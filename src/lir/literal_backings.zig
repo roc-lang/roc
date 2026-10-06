@@ -55,17 +55,14 @@ const Collector = struct {
                     switch (s.value) {
                         .str_literal => |literal| try self.mark(literal.backing),
                         .bytes_literal => |literal| try self.mark(literal.bytes.backing),
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .null_ptr, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .proc_ref => {},
                     }
                     try self.pushStmt(s.next);
                 },
-                .assign_call => |s| {
+                inline .assign_call, .assign_packed_erased_fn => |s| {
                     try self.pushStmt(s.next);
                 },
                 .assign_call_erased => |s| try self.pushStmt(s.next),
-                .assign_packed_erased_fn => |s| {
-                    try self.pushStmt(s.next);
-                },
                 inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
                 .boxy_tag_match => |s| {
                     try self.pushStmt(s.on_match);

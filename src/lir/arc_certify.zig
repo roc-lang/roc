@@ -646,11 +646,7 @@ fn writeFailureContext(
                         walk.append(store.allocator, continuation) catch return;
                     }
                 },
-                .str_match => |s| {
-                    walk.append(store.allocator, s.on_match) catch return;
-                    walk.append(store.allocator, s.on_miss) catch return;
-                },
-                .boxy_tag_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     walk.append(store.allocator, s.on_match) catch return;
                     walk.append(store.allocator, s.on_miss) catch return;
                 },
@@ -974,8 +970,8 @@ fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
 fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.LocalId) bool {
     return switch (stmt) {
         .assign_ref => |a| a.target == needle or refOpReadsLocal(a.op, needle),
-        .assign_literal => |a| a.target == needle,
-        .assign_call => |a| a.target == needle or spanHasLocal(store, a.args, needle),
+        inline .assign_literal, .init_uninitialized => |a| a.target == needle,
+        inline .assign_call, .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_call_erased => |a| a.target == needle or a.closure == needle or (a.reuse_source != null and a.reuse_source.? == needle) or spanHasLocal(store, a.args, needle),
         .assign_packed_erased_fn => |a| a.target == needle or (a.capture != null and a.capture.? == needle) or (a.reuse != null and a.reuse.? == needle),
         .assign_boxy_desc_ref => |a| a.target == needle or boxyDescRefReadsLocal(a.desc, needle) or
@@ -1006,7 +1002,6 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             spanHasLocal(store, a.args, needle) or spanHasLocal(store, a.arg_descs, needle) or
             spanHasLocal(store, a.hidden_args, needle) or
             (a.result_desc != null and boxyDescRefReadsLocal(a.result_desc.?, needle)),
-        .assign_low_level => |a| a.target == needle or spanHasLocal(store, a.args, needle),
         .assign_list => |a| a.target == needle or spanHasLocal(store, a.elems, needle),
         .assign_struct => |a| a.target == needle or spanHasLocal(store, a.fields, needle),
         .assign_tag => |a| a.target == needle or
@@ -1015,14 +1010,11 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .store_struct => |a| a.dest == needle or spanHasLocal(store, a.fields, needle),
         .store_tag => |a| a.dest == needle or (a.payload != null and a.payload.? == needle),
         .set_local => |a| a.target == needle or a.value == needle,
-        .init_uninitialized => |a| a.target == needle,
         .debug => |d| d.message == needle,
         .expect_err => |e| e.message == needle,
         .expect => |e| e.condition == needle,
-        .incref => |rc| rc.value == needle,
-        .decref => |rc| rc.value == needle,
+        inline .incref, .decref, .free => |rc| rc.value == needle,
         .decref_if_initialized => |rc| rc.cond == needle or rc.value == needle,
-        .free => |rc| rc.value == needle,
         .switch_stmt => |s| s.cond == needle,
         .switch_initialized_payload => |s| s.cond == needle or s.payload == needle,
         .str_match => |s| blk: {
@@ -1227,8 +1219,7 @@ fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_tag,
         .set_local,
         => |binding| binding.target,
-        .store_struct => |store_stmt| store_stmt.dest,
-        .store_tag => |store_stmt| store_stmt.dest,
+        inline .store_struct, .store_tag => |store_stmt| store_stmt.dest,
         .debug,
         .expect,
         .expect_err,
@@ -3660,7 +3651,7 @@ const Certifier = struct {
             if (ga.abi_live != sb.abi_live) return false;
             if (ga.maybe_uninitialized_unresolved != sb.maybe_uninitialized_unresolved) return false;
             switch (ga.class) {
-                .unbound => {},
+                .unbound, .representation => {},
                 // Claims are per-field spend records, not attributable
                 // balances; states disagreeing on them walk separately.
                 .owned => if (!ga.claims.eql(sb.claims) or
@@ -3669,7 +3660,6 @@ const Certifier = struct {
                     ga.condition_mask != sb.condition_mask or
                     !summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
                 .borrowed => if (!summaryProvenanceEql(ga.provenance, sb.provenance)) return false,
-                .representation => {},
             }
         }
         return true;
@@ -3886,12 +3876,8 @@ const Certifier = struct {
                     try self.noteProcLocal(assign.target);
                     switch (assign.op) {
                         .local => |source| try self.noteProcLocal(source),
-                        .discriminant => |op| try self.noteProcLocal(op.source),
-                        .field => |op| try self.noteProcLocal(op.source),
-                        .tag_payload => |op| try self.noteProcLocal(op.source),
-                        .tag_payload_struct => |op| try self.noteProcLocal(op.source),
-                        .list_reinterpret => |op| try self.noteProcLocal(op.backing_ref),
-                        .nominal => |op| try self.noteProcLocal(op.backing_ref),
+                        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |op| try self.noteProcLocal(op.source),
+                        inline .list_reinterpret, .nominal => |op| try self.noteProcLocal(op.backing_ref),
                     }
                     try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
@@ -3903,7 +3889,7 @@ const Certifier = struct {
                     try self.noteProcLocal(init.target);
                     try stack.append(self.allocator, .{ .stmt = init.next, .region = region });
                 },
-                .assign_call => |assign| {
+                inline .assign_call, .assign_low_level => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.args);
                     try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
@@ -4036,11 +4022,6 @@ const Certifier = struct {
                     try self.noteProcLocalSpan(assign.hidden_args);
                     try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
-                .assign_low_level => |assign| {
-                    try self.noteProcLocal(assign.target);
-                    try self.noteProcLocalSpan(assign.args);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
-                },
                 .assign_list => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocalSpan(assign.elems);
@@ -4080,20 +4061,12 @@ const Certifier = struct {
                     try self.noteProcLocal(expect_stmt.condition);
                     try stack.append(self.allocator, .{ .stmt = expect_stmt.next, .region = region });
                 },
-                .incref => |rc| {
-                    try self.noteProcLocal(rc.value);
-                    try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
-                },
-                .decref => |rc| {
+                inline .incref, .decref, .free => |rc| {
                     try self.noteProcLocal(rc.value);
                     try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
                 },
                 .decref_if_initialized => |rc| {
                     try self.noteProcLocal(rc.cond);
-                    try self.noteProcLocal(rc.value);
-                    try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
-                },
-                .free => |rc| {
                     try self.noteProcLocal(rc.value);
                     try stack.append(self.allocator, .{ .stmt = rc.next, .region = region });
                 },
@@ -4358,12 +4331,8 @@ const Certifier = struct {
     ) Allocator.Error!void {
         const local = switch (op) {
             .local => |source| source,
-            .discriminant => |ref| ref.source,
-            .field => |ref| ref.source,
-            .tag_payload => |ref| ref.source,
-            .tag_payload_struct => |ref| ref.source,
-            .list_reinterpret => |ref| ref.backing_ref,
-            .nominal => |ref| ref.backing_ref,
+            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source,
+            inline .list_reinterpret, .nominal => |ref| ref.backing_ref,
         };
         try self.noteExposedReadLocal(reads, local);
     }
@@ -4481,7 +4450,7 @@ const Certifier = struct {
                     self.setReadBeforeRebindDef(&graph, node_index, init.target);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, init.next);
                 },
-                .assign_call => |assign| {
+                inline .assign_call, .assign_low_level => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.args);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
@@ -4612,11 +4581,6 @@ const Certifier = struct {
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
-                .assign_low_level => |assign| {
-                    try self.noteExposedReadSpan(&node_reads, assign.args);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
                 .assign_list => |assign| {
                     try self.noteExposedReadSpan(&node_reads, assign.elems);
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
@@ -4659,20 +4623,12 @@ const Certifier = struct {
                     try self.noteExposedReadLocal(&node_reads, expect_stmt.condition);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, expect_stmt.next);
                 },
-                .incref => |rc| {
-                    try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .decref => |rc| {
+                inline .incref, .decref, .free => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.value);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
                 .decref_if_initialized => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.cond);
-                    try self.noteExposedReadLocal(&node_reads, rc.value);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
-                },
-                .free => |rc| {
                     try self.noteExposedReadLocal(&node_reads, rc.value);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, rc.next);
                 },
@@ -4720,8 +4676,7 @@ const Certifier = struct {
                         for (0..GuardedList.borrowLen(steps)) |step_index| {
                             const step = GuardedList.at(steps, step_index);
                             switch (step.capture) {
-                                .discard => {},
-                                .view => {},
+                                .discard, .view => {},
                             }
                         }
                         try appendReadBeforeRebindSuccessor(&graph, &work, node_index, arm.on_match);
@@ -5899,8 +5854,7 @@ const Certifier = struct {
                             assign.take_kind,
                             op.tag_discriminant,
                         ),
-                        .list_reinterpret => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
-                        .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
+                        inline .list_reinterpret, .nominal => |op| try self.bindSameValue(&state, assign.target, op.backing_ref),
                     }
                     cursor = assign.next;
                 },
@@ -6015,9 +5969,8 @@ const Certifier = struct {
                     const source_value = try self.requireBoxyTransferSource(&state, assign.source, assign.source_mode);
                     if (self.isRc(assign.target)) {
                         switch (assign.source_mode) {
-                            .move => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
+                            .move, .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
                             .borrow => _ = try self.bindFresh(&state, assign.target, 0, &.{source_value}),
-                            .copy => _ = try self.bindFresh(&state, assign.target, 1, &.{}),
                         }
                     }
                     cursor = assign.next;
@@ -6184,7 +6137,7 @@ const Certifier = struct {
                     try state.addBalance(value, std.math.cast(i32, rc.count) orelse return error.OutOfMemory);
                     cursor = rc.next;
                 },
-                .decref => |rc| {
+                inline .decref, .free => |rc| {
                     try self.applyRelease(&state, rc.value);
                     cursor = rc.next;
                 },
@@ -6206,10 +6159,6 @@ const Certifier = struct {
                         if (dense != no_dense) try state.setMaybeUninitializedReleased(dense, true);
                     }
                     if (dense != no_dense) try state.setMaybeUninitializedUnresolved(dense, false);
-                    cursor = rc.next;
-                },
-                .free => |rc| {
-                    try self.applyRelease(&state, rc.value);
                     cursor = rc.next;
                 },
                 .switch_stmt => |switch_stmt| {
@@ -6969,12 +6918,8 @@ const Certifier = struct {
 fn refOpReadsLocal(op: LIR.RefOp, needle: LIR.LocalId) bool {
     return switch (op) {
         .local => |local| local == needle,
-        .discriminant => |ref| ref.source == needle,
-        .field => |ref| ref.source == needle,
-        .tag_payload => |ref| ref.source == needle,
-        .tag_payload_struct => |ref| ref.source == needle,
-        .list_reinterpret => |ref| ref.backing_ref == needle,
-        .nominal => |ref| ref.backing_ref == needle,
+        inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| ref.source == needle,
+        inline .list_reinterpret, .nominal => |ref| ref.backing_ref == needle,
     };
 }
 

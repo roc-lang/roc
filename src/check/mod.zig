@@ -14,6 +14,8 @@ pub const occurs = @import("occurs.zig");
 pub const problem = @import("problem.zig");
 /// **Reporting**
 pub const report = @import("report.zig");
+/// The reports of one module, phase by phase, in the order a build reports them.
+pub const module_reports = @import("module_reports.zig");
 /// **Exhaustiveness Checking**
 pub const exhaustive = @import("exhaustive.zig");
 pub const ExhaustivenessContext = @import("exhaustiveness_context.zig");

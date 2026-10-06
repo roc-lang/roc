@@ -136,7 +136,6 @@ const Pass = struct {
                 .dec_literal,
                 .boxy_dynamic_num_literal,
                 .boxy_dynamic_frac_literal,
-                .null_ptr,
                 .proc_ref,
                 => self.markOther(s.target),
             },
@@ -161,23 +160,17 @@ const Pass = struct {
             .set_local,
             => |s| self.markOther(s.target),
 
-            .assign_call => |s| {
+            inline .assign_call, .assign_call_erased => |s| {
                 self.markOther(s.target);
                 self.markOtherOpt(s.out_desc);
             },
-            .assign_call_erased => |s| {
-                self.markOther(s.target);
-                self.markOtherOpt(s.out_desc);
-            },
-            .assign_call_dict => |s| self.markOther(s.target),
-            .assign_packed_erased_fn => |s| self.markOther(s.target),
+            inline .assign_call_dict, .assign_packed_erased_fn => |s| self.markOther(s.target),
             .assign_boxy_tag_payload => |s| {
                 self.markOther(s.target);
                 self.markOtherOpt(s.target_desc);
             },
 
-            .store_struct => |s| self.markOther(s.dest),
-            .store_tag => |s| self.markOther(s.dest),
+            inline .store_struct, .store_tag => |s| self.markOther(s.dest),
 
             .join => |s| {
                 self.markOtherSpan(s.params);
@@ -305,9 +298,7 @@ fn anyStaticLiteral(store: *const LirStore) bool {
 /// statement after it; null for every other statement.
 fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
     return switch (stmt) {
-        .incref => |s| .{ s.value, s.next },
-        .decref => |s| .{ s.value, s.next },
-        .decref_if_initialized => |s| .{ s.value, s.next },
+        inline .incref, .decref, .decref_if_initialized => |s| .{ s.value, s.next },
         .init_uninitialized,
         .boxy_tag_match,
         .str_match,

@@ -1599,15 +1599,6 @@ pub const ProgramView = struct {
         return procDebugNameInSlice(self.proc_debug_names, symbol);
     }
 
-    pub fn fieldAccessSegmentSpan(self: ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
-        return self.field_access_segments[span_.start..][0..span_.len];
-    }
-
-    pub fn fieldAccessSegmentAt(self: ProgramView, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
-        if (index >= span_.len) Common.invariant("field access segment index was outside span");
-        return self.field_access_segments[span_.start + index];
-    }
-
     /// Verify that a completed program view refers only to durable type-store
     /// ids. Active snapshots are rejected by graph-scoped sealing while the
     /// graph maps still exist; completed views must additionally be frozen and
@@ -1962,14 +1953,6 @@ pub const ProgramBuilder = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn constFnEvidence(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
-    pub fn constFnEvidenceFrames(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
-        return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
     pub fn fnCount(self: *const ProgramBuilder) usize {
         return self.fns.len();
     }
@@ -1984,10 +1967,6 @@ pub const ProgramBuilder = struct {
 
     pub fn setFnSource(self: *ProgramBuilder, id: FnId, source: FnTemplate) void {
         self.fns.getPtrImmediate(@intFromEnum(id)).source = source;
-    }
-
-    pub fn fnsView(self: *const ProgramBuilder) []const Fn {
-        return self.fns.unsafeRawItemsForView();
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -2006,20 +1985,6 @@ pub const ProgramBuilder = struct {
 
     pub fn setDef(self: *ProgramBuilder, id: DefId, def: Def) void {
         self.defs.set(@intFromEnum(id), def);
-    }
-
-    pub fn setDefFn(self: *ProgramBuilder, id: DefId, fn_id: FnId) void {
-        self.defs.getPtrImmediate(@intFromEnum(id)).fn_id = fn_id;
-    }
-
-    pub fn defsView(self: *const ProgramBuilder) []const Def {
-        return self.defs.unsafeRawItemsForView();
-    }
-
-    pub fn addNestedDef(self: *ProgramBuilder, nested_def: NestedDef) std.mem.Allocator.Error!NestedDefId {
-        const id: NestedDefId = @enumFromInt(@as(u32, @intCast(self.nested_defs.len())));
-        try self.nested_defs.append(self.allocator, nested_def);
-        return id;
     }
 
     pub fn nestedDefCount(self: *const ProgramBuilder) usize {
@@ -2042,14 +2007,6 @@ pub const ProgramBuilder = struct {
         const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.len())));
         try self.specs.append(self.allocator, record);
         return id;
-    }
-
-    pub fn getSpec(self: *const ProgramBuilder, id: SpecId) SpecRecord {
-        return self.specs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    pub fn setSpecStatus(self: *ProgramBuilder, id: SpecId, status: SpecStatus) void {
-        self.specs.getPtrImmediate(@intFromEnum(id)).status = status;
     }
 
     pub fn specsView(self: *const ProgramBuilder) []const SpecRecord {
@@ -2157,10 +2114,6 @@ pub const ProgramBuilder = struct {
         return self.pats.len();
     }
 
-    pub fn patsView(self: *const ProgramBuilder) []const Pat {
-        return self.pats.unsafeRawItemsForView();
-    }
-
     pub fn getPat(self: *const ProgramBuilder, id: PatId) Pat {
         return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
     }
@@ -2171,14 +2124,6 @@ pub const ProgramBuilder = struct {
 
     pub fn stmtCount(self: *const ProgramBuilder) usize {
         return self.stmts.len();
-    }
-
-    pub fn stmtsView(self: *const ProgramBuilder) []const Stmt {
-        return self.stmts.unsafeRawItemsForView();
-    }
-
-    pub fn getStmt(self: *const ProgramBuilder, id: StmtId) Stmt {
-        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn getStmtAt(self: *const ProgramBuilder, index: usize) Stmt {
@@ -2216,26 +2161,6 @@ pub const ProgramBuilder = struct {
         const id: Common.LoweringModuleId = @enumFromInt(@as(u32, @intCast(self.lowering_modules.len())));
         try self.lowering_modules.append(self.allocator, key);
         return id;
-    }
-
-    /// Source location of an expression.
-    pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
-        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of an expression.
-    pub fn exprRegion(self: *const ProgramBuilder, id: ExprId) base.Region {
-        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Source location of a statement.
-    pub fn stmtLoc(self: *const ProgramBuilder, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of a statement.
-    pub fn stmtRegion(self: *const ProgramBuilder, id: StmtId) base.Region {
-        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *ProgramBuilder, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -2374,21 +2299,8 @@ pub const ProgramBuilder = struct {
         return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
-    pub fn setLocalType(self: *ProgramBuilder, id: LocalId, ty: Type.TypeId) void {
-        self.locals.getPtrImmediate(@intFromEnum(id)).ty = ty;
-        for (self.typed_locals.unsafeRawItemsMutForStore()) |*typed_local| {
-            if (typed_local.local == id) {
-                typed_local.ty = ty;
-            }
-        }
-    }
-
     pub fn localCount(self: *const ProgramBuilder) usize {
         return self.locals.len();
-    }
-
-    pub fn localsView(self: *const ProgramBuilder) []const Local {
-        return self.locals.unsafeRawItemsForView();
     }
 
     pub fn getLocal(self: *const ProgramBuilder, id: LocalId) Local {
@@ -2417,16 +2329,8 @@ pub const ProgramBuilder = struct {
         return self.layout_requests.len();
     }
 
-    pub fn layoutRequestsView(self: *const ProgramBuilder) []const LayoutRequest {
-        return self.layout_requests.unsafeRawItemsForView();
-    }
-
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
         try self.layout_requests.append(self.allocator, request);
-    }
-
-    pub fn comptimeValueReadsView(self: *const ProgramBuilder) []const Common.ComptimeValueRoot {
-        return self.comptime_value_reads.unsafeRawItemsForView();
     }
 
     /// Record that this program reads one evaluated root's completed value.
@@ -2446,11 +2350,6 @@ pub const ProgramBuilder = struct {
 
     pub fn addRuntimeSchemaRequest(self: *ProgramBuilder, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
         try self.runtime_schema_requests.append(self.allocator, request);
-    }
-
-    pub fn addStaticDataValue(self: *ProgramBuilder, value: StaticDataValue) std.mem.Allocator.Error!Common.StaticDataId {
-        try self.ensureStaticDataValueCapacity(1);
-        return self.addStaticDataValueAssumeCapacity(value);
     }
 
     /// Preflight static-data publication so parallel identity tables cannot
@@ -2527,10 +2426,6 @@ pub const ProgramBuilder = struct {
         return self.field_exprs.get(index);
     }
 
-    pub fn getFieldAccessSegmentAt(self: *const ProgramBuilder, index: usize) FieldAccessSegment {
-        return self.field_access_segments.get(index);
-    }
-
     pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
         return self.record_destructs.get(index);
     }
@@ -2573,52 +2468,16 @@ pub const ProgramBuilder = struct {
         return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
-    pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        return try Common.appendSpan(FnDefCapture, &self.fn_def_captures, self.allocator, values);
-    }
-
-    pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
-    }
-
-    pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        return try Common.appendSpan(StrPatternStep, &self.str_pattern_steps, self.allocator, values);
-    }
-
     pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
-    }
-
-    pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
-    }
-
-    pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
-    }
-
-    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
-        return self.expr_ids.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn patSpan(self: *const ProgramBuilder, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
-        return self.pat_ids.borrowSpan(span_.start, span_.len);
     }
 
     pub fn typedLocalSpan(self: *const ProgramBuilder, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
         return self.typed_locals.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
-        return self.stmt_ids.borrowSpan(span_.start, span_.len);
-    }
-
     pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
         return self.field_exprs.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn fieldAccessSegmentSpan(self: *const ProgramBuilder, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
-        return self.field_access_segments.borrowSpan(span_.start, span_.len);
     }
 
     pub fn fieldAccessSegmentAt(self: *const ProgramBuilder, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
@@ -2626,23 +2485,8 @@ pub const ProgramBuilder = struct {
         return self.field_access_segments.get(span_.start + index);
     }
 
-    pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
-        return self.fn_def_captures.borrowSpan(span_.start, span_.len);
-    }
-
     pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
         return try Common.appendSpan(CaptureOperand, &self.capture_operands, self.allocator, values);
-    }
-
-    pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {
-        return self.capture_operands.borrowSpan(span_.start, span_.len);
-    }
-
-    /// The CaptureId of a local. Every local that participates in a capture set
-    /// carries one; asserts it is present.
-    pub fn captureIdOfLocal(self: *const ProgramBuilder, id: LocalId) checked.CaptureId {
-        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)].capture_id orelse
-            Common.invariant("Monotype capture local had no CaptureId");
     }
 
     /// Seal provisional identities on locals emitted outside a body
@@ -2667,28 +2511,10 @@ pub const ProgramBuilder = struct {
     pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
         return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
-
-    pub fn strPatternStepSpan(self: *const ProgramBuilder, span_: Span(StrPatternStep)) ProgramSpanBorrow(StrPatternStep, "str_pattern_steps") {
-        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn branchSpan(self: *const ProgramBuilder, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
-        return self.branches.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn ifBranchSpan(self: *const ProgramBuilder, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
-        return self.if_branches.borrowSpan(span_.start, span_.len);
-    }
 };
 
 /// Compatibility name for existing Monotype builder-owned program storage.
 pub const Program = ProgramBuilder;
-
-/// Design-document name for mutable Monotype builder storage.
-pub const MonoProgramBuilder = ProgramBuilder;
-
-/// Design-document name for the read-only Monotype program view.
-pub const MonoProgramView = ProgramView;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());

@@ -558,12 +558,6 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items[range.start .. range.start + range.len];
     }
 
-    pub fn cloneTypeFrom(self: *ConstTypeStore, source: *const ConstTypeStore, ty: ConstTypeId) Allocator.Error!ConstTypeId {
-        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
-        defer map.deinit();
-        return try self.cloneTypeFromInner(source, null, ty, &map);
-    }
-
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
@@ -1073,9 +1067,7 @@ pub const ConstStore = struct {
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
             const contracts = switch (node) {
-                .target => |target| target.callable_contracts,
-                .structural => |structural| structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
+                inline .target, .structural, .from_callable => |target| target.callable_contracts,
                 .from_scheme, .unreachable_value, .checked_error => 0,
             };
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });

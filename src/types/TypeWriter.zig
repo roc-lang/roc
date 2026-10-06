@@ -1538,14 +1538,8 @@ fn popSeenCount(self: *TypeWriter) void {
 /// order the count visits them, onto the pending run.
 fn collectCountChildren(self: *TypeWriter, content: Content) std.mem.Allocator.Error!void {
     switch (content) {
-        .flex => |flex| {
+        inline .flex, .rigid => |flex| {
             const constraints = self.types.sliceStaticDispatchConstraints(flex.constraints);
-            for (constraints) |constraint| {
-                try self.count_pending.append(constraint.fn_var);
-            }
-        },
-        .rigid => |rigid| {
-            const constraints = self.types.sliceStaticDispatchConstraints(rigid.constraints);
             for (constraints) |constraint| {
                 try self.count_pending.append(constraint.fn_var);
             }

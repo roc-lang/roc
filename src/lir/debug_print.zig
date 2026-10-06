@@ -99,8 +99,7 @@ const Printer = struct {
                 .assign_literal => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.value) {
-                        .i64_literal => |l| try writer.print("literal {d}", .{l.value}),
-                        .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        inline .i64_literal, .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
                         .f64_literal => |f| try writer.print("literal f64 {d}", .{f}),
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
@@ -109,7 +108,6 @@ const Printer = struct {
                         .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{l.dec_bits}),
                         .static_data => |id| try writer.print("literal static_data s{d}", .{@intFromEnum(id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
-                        .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
                     if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@intFromEnum(proc)});

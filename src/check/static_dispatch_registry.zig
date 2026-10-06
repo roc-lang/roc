@@ -1565,10 +1565,10 @@ pub const StructuralDerivation = union(enum(u8)) {
 /// classifies its view-local method names by text—both from this single
 /// source.
 pub const structural_method_kinds = [_]struct { method_name: [:0]const u8, common_ident: [:0]const u8, kind: StructuralKind }{
-    .{ .method_name = "is_eq", .common_ident = "is_eq", .kind = .equality },
-    .{ .method_name = "to_hash", .common_ident = "to_hash", .kind = .hash },
-    .{ .method_name = "parser_for", .common_ident = "parser_for", .kind = .parser },
-    .{ .method_name = "encoder_for", .common_ident = "encoder_for", .kind = .encoder },
+    .{ .method_name = Ident.IS_EQ_METHOD_NAME, .common_ident = "is_eq", .kind = .equality },
+    .{ .method_name = Ident.TO_HASH_METHOD_NAME, .common_ident = "to_hash", .kind = .hash },
+    .{ .method_name = Ident.PARSER_FOR_METHOD_NAME, .common_ident = "parser_for", .kind = .parser },
+    .{ .method_name = Ident.ENCODER_FOR_METHOD_NAME, .common_ident = "encoder_for", .kind = .encoder },
     .{ .method_name = "map", .common_ident = "map", .kind = .map },
     .{ .method_name = "map!", .common_ident = "map_bang", .kind = .map_effectful },
 };
@@ -2477,7 +2477,7 @@ pub const StaticDispatchPlanTable = struct {
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             try plans.append(allocator, .{
                 .expr = checked_expr,
-                .method = try names.internMethodName("from_numeral"),
+                .method = try names.internMethodName(Ident.FROM_NUMERAL_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(numeral_plan.fn_var)),
@@ -2532,7 +2532,7 @@ pub const StaticDispatchPlanTable = struct {
             const plan_id: StaticDispatchPlanId = @enumFromInt(@as(u32, @intCast(plans.items.len)));
             try plans.append(allocator, .{
                 .expr = checked_expr,
-                .method = try names.internMethodName("from_quote"),
+                .method = try names.internMethodName(Ident.FROM_QUOTE_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(quote_plan.fn_var)),
@@ -2558,7 +2558,7 @@ pub const StaticDispatchPlanTable = struct {
             };
             try plans.append(allocator, .{
                 .expr = literal.equality,
-                .method = try names.internMethodName("is_eq"),
+                .method = try names.internMethodName(Ident.IS_EQ_METHOD_NAME),
                 .dispatcher = .{ .arg = 0 },
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @enumFromInt(source.target_var)),
                 .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, constraint_fn),
@@ -2681,18 +2681,6 @@ pub const StaticDispatchPlanTable = struct {
 
     pub fn lookupByExpr(self: *const StaticDispatchPlanTable, expr: CIR.Expr.Idx) ?StaticDispatchPlanId {
         return if (lookupPlanKV(self.by_expr, @intFromEnum(expr))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn lookupNumeralByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.numeral_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn lookupQuoteByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?StaticDispatchPlanId {
-        return if (lookupPlanKV(self.quote_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
-    }
-
-    pub fn lookupIteratorForByNode(self: *const StaticDispatchPlanTable, node: CIR.Node.Idx) ?IteratorForPlanId {
-        return if (lookupPlanKV(self.iterator_for_by_node, @intFromEnum(node))) |v| @enumFromInt(v) else null;
     }
 
     pub fn evidenceNode(self: *const StaticDispatchPlanTable, id: EvidenceNodeId) EvidenceNode {
@@ -3104,37 +3092,6 @@ fn checkedTypeThroughAliases(checked_types: anytype, ty: CheckedTypeId) CheckedT
     while (true) {
         const payload = checked_types.store.payload(current);
         if (std.meta.activeTag(payload) != .alias) return current;
-        if (remaining == 0) {
-            if (@import("builtin").mode == .Debug) {
-                base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});
-            }
-            unreachable;
-        }
-        remaining -= 1;
-        current = payload.alias.backing;
-    }
-}
-
-/// Public `methodOwnerForCheckedType` declaration: the method owner of a
-/// published checked type, walking alias chains transparently.
-pub fn methodOwnerForCheckedType(checked_types: anytype, ty: CheckedTypeId) ?MethodOwner {
-    var current = ty;
-    // Aliases are transparent for static dispatch: an alias's method owner is its
-    // backing's owner. Walk the (finite) alias chain so an alias-over-nominal,
-    // alias-over-alias, or alias-over-builtin resolves to the underlying owner
-    // rather than the alias's own identity, where no methods are registered. The
-    // bound on iterations is the store size, so a cyclic chain cannot loop here.
-    var remaining = checked_types.store.payloads.items.len;
-    while (true) {
-        const raw = @intFromEnum(current);
-        if (raw >= checked_types.store.payloads.items.len) {
-            if (@import("builtin").mode == .Debug) {
-                base.invariant("checked static dispatch invariant violated: dispatcher type root was outside the checked type store", .{});
-            }
-            unreachable;
-        }
-        const payload = checked_types.store.payloads.items[raw];
-        if (std.meta.activeTag(payload) != .alias) return methodOwnerForCheckedPayload(payload);
         if (remaining == 0) {
             if (@import("builtin").mode == .Debug) {
                 base.invariant("checked static dispatch invariant violated: checked type alias chain was cyclic", .{});

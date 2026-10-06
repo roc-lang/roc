@@ -6,7 +6,6 @@
 //! - Error handling
 
 const std = @import("std");
-const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
@@ -158,6 +157,16 @@ test "DirExtractWriter does not follow links outside its root" {
     try testing.expectEqualStrings("unchanged", content);
 }
 
+test "pathHasUnbundleErr - traversal behind a backslash separator" {
+    // Windows treats a backslash as a separator, so extraction there would
+    // follow these components out of the destination directory.
+    for ([_][]const u8{ "foo\\..\\..\\evil.txt", "..\\evil.txt", "foo/bar\\.." }) |path| {
+        const err = unbundle.pathHasUnbundleErr(path);
+        try testing.expect(err != null);
+        try testing.expect(err.?.reason == .path_traversal);
+    }
+}
+
 test "validateBase58Hash - valid and invalid hashes" {
     // Generate a real hash and encode it
     const data = "test data";
@@ -190,12 +199,9 @@ test "validateBase58Hash - valid and invalid hashes" {
 }
 
 test "BufferExtractWriter - basic functionality" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file
@@ -349,12 +355,9 @@ test "validateBase58Hash - edge cases" {
 }
 
 test "BufferExtractWriter - overwrite existing file" {
-    const allocator = testing.allocator;
-
-    var arena = collections.SingleThreadArena.init(allocator);
-    defer arena.deinit();
-    const alloc = arena.allocator();
-    var writer = unbundle.BufferExtractWriter.init(alloc);
+    // The testing allocator checks every free and reports leaks, which pins
+    // the writer's ownership of file contents and path keys.
+    var writer = unbundle.BufferExtractWriter.init(testing.allocator);
     defer writer.deinit();
 
     // Create a file with initial content

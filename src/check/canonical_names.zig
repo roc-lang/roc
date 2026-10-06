@@ -49,8 +49,6 @@ pub const ProcBaseKeyRef = enum(u32) { _ };
 pub const CheckedProcedureTemplateId = enum(u32) { _ };
 /// Public `NestedProcSiteId` declaration.
 pub const NestedProcSiteId = enum(u32) { _ };
-/// Public `HostedWrapperId` declaration.
-pub const HostedWrapperId = enum(u32) { _ };
 /// Public `IntrinsicWrapperId` declaration.
 pub const IntrinsicWrapperId = enum(u32) { _ };
 /// Public `EntryWrapperId` declaration.
@@ -106,8 +104,6 @@ pub const MonoSpecializationKey = struct {
 
 /// Digest for a checked type shape at post-check boundaries.
 pub const TypeDigest = CanonicalTypeKey;
-/// Digest for a checked value type that requests a runtime layout.
-pub const ExecValueDigest = CanonicalExecValueTypeKey;
 /// Short name for the checked boundary name store.
 pub const NameStore = CanonicalNameStore;
 /// Short name used by post-check records for record field labels.
@@ -118,18 +114,6 @@ pub const TagNameId = TagLabelId;
 pub const ProcSiteId = NestedProcSiteId;
 /// Short name for a procedure template that may come from checked or lifted code.
 pub const CallableProcTemplate = CallableProcedureTemplateRef;
-
-/// Public `MonoSpecializedProcRef` declaration.
-pub const MonoSpecializedProcRef = struct {
-    proc: ProcedureValueRef,
-    specialization: MonoSpecializationKey,
-};
-
-/// Public `ProcCallable` declaration.
-pub const ProcCallable = struct {
-    proc: ProcedureValueRef,
-    callable: ProcedureCallableRef,
-};
 
 /// Public `procedureValueRefEql` function.
 pub fn procedureValueRefEql(a: ProcedureValueRef, b: ProcedureValueRef) bool {
@@ -142,35 +126,6 @@ pub fn procedureTemplateRefEql(a: ProcedureTemplateRef, b: ProcedureTemplateRef)
     return std.meta.eql(a.artifact.bytes, b.artifact.bytes) and
         a.proc_base == b.proc_base and
         a.template == b.template;
-}
-
-/// Public `monoSpecializationKeyEql` function.
-pub fn monoSpecializationKeyEql(a: MonoSpecializationKey, b: MonoSpecializationKey) bool {
-    return std.meta.eql(a.requested_mono_fn_ty.bytes, b.requested_mono_fn_ty.bytes) and
-        procedureTemplateRefEql(a.template, b.template);
-}
-
-/// Public `monoSpecializedProcRefEql` function.
-pub fn monoSpecializedProcRefEql(a: MonoSpecializedProcRef, b: MonoSpecializedProcRef) bool {
-    return procedureValueRefEql(a.proc, b.proc) and
-        monoSpecializationKeyEql(a.specialization, b.specialization);
-}
-
-/// Public `procCallableFromMono` function.
-pub fn procCallableFromMono(proc: MonoSpecializedProcRef) ProcCallable {
-    return .{
-        .proc = proc.proc,
-        .callable = .{
-            .template = .{ .checked = proc.specialization.template },
-            .source_fn_ty = proc.specialization.requested_mono_fn_ty,
-        },
-    };
-}
-
-/// Public `procCallableEql` function.
-pub fn procCallableEql(a: ProcCallable, b: ProcCallable) bool {
-    return procedureValueRefEql(a.proc, b.proc) and
-        procedureCallableRefEql(a.callable, b.callable);
 }
 
 /// Public `LiftedProcedureTemplateRef` declaration.
@@ -191,46 +146,8 @@ pub const CallableProcedureTemplateRef = union(enum) {
     synthetic: SyntheticProcedureTemplateRef,
 };
 
-/// Public `ProcedureCallableRef` declaration.
-pub const ProcedureCallableRef = struct {
-    template: CallableProcedureTemplateRef,
-    source_fn_ty: CanonicalTypeKey,
-};
-
-/// Public `CanonicalExecValueTypeKey` declaration.
-pub const CanonicalExecValueTypeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `procedureCallableRefEql` function.
-pub fn procedureCallableRefEql(a: ProcedureCallableRef, b: ProcedureCallableRef) bool {
-    return callableProcedureTemplateRefEql(a.template, b.template) and
-        std.meta.eql(a.source_fn_ty.bytes, b.source_fn_ty.bytes);
-}
-
-/// Public `callableProcedureTemplateRefEql` function.
-pub fn callableProcedureTemplateRefEql(a: CallableProcedureTemplateRef, b: CallableProcedureTemplateRef) bool {
-    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
-    return switch (a) {
-        .checked => |left| procedureTemplateRefEql(left, b.checked),
-        .lifted => |left| liftedProcedureTemplateRefEql(left, b.lifted),
-        .synthetic => |left| procedureTemplateRefEql(left.template, b.synthetic.template),
-    };
-}
-
-/// Public `liftedProcedureTemplateRefEql` function.
-pub fn liftedProcedureTemplateRefEql(a: LiftedProcedureTemplateRef, b: LiftedProcedureTemplateRef) bool {
-    return monoSpecializationKeyEql(a.owner_mono_specialization, b.owner_mono_specialization) and
-        a.site == b.site;
-}
-
 /// Public `CanonicalTypeKey` declaration.
 pub const CanonicalTypeKey = struct {
-    bytes: [32]u8 = [_]u8{0} ** 32,
-};
-
-/// Public `CanonicalTypeTemplateKey` declaration.
-pub const CanonicalTypeTemplateKey = struct {
     bytes: [32]u8 = [_]u8{0} ** 32,
 };
 
@@ -717,10 +634,6 @@ pub const CanonicalNameStore = struct {
         return if (it.lookup(text)) |id| @as(Id, @enumFromInt(id)) else null;
     }
 
-    pub fn lookupModuleIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?ModuleNameId {
-        return lookupId(ModuleNameId, &self.module_names, idents.getText(ident));
-    }
-
     pub fn lookupTypeIdent(self: *const CanonicalNameStore, idents: *const Ident.Store, ident: Ident.Idx) ?TypeNameId {
         return lookupId(TypeNameId, &self.type_names, idents.getText(ident));
     }
@@ -759,10 +672,6 @@ pub const CanonicalNameStore = struct {
 
     pub fn lookupTagLabel(self: *const CanonicalNameStore, text: []const u8) ?TagLabelId {
         return lookupId(TagLabelId, &self.tag_labels, text);
-    }
-
-    pub fn lookupExportName(self: *const CanonicalNameStore, text: []const u8) ?ExportNameId {
-        return lookupId(ExportNameId, &self.export_names, text);
     }
 
     pub fn internProcBase(self: *CanonicalNameStore, key: ProcBaseKey) Allocator.Error!ProcBaseKeyRef {

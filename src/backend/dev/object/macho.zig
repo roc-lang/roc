@@ -70,23 +70,24 @@ const MachHeader64 = extern struct {
     filetype: u32,
     ncmds: u32,
     sizeofcmds: u32,
-    flags: u32,
-    reserved: u32,
+    flags: u32 = 0,
+    reserved: u32 = 0,
 };
 
 /// 64-bit segment command (72 bytes)
 const SegmentCommand64 = extern struct {
     cmd: u32,
     cmdsize: u32,
-    segname: [16]u8,
-    vmaddr: u64,
+    /// Empty, as is typical for the one segment of an object file.
+    segname: [16]u8 = @splat(0),
+    vmaddr: u64 = 0,
     vmsize: u64,
     fileoff: u64,
     filesize: u64,
     maxprot: i32,
     initprot: i32,
     nsects: u32,
-    flags: u32,
+    flags: u32 = 0,
 };
 
 /// 64-bit section (80 bytes)
@@ -96,14 +97,21 @@ const Section64 = extern struct {
     addr: u64,
     size: u64,
     offset: u32,
-    @"align": u32,
-    reloff: u32,
-    nreloc: u32,
-    flags: u32,
-    reserved1: u32,
-    reserved2: u32,
-    reserved3: u32,
+    @"align": u32 = 0,
+    reloff: u32 = 0,
+    nreloc: u32 = 0,
+    flags: u32 = 0,
+    reserved1: u32 = 0,
+    reserved2: u32 = 0,
+    reserved3: u32 = 0,
 };
+
+/// A section or segment name, zero-padded to the 16 bytes its field holds.
+fn name16(comptime name: []const u8) [16]u8 {
+    var bytes: [16]u8 = @splat(0);
+    @memcpy(bytes[0..name.len], name);
+    return bytes;
+}
 
 /// Symbol table command
 const SymtabCommand = extern struct {
@@ -119,24 +127,24 @@ const SymtabCommand = extern struct {
 const DysymtabCommand = extern struct {
     cmd: u32,
     cmdsize: u32,
-    ilocalsym: u32,
+    ilocalsym: u32 = 0,
     nlocalsym: u32,
     iextdefsym: u32,
     nextdefsym: u32,
     iundefsym: u32,
     nundefsym: u32,
-    tocoff: u32,
-    ntoc: u32,
-    modtaboff: u32,
-    nmodtab: u32,
-    extrefsymoff: u32,
-    nextrefsyms: u32,
-    indirectsymoff: u32,
-    nindirectsyms: u32,
-    extreloff: u32,
-    nextrel: u32,
-    locreloff: u32,
-    nlocrel: u32,
+    tocoff: u32 = 0,
+    ntoc: u32 = 0,
+    modtaboff: u32 = 0,
+    nmodtab: u32 = 0,
+    extrefsymoff: u32 = 0,
+    nextrefsyms: u32 = 0,
+    indirectsymoff: u32 = 0,
+    nindirectsyms: u32 = 0,
+    extreloff: u32 = 0,
+    nextrel: u32 = 0,
+    locreloff: u32 = 0,
+    nlocrel: u32 = 0,
 };
 
 /// Build version command (24 bytes)
@@ -154,7 +162,7 @@ const Nlist64 = extern struct {
     n_strx: u32,
     n_type: u8,
     n_sect: u8,
-    n_desc: i16,
+    n_desc: i16 = 0,
     n_value: u64,
 };
 
@@ -201,6 +209,14 @@ pub const Architecture = enum {
             .aarch64 => MachO.ARM64_RELOC_BRANCH26,
         };
     }
+
+    /// The relocation type of an absolute address field.
+    fn unsignedRelocType(self: Architecture) u4 {
+        return switch (self) {
+            .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
+            .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
+        };
+    }
 };
 
 /// Symbol definition
@@ -237,12 +253,8 @@ pub const MachOWriter = struct {
     text_relocs: std.ArrayList(TextReloc),
     rodata_relocs: std.ArrayList(DataReloc),
 
-    // DWARF debug sections plus their explicit cross-section relocations.
-    debug_line: []const u8,
-    debug_abbrev: []const u8,
-    debug_info: []const u8,
-    debug_line_relocs: []const DebugReloc,
-    debug_info_relocs: []const DebugReloc,
+    /// DWARF debug sections plus their explicit cross-section relocations.
+    debug: object.DebugSections = .{},
 
     // String table
     strtab: std.ArrayList(u8),
@@ -279,11 +291,6 @@ pub const MachOWriter = struct {
             .symbols = .empty,
             .text_relocs = .empty,
             .rodata_relocs = .empty,
-            .debug_line = &.{},
-            .debug_abbrev = &.{},
-            .debug_info = &.{},
-            .debug_line_relocs = &.{},
-            .debug_info_relocs = &.{},
             .strtab = .empty,
         };
 
@@ -299,23 +306,6 @@ pub const MachOWriter = struct {
         self.text_relocs.deinit(self.allocator);
         self.rodata_relocs.deinit(self.allocator);
         self.strtab.deinit(self.allocator);
-    }
-
-    /// Set the DWARF debug section contents and their explicit cross-section
-    /// relocations.
-    pub fn setDebugSections(
-        self: *Self,
-        debug_line: []const u8,
-        debug_abbrev: []const u8,
-        debug_info: []const u8,
-        line_relocs: []const DebugReloc,
-        info_relocs: []const DebugReloc,
-    ) void {
-        self.debug_line = debug_line;
-        self.debug_abbrev = debug_abbrev;
-        self.debug_info = debug_info;
-        self.debug_line_relocs = line_relocs;
-        self.debug_info_relocs = info_relocs;
     }
 
     /// Borrow code section contents until write completes
@@ -367,10 +357,7 @@ pub const MachOWriter = struct {
             .abs64 => .{
                 .pcrel = false,
                 .length = @as(u2, 3),
-                .reloc_type = switch (self.arch) {
-                    .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
-                    .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
-                },
+                .reloc_type = self.arch.unsignedRelocType(),
             },
             .rel32 => .{
                 .pcrel = true,
@@ -445,19 +432,19 @@ pub const MachOWriter = struct {
         const rodata_size: u32 = @intCast(self.rodata.len);
 
         const debug_line_offset: u32 = rodata_offset + rodata_size;
-        const debug_line_size: u32 = @intCast(self.debug_line.len);
+        const debug_line_size: u32 = @intCast(self.debug.line.len);
         const debug_abbrev_offset: u32 = debug_line_offset + debug_line_size;
-        const debug_abbrev_size: u32 = @intCast(self.debug_abbrev.len);
+        const debug_abbrev_size: u32 = @intCast(self.debug.abbrev.len);
         const debug_info_offset: u32 = debug_abbrev_offset + debug_abbrev_size;
-        const debug_info_size: u32 = @intCast(self.debug_info.len);
+        const debug_info_size: u32 = @intCast(self.debug.info.len);
         // Segment-backed sections are contiguous. Relocation tables follow
         // the segment and do not inflate its file extent beyond virtual size.
         const text_reloc_offset: u32 = debug_info_offset + debug_info_size;
         const text_reloc_size: u32 = @intCast(self.text_relocs.items.len * @sizeOf(RelocationInfo));
         const rodata_reloc_offset: u32 = text_reloc_offset + text_reloc_size;
         const rodata_reloc_size: u32 = @intCast(self.rodata_relocs.items.len * @sizeOf(RelocationInfo));
-        const debug_line_text_relocs = textRelocationCount(self.debug_line_relocs);
-        const debug_info_text_relocs = textRelocationCount(self.debug_info_relocs);
+        const debug_line_text_relocs = textRelocationCount(self.debug.line_relocs);
+        const debug_info_text_relocs = textRelocationCount(self.debug.info_relocs);
         const debug_line_reloc_offset: u32 = rodata_reloc_offset + rodata_reloc_size;
         const debug_line_reloc_size: u32 = debug_line_text_relocs * @sizeOf(RelocationInfo);
         const debug_info_reloc_offset: u32 = debug_line_reloc_offset + debug_line_reloc_size;
@@ -518,20 +505,13 @@ pub const MachOWriter = struct {
             .filetype = MachO.MH_OBJECT,
             .ncmds = 4, // segment, symtab, dysymtab, build_version
             .sizeofcmds = total_cmd_size,
-            .flags = 0,
-            .reserved = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&header));
 
         // Write segment command
-        const segname: [16]u8 = std.mem.zeroes([16]u8);
-        // Empty segment name is typical for object files
-
         const segment_cmd = SegmentCommand64{
             .cmd = MachO.LC_SEGMENT_64,
             .cmdsize = segment_cmd_size,
-            .segname = segname,
-            .vmaddr = 0,
             .vmsize = @as(u64, text_size) + rodata_size + debug_line_size + debug_abbrev_size + debug_info_size + self.zero_fill_size,
             .fileoff = text_offset,
             // The segment's file extent covers the five byte-backed sections,
@@ -540,19 +520,13 @@ pub const MachOWriter = struct {
             .maxprot = 7, // rwx
             .initprot = 7,
             .nsects = section_count,
-            .flags = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&segment_cmd));
 
         // Write __text section
-        var sectname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(sectname[0..6], "__text");
-        var sectsegname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(sectsegname[0..6], "__TEXT");
-
         const text_section = Section64{
-            .sectname = sectname,
-            .segname = sectsegname,
+            .sectname = comptime name16("__text"),
+            .segname = comptime name16("__TEXT"),
             .addr = 0,
             .size = text_size,
             .offset = text_offset,
@@ -560,109 +534,69 @@ pub const MachOWriter = struct {
             .reloff = if (self.text_relocs.items.len > 0) text_reloc_offset else 0,
             .nreloc = @intCast(self.text_relocs.items.len),
             .flags = MachO.S_ATTR_PURE_INSTRUCTIONS | MachO.S_ATTR_SOME_INSTRUCTIONS,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&text_section));
 
-        var const_sectname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(const_sectname[0..7], "__const");
-        var const_segname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(const_segname[0..6], "__DATA");
-
         const rodata_section = Section64{
-            .sectname = const_sectname,
-            .segname = const_segname,
+            .sectname = comptime name16("__const"),
+            .segname = comptime name16("__DATA"),
             .addr = text_size,
             .size = rodata_size,
             .offset = rodata_offset,
             .@"align" = 4,
             .reloff = if (self.rodata_relocs.items.len > 0) rodata_reloc_offset else 0,
             .nreloc = @intCast(self.rodata_relocs.items.len),
-            .flags = 0,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&rodata_section));
 
-        var dwarf_segname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(dwarf_segname[0..7], "__DWARF");
+        const dwarf_segname = comptime name16("__DWARF");
         const debug_addr_base: u64 = @as(u64, text_size) + rodata_size;
         const zero_fill_addr: u64 = debug_addr_base + debug_line_size + debug_abbrev_size + debug_info_size;
 
-        var dbg_line_name: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(dbg_line_name[0..12], "__debug_line");
         const debug_line_section = Section64{
-            .sectname = dbg_line_name,
+            .sectname = comptime name16("__debug_line"),
             .segname = dwarf_segname,
             .addr = debug_addr_base,
             .size = debug_line_size,
             .offset = debug_line_offset,
-            .@"align" = 0,
             .reloff = if (debug_line_text_relocs > 0) debug_line_reloc_offset else 0,
             .nreloc = debug_line_text_relocs,
             .flags = MachO.S_ATTR_DEBUG,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&debug_line_section));
 
-        var dbg_abbrev_name: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(dbg_abbrev_name[0..14], "__debug_abbrev");
         const debug_abbrev_section = Section64{
-            .sectname = dbg_abbrev_name,
+            .sectname = comptime name16("__debug_abbrev"),
             .segname = dwarf_segname,
             .addr = debug_addr_base + debug_line_size,
             .size = debug_abbrev_size,
             .offset = debug_abbrev_offset,
-            .@"align" = 0,
-            .reloff = 0,
-            .nreloc = 0,
             .flags = MachO.S_ATTR_DEBUG,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&debug_abbrev_section));
 
-        var dbg_info_name: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(dbg_info_name[0..12], "__debug_info");
         const debug_info_section = Section64{
-            .sectname = dbg_info_name,
+            .sectname = comptime name16("__debug_info"),
             .segname = dwarf_segname,
             .addr = debug_addr_base + debug_line_size + debug_abbrev_size,
             .size = debug_info_size,
             .offset = debug_info_offset,
-            .@"align" = 0,
             .reloff = if (debug_info_text_relocs > 0) debug_info_reloc_offset else 0,
             .nreloc = debug_info_text_relocs,
             .flags = MachO.S_ATTR_DEBUG,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&debug_info_section));
 
         // `__bss` is last in the segment, as zero-fill sections must be, and
         // has no file offset: the loader maps zero pages for its extent.
-        var bss_sectname: [16]u8 = std.mem.zeroes([16]u8);
-        @memcpy(bss_sectname[0..5], "__bss");
         const bss_section = Section64{
-            .sectname = bss_sectname,
-            .segname = const_segname,
+            .sectname = comptime name16("__bss"),
+            .segname = comptime name16("__DATA"),
             .addr = zero_fill_addr,
             .size = self.zero_fill_size,
             .offset = 0,
             .@"align" = 4,
-            .reloff = 0,
-            .nreloc = 0,
             .flags = MachO.S_ZEROFILL,
-            .reserved1 = 0,
-            .reserved2 = 0,
-            .reserved3 = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&bss_section));
 
@@ -681,24 +615,11 @@ pub const MachOWriter = struct {
         const dysymtab_cmd = DysymtabCommand{
             .cmd = MachO.LC_DYSYMTAB,
             .cmdsize = dysymtab_cmd_size,
-            .ilocalsym = 0,
             .nlocalsym = num_local,
             .iextdefsym = num_local,
             .nextdefsym = num_extdef,
             .iundefsym = num_local + num_extdef,
             .nundefsym = num_undef,
-            .tocoff = 0,
-            .ntoc = 0,
-            .modtaboff = 0,
-            .nmodtab = 0,
-            .extrefsymoff = 0,
-            .nextrefsyms = 0,
-            .indirectsymoff = 0,
-            .nindirectsyms = 0,
-            .extreloff = 0,
-            .nextrel = 0,
-            .locreloff = 0,
-            .nlocrel = 0,
         };
         output.appendSliceAssumeCapacity(std.mem.asBytes(&dysymtab_cmd));
 
@@ -725,11 +646,11 @@ pub const MachOWriter = struct {
         }
 
         // Write debug sections within the same contiguous segment
-        output.appendSliceAssumeCapacity(self.debug_line);
-        output.appendSliceAssumeCapacity(self.debug_abbrev);
-        output.appendSliceAssumeCapacity(self.debug_info);
-        applyDebugRelocations(output.items[debug_line_offset..][0..debug_line_size], self.debug_line_relocs);
-        applyDebugRelocations(output.items[debug_info_offset..][0..debug_info_size], self.debug_info_relocs);
+        output.appendSliceAssumeCapacity(self.debug.line);
+        output.appendSliceAssumeCapacity(self.debug.abbrev);
+        output.appendSliceAssumeCapacity(self.debug.info);
+        applyDebugRelocations(output.items[debug_line_offset..][0..debug_line_size], self.debug.line_relocs);
+        applyDebugRelocations(output.items[debug_info_offset..][0..debug_info_size], self.debug.info_relocs);
 
         // Write relocations
         for (self.text_relocs.items) |rel| {
@@ -745,26 +666,18 @@ pub const MachOWriter = struct {
         }
 
         for (self.rodata_relocs.items) |rel| {
-            const reloc_type: u4 = switch (self.arch) {
-                .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
-                .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
-            };
             const reloc = RelocationInfo.init(
                 rel.offset,
                 self.relocationSymbolNumber(rel.symbol_idx, rel.is_extern, symbol_index_remap),
                 false, // absolute pointer
                 3, // 64-bit (2^3 = 8 bytes)
                 rel.is_extern,
-                reloc_type,
+                self.arch.unsignedRelocType(),
             );
             output.appendSliceAssumeCapacity(std.mem.asBytes(&reloc));
         }
 
-        const unsigned_reloc_type: u4 = switch (self.arch) {
-            .x86_64 => MachO.X86_64_RELOC_UNSIGNED,
-            .aarch64 => MachO.ARM64_RELOC_UNSIGNED,
-        };
-        for ([_][]const DebugReloc{ self.debug_line_relocs, self.debug_info_relocs }) |relocs| {
+        for ([_][]const DebugReloc{ self.debug.line_relocs, self.debug.info_relocs }) |relocs| {
             for (relocs) |rel| {
                 if (rel.target != .text) continue;
                 const reloc = RelocationInfo.init(
@@ -773,7 +686,7 @@ pub const MachOWriter = struct {
                     false,
                     debugRelocLength(rel.width),
                     false,
-                    unsigned_reloc_type,
+                    self.arch.unsignedRelocType(),
                 );
                 output.appendSliceAssumeCapacity(std.mem.asBytes(&reloc));
             }
@@ -801,7 +714,6 @@ pub const MachOWriter = struct {
                 .n_strx = str_offset,
                 .n_type = n_type,
                 .n_sect = sym.section,
-                .n_desc = 0,
                 .n_value = section_addr + sym.offset,
             };
             output.appendSliceAssumeCapacity(std.mem.asBytes(&nlist));
@@ -994,7 +906,7 @@ test "DWARF sections relocate only text addresses in the written object" {
     const line_relocs = [_]DebugReloc{
         .{ .section_offset = 8, .target = .text, .width = .eight, .addend = 0 },
     };
-    writer.setDebugSections(&line, &(@as([8]u8, @splat(0))), &info, &line_relocs, &info_relocs);
+    writer.debug = .{ .line = &line, .abbrev = &(@as([8]u8, @splat(0))), .info = &info, .line_relocs = &line_relocs, .info_relocs = &info_relocs };
     var output = std.ArrayList(u8).empty;
     defer output.deinit(allocator);
     try writer.write(&output);
@@ -1027,9 +939,9 @@ test "macho segment file extent contains every declared section" {
     writer.setCode(&.{ 0xc0, 0x03, 0x5f, 0xd6 });
     const external = try writer.addExternalSymbol("_external");
     try writer.addTextRelocation(0, external, true);
-    writer.debug_line = &(@as([256]u8, @splat(0)));
-    writer.debug_abbrev = &(@as([64]u8, @splat(0)));
-    writer.debug_info = &(@as([128]u8, @splat(0)));
+    writer.debug.line = &(@as([256]u8, @splat(0)));
+    writer.debug.abbrev = &(@as([64]u8, @splat(0)));
+    writer.debug.info = &(@as([128]u8, @splat(0)));
     var output = std.ArrayList(u8).empty;
     defer output.deinit(allocator);
     try writer.write(&output);

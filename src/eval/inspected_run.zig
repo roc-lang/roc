@@ -87,8 +87,6 @@ pub const ExecutionHost = union(enum) {
 
 /// Module name a REPL imports to emit one-way effects.
 pub const repl_effect_module_name = "Repl";
-/// Hosted symbol backing `Repl.emit!`.
-pub const repl_effect_hosted_symbol = "roc_repl_emit!";
 /// Source of the in-memory `Repl` module, served to REPL sessions that opt in
 /// to effects so no file on disk is required.
 pub const repl_effect_module_source =
@@ -98,60 +96,6 @@ pub const repl_effect_module_source =
     \\    emit! = |request| Repl.roc_repl_emit!(request)
     \\}
 ;
-
-/// The dedicated REPL's explicit one-way-effect dependency. Callers opt into
-/// it; ordinary inspected evaluation always passes `.reject`.
-pub fn replEffectHost() ExecutionHost {
-    return .{ .hosted_calls = .{ .dispatch = dispatchReplEffect } };
-}
-
-fn dispatchReplEffect(runtime_env: *RuntimeHostEnv, call: Interpreter.HostedCall) Interpreter.Error!void {
-    if (!std.mem.eql(u8, call.symbol, repl_effect_hosted_symbol)) {
-        return error.UnsupportedHostedFunction;
-    }
-    if (call.arg_layouts.len != 1 or call.arg_offsets.len != 1) {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const arg_layout_idx = call.layouts.runtimeRepresentationLayoutIdx(call.arg_layouts[0]);
-    const arg_layout = call.layouts.getLayout(arg_layout_idx);
-    if (arg_layout.tag != .struct_) return error.InvalidHostedFunctionSignature;
-    const struct_idx = arg_layout.getStruct().idx;
-    if (call.layouts.getStructData(struct_idx).fields.count != 2) {
-        return error.InvalidHostedFunctionSignature;
-    }
-    if (call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0)) != .str or
-        call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1)) != .str or
-        call.layouts.layoutSizeAlign(call.layouts.getLayout(call.ret_layout)).size != 0)
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const record_offset: usize = call.arg_offsets[0];
-    const name_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
-    ) catch return error.InvalidHostedFunctionSignature;
-    const payload_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
-    ) catch return error.InvalidHostedFunctionSignature;
-    if (name_offset > call.args.len or call.args.len - name_offset < @sizeOf(RocStr) or
-        payload_offset > call.args.len or call.args.len - payload_offset < @sizeOf(RocStr))
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-    const name_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + name_offset);
-    const payload_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + payload_offset);
-    const name = name_ptr.*;
-    const payload = payload_ptr.*;
-    const roc_ops = runtime_env.get_ops();
-    defer name.decref(roc_ops);
-    defer payload.decref(roc_ops);
-    try runtime_env.recordEffect(name.asSlice(), payload.asSlice());
-}
 
 /// Semantic result of executing a Roc root. The caller owns the byte slice in
 /// either variant and must call `deinit` when it is no longer needed.

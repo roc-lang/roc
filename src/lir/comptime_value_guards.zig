@@ -54,7 +54,7 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
-                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => continue,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => continue,
             };
             const root = program.static_data_values.items[@intFromEnum(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;

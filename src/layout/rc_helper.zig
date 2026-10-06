@@ -43,9 +43,8 @@ pub const RcOp = enum(u2) {
     pub fn performed(self: RcOp) PerformedOp {
         return switch (self) {
             .incref => .incref,
-            .decref => .decref,
+            .decref, .host_drop => .decref,
             .free => .free,
-            .host_drop => .decref,
         };
     }
 };
@@ -176,11 +175,6 @@ pub const Resolver = struct {
     /// counting.
     fn nestedContainsRefcounted(self: *const Resolver, l: layout_mod.Layout) bool {
         return self.store.layoutContainsRefcounted(l);
-    }
-
-    /// Build a helper key from an operation and layout id.
-    pub fn makeKey(_: *const Resolver, op: RcOp, layout_idx: Idx) HelperKey {
-        return .{ .op = op, .layout_idx = layout_idx };
     }
 
     /// Plan the RC behavior for a canonical helper key.

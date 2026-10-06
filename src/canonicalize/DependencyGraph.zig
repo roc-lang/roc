@@ -932,17 +932,9 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
-            .s_while => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
                 try walk.push(self.allocator, .{ .visit = while_stmt.body });
                 try walk.push(self.allocator, .{ .visit = while_stmt.cond });
-            },
-            .s_infinite_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
-            .s_breakable_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
             },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
             .s_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
@@ -1023,11 +1015,7 @@ const DemandAnalyzer = struct {
                 if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
             },
             .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
-            .e_method_call => |call| {
-                try self.pushExprSpanReversed(walk, call.args);
-                try walk.push(self.allocator, .{ .visit = call.receiver });
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
@@ -1316,9 +1304,7 @@ fn appendChildPatterns(
                 try out.append(allocator, arg);
             }
         },
-        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .deferred_import_ref => |deferred| try out.append(allocator, deferred.backing_pattern),
+        inline .nominal, .nominal_external, .deferred_import_ref => |nominal| try out.append(allocator, nominal.backing_pattern),
         .record_destructure => |record| {
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
@@ -1505,89 +1491,6 @@ pub fn computeSCCs(
     };
 }
 
-/// Returns indices of all top-level constants (definitions that are not functions).
-///
-/// This is used to identify definitions that should be evaluated at compile time,
-/// as opposed to functions which are only evaluated when called.
-pub fn getTopLevelConstants(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error![]const CIR.Def.Idx {
-    const defs_slice = cir.store.sliceDefs(all_defs);
-
-    var constants: std.ArrayList(CIR.Def.Idx) = .empty;
-    errdefer constants.deinit(allocator);
-
-    for (defs_slice) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        const expr = cir.store.getExpr(def.expr);
-
-        const tag = std.meta.activeTag(expr);
-        const is_constant = tag != .e_lambda and
-            tag != .e_closure and
-            tag != .e_anno_only and
-            tag != .e_derived_method and
-            tag != .e_hosted_lambda;
-
-        if (is_constant) {
-            try constants.append(allocator, def_idx);
-        }
-    }
-
-    return constants.toOwnedSlice(allocator);
-}
-
-/// Returns constants in dependency order (dependencies first).
-///
-/// This computes the strongly connected components (SCCs) for only the constant
-/// definitions, returning them in topological order so that each constant can
-/// be evaluated after all its dependencies have been evaluated.
-pub fn getConstantsInDependencyOrder(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EvaluationOrder {
-    // Get only the constant definitions
-    const constants = try getTopLevelConstants(cir, all_defs, allocator);
-    defer allocator.free(constants);
-
-    if (constants.len == 0) {
-        return EvaluationOrder{
-            .sccs = &[_]SCC{},
-            .allocator = allocator,
-        };
-    }
-
-    // Build a dependency graph for just the constants
-    var graph = DependencyGraph.init(allocator, constants);
-    errdefer graph.deinit();
-
-    const defs_slice = cir.store.sliceDefs(all_defs);
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, &.{}, allocator);
-    defer analyzer.deinit();
-
-    try analyzer.computeSummaries();
-
-    for (constants) |def_idx| {
-        var deps = DemandSummary{};
-        defer deps.deinit(allocator);
-
-        try analyzer.collectDefDependencies(def_idx, &deps);
-        try analyzer.expandDeps(&deps);
-
-        var dep_iter = deps.deps.keyIterator();
-        while (dep_iter.next()) |dep_def_idx| {
-            try graph.addEdge(def_idx, dep_def_idx.*);
-        }
-    }
-
-    // Compute SCCs using Tarjan's algorithm
-    const result = try computeSCCs(&graph, allocator);
-    graph.deinit();
-    return result;
-}
-
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
 /// tree—including nested lambda bodies and blocks—into `out` (deduplicated).
 ///
@@ -1690,11 +1593,7 @@ pub fn collectNameReferences(
                 }
             },
             .e_field_access => |access| try scratch_stack.append(allocator, access.receiver),
-            .e_method_call => |call| {
-                try scratch_stack.append(allocator, call.receiver);
-                for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try scratch_stack.append(allocator, call.receiver);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
@@ -1729,9 +1628,7 @@ pub fn collectNameReferences(
                         .s_decl => |decl| try scratch_stack.append(allocator, decl.expr),
                         .s_var => |var_stmt| try scratch_stack.append(allocator, var_stmt.expr),
                         .s_var_uninitialized => {},
-                        .s_reassign => |reassign| try scratch_stack.append(allocator, reassign.expr),
-                        .s_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
-                        .s_expr => |expr_stmt| try scratch_stack.append(allocator, expr_stmt.expr),
+                        inline .s_reassign, .s_dbg, .s_expr => |reassign| try scratch_stack.append(allocator, reassign.expr),
                         .s_expect => |expect| try scratch_stack.append(allocator, expect.body),
                         .s_for => |for_stmt| {
                             try scratch_stack.append(allocator, for_stmt.expr);

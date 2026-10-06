@@ -158,6 +158,9 @@ fn scratchFmt(
     return scratch.items;
 }
 
+/// A builtin's identifier text paired with the low-level operation that implements it.
+const NamedLowLevel = struct { []const u8, CIR.Expr.LowLevel };
+
 fn putLowLevelFmt(
     low_level_map: *LowLevelMap,
     env: *ModuleEnv,
@@ -204,221 +207,81 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
     // Add all low-level operations to the map using full qualified names
     // Associated items are stored as defs with qualified names like "Builtin.Str.is_empty"
     // We need to find the actual ident that was created during canonicalization
-    if (env.common.findIdent("Builtin.Str.is_eq")) |str_is_eq_ident| {
-        try low_level_map.put(str_is_eq_ident, .str_is_eq);
-    }
-    if (env.common.findIdent("Builtin.Str.concat")) |str_concat_ident| {
-        try low_level_map.put(str_concat_ident, .str_concat);
-    }
-    if (env.common.findIdent("Builtin.Str.contains")) |str_contains_ident| {
-        try low_level_map.put(str_contains_ident, .str_contains);
-    }
-    if (env.common.findIdent("Builtin.Str.trim")) |str_trim_ident| {
-        try low_level_map.put(str_trim_ident, .str_trim);
-    }
-    if (env.common.findIdent("Builtin.Str.trim_start")) |str_trim_start_ident| {
-        try low_level_map.put(str_trim_start_ident, .str_trim_start);
-    }
-    if (env.common.findIdent("Builtin.Str.trim_end")) |str_trim_end_ident| {
-        try low_level_map.put(str_trim_end_ident, .str_trim_end);
-    }
-    if (env.common.findIdent("Builtin.Str.caseless_ascii_equals")) |str_caseless_ascii_equals_ident| {
-        try low_level_map.put(str_caseless_ascii_equals_ident, .str_caseless_ascii_equals);
-    }
-    if (env.common.findIdent("Builtin.Str.with_ascii_lowercased")) |str_with_ascii_lowercased_ident| {
-        try low_level_map.put(str_with_ascii_lowercased_ident, .str_with_ascii_lowercased);
-    }
-    if (env.common.findIdent("Builtin.Str.with_ascii_uppercased")) |str_with_ascii_uppercased_ident| {
-        try low_level_map.put(str_with_ascii_uppercased_ident, .str_with_ascii_uppercased);
-    }
-    if (env.common.findIdent("Builtin.Str.starts_with")) |str_starts_with_ident| {
-        try low_level_map.put(str_starts_with_ident, .str_starts_with);
-    }
-    if (env.common.findIdent("Builtin.Str.ends_with")) |str_ends_with_ident| {
-        try low_level_map.put(str_ends_with_ident, .str_ends_with);
-    }
-    if (env.common.findIdent("Builtin.Str.repeat")) |str_repeat_ident| {
-        try low_level_map.put(str_repeat_ident, .str_repeat);
-    }
-    if (env.common.findIdent("Builtin.Str.drop_prefix")) |str_drop_prefix_ident| {
-        try low_level_map.put(str_drop_prefix_ident, .str_drop_prefix);
-    }
-    if (env.common.findIdent("str_drop_prefix_caseless_ascii_raw")) |str_drop_prefix_caseless_ascii_ident| {
-        try low_level_map.put(str_drop_prefix_caseless_ascii_ident, .str_drop_prefix_caseless_ascii);
-    }
-    if (env.common.findIdent("Builtin.Str.drop_suffix")) |str_drop_suffix_ident| {
-        try low_level_map.put(str_drop_suffix_ident, .str_drop_suffix);
-    }
-    if (env.common.findIdent("str_split_first_raw")) |str_split_first_ident| {
-        try low_level_map.put(str_split_first_ident, .str_split_first);
-    }
-    if (env.common.findIdent("str_split_last_raw")) |str_split_last_ident| {
-        try low_level_map.put(str_split_last_ident, .str_split_last);
-    }
-    if (env.common.findIdent("Builtin.Str.count_utf8_bytes")) |str_count_utf8_bytes_ident| {
-        try low_level_map.put(str_count_utf8_bytes_ident, .str_count_utf8_bytes);
-    }
-    if (env.common.findIdent("str_get_utf8_byte_unsafe")) |ident| {
-        try low_level_map.put(ident, .str_get_utf8_byte_unsafe);
-    }
-    if (env.common.findIdent("str_substring_unsafe")) |ident| {
-        try low_level_map.put(ident, .str_substring_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Str.with_capacity")) |str_with_capacity_ident| {
-        try low_level_map.put(str_with_capacity_ident, .str_with_capacity);
-    }
-    if (env.common.findIdent("Builtin.Str.reserve")) |str_reserve_ident| {
-        try low_level_map.put(str_reserve_ident, .str_reserve);
-    }
-    if (env.common.findIdent("Builtin.Str.release_excess_capacity")) |str_release_excess_capacity_ident| {
-        try low_level_map.put(str_release_excess_capacity_ident, .str_release_excess_capacity);
-    }
-    if (env.common.findIdent("Builtin.Str.to_utf8")) |str_to_utf8_ident| {
-        try low_level_map.put(str_to_utf8_ident, .str_to_utf8);
-    }
-    if (env.common.findIdent("str_from_utf8_validated")) |ident| {
-        try low_level_map.put(ident, .str_from_utf8_validated);
-    }
-    if (env.common.findIdent("str_from_utf16_le_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf16_le_short);
-    }
-    if (env.common.findIdent("str_from_utf16_be_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf16_be_short);
-    }
-    if (env.common.findIdent("str_from_utf32_le_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf32_le_short);
-    }
-    if (env.common.findIdent("str_from_utf32_be_short")) |ident| {
-        try low_level_map.put(ident, .str_from_utf32_be_short);
-    }
-    if (env.common.findIdent("Builtin.Str.from_utf8_lossy")) |str_from_utf8_lossy_ident| {
-        try low_level_map.put(str_from_utf8_lossy_ident, .str_from_utf8_lossy);
-    }
-    if (env.common.findIdent("Builtin.Str.from_utf8")) |str_from_utf8_ident| {
-        try low_level_map.put(str_from_utf8_ident, .str_from_utf8);
-    }
-    if (env.common.findIdent("Builtin.Str.split_on")) |str_split_on_ident| {
-        try low_level_map.put(str_split_on_ident, .str_split_on);
-    }
-    if (env.common.findIdent("Builtin.Str.join_with")) |str_join_with_ident| {
-        try low_level_map.put(str_join_with_ident, .str_join_with);
-    }
-    if (env.common.findIdent("Builtin.Box.box")) |box_box_ident| {
-        try low_level_map.put(box_box_ident, .box_box);
-    }
-    if (env.common.findIdent("Builtin.Box.unbox")) |box_unbox_ident| {
-        try low_level_map.put(box_unbox_ident, .box_unbox);
-    }
-    if (env.common.findIdent("Builtin.List.len")) |list_len_ident| {
-        try low_level_map.put(list_len_ident, .list_len);
-    }
-    if (env.common.findIdent("Builtin.List.capacity")) |list_cap_ident| {
-        try low_level_map.put(list_cap_ident, .list_capacity);
-    }
-    if (env.common.findIdent("u8_list_len")) |ident| {
-        try low_level_map.put(ident, .list_len);
-    }
-    if (env.common.findIdent("Builtin.List.concat")) |list_concat_ident| {
-        try low_level_map.put(list_concat_ident, .list_concat);
-    }
-    if (env.common.findIdent("Builtin.List.with_capacity")) |list_with_capacity_ident| {
-        try low_level_map.put(list_with_capacity_ident, .list_with_capacity);
-    }
-    if (env.common.findIdent("u8_list_with_capacity")) |ident| {
-        try low_level_map.put(ident, .list_with_capacity);
-    }
-    if (env.common.findIdent("list_get_unsafe")) |list_get_unsafe_ident| {
-        try low_level_map.put(list_get_unsafe_ident, .list_get_unsafe);
-    }
-    if (env.common.findIdent("u8_list_get_unsafe")) |ident| {
-        try low_level_map.put(ident, .list_get_unsafe);
-    }
-    if (env.common.findIdent("list_prefetched")) |ident| {
-        try low_level_map.put(ident, .list_prefetched);
-    }
-    if (env.common.findIdent("list_append_unsafe")) |list_append_unsafe_ident| {
-        try low_level_map.put(list_append_unsafe_ident, .list_append_unsafe);
-    }
-    if (env.common.findIdent("u8_list_append_unsafe")) |ident| {
-        try low_level_map.put(ident, .list_append_unsafe);
-    }
-    if (env.common.findIdent("list_reserve")) |list_reserve_ident| {
-        try low_level_map.put(list_reserve_ident, .list_reserve);
-    }
-    if (env.common.findIdent("Builtin.Bool.not")) |ident| {
-        try low_level_map.put(ident, .bool_not);
-    }
-    if (env.common.findIdent("bool_likely")) |ident| {
-        try low_level_map.put(ident, .bool_likely);
-    }
-    if (env.common.findIdent("list_reserve_for_append")) |ident| {
-        try low_level_map.put(ident, .list_reserve_for_append);
-    }
-    if (env.common.findIdent("list_append_range_within")) |ident| {
-        try low_level_map.put(ident, .list_append_range_within);
-    }
-    if (env.common.findIdent("list_copy_range_within")) |ident| {
-        try low_level_map.put(ident, .list_copy_range_within);
-    }
-    if (env.common.findIdent("list_append_sublist")) |ident| {
-        try low_level_map.put(ident, .list_append_sublist);
-    }
-    if (env.common.findIdent("list_append_le_bytes")) |ident| {
-        try low_level_map.put(ident, .list_append_le_bytes);
-    }
-    if (env.common.findIdent("u8_list_reserve")) |ident| {
-        try low_level_map.put(ident, .list_reserve);
-    }
-    if (env.common.findIdent("u8_list_reserve_for_append")) |ident| {
-        try low_level_map.put(ident, .list_reserve_for_append);
-    }
-    if (env.common.findIdent("list_release_excess_capacity")) |list_release_excess_capacity_ident| {
-        try low_level_map.put(list_release_excess_capacity_ident, .list_release_excess_capacity);
-    }
-    if (env.common.findIdent("list_clear")) |ident| {
-        try low_level_map.put(ident, .list_clear);
-    }
-    if (env.common.findIdent("list_sort_with")) |ident| {
-        try low_level_map.put(ident, .list_sort_with);
-    }
-    if (env.common.findIdent("Builtin.List.drop_at")) |list_drop_at_ident| {
-        try low_level_map.put(list_drop_at_ident, .list_drop_at);
-    }
-    if (env.common.findIdent("Builtin.List.sublist")) |list_sublist_ident| {
-        try low_level_map.put(list_sublist_ident, .list_sublist);
-    }
-    if (env.common.findIdent("Builtin.List.prepend")) |list_prepend_ident| {
-        try low_level_map.put(list_prepend_ident, .list_prepend);
-    }
-    if (env.common.findIdent("list_set_unsafe")) |list_set_unsafe_ident| {
-        try low_level_map.put(list_set_unsafe_ident, .list_set);
-    }
-    if (env.common.findIdent("list_replace_unsafe")) |list_replace_unsafe_ident| {
-        try low_level_map.put(list_replace_unsafe_ident, .list_replace_unsafe);
-    }
-    if (env.common.findIdent("list_swap_unsafe")) |list_swap_unsafe_ident| {
-        try low_level_map.put(list_swap_unsafe_ident, .list_swap);
-    }
-    if (env.common.findIdent("list_map_prepare_reuse")) |list_map_prepare_reuse_ident| {
-        try low_level_map.put(list_map_prepare_reuse_ident, .list_map_prepare_reuse);
-    }
-    if (env.common.findIdent("list_map_can_reuse")) |list_map_can_reuse_ident| {
-        try low_level_map.put(list_map_can_reuse_ident, .list_map_can_reuse);
-    }
-    if (env.common.findIdent("list_map_cast_unsafe")) |list_map_cast_unsafe_ident| {
-        try low_level_map.put(list_map_cast_unsafe_ident, .list_map_cast_unsafe);
-    }
-    if (env.common.findIdent("list_map_extract_unsafe")) |list_map_extract_unsafe_ident| {
-        try low_level_map.put(list_map_extract_unsafe_ident, .list_map_extract_unsafe);
-    }
-    if (env.common.findIdent("list_map_write_unsafe")) |list_map_write_unsafe_ident| {
-        try low_level_map.put(list_map_write_unsafe_ident, .list_map_write_unsafe);
-    }
-    if (env.common.findIdent("dict_pseudo_seed")) |ident| {
-        try low_level_map.put(ident, .dict_pseudo_seed);
-    }
-    if (env.common.findIdent("hasher_finish")) |ident| {
-        try low_level_map.put(ident, .hasher_finish);
+    for ([_]NamedLowLevel{
+        .{ "Builtin.Str.is_eq", .str_is_eq },
+        .{ "Builtin.Str.concat", .str_concat },
+        .{ "Builtin.Str.contains", .str_contains },
+        .{ "Builtin.Str.trim", .str_trim },
+        .{ "Builtin.Str.trim_start", .str_trim_start },
+        .{ "Builtin.Str.trim_end", .str_trim_end },
+        .{ "Builtin.Str.caseless_ascii_equals", .str_caseless_ascii_equals },
+        .{ "Builtin.Str.with_ascii_lowercased", .str_with_ascii_lowercased },
+        .{ "Builtin.Str.with_ascii_uppercased", .str_with_ascii_uppercased },
+        .{ "Builtin.Str.starts_with", .str_starts_with },
+        .{ "Builtin.Str.ends_with", .str_ends_with },
+        .{ "Builtin.Str.repeat", .str_repeat },
+        .{ "Builtin.Str.drop_prefix", .str_drop_prefix },
+        .{ "str_drop_prefix_caseless_ascii_raw", .str_drop_prefix_caseless_ascii },
+        .{ "Builtin.Str.drop_suffix", .str_drop_suffix },
+        .{ "str_split_first_raw", .str_split_first },
+        .{ "str_split_last_raw", .str_split_last },
+        .{ "Builtin.Str.count_utf8_bytes", .str_count_utf8_bytes },
+        .{ "str_get_utf8_byte_unsafe", .str_get_utf8_byte_unsafe },
+        .{ "str_substring_unsafe", .str_substring_unsafe },
+        .{ "Builtin.Str.with_capacity", .str_with_capacity },
+        .{ "Builtin.Str.reserve", .str_reserve },
+        .{ "Builtin.Str.release_excess_capacity", .str_release_excess_capacity },
+        .{ "Builtin.Str.to_utf8", .str_to_utf8 },
+        .{ "str_from_utf8_validated", .str_from_utf8_validated },
+        .{ "str_from_utf16_le_short", .str_from_utf16_le_short },
+        .{ "str_from_utf16_be_short", .str_from_utf16_be_short },
+        .{ "str_from_utf32_le_short", .str_from_utf32_le_short },
+        .{ "str_from_utf32_be_short", .str_from_utf32_be_short },
+        .{ "Builtin.Str.from_utf8_lossy", .str_from_utf8_lossy },
+        .{ "Builtin.Str.from_utf8", .str_from_utf8 },
+        .{ "Builtin.Str.split_on", .str_split_on },
+        .{ "Builtin.Str.join_with", .str_join_with },
+        .{ "Builtin.Box.box", .box_box },
+        .{ "Builtin.Box.unbox", .box_unbox },
+        .{ "Builtin.List.len", .list_len },
+        .{ "Builtin.List.capacity", .list_capacity },
+        .{ "u8_list_len", .list_len },
+        .{ "Builtin.List.concat", .list_concat },
+        .{ "Builtin.List.with_capacity", .list_with_capacity },
+        .{ "u8_list_with_capacity", .list_with_capacity },
+        .{ "list_get_unsafe", .list_get_unsafe },
+        .{ "u8_list_get_unsafe", .list_get_unsafe },
+        .{ "list_prefetched", .list_prefetched },
+        .{ "list_append_unsafe", .list_append_unsafe },
+        .{ "u8_list_append_unsafe", .list_append_unsafe },
+        .{ "list_reserve", .list_reserve },
+        .{ "Builtin.Bool.not", .bool_not },
+        .{ "bool_likely", .bool_likely },
+        .{ "list_reserve_for_append", .list_reserve_for_append },
+        .{ "list_append_range_within", .list_append_range_within },
+        .{ "list_copy_range_within", .list_copy_range_within },
+        .{ "list_append_sublist", .list_append_sublist },
+        .{ "list_append_le_bytes", .list_append_le_bytes },
+        .{ "u8_list_reserve", .list_reserve },
+        .{ "u8_list_reserve_for_append", .list_reserve_for_append },
+        .{ "list_release_excess_capacity", .list_release_excess_capacity },
+        .{ "list_clear", .list_clear },
+        .{ "list_sort_with", .list_sort_with },
+        .{ "Builtin.List.drop_at", .list_drop_at },
+        .{ "Builtin.List.sublist", .list_sublist },
+        .{ "Builtin.List.prepend", .list_prepend },
+        .{ "list_set_unsafe", .list_set },
+        .{ "list_replace_unsafe", .list_replace_unsafe },
+        .{ "list_swap_unsafe", .list_swap },
+        .{ "list_map_prepare_reuse", .list_map_prepare_reuse },
+        .{ "list_map_can_reuse", .list_map_can_reuse },
+        .{ "list_map_cast_unsafe", .list_map_cast_unsafe },
+        .{ "list_map_extract_unsafe", .list_map_extract_unsafe },
+        .{ "list_map_write_unsafe", .list_map_write_unsafe },
+        .{ "dict_pseudo_seed", .dict_pseudo_seed },
+        .{ "hasher_finish", .hasher_finish },
+    }) |entry| {
+        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
     }
     const hasher_primitives = [_]struct {
         name: []const u8,
@@ -757,885 +620,316 @@ fn replaceProvidedByCompilerLowLevels(env: *ModuleEnv) (Allocator.Error || error
 
     // Bitwise logical operations (integer types only)
     for (integer_types) |num_type| {
-        var buf: [256]u8 = undefined;
-
-        // bitwise_and
-        const bitwise_and = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_and", .{num_type}) catch unreachable;
-        if (env.common.findIdent(bitwise_and)) |ident| {
-            try low_level_map.put(ident, .num_bitwise_and);
-        }
-
-        // bitwise_or
-        const bitwise_or = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_or", .{num_type}) catch unreachable;
-        if (env.common.findIdent(bitwise_or)) |ident| {
-            try low_level_map.put(ident, .num_bitwise_or);
-        }
-
-        // bitwise_xor
-        const bitwise_xor = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_xor", .{num_type}) catch unreachable;
-        if (env.common.findIdent(bitwise_xor)) |ident| {
-            try low_level_map.put(ident, .num_bitwise_xor);
-        }
-
-        // bitwise_not
-        const bitwise_not = std.fmt.bufPrint(&buf, "Builtin.Num.{s}.bitwise_not", .{num_type}) catch unreachable;
-        if (env.common.findIdent(bitwise_not)) |ident| {
-            try low_level_map.put(ident, .num_bitwise_not);
-        }
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.bitwise_and", .{num_type}, .num_bitwise_and);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.bitwise_or", .{num_type}, .num_bitwise_or);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.bitwise_xor", .{num_type}, .num_bitwise_xor);
+        try putLowLevelFmt(&low_level_map, env, &name_scratch, "Builtin.Num.{s}.bitwise_not", .{num_type}, .num_bitwise_not);
     }
 
     // U8 conversion operations
-    if (env.common.findIdent("Builtin.Num.U8.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .u8_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .u8_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_i16")) |ident| {
-        try low_level_map.put(ident, .u8_to_i16);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_i32")) |ident| {
-        try low_level_map.put(ident, .u8_to_i32);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_i64")) |ident| {
-        try low_level_map.put(ident, .u8_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_i128")) |ident| {
-        try low_level_map.put(ident, .u8_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_u16")) |ident| {
-        try low_level_map.put(ident, .u8_to_u16);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_u32")) |ident| {
-        try low_level_map.put(ident, .u8_to_u32);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_u64")) |ident| {
-        try low_level_map.put(ident, .u8_to_u64);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_u128")) |ident| {
-        try low_level_map.put(ident, .u8_to_u128);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_f32")) |ident| {
-        try low_level_map.put(ident, .u8_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_f64")) |ident| {
-        try low_level_map.put(ident, .u8_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.U8.to_dec")) |ident| {
-        try low_level_map.put(ident, .u8_to_dec);
-    }
+    for ([_]NamedLowLevel{
+        .{ "Builtin.Num.U8.to_i8_wrap", .u8_to_i8_wrap },
+        .{ "Builtin.Num.U8.to_i8_try", .u8_to_i8_try },
+        .{ "Builtin.Num.U8.to_i16", .u8_to_i16 },
+        .{ "Builtin.Num.U8.to_i32", .u8_to_i32 },
+        .{ "Builtin.Num.U8.to_i64", .u8_to_i64 },
+        .{ "Builtin.Num.U8.to_i128", .u8_to_i128 },
+        .{ "Builtin.Num.U8.to_u16", .u8_to_u16 },
+        .{ "Builtin.Num.U8.to_u32", .u8_to_u32 },
+        .{ "Builtin.Num.U8.to_u64", .u8_to_u64 },
+        .{ "Builtin.Num.U8.to_u128", .u8_to_u128 },
+        .{ "Builtin.Num.U8.to_f32", .u8_to_f32 },
+        .{ "Builtin.Num.U8.to_f64", .u8_to_f64 },
+        .{ "Builtin.Num.U8.to_dec", .u8_to_dec },
 
-    // I8 conversion operations
-    if (env.common.findIdent("Builtin.Num.I8.to_i16")) |ident| {
-        try low_level_map.put(ident, .i8_to_i16);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_i32")) |ident| {
-        try low_level_map.put(ident, .i8_to_i32);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_i64")) |ident| {
-        try low_level_map.put(ident, .i8_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_i128")) |ident| {
-        try low_level_map.put(ident, .i8_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .i8_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .i8_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .i8_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .i8_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .i8_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .i8_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .i8_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .i8_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .i8_to_u128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_u128_try")) |ident| {
-        try low_level_map.put(ident, .i8_to_u128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_f32")) |ident| {
-        try low_level_map.put(ident, .i8_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_f64")) |ident| {
-        try low_level_map.put(ident, .i8_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.I8.to_dec")) |ident| {
-        try low_level_map.put(ident, .i8_to_dec);
-    }
+        // I8 conversion operations
+        .{ "Builtin.Num.I8.to_i16", .i8_to_i16 },
+        .{ "Builtin.Num.I8.to_i32", .i8_to_i32 },
+        .{ "Builtin.Num.I8.to_i64", .i8_to_i64 },
+        .{ "Builtin.Num.I8.to_i128", .i8_to_i128 },
+        .{ "Builtin.Num.I8.to_u8_wrap", .i8_to_u8_wrap },
+        .{ "Builtin.Num.I8.to_u8_try", .i8_to_u8_try },
+        .{ "Builtin.Num.I8.to_u16_wrap", .i8_to_u16_wrap },
+        .{ "Builtin.Num.I8.to_u16_try", .i8_to_u16_try },
+        .{ "Builtin.Num.I8.to_u32_wrap", .i8_to_u32_wrap },
+        .{ "Builtin.Num.I8.to_u32_try", .i8_to_u32_try },
+        .{ "Builtin.Num.I8.to_u64_wrap", .i8_to_u64_wrap },
+        .{ "Builtin.Num.I8.to_u64_try", .i8_to_u64_try },
+        .{ "Builtin.Num.I8.to_u128_wrap", .i8_to_u128_wrap },
+        .{ "Builtin.Num.I8.to_u128_try", .i8_to_u128_try },
+        .{ "Builtin.Num.I8.to_f32", .i8_to_f32 },
+        .{ "Builtin.Num.I8.to_f64", .i8_to_f64 },
+        .{ "Builtin.Num.I8.to_dec", .i8_to_dec },
 
-    // U16 conversion operations
-    if (env.common.findIdent("Builtin.Num.U16.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .u16_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .u16_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .u16_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .u16_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i32")) |ident| {
-        try low_level_map.put(ident, .u16_to_i32);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i64")) |ident| {
-        try low_level_map.put(ident, .u16_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_i128")) |ident| {
-        try low_level_map.put(ident, .u16_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .u16_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .u16_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_u32")) |ident| {
-        try low_level_map.put(ident, .u16_to_u32);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_u64")) |ident| {
-        try low_level_map.put(ident, .u16_to_u64);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_u128")) |ident| {
-        try low_level_map.put(ident, .u16_to_u128);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_f32")) |ident| {
-        try low_level_map.put(ident, .u16_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_f64")) |ident| {
-        try low_level_map.put(ident, .u16_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.U16.to_dec")) |ident| {
-        try low_level_map.put(ident, .u16_to_dec);
-    }
+        // U16 conversion operations
+        .{ "Builtin.Num.U16.to_i8_wrap", .u16_to_i8_wrap },
+        .{ "Builtin.Num.U16.to_i8_try", .u16_to_i8_try },
+        .{ "Builtin.Num.U16.to_i16_wrap", .u16_to_i16_wrap },
+        .{ "Builtin.Num.U16.to_i16_try", .u16_to_i16_try },
+        .{ "Builtin.Num.U16.to_i32", .u16_to_i32 },
+        .{ "Builtin.Num.U16.to_i64", .u16_to_i64 },
+        .{ "Builtin.Num.U16.to_i128", .u16_to_i128 },
+        .{ "Builtin.Num.U16.to_u8_wrap", .u16_to_u8_wrap },
+        .{ "Builtin.Num.U16.to_u8_try", .u16_to_u8_try },
+        .{ "Builtin.Num.U16.to_u32", .u16_to_u32 },
+        .{ "Builtin.Num.U16.to_u64", .u16_to_u64 },
+        .{ "Builtin.Num.U16.to_u128", .u16_to_u128 },
+        .{ "Builtin.Num.U16.to_f32", .u16_to_f32 },
+        .{ "Builtin.Num.U16.to_f64", .u16_to_f64 },
+        .{ "Builtin.Num.U16.to_dec", .u16_to_dec },
 
-    // I16 conversion operations
-    if (env.common.findIdent("Builtin.Num.I16.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_i32")) |ident| {
-        try low_level_map.put(ident, .i16_to_i32);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_i64")) |ident| {
-        try low_level_map.put(ident, .i16_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_i128")) |ident| {
-        try low_level_map.put(ident, .i16_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .i16_to_u128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_u128_try")) |ident| {
-        try low_level_map.put(ident, .i16_to_u128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_f32")) |ident| {
-        try low_level_map.put(ident, .i16_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_f64")) |ident| {
-        try low_level_map.put(ident, .i16_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.I16.to_dec")) |ident| {
-        try low_level_map.put(ident, .i16_to_dec);
-    }
+        // I16 conversion operations
+        .{ "Builtin.Num.I16.to_i8_wrap", .i16_to_i8_wrap },
+        .{ "Builtin.Num.I16.to_i8_try", .i16_to_i8_try },
+        .{ "Builtin.Num.I16.to_i32", .i16_to_i32 },
+        .{ "Builtin.Num.I16.to_i64", .i16_to_i64 },
+        .{ "Builtin.Num.I16.to_i128", .i16_to_i128 },
+        .{ "Builtin.Num.I16.to_u8_wrap", .i16_to_u8_wrap },
+        .{ "Builtin.Num.I16.to_u8_try", .i16_to_u8_try },
+        .{ "Builtin.Num.I16.to_u16_wrap", .i16_to_u16_wrap },
+        .{ "Builtin.Num.I16.to_u16_try", .i16_to_u16_try },
+        .{ "Builtin.Num.I16.to_u32_wrap", .i16_to_u32_wrap },
+        .{ "Builtin.Num.I16.to_u32_try", .i16_to_u32_try },
+        .{ "Builtin.Num.I16.to_u64_wrap", .i16_to_u64_wrap },
+        .{ "Builtin.Num.I16.to_u64_try", .i16_to_u64_try },
+        .{ "Builtin.Num.I16.to_u128_wrap", .i16_to_u128_wrap },
+        .{ "Builtin.Num.I16.to_u128_try", .i16_to_u128_try },
+        .{ "Builtin.Num.I16.to_f32", .i16_to_f32 },
+        .{ "Builtin.Num.I16.to_f64", .i16_to_f64 },
+        .{ "Builtin.Num.I16.to_dec", .i16_to_dec },
 
-    // U32 conversion operations
-    if (env.common.findIdent("Builtin.Num.U32.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .u32_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .u32_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .u32_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .u32_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .u32_to_i32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i32_try")) |ident| {
-        try low_level_map.put(ident, .u32_to_i32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i64")) |ident| {
-        try low_level_map.put(ident, .u32_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_i128")) |ident| {
-        try low_level_map.put(ident, .u32_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .u32_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .u32_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .u32_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .u32_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u64")) |ident| {
-        try low_level_map.put(ident, .u32_to_u64);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_u128")) |ident| {
-        try low_level_map.put(ident, .u32_to_u128);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_f32")) |ident| {
-        try low_level_map.put(ident, .u32_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_f64")) |ident| {
-        try low_level_map.put(ident, .u32_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.U32.to_dec")) |ident| {
-        try low_level_map.put(ident, .u32_to_dec);
-    }
+        // U32 conversion operations
+        .{ "Builtin.Num.U32.to_i8_wrap", .u32_to_i8_wrap },
+        .{ "Builtin.Num.U32.to_i8_try", .u32_to_i8_try },
+        .{ "Builtin.Num.U32.to_i16_wrap", .u32_to_i16_wrap },
+        .{ "Builtin.Num.U32.to_i16_try", .u32_to_i16_try },
+        .{ "Builtin.Num.U32.to_i32_wrap", .u32_to_i32_wrap },
+        .{ "Builtin.Num.U32.to_i32_try", .u32_to_i32_try },
+        .{ "Builtin.Num.U32.to_i64", .u32_to_i64 },
+        .{ "Builtin.Num.U32.to_i128", .u32_to_i128 },
+        .{ "Builtin.Num.U32.to_u8_wrap", .u32_to_u8_wrap },
+        .{ "Builtin.Num.U32.to_u8_try", .u32_to_u8_try },
+        .{ "Builtin.Num.U32.to_u16_wrap", .u32_to_u16_wrap },
+        .{ "Builtin.Num.U32.to_u16_try", .u32_to_u16_try },
+        .{ "Builtin.Num.U32.to_u64", .u32_to_u64 },
+        .{ "Builtin.Num.U32.to_u128", .u32_to_u128 },
+        .{ "Builtin.Num.U32.to_f32", .u32_to_f32 },
+        .{ "Builtin.Num.U32.to_f64", .u32_to_f64 },
+        .{ "Builtin.Num.U32.to_dec", .u32_to_dec },
 
-    // I32 conversion operations
-    if (env.common.findIdent("Builtin.Num.I32.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_i64")) |ident| {
-        try low_level_map.put(ident, .i32_to_i64);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_i128")) |ident| {
-        try low_level_map.put(ident, .i32_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .i32_to_u128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_u128_try")) |ident| {
-        try low_level_map.put(ident, .i32_to_u128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_f32")) |ident| {
-        try low_level_map.put(ident, .i32_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_f64")) |ident| {
-        try low_level_map.put(ident, .i32_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.I32.to_dec")) |ident| {
-        try low_level_map.put(ident, .i32_to_dec);
-    }
+        // I32 conversion operations
+        .{ "Builtin.Num.I32.to_i8_wrap", .i32_to_i8_wrap },
+        .{ "Builtin.Num.I32.to_i8_try", .i32_to_i8_try },
+        .{ "Builtin.Num.I32.to_i16_wrap", .i32_to_i16_wrap },
+        .{ "Builtin.Num.I32.to_i16_try", .i32_to_i16_try },
+        .{ "Builtin.Num.I32.to_i64", .i32_to_i64 },
+        .{ "Builtin.Num.I32.to_i128", .i32_to_i128 },
+        .{ "Builtin.Num.I32.to_u8_wrap", .i32_to_u8_wrap },
+        .{ "Builtin.Num.I32.to_u8_try", .i32_to_u8_try },
+        .{ "Builtin.Num.I32.to_u16_wrap", .i32_to_u16_wrap },
+        .{ "Builtin.Num.I32.to_u16_try", .i32_to_u16_try },
+        .{ "Builtin.Num.I32.to_u32_wrap", .i32_to_u32_wrap },
+        .{ "Builtin.Num.I32.to_u32_try", .i32_to_u32_try },
+        .{ "Builtin.Num.I32.to_u64_wrap", .i32_to_u64_wrap },
+        .{ "Builtin.Num.I32.to_u64_try", .i32_to_u64_try },
+        .{ "Builtin.Num.I32.to_u128_wrap", .i32_to_u128_wrap },
+        .{ "Builtin.Num.I32.to_u128_try", .i32_to_u128_try },
+        .{ "Builtin.Num.I32.to_f32", .i32_to_f32 },
+        .{ "Builtin.Num.I32.to_f64", .i32_to_f64 },
+        .{ "Builtin.Num.I32.to_dec", .i32_to_dec },
 
-    // U64 conversion operations
-    if (env.common.findIdent("Builtin.Num.U64.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_i32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i32_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_i32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_i64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i64_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_i64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_i128")) |ident| {
-        try low_level_map.put(ident, .u64_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .u64_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .u64_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_u128")) |ident| {
-        try low_level_map.put(ident, .u64_to_u128);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_f32")) |ident| {
-        try low_level_map.put(ident, .u64_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_f64")) |ident| {
-        try low_level_map.put(ident, .u64_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.U64.to_dec")) |ident| {
-        try low_level_map.put(ident, .u64_to_dec);
-    }
+        // U64 conversion operations
+        .{ "Builtin.Num.U64.to_i8_wrap", .u64_to_i8_wrap },
+        .{ "Builtin.Num.U64.to_i8_try", .u64_to_i8_try },
+        .{ "Builtin.Num.U64.to_i16_wrap", .u64_to_i16_wrap },
+        .{ "Builtin.Num.U64.to_i16_try", .u64_to_i16_try },
+        .{ "Builtin.Num.U64.to_i32_wrap", .u64_to_i32_wrap },
+        .{ "Builtin.Num.U64.to_i32_try", .u64_to_i32_try },
+        .{ "Builtin.Num.U64.to_i64_wrap", .u64_to_i64_wrap },
+        .{ "Builtin.Num.U64.to_i64_try", .u64_to_i64_try },
+        .{ "Builtin.Num.U64.to_i128", .u64_to_i128 },
+        .{ "Builtin.Num.U64.to_u8_wrap", .u64_to_u8_wrap },
+        .{ "Builtin.Num.U64.to_u8_try", .u64_to_u8_try },
+        .{ "Builtin.Num.U64.to_u16_wrap", .u64_to_u16_wrap },
+        .{ "Builtin.Num.U64.to_u16_try", .u64_to_u16_try },
+        .{ "Builtin.Num.U64.to_u32_wrap", .u64_to_u32_wrap },
+        .{ "Builtin.Num.U64.to_u32_try", .u64_to_u32_try },
+        .{ "Builtin.Num.U64.to_u128", .u64_to_u128 },
+        .{ "Builtin.Num.U64.to_f32", .u64_to_f32 },
+        .{ "Builtin.Num.U64.to_f64", .u64_to_f64 },
+        .{ "Builtin.Num.U64.to_dec", .u64_to_dec },
 
-    // I64 conversion operations
-    if (env.common.findIdent("Builtin.Num.I64.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_i32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i32_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_i32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_i128")) |ident| {
-        try low_level_map.put(ident, .i64_to_i128);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .i64_to_u128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_u128_try")) |ident| {
-        try low_level_map.put(ident, .i64_to_u128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_f32")) |ident| {
-        try low_level_map.put(ident, .i64_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_f64")) |ident| {
-        try low_level_map.put(ident, .i64_to_f64);
-    }
-    if (env.common.findIdent("Builtin.Num.I64.to_dec")) |ident| {
-        try low_level_map.put(ident, .i64_to_dec);
-    }
+        // I64 conversion operations
+        .{ "Builtin.Num.I64.to_i8_wrap", .i64_to_i8_wrap },
+        .{ "Builtin.Num.I64.to_i8_try", .i64_to_i8_try },
+        .{ "Builtin.Num.I64.to_i16_wrap", .i64_to_i16_wrap },
+        .{ "Builtin.Num.I64.to_i16_try", .i64_to_i16_try },
+        .{ "Builtin.Num.I64.to_i32_wrap", .i64_to_i32_wrap },
+        .{ "Builtin.Num.I64.to_i32_try", .i64_to_i32_try },
+        .{ "Builtin.Num.I64.to_i128", .i64_to_i128 },
+        .{ "Builtin.Num.I64.to_u8_wrap", .i64_to_u8_wrap },
+        .{ "Builtin.Num.I64.to_u8_try", .i64_to_u8_try },
+        .{ "Builtin.Num.I64.to_u16_wrap", .i64_to_u16_wrap },
+        .{ "Builtin.Num.I64.to_u16_try", .i64_to_u16_try },
+        .{ "Builtin.Num.I64.to_u32_wrap", .i64_to_u32_wrap },
+        .{ "Builtin.Num.I64.to_u32_try", .i64_to_u32_try },
+        .{ "Builtin.Num.I64.to_u64_wrap", .i64_to_u64_wrap },
+        .{ "Builtin.Num.I64.to_u64_try", .i64_to_u64_try },
+        .{ "Builtin.Num.I64.to_u128_wrap", .i64_to_u128_wrap },
+        .{ "Builtin.Num.I64.to_u128_try", .i64_to_u128_try },
+        .{ "Builtin.Num.I64.to_f32", .i64_to_f32 },
+        .{ "Builtin.Num.I64.to_f64", .i64_to_f64 },
+        .{ "Builtin.Num.I64.to_dec", .i64_to_dec },
 
-    // U128 conversion operations
-    if (env.common.findIdent("Builtin.Num.U128.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_i32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i32_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_i32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_i64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i64_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_i64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i128_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_i128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_i128_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_i128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .u128_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .u128_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_f32")) |ident| {
-        try low_level_map.put(ident, .u128_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.U128.to_f64")) |ident| {
-        try low_level_map.put(ident, .u128_to_f64);
-    }
-    if (env.common.findIdent("u128_to_dec_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .u128_to_dec_try_unsafe);
-    }
+        // U128 conversion operations
+        .{ "Builtin.Num.U128.to_i8_wrap", .u128_to_i8_wrap },
+        .{ "Builtin.Num.U128.to_i8_try", .u128_to_i8_try },
+        .{ "Builtin.Num.U128.to_i16_wrap", .u128_to_i16_wrap },
+        .{ "Builtin.Num.U128.to_i16_try", .u128_to_i16_try },
+        .{ "Builtin.Num.U128.to_i32_wrap", .u128_to_i32_wrap },
+        .{ "Builtin.Num.U128.to_i32_try", .u128_to_i32_try },
+        .{ "Builtin.Num.U128.to_i64_wrap", .u128_to_i64_wrap },
+        .{ "Builtin.Num.U128.to_i64_try", .u128_to_i64_try },
+        .{ "Builtin.Num.U128.to_i128_wrap", .u128_to_i128_wrap },
+        .{ "Builtin.Num.U128.to_i128_try", .u128_to_i128_try },
+        .{ "Builtin.Num.U128.to_u8_wrap", .u128_to_u8_wrap },
+        .{ "Builtin.Num.U128.to_u8_try", .u128_to_u8_try },
+        .{ "Builtin.Num.U128.to_u16_wrap", .u128_to_u16_wrap },
+        .{ "Builtin.Num.U128.to_u16_try", .u128_to_u16_try },
+        .{ "Builtin.Num.U128.to_u32_wrap", .u128_to_u32_wrap },
+        .{ "Builtin.Num.U128.to_u32_try", .u128_to_u32_try },
+        .{ "Builtin.Num.U128.to_u64_wrap", .u128_to_u64_wrap },
+        .{ "Builtin.Num.U128.to_u64_try", .u128_to_u64_try },
+        .{ "Builtin.Num.U128.to_f32", .u128_to_f32 },
+        .{ "Builtin.Num.U128.to_f64", .u128_to_f64 },
+        .{ "u128_to_dec_try_unsafe", .u128_to_dec_try_unsafe },
 
-    // I128 conversion operations
-    if (env.common.findIdent("Builtin.Num.I128.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_i8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i8_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_i8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_i16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i16_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_i16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_i32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i32_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_i32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_i64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_i64_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_i64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_u8_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u8_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_u8_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_u16_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u16_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_u16_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_u32_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u32_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_u32_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_u64_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u64_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_u64_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .i128_to_u128_wrap);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_u128_try")) |ident| {
-        try low_level_map.put(ident, .i128_to_u128_try);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_f32")) |ident| {
-        try low_level_map.put(ident, .i128_to_f32);
-    }
-    if (env.common.findIdent("Builtin.Num.I128.to_f64")) |ident| {
-        try low_level_map.put(ident, .i128_to_f64);
-    }
-    if (env.common.findIdent("i128_to_dec_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .i128_to_dec_try_unsafe);
-    }
+        // I128 conversion operations
+        .{ "Builtin.Num.I128.to_i8_wrap", .i128_to_i8_wrap },
+        .{ "Builtin.Num.I128.to_i8_try", .i128_to_i8_try },
+        .{ "Builtin.Num.I128.to_i16_wrap", .i128_to_i16_wrap },
+        .{ "Builtin.Num.I128.to_i16_try", .i128_to_i16_try },
+        .{ "Builtin.Num.I128.to_i32_wrap", .i128_to_i32_wrap },
+        .{ "Builtin.Num.I128.to_i32_try", .i128_to_i32_try },
+        .{ "Builtin.Num.I128.to_i64_wrap", .i128_to_i64_wrap },
+        .{ "Builtin.Num.I128.to_i64_try", .i128_to_i64_try },
+        .{ "Builtin.Num.I128.to_u8_wrap", .i128_to_u8_wrap },
+        .{ "Builtin.Num.I128.to_u8_try", .i128_to_u8_try },
+        .{ "Builtin.Num.I128.to_u16_wrap", .i128_to_u16_wrap },
+        .{ "Builtin.Num.I128.to_u16_try", .i128_to_u16_try },
+        .{ "Builtin.Num.I128.to_u32_wrap", .i128_to_u32_wrap },
+        .{ "Builtin.Num.I128.to_u32_try", .i128_to_u32_try },
+        .{ "Builtin.Num.I128.to_u64_wrap", .i128_to_u64_wrap },
+        .{ "Builtin.Num.I128.to_u64_try", .i128_to_u64_try },
+        .{ "Builtin.Num.I128.to_u128_wrap", .i128_to_u128_wrap },
+        .{ "Builtin.Num.I128.to_u128_try", .i128_to_u128_try },
+        .{ "Builtin.Num.I128.to_f32", .i128_to_f32 },
+        .{ "Builtin.Num.I128.to_f64", .i128_to_f64 },
+        .{ "i128_to_dec_try_unsafe", .i128_to_dec_try_unsafe },
 
-    // F32 conversion operations
-    if (env.common.findIdent("Builtin.Num.F32.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_i8_trunc);
-    }
-    if (env.common.findIdent("f32_to_i8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_i8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_i16_trunc);
-    }
-    if (env.common.findIdent("f32_to_i16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_i16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_i32_trunc);
-    }
-    if (env.common.findIdent("f32_to_i32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_i32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_i64_trunc);
-    }
-    if (env.common.findIdent("f32_to_i64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_i64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_i128_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_i128_trunc);
-    }
-    if (env.common.findIdent("f32_to_i128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_i128_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_u8_trunc);
-    }
-    if (env.common.findIdent("f32_to_u8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_u8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_u16_trunc);
-    }
-    if (env.common.findIdent("f32_to_u16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_u16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_u32_trunc);
-    }
-    if (env.common.findIdent("f32_to_u32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_u32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_u64_trunc);
-    }
-    if (env.common.findIdent("f32_to_u64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_u64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .f32_to_u128_trunc);
-    }
-    if (env.common.findIdent("f32_to_u128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f32_to_u128_try_unsafe);
-    }
-    if (env.common.findIdent("f32_sqrt_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sqrt);
-    }
-    if (env.common.findIdent("f32_pow_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_pow);
-    }
-    if (env.common.findIdent("f32_sin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sin);
-    }
-    if (env.common.findIdent("f32_cos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_cos);
-    }
-    if (env.common.findIdent("f32_tan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_tan);
-    }
-    if (env.common.findIdent("f32_asin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_asin);
-    }
-    if (env.common.findIdent("f32_acos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_acos);
-    }
-    if (env.common.findIdent("f32_atan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan);
-    }
-    if (env.common.findIdent("f32_atan2_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan2);
-    }
-    if (env.common.findIdent("dec_sqrt_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sqrt);
-    }
-    if (env.common.findIdent("dec_pow_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_pow);
-    }
-    if (env.common.findIdent("dec_sin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sin);
-    }
-    if (env.common.findIdent("dec_cos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_cos);
-    }
-    if (env.common.findIdent("dec_tan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_tan);
-    }
-    if (env.common.findIdent("dec_asin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_asin);
-    }
-    if (env.common.findIdent("dec_acos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_acos);
-    }
-    if (env.common.findIdent("dec_atan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan);
-    }
-    if (env.common.findIdent("dec_atan2_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan2);
-    }
-    if (env.common.findIdent("f32_floor_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_floor);
-    }
-    if (env.common.findIdent("f32_ceiling_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_ceiling);
-    }
-    if (env.common.findIdent("Builtin.Num.F32.to_f64")) |ident| {
-        try low_level_map.put(ident, .f32_to_f64);
-    }
+        // F32 conversion operations
+        .{ "Builtin.Num.F32.to_i8_wrap", .f32_to_i8_trunc },
+        .{ "f32_to_i8_try_unsafe", .f32_to_i8_try_unsafe },
+        .{ "Builtin.Num.F32.to_i16_wrap", .f32_to_i16_trunc },
+        .{ "f32_to_i16_try_unsafe", .f32_to_i16_try_unsafe },
+        .{ "Builtin.Num.F32.to_i32_wrap", .f32_to_i32_trunc },
+        .{ "f32_to_i32_try_unsafe", .f32_to_i32_try_unsafe },
+        .{ "Builtin.Num.F32.to_i64_wrap", .f32_to_i64_trunc },
+        .{ "f32_to_i64_try_unsafe", .f32_to_i64_try_unsafe },
+        .{ "Builtin.Num.F32.to_i128_wrap", .f32_to_i128_trunc },
+        .{ "f32_to_i128_try_unsafe", .f32_to_i128_try_unsafe },
+        .{ "Builtin.Num.F32.to_u8_wrap", .f32_to_u8_trunc },
+        .{ "f32_to_u8_try_unsafe", .f32_to_u8_try_unsafe },
+        .{ "Builtin.Num.F32.to_u16_wrap", .f32_to_u16_trunc },
+        .{ "f32_to_u16_try_unsafe", .f32_to_u16_try_unsafe },
+        .{ "Builtin.Num.F32.to_u32_wrap", .f32_to_u32_trunc },
+        .{ "f32_to_u32_try_unsafe", .f32_to_u32_try_unsafe },
+        .{ "Builtin.Num.F32.to_u64_wrap", .f32_to_u64_trunc },
+        .{ "f32_to_u64_try_unsafe", .f32_to_u64_try_unsafe },
+        .{ "Builtin.Num.F32.to_u128_wrap", .f32_to_u128_trunc },
+        .{ "f32_to_u128_try_unsafe", .f32_to_u128_try_unsafe },
+        .{ "f32_sqrt_unsafe", .num_sqrt },
+        .{ "f32_pow_unsafe", .num_pow },
+        .{ "f32_sin_unsafe", .num_sin },
+        .{ "f32_cos_unsafe", .num_cos },
+        .{ "f32_tan_unsafe", .num_tan },
+        .{ "f32_asin_unsafe", .num_asin },
+        .{ "f32_acos_unsafe", .num_acos },
+        .{ "f32_atan_unsafe", .num_atan },
+        .{ "f32_atan2_unsafe", .num_atan2 },
+        .{ "dec_sqrt_unsafe", .num_sqrt },
+        .{ "dec_pow_unsafe", .num_pow },
+        .{ "dec_sin_unsafe", .num_sin },
+        .{ "dec_cos_unsafe", .num_cos },
+        .{ "dec_tan_unsafe", .num_tan },
+        .{ "dec_asin_unsafe", .num_asin },
+        .{ "dec_acos_unsafe", .num_acos },
+        .{ "dec_atan_unsafe", .num_atan },
+        .{ "dec_atan2_unsafe", .num_atan2 },
+        .{ "f32_floor_unsafe", .num_floor },
+        .{ "f32_ceiling_unsafe", .num_ceiling },
+        .{ "Builtin.Num.F32.to_f64", .f32_to_f64 },
 
-    // F64 conversion operations
-    if (env.common.findIdent("Builtin.Num.F64.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_i8_trunc);
-    }
-    if (env.common.findIdent("f64_to_i8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_i8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_i16_trunc);
-    }
-    if (env.common.findIdent("f64_to_i16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_i16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_i32_trunc);
-    }
-    if (env.common.findIdent("f64_to_i32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_i32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_i64_trunc);
-    }
-    if (env.common.findIdent("f64_to_i64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_i64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_i128_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_i128_trunc);
-    }
-    if (env.common.findIdent("f64_to_i128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_i128_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_u8_trunc);
-    }
-    if (env.common.findIdent("f64_to_u8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_u8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_u16_trunc);
-    }
-    if (env.common.findIdent("f64_to_u16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_u16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_u32_trunc);
-    }
-    if (env.common.findIdent("f64_to_u32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_u32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_u64_trunc);
-    }
-    if (env.common.findIdent("f64_to_u64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_u64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_u128_trunc);
-    }
-    if (env.common.findIdent("f64_to_u128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_u128_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.F64.to_f32_wrap")) |ident| {
-        try low_level_map.put(ident, .f64_to_f32_wrap);
-    }
-    if (env.common.findIdent("f64_to_f32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .f64_to_f32_try_unsafe);
-    }
-    if (env.common.findIdent("f64_sqrt_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sqrt);
-    }
-    if (env.common.findIdent("f64_pow_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_pow);
-    }
-    if (env.common.findIdent("f64_sin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_sin);
-    }
-    if (env.common.findIdent("f64_cos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_cos);
-    }
-    if (env.common.findIdent("f64_tan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_tan);
-    }
-    if (env.common.findIdent("f64_asin_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_asin);
-    }
-    if (env.common.findIdent("f64_acos_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_acos);
-    }
-    if (env.common.findIdent("f64_atan_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan);
-    }
-    if (env.common.findIdent("f64_atan2_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_atan2);
-    }
-    if (env.common.findIdent("f64_floor_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_floor);
-    }
-    if (env.common.findIdent("f64_ceiling_unsafe")) |ident| {
-        try low_level_map.put(ident, .num_ceiling);
-    }
+        // F64 conversion operations
+        .{ "Builtin.Num.F64.to_i8_wrap", .f64_to_i8_trunc },
+        .{ "f64_to_i8_try_unsafe", .f64_to_i8_try_unsafe },
+        .{ "Builtin.Num.F64.to_i16_wrap", .f64_to_i16_trunc },
+        .{ "f64_to_i16_try_unsafe", .f64_to_i16_try_unsafe },
+        .{ "Builtin.Num.F64.to_i32_wrap", .f64_to_i32_trunc },
+        .{ "f64_to_i32_try_unsafe", .f64_to_i32_try_unsafe },
+        .{ "Builtin.Num.F64.to_i64_wrap", .f64_to_i64_trunc },
+        .{ "f64_to_i64_try_unsafe", .f64_to_i64_try_unsafe },
+        .{ "Builtin.Num.F64.to_i128_wrap", .f64_to_i128_trunc },
+        .{ "f64_to_i128_try_unsafe", .f64_to_i128_try_unsafe },
+        .{ "Builtin.Num.F64.to_u8_wrap", .f64_to_u8_trunc },
+        .{ "f64_to_u8_try_unsafe", .f64_to_u8_try_unsafe },
+        .{ "Builtin.Num.F64.to_u16_wrap", .f64_to_u16_trunc },
+        .{ "f64_to_u16_try_unsafe", .f64_to_u16_try_unsafe },
+        .{ "Builtin.Num.F64.to_u32_wrap", .f64_to_u32_trunc },
+        .{ "f64_to_u32_try_unsafe", .f64_to_u32_try_unsafe },
+        .{ "Builtin.Num.F64.to_u64_wrap", .f64_to_u64_trunc },
+        .{ "f64_to_u64_try_unsafe", .f64_to_u64_try_unsafe },
+        .{ "Builtin.Num.F64.to_u128_wrap", .f64_to_u128_trunc },
+        .{ "f64_to_u128_try_unsafe", .f64_to_u128_try_unsafe },
+        .{ "Builtin.Num.F64.to_f32_wrap", .f64_to_f32_wrap },
+        .{ "f64_to_f32_try_unsafe", .f64_to_f32_try_unsafe },
+        .{ "f64_sqrt_unsafe", .num_sqrt },
+        .{ "f64_pow_unsafe", .num_pow },
+        .{ "f64_sin_unsafe", .num_sin },
+        .{ "f64_cos_unsafe", .num_cos },
+        .{ "f64_tan_unsafe", .num_tan },
+        .{ "f64_asin_unsafe", .num_asin },
+        .{ "f64_acos_unsafe", .num_acos },
+        .{ "f64_atan_unsafe", .num_atan },
+        .{ "f64_atan2_unsafe", .num_atan2 },
+        .{ "f64_floor_unsafe", .num_floor },
+        .{ "f64_ceiling_unsafe", .num_ceiling },
 
-    // Dec conversion functions
-    if (env.common.findIdent("Builtin.Num.Dec.to_i8_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_i8_trunc);
-    }
-    if (env.common.findIdent("dec_to_i8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i16_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_i16_trunc);
-    }
-    if (env.common.findIdent("dec_to_i16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i32_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_i32_trunc);
-    }
-    if (env.common.findIdent("dec_to_i32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i64_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_i64_trunc);
-    }
-    if (env.common.findIdent("dec_to_i64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_i64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_i128")) |ident| {
-        try low_level_map.put(ident, .dec_to_i128_trunc);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u8_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_u8_trunc);
-    }
-    if (env.common.findIdent("dec_to_u8_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_u8_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u16_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_u16_trunc);
-    }
-    if (env.common.findIdent("dec_to_u16_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_u16_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u32_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_u32_trunc);
-    }
-    if (env.common.findIdent("dec_to_u32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_u32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u64_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_u64_trunc);
-    }
-    if (env.common.findIdent("dec_to_u64_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_u64_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_u128_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_u128_trunc);
-    }
-    if (env.common.findIdent("dec_to_u128_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_u128_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_f32_wrap")) |ident| {
-        try low_level_map.put(ident, .dec_to_f32_wrap);
-    }
-    if (env.common.findIdent("dec_to_f32_try_unsafe")) |ident| {
-        try low_level_map.put(ident, .dec_to_f32_try_unsafe);
-    }
-    if (env.common.findIdent("Builtin.Num.Dec.to_f64")) |ident| {
-        try low_level_map.put(ident, .dec_to_f64);
+        // Dec conversion functions
+        .{ "Builtin.Num.Dec.to_i8_wrap", .dec_to_i8_trunc },
+        .{ "dec_to_i8_try_unsafe", .dec_to_i8_try_unsafe },
+        .{ "Builtin.Num.Dec.to_i16_wrap", .dec_to_i16_trunc },
+        .{ "dec_to_i16_try_unsafe", .dec_to_i16_try_unsafe },
+        .{ "Builtin.Num.Dec.to_i32_wrap", .dec_to_i32_trunc },
+        .{ "dec_to_i32_try_unsafe", .dec_to_i32_try_unsafe },
+        .{ "Builtin.Num.Dec.to_i64_wrap", .dec_to_i64_trunc },
+        .{ "dec_to_i64_try_unsafe", .dec_to_i64_try_unsafe },
+        .{ "Builtin.Num.Dec.to_i128", .dec_to_i128_trunc },
+        .{ "Builtin.Num.Dec.to_u8_wrap", .dec_to_u8_trunc },
+        .{ "dec_to_u8_try_unsafe", .dec_to_u8_try_unsafe },
+        .{ "Builtin.Num.Dec.to_u16_wrap", .dec_to_u16_trunc },
+        .{ "dec_to_u16_try_unsafe", .dec_to_u16_try_unsafe },
+        .{ "Builtin.Num.Dec.to_u32_wrap", .dec_to_u32_trunc },
+        .{ "dec_to_u32_try_unsafe", .dec_to_u32_try_unsafe },
+        .{ "Builtin.Num.Dec.to_u64_wrap", .dec_to_u64_trunc },
+        .{ "dec_to_u64_try_unsafe", .dec_to_u64_try_unsafe },
+        .{ "Builtin.Num.Dec.to_u128_wrap", .dec_to_u128_trunc },
+        .{ "dec_to_u128_try_unsafe", .dec_to_u128_try_unsafe },
+        .{ "Builtin.Num.Dec.to_f32_wrap", .dec_to_f32_wrap },
+        .{ "dec_to_f32_try_unsafe", .dec_to_f32_try_unsafe },
+        .{ "Builtin.Num.Dec.to_f64", .dec_to_f64 },
+    }) |entry| {
+        if (env.common.findIdent(entry[0])) |ident| try low_level_map.put(ident, entry[1]);
     }
 
     // Iterate through all defs and replace matching anno-only defs with low-level implementations

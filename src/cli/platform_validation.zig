@@ -11,6 +11,7 @@
 const std = @import("std");
 const parse = @import("parse");
 const base = @import("base");
+const check = @import("check");
 const reporting = @import("reporting");
 const target_mod = @import("target.zig");
 pub const targets_validator = @import("targets_validator.zig");
@@ -85,21 +86,12 @@ pub fn validatePlatformHeader(
     if (ast.hasErrors()) {
         const owned_filename = try allocator.dupe(u8, platform_source_path);
         defer allocator.free(owned_filename);
-        for (ast.tokenize_diagnostics.items) |diagnostic| {
-            var report = try ast.tokenizeDiagnosticToReport(diagnostic, allocator, owned_filename);
-            defer report.deinit();
+        var reports: std.ArrayList(reporting.Report) = .empty;
+        defer check.module_reports.deinit(allocator, &reports);
+        try check.module_reports.appendSyntax(allocator, &reports, ast, &env, owned_filename);
+        for (reports.items) |*report| {
             reporting.renderReportToTerminal(
-                &report,
-                stderr,
-                reporting.ColorUtils.getPaletteForConfig(report_config),
-                report_config,
-            ) catch {};
-        }
-        for (ast.parse_diagnostics.items) |diagnostic| {
-            var report = try ast.parseDiagnosticToReport(&env, diagnostic, allocator, owned_filename);
-            defer report.deinit();
-            reporting.renderReportToTerminal(
-                &report,
+                report,
                 stderr,
                 reporting.ColorUtils.getPaletteForConfig(report_config),
                 report_config,
@@ -150,8 +142,7 @@ fn renderFileReadError(
 
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Check that the file exists and you have read permissions.");
     try report.document.addLineBreak();
 
@@ -175,8 +166,7 @@ fn renderParseError(
 
     try report.document.addText("    ");
     try report.document.addAnnotated(path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Check that the file contains valid Roc syntax.");
     try report.document.addLineBreak();
 
@@ -201,15 +191,8 @@ fn renderMissingTargetsError(
     defer report.deinit();
 
     try report.document.addText("Platform headers must declare supported targets. Example:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
-    try report.document.addCodeBlock(
-        \\    targets: {
-        \\        inputs_dir: "targets/",
-        \\        x64linux: { inputs: ["host.o", app] },
-        \\        arm64linux: { inputs: ["host.o", app] },
-        \\    }
-    );
+    try report.document.addLineBreaks(2);
+    try report.document.addCodeBlock(comptime targets_validator.exampleTargetsSection(&.{ .x64linux, .arm64linux }));
     try report.document.addLineBreak();
 
     reporting.renderReportToTerminal(
@@ -218,18 +201,6 @@ fn renderMissingTargetsError(
         reporting.ColorUtils.getPaletteForConfig(report_config),
         report_config,
     ) catch {};
-}
-
-/// Validate that a specific target is supported by the platform.
-/// Returns error.UnsupportedTarget if the target is not in the config.
-/// Does not log - caller should handle error reporting.
-pub fn validateTargetSupported(
-    config: TargetsConfig,
-    target: RocTarget,
-) ValidationError!void {
-    if (!config.supportsTarget(target)) {
-        return error.UnsupportedTarget;
-    }
 }
 
 /// Create a ValidationResult for an unsupported target error.
@@ -303,34 +274,4 @@ pub fn validateAllTargetFilesExist(
     };
 
     return if (result == .valid) null else result;
-}
-
-// Tests
-const testing = std.testing;
-
-test "validateTargetSupported returns error for unsupported target" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // x64musl is not in the config, should error
-    const result = validateTargetSupported(config, .x64musl);
-    try testing.expectError(error.UnsupportedTarget, result);
-}
-
-test "validateTargetSupported succeeds for supported target" {
-    const config = TargetsConfig{
-        .inputs_dir = "targets",
-        .targets = &.{
-            .{ .target = .x64mac, .output = .exe, .items = &.{.app} },
-            .{ .target = .arm64mac, .output = .exe, .items = &.{.app} },
-        },
-    };
-
-    // x64mac is in the config, should succeed
-    try validateTargetSupported(config, .x64mac);
 }

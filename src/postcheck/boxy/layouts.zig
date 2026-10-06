@@ -306,8 +306,7 @@ const Builder = struct {
         for (captures, fields, 0..) |capture, *field, index| {
             const field_layout: layout.Idx = switch (capture.kind) {
                 .captured_value => (try self.runtimeLayoutForRep(capture.rep)).layoutIdx(),
-                .hidden_desc => .opaque_ptr,
-                .hidden_dict, .hidden_literal => .opaque_ptr,
+                .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
             };
             field.* = .{ .index = @intCast(index), .layout = field_layout };
         }
@@ -561,16 +560,17 @@ const Builder = struct {
                 continue;
             }
             if (rep.kind == .dynamic and rep.tag_variants.len != 0) {
-                return try self.tagUnionPayloadLayout(rep_id);
+                return try self.aggregatePayloadLayout(.tag_union, rep_id);
             }
             if (rep.kind == .dynamic and repHasRecordFields(self.program, rep)) {
-                return try self.recordPayloadLayout(rep_id);
+                return try self.aggregatePayloadLayout(.record, rep_id);
             }
             return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
         }
     }
 
-    fn recordPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
+    /// The descriptor payload layout of the record or tag union `rep_id`.
+    fn aggregatePayloadLayout(self: *Builder, comptime shape: enum { record, tag_union }, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
 
@@ -585,29 +585,10 @@ const Builder = struct {
         };
         const root = try graph.reserveNode(self.allocator);
         try local_nodes.put(rep_id, root);
-        try graph_builder.buildNode(.{ .state = .{ .fields = .{ .node = root, .rep_id = rep_id, .kind = .record } } });
-
-        var commit = try self.store.commitGraph(&graph, .{ .local = root });
-        defer commit.deinit(self.allocator);
-        return commit.value_layouts[@intFromEnum(root)];
-    }
-
-    fn tagUnionPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
-        var graph = layout.Graph{};
-        defer graph.deinit(self.allocator);
-
-        const local_nodes = &self.graph_nodes;
-        local_nodes.clearRetainingCapacity();
-
-        var graph_builder = GraphBuilder{
-            .parent = self,
-            .descriptor_payload = true,
-            .graph = &graph,
-            .local_nodes = local_nodes,
-        };
-        const root = try graph.reserveNode(self.allocator);
-        try local_nodes.put(rep_id, root);
-        try graph_builder.buildNode(.{ .state = .{ .tag = .{ .node = root, .rep_id = rep_id, .mode = .descriptor_payload } } });
+        try graph_builder.buildNode(.{ .state = switch (shape) {
+            .record => .{ .fields = .{ .node = root, .rep_id = rep_id, .kind = .record } },
+            .tag_union => .{ .tag = .{ .node = root, .rep_id = rep_id, .mode = .descriptor_payload } },
+        } });
 
         var commit = try self.store.commitGraph(&graph, .{ .local = root });
         defer commit.deinit(self.allocator);

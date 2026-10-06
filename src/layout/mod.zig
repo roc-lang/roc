@@ -84,7 +84,6 @@ pub const GraphDigest = @import("graph.zig").Digest;
 pub const GraphRef = @import("graph.zig").Ref;
 /// Input edge into a layout graph node.
 pub const GraphInput = GraphRef;
-pub const graphRefKey = @import("graph.zig").refKey;
 pub const GraphField = @import("graph.zig").Field;
 pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
 pub const GraphRefSpan = @import("graph.zig").RefSpan;

@@ -450,8 +450,7 @@ fn releaseRead(remaining: *collections.DenseMap(LocalId, u32), local: LocalId) v
 /// literal, whose value is its discriminant.
 fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
     return switch (value) {
-        .i64_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
-        .i128_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
+        inline .i64_literal, .i128_literal => |literal| if (literal.layout_idx == .bool) @intCast(literal.value) else null,
         .f64_literal,
         .f32_literal,
         .dec_literal,
@@ -460,7 +459,6 @@ fn boolLiteralDiscriminant(value: LIR.LiteralValue) ?u32 {
         .boxy_dynamic_frac_literal,
         .static_data,
         .bytes_literal,
-        .null_ptr,
         .proc_ref,
         => null,
     };

@@ -115,15 +115,7 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, for_stmt.expr, scope_end, depth + 1);
                 try self.traverseExpr(module_env, for_stmt.body, body_region.end.offset, depth + 1);
             },
-            .s_while => |while_stmt| {
-                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
-                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
-            },
-            .s_infinite_loop => |while_stmt| {
-                try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
-                try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
-            },
-            .s_breakable_loop => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
                 try self.traverseExpr(module_env, while_stmt.cond, scope_end, depth + 1);
                 try self.traverseExpr(module_env, while_stmt.body, scope_end, depth + 1);
             },
@@ -133,11 +125,8 @@ pub const ScopeMap = struct {
             .s_expect => |expect_stmt| {
                 try self.traverseExpr(module_env, expect_stmt.body, scope_end, depth + 1);
             },
-            .s_dbg => |dbg_stmt| {
+            inline .s_dbg, .s_return => |dbg_stmt| {
                 try self.traverseExpr(module_env, dbg_stmt.expr, scope_end, depth + 1);
-            },
-            .s_return => |return_stmt| {
-                try self.traverseExpr(module_env, return_stmt.expr, scope_end, depth + 1);
             },
             // Type declarations, imports, etc. don't introduce variable bindings
             .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_crash, .s_break, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
@@ -239,14 +228,8 @@ pub const ScopeMap = struct {
             .e_unary_minus => |unary| {
                 try self.traverseExpr(module_env, unary.expr, scope_end, depth + 1);
             },
-            .e_list => |list| {
+            inline .e_list, .e_tuple => |list| {
                 const elems = module_env.store.sliceExpr(list.elems);
-                for (elems) |elem_idx| {
-                    try self.traverseExpr(module_env, elem_idx, scope_end, depth + 1);
-                }
-            },
-            .e_tuple => |tuple| {
-                const elems = module_env.store.sliceExpr(tuple.elems);
                 for (elems) |elem_idx| {
                     try self.traverseExpr(module_env, elem_idx, scope_end, depth + 1);
                 }
@@ -261,14 +244,7 @@ pub const ScopeMap = struct {
             .e_field_access => |field_access| {
                 try self.traverseExpr(module_env, field_access.receiver, scope_end, depth + 1);
             },
-            .e_method_call => |method_call| {
-                try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
-                const args = module_env.store.sliceExpr(method_call.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_dispatch_call => |method_call| {
+            inline .e_method_call, .e_dispatch_call => |method_call| {
                 try self.traverseExpr(module_env, method_call.receiver, scope_end, depth + 1);
                 const args = module_env.store.sliceExpr(method_call.args);
                 for (args) |arg_idx| {
@@ -293,13 +269,7 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, eq.lhs, scope_end, depth + 1);
                 try self.traverseExpr(module_env, eq.rhs, scope_end, depth + 1);
             },
-            .e_type_method_call => |method_call| {
-                const args = module_env.store.sliceExpr(method_call.args);
-                for (args) |arg_idx| {
-                    try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
-                }
-            },
-            .e_type_dispatch_call => |method_call| {
+            inline .e_type_method_call, .e_type_dispatch_call => |method_call| {
                 const args = module_env.store.sliceExpr(method_call.args);
                 for (args) |arg_idx| {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
@@ -320,10 +290,7 @@ pub const ScopeMap = struct {
                     try self.traverseExpr(module_env, arg_idx, scope_end, depth + 1);
                 }
             },
-            .e_nominal => |nominal| {
-                try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
-            },
-            .e_nominal_external => |nominal| {
+            inline .e_nominal, .e_nominal_external => |nominal| {
                 try self.traverseExpr(module_env, nominal.backing_expr, scope_end, depth + 1);
             },
             .e_hosted_lambda => {},
@@ -334,11 +301,8 @@ pub const ScopeMap = struct {
                 try self.traverseExpr(module_env, for_expr.expr, scope_end, depth + 1);
                 try self.traverseExpr(module_env, for_expr.body, body_region.end.offset, depth + 1);
             },
-            .e_dbg => |dbg_expr| {
+            inline .e_dbg, .e_expect_err => |dbg_expr| {
                 try self.traverseExpr(module_env, dbg_expr.expr, scope_end, depth + 1);
-            },
-            .e_expect_err => |expect_err| {
-                try self.traverseExpr(module_env, expect_err.expr, scope_end, depth + 1);
             },
             .e_expect => |expect_expr| {
                 try self.traverseExpr(module_env, expect_expr.body, scope_end, depth + 1);
@@ -399,16 +363,7 @@ pub const ScopeMap = struct {
         const pattern = module_env.store.getSourcePattern(pattern_idx);
 
         switch (pattern) {
-            .assign => |p| {
-                try self.bindings.append(self.allocator, .{
-                    .ident = p.ident,
-                    .pattern_idx = pattern_idx,
-                    .visible_from = visible_from,
-                    .visible_to = visible_to,
-                    .is_parameter = is_parameter,
-                });
-            },
-            .var_assign => |p| {
+            inline .assign, .var_assign => |p| {
                 try self.bindings.append(self.allocator, .{
                     .ident = p.ident,
                     .pattern_idx = pattern_idx,

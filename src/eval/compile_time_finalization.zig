@@ -5508,7 +5508,7 @@ test "shared frozen erased callables execute on interpreter dev and LLVM" {
     defer allocator.free(image_bytes);
     var fba = std.heap.FixedBufferAllocator.init(image_bytes);
     const header = try fba.allocator().create(lir.LirImage.Header);
-    const image_program = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(fba.allocator(), image_bytes.ptr, image_bytes.len, &program, &.{.{ .ordinal = 0, .root_proc = caller }}, copied);
+    const image_program = try lir.LirImage.copyProgramWithStaticDataIntoBuffer(fba.allocator(), image_bytes.ptr, image_bytes.len, .mapped, &program, &.{.{ .ordinal = 0, .root_proc = caller }}, copied);
     try image_program.fillHeader(header, fba.end_index);
     var view = try lir.LirImage.viewMappedImageWithAllocator(header, image_bytes.ptr, fba.end_index, .native, allocator);
     defer view.deinit();
@@ -5597,5 +5597,78 @@ test "inspected runners consume frozen string slots on every backend" {
         defer result.deinit(allocator);
         try std.testing.expect(result.outcome == .returned);
         try std.testing.expectEqualStrings("frozen", result.outcome.returned);
+    }
+}
+
+// No target has a float remainder instruction, so the object LLVM compiles
+// calls the C math library for one, and the in-process loader has to bind that
+// call. Each operand is derived from the root's argument, which only exists
+// when the root runs, so the remainder cannot be folded away before then.
+test "LLVM test roots run a float remainder in process" {
+    if (comptime builtin.os.tag == .freestanding) return error.SkipZigTest;
+    const Inspected = @import("inspected.zig");
+    const allocator = std.testing.allocator;
+    var program = try LirProgram.Result.init(allocator, .native);
+    defer program.deinit();
+    const store = &program.store;
+
+    var roots: [2]Inspected.BoolRoot = undefined;
+    inline for (.{ lir.LIR.LiteralValue{ .f64_literal = 7.5 }, lir.LIR.LiteralValue{ .f32_literal = 7.5 } }, 0..) |dividend_literal, index| {
+        const wide = index == 0;
+        const float_layout: @FieldType(Inspected.BoolRoot, "ret_layout") = if (wide) .f64 else .f32;
+        const offset = try store.addLocal(.{ .layout_idx = float_layout });
+        const dividend_base = try store.addLocal(.{ .layout_idx = float_layout });
+        const dividend = try store.addLocal(.{ .layout_idx = float_layout });
+        const divisor_base = try store.addLocal(.{ .layout_idx = float_layout });
+        const divisor = try store.addLocal(.{ .layout_idx = float_layout });
+        const remainder = try store.addLocal(.{ .layout_idx = float_layout });
+        const expected = try store.addLocal(.{ .layout_idx = float_layout });
+        const matches = try store.addLocal(.{ .layout_idx = .bool });
+
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = matches } }, .test_fixture);
+        const compare = try store.addLowLevelStmt(matches, .num_is_eq, &.{ remainder, expected }, ret, .test_fixture);
+        const expect_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = expected,
+            .value = if (wide) .{ .f64_literal = 1.5 } else .{ .f32_literal = 1.5 },
+            .next = compare,
+        } }, .test_fixture);
+        const rem = try store.addLowLevelStmt(remainder, .num_rem_by, &.{ dividend, divisor }, expect_literal, .test_fixture);
+        const add_divisor = try store.addLowLevelStmt(divisor, .num_float_add, &.{ offset, divisor_base }, rem, .test_fixture);
+        const divisor_literal = try store.addCFStmt(.{ .assign_literal = .{
+            .target = divisor_base,
+            .value = if (wide) .{ .f64_literal = 2.0 } else .{ .f32_literal = 2.0 },
+            .next = add_divisor,
+        } }, .test_fixture);
+        const add_dividend = try store.addLowLevelStmt(dividend, .num_float_add, &.{ offset, dividend_base }, divisor_literal, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_literal = .{
+            .target = dividend_base,
+            .value = dividend_literal,
+            .next = add_dividend,
+        } }, .test_fixture);
+        const proc = try store.addProcSpec(.{
+            .name = .fromRaw(201 + index),
+            .identity = lir.LIR.ProcIdentity.forTest(@intCast(index + 1)),
+            .args = try store.addLocalSpan(&.{offset}),
+            .frame_locals = try store.addLocalSpan(&.{ offset, dividend_base, dividend, divisor_base, divisor, remainder, expected, matches }),
+            .body = body,
+            .ret_layout = .bool,
+        }, .none);
+        roots[index] = .{
+            .symbol_name = if (wide) "test_float_rem_f64" else "test_float_rem_f32",
+            .proc = proc,
+            .arg_layouts = if (wide) &.{.f64} else &.{.f32},
+            .ret_layout = .bool,
+        };
+    }
+
+    const module = Inspected.BoolRootModule{ .store = &program.store, .layouts = &program.layouts, .tables = Interpreter.BoxyTables.fromResult(&program), .roots = &roots };
+    inline for (.{ Inspected.LlvmTestOpt.size, Inspected.LlvmTestOpt.speed }) |opt| {
+        const results = try Inspected.llvmEvalBoolRootModules(allocator, &.{module}, opt);
+        defer Inspected.deinitBoolRootEvalResults(allocator, results);
+        try std.testing.expectEqual(roots.len, results.len);
+        for (results) |result| {
+            try std.testing.expect(result.outcome == .passed);
+            try std.testing.expect(result.outcome.passed);
+        }
     }
 }

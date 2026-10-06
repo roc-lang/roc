@@ -228,26 +228,6 @@ pub const Reporter = struct {
         self.endActiveLocked(subs);
     }
 
-    /// End the active phase with a breakdown whose subs ran once each, in
-    /// order. Each sub's window is reconstructed from the cumulative
-    /// durations and sliced from the sample buffer for a per-sub memory
-    /// range.
-    pub fn endWithBreakdownSequential(self: *Reporter, subs: []const SubTiming) void {
-        self.mutex.lockUncancelable(self.std_io);
-        defer self.mutex.unlock(self.std_io);
-        const idx = self.active orelse return;
-        self.sampleMemoryLocked();
-        if (self.always) {
-            var cursor = self.phases[idx].start_ns;
-            const n = @min(subs.len, self.phases[idx].sub_mem.len);
-            for (subs[0..n], 0..) |sub, i| {
-                self.phases[idx].sub_mem[i] = self.sampleRangeInWindow(cursor, cursor + sub.ns);
-                cursor += sub.ns;
-            }
-        }
-        self.endActiveLocked(subs);
-    }
-
     /// A memory range observed by the producer of an externally timed phase.
     /// The reporter cannot window-sample work that runs interleaved inside
     /// another phase, so the producer supplies its own boundary readings.
@@ -450,17 +430,6 @@ pub const Reporter = struct {
         self.samples[self.sample_len] = .{ .at_ns = now, .bytes = bytes };
         self.sample_len += 1;
         self.last_sample_ns = now;
-    }
-
-    /// Smallest and largest buffered sample in `[from_ns, to_ns]`.
-    fn sampleRangeInWindow(self: *const Reporter, from_ns: u64, to_ns: u64) MemRange {
-        var range = MemRange{};
-        for (self.samples[0..self.sample_len]) |sample| {
-            if (sample.at_ns < from_ns or sample.at_ns > to_ns) continue;
-            if (sample.bytes < range.min) range.min = sample.bytes;
-            if (sample.bytes > range.max) range.max = sample.bytes;
-        }
-        return range;
     }
 
     /// One animation frame. Caller holds the mutex.

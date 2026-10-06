@@ -295,18 +295,6 @@ pub const ProgramView = struct {
         return self.stmt_regions[@intFromEnum(id)];
     }
 
-    pub fn exprInlineScope(self: ProgramView, id: ExprId) InlineScopeId {
-        return self.expr_inline_scopes[@intFromEnum(id)];
-    }
-
-    pub fn stmtInlineScope(self: ProgramView, id: StmtId) InlineScopeId {
-        return self.stmt_inline_scopes[@intFromEnum(id)];
-    }
-
-    pub fn inlineScope(self: ProgramView, id: InlineScopeId) InlineScope {
-        return self.inline_scopes[@intFromEnum(id)];
-    }
-
     pub fn comptimeSite(self: ProgramView, id: ComptimeSiteId) ComptimeSite {
         return self.comptime_sites[@intFromEnum(id)];
     }
@@ -350,11 +338,6 @@ pub const ProgramView = struct {
         return self.field_access_segments[span_.start..][0..span_.len];
     }
 
-    pub fn fieldAccessSegmentAt(self: ProgramView, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
-        if (index >= span_.len) Common.invariant("field access segment index was outside span");
-        return self.field_access_segments[span_.start + index];
-    }
-
     pub fn recordDestructSpan(self: ProgramView, span_: Span(RecordDestruct)) []const RecordDestruct {
         return self.record_destructs[span_.start..][0..span_.len];
     }
@@ -369,93 +352,6 @@ pub const ProgramView = struct {
 
     pub fn ifBranchSpan(self: ProgramView, span_: Span(IfBranch)) []const IfBranch {
         return self.if_branches[span_.start..][0..span_.len];
-    }
-
-    pub fn exprCount(self: ProgramView) usize {
-        return self.exprs.len;
-    }
-
-    pub fn patCount(self: ProgramView) usize {
-        return self.pats.len;
-    }
-
-    pub fn stmtCount(self: ProgramView) usize {
-        return self.stmts.len;
-    }
-
-    pub fn localCount(self: ProgramView) usize {
-        return self.locals.len;
-    }
-
-    pub fn exprTy(self: ProgramView, id: ExprId) Type.TypeId {
-        return self.exprs[@intFromEnum(id)].ty;
-    }
-
-    pub fn patTy(self: ProgramView, id: PatId) Type.TypeId {
-        return self.pats[@intFromEnum(id)].ty;
-    }
-
-    pub fn pat(self: ProgramView, id: PatId) Pat {
-        return self.pats[@intFromEnum(id)];
-    }
-
-    pub fn stmt(self: ProgramView, id: StmtId) Stmt {
-        return self.stmts[@intFromEnum(id)];
-    }
-
-    /// The two pieces direct LIR lowering needs to consider folding away the
-    /// in-place `List.map` branch: the `list_map_can_reuse` call's arguments
-    /// (to compute layout eligibility) and the body a constant-0 scrutinee
-    /// selects.
-    pub const ListMapCanReuseMatch = struct {
-        call_args: Span(ExprId),
-        zero_branch_body: ExprId,
-    };
-
-    /// Recognizes the `List.map` reuse match: a match whose scrutinee calls
-    /// the Builtin `list_map_can_reuse` wrapper, with guard-free
-    /// integer-literal and wildcard branches. Returns null for any other
-    /// shape. Whether to fold is the caller's layout-aware decision; this
-    /// only identifies the site and the branch a constant 0 reaches.
-    pub fn listMapCanReuseMatch(
-        self: ProgramView,
-        scrutinee: ExprId,
-        branches_span: Span(Branch),
-    ) ?ListMapCanReuseMatch {
-        const scrutinee_data = self.exprs[@intFromEnum(scrutinee)].data;
-        if (std.meta.activeTag(scrutinee_data) != .call_proc) return null;
-        const call = scrutinee_data.call_proc;
-        const callee = switch (call.callee) {
-            .lifted => |fn_id| fn_id,
-            .func => return null,
-        };
-        const callee_body = switch (self.fns[@intFromEnum(callee)].body) {
-            .roc => |body| body,
-            .hosted => return null,
-        };
-        if (!self.exprIsListMapCanReuseOp(callee_body)) return null;
-
-        for (self.branchSpan(branches_span)) |branch| {
-            if (branch.guard != null or branch.bindings.len != 0) return null;
-            const pat_data = self.pats[@intFromEnum(branch.pat)].data;
-            const tag = std.meta.activeTag(pat_data);
-            if (tag == .wildcard or (tag == .int_lit and pat_data.int_lit.toI128() == 0)) {
-                return .{ .call_args = call.args, .zero_branch_body = branch.body };
-            }
-            return null;
-        }
-        return null;
-    }
-
-    fn exprIsListMapCanReuseOp(self: ProgramView, root: ExprId) bool {
-        var expr_id = root;
-        while (true) {
-            const data = self.exprs[@intFromEnum(expr_id)].data;
-            const tag = std.meta.activeTag(data);
-            if (tag == .low_level) return data.low_level.op == .list_map_can_reuse;
-            if (tag != .block or data.block.statements.len != 0) return false;
-            expr_id = data.block.final_expr;
-        }
     }
 };
 
@@ -1249,10 +1145,6 @@ pub const Program = struct {
         return self.string_literals.unsafeRawItemsForView();
     }
 
-    pub fn rootCount(self: *const Program) usize {
-        return self.rowCount("roots");
-    }
-
     pub fn rootsView(self: *const Program) []const Root {
         if (self.body_prefix) |prefix| return prefix.source.rootsView();
         return self.roots.unsafeRawItemsForView();
@@ -1357,8 +1249,7 @@ pub const Program = struct {
             .local_template, .imported_template, .checked_generated => |proc_template| proc_template,
             .nested => |nested| nested.owner,
             .local_hosted, .imported_hosted => |hosted_fn| hosted_fn.template,
-            .parser_runtime => |runtime| runtime.owner,
-            .encoder_for_runtime => |runtime| runtime.owner,
+            inline .parser_runtime, .encoder_for_runtime => |runtime| runtime.owner,
         };
         return std.mem.eql(u8, &proc_template.artifact.bytes, &filling.app_module);
     }
@@ -1467,10 +1358,6 @@ pub const Program = struct {
         return self.exprs.unsafeRawItemsForView();
     }
 
-    pub fn setExpr(self: *Program, id: ExprId, expr: Expr) void {
-        self.exprs.set(self.ownedIndex("exprs", @intFromEnum(id)), expr);
-    }
-
     pub fn getExprAt(self: *const Program, index: usize) Expr {
         return self.row("exprs", index);
     }
@@ -1488,16 +1375,8 @@ pub const Program = struct {
         return self.row("pats", @intFromEnum(id));
     }
 
-    pub fn getPatAt(self: *const Program, index: usize) Pat {
-        return self.row("pats", index);
-    }
-
     pub fn getStmt(self: *const Program, id: StmtId) Stmt {
         return self.row("stmts", @intFromEnum(id));
-    }
-
-    pub fn getStmtAt(self: *const Program, index: usize) Stmt {
-        return self.row("stmts", index);
     }
 
     pub fn stmtsView(self: *const Program) []const Stmt {
@@ -1507,10 +1386,6 @@ pub const Program = struct {
 
     pub fn getLocal(self: *const Program, id: LocalId) Local {
         return self.row("locals", @intFromEnum(id));
-    }
-
-    pub fn getLocalAt(self: *const Program, index: usize) Local {
-        return self.row("locals", index);
     }
 
     pub fn localsView(self: *const Program) []const Local {
@@ -1555,11 +1430,6 @@ pub const Program = struct {
 
     pub fn addComptimeValueRead(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!void {
         try self.comptime_value_reads.append(self.allocator, root);
-    }
-
-    pub fn addRuntimeSchemaRequest(self: *Program, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
-        std.debug.assert(self.body_prefix == null);
-        try self.runtime_schema_requests.append(self.allocator, request);
     }
 
     pub fn addLocalWithBinder(
@@ -1859,22 +1729,6 @@ pub const Program = struct {
 
     pub fn localCount(self: *const Program) usize {
         return self.rowCount("locals");
-    }
-
-    pub fn exprTy(self: *const Program, id: ExprId) Type.TypeId {
-        return self.getExpr(id).ty;
-    }
-
-    pub fn patTy(self: *const Program, id: PatId) Type.TypeId {
-        return self.getPat(id).ty;
-    }
-
-    pub fn pat(self: *const Program, id: PatId) Pat {
-        return self.getPat(id);
-    }
-
-    pub fn stmt(self: *const Program, id: StmtId) Stmt {
-        return self.getStmt(id);
     }
 };
 

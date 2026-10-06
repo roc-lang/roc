@@ -702,20 +702,8 @@ pub const ModuleState = struct {
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
     depth: u32,
-    /// DFS visit color for cycle detection
-    visit_color: VisitColor,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
-
-    /// DFS colors for cycle detection during import graph traversal
-    pub const VisitColor = enum {
-        /// Not yet visited
-        white,
-        /// Currently being visited (in the DFS stack)
-        gray,
-        /// Fully processed
-        black,
-    };
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -732,7 +720,6 @@ pub const ModuleState = struct {
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
-            .visit_color = .white,
             .compile_time_ns = 0,
         };
     }
@@ -1590,21 +1577,6 @@ pub const Coordinator = struct {
         self.app_package_absent = true;
     }
 
-    /// Set the I/O / core context implementation. Callers must supply a fully
-    /// initialised `CoreCtx`—it must not create a replacement
-    /// `CoreCtx.default(...)` here because the existing context may have been
-    /// constructed via `CoreCtx.testing(undefined, undefined)` (see
-    /// `cache_config.zig`), in which case snapshotting its fields into a
-    /// `default()` vtable would invoke UB the first time the OS-backed
-    /// vtable dereferenced `std_io`.
-    pub fn setCoreCtx(self: *Coordinator, roc_ctx: CoreCtx) void {
-        self.roc_ctx = roc_ctx;
-    }
-
-    /// Back-compat alias for the documented embedding contract
-    /// (`coord.setIo(my_io)` in `src/compile/README.md`).
-    pub const setIo = setCoreCtx;
-
     /// Get the allocator to use for module data.
     /// - In multi-threaded mode: smp_allocator (per-thread freelists)
     /// - In single-threaded mode: gpa (better performance)
@@ -1981,32 +1953,8 @@ pub const Coordinator = struct {
         };
     }
 
-    pub fn freeWatchInputs(self: *Coordinator, inputs: []const []const u8) void {
-        for (inputs) |path| self.gpa.free(path);
-        self.gpa.free(inputs);
-    }
-
     pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
         watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInput(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-    ) Allocator.Error!void {
-        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
-        errdefer self.gpa.free(absolute);
-
-        if (seen.contains(absolute)) {
-            self.gpa.free(absolute);
-            return;
-        }
-
-        try paths.append(self.gpa, absolute);
-        errdefer _ = paths.pop();
-        try seen.put(self.gpa, absolute, {});
     }
 
     fn appendWatchInputState(
@@ -2030,24 +1978,6 @@ pub const Coordinator = struct {
         });
         errdefer _ = inputs.pop();
         try seen.put(self.gpa, absolute, {});
-    }
-
-    fn appendFileDependencyWatchInputs(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            // A module that never reached import resolution has not read its
-            // file imports, so this run read no such file.
-            if (dep.state == .pending) continue;
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInput(paths, seen, full_path);
-        }
     }
 
     fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
@@ -2075,39 +2005,6 @@ pub const Coordinator = struct {
             defer self.gpa.free(full_path);
             try self.appendWatchInputState(inputs, seen, full_path, fileDependencyWatchState(dep));
         }
-    }
-
-    /// Collect exact filesystem inputs read by this coordinator run. Returned
-    /// paths are owned by the coordinator allocator and must be released with
-    /// `freeWatchInputs`.
-    pub fn collectWatchInputs(self: *Coordinator) Allocator.Error![]const []const u8 {
-        var paths = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (paths.items) |path| self.gpa.free(path);
-            paths.deinit(self.gpa);
-        }
-
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.url != null) continue;
-
-            if (pkg.root_file) |root_file| {
-                try self.appendWatchInput(&paths, &seen, root_file);
-            }
-
-            for (pkg.modules.items) |*mod| {
-                try self.appendWatchInput(&paths, &seen, mod.path);
-
-                const env = mod.moduleEnv() orelse continue;
-                try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), env);
-            }
-        }
-
-        return paths.toOwnedSlice(self.gpa);
     }
 
     /// Collect exact filesystem inputs read by this coordinator run, paired
@@ -2288,26 +2185,6 @@ pub const Coordinator = struct {
         return false;
     }
 
-    fn appendAvailableArtifactViewByKey(
-        self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) Allocator.Error!void {
-        if (importedArtifactViewExists(views.items, key)) return;
-        const artifact = if (checkedArtifactKeyEql(key, self.builtin_modules.checked_artifact.key))
-            &self.builtin_modules.checked_artifact
-        else
-            self.checkedArtifactByKey(key) orelse {
-                coordinatorInvariant("compile.coordinator missing lowering visibility checked artifact", .{});
-            };
-
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-        for (artifact.lowering_visibility.module_ids) |dependency_key| {
-            try self.appendAvailableArtifactViewByKey(views, allocator, dependency_key);
-        }
-    }
-
     /// Finish the immutable platform's independent compile-time work, then
     /// compose its checked metadata with the app's recorded requirement solutions.
     /// App evaluation and the pairing's dependent roots share runtime lowering.
@@ -2422,10 +2299,7 @@ pub const Coordinator = struct {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
-                    switch (rep.severity) {
-                        .warning => {},
-                        .runtime_error, .fatal => return true,
-                    }
+                    if (rep.severity.isError()) return true;
                 }
             }
         }
@@ -3339,7 +3213,6 @@ pub const Coordinator = struct {
             .canonicalized_cached,
             .type_checked,
             .operation_failed,
-            .cycle_detected,
             .worker_oom,
             => unreachable,
         };
@@ -3394,11 +3267,6 @@ pub const Coordinator = struct {
         for (external_imports.items) |imp| allocator.free(imp.import_name);
         external_imports.deinit(allocator);
         external_imports.* = std.ArrayList(DiscoveredExternalImport).empty;
-    }
-
-    fn deinitReports(reports: *std.ArrayList(Report), allocator: Allocator) void {
-        for (reports.items) |*rep| rep.deinit();
-        reports.deinit(allocator);
     }
 
     fn destroyModuleEnvAndSource(env: *ModuleEnv) void {
@@ -3907,7 +3775,6 @@ pub const Coordinator = struct {
 
         mod.phase = .Done;
         mod.completion = .succeeded;
-        mod.visit_color = .black;
 
         if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
             coordinatorInvariant("successful completion counters were already zero for module '{s}'", .{mod.name});
@@ -4004,7 +3871,6 @@ pub const Coordinator = struct {
 
             mod.phase = .Done;
             mod.completion = .failed;
-            mod.visit_color = .black;
 
             if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
                 coordinatorInvariant("failed completion counters were already zero for module '{s}'", .{mod.name});
@@ -4100,7 +3966,6 @@ pub const Coordinator = struct {
             .canonicalized_cached => |*r| try self.handleCanonicalizedCached(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
-            .cycle_detected => |*r| try self.handleCycleDetected(r),
             .worker_oom => return error.OutOfMemory,
             .post_check => unreachable,
         }
@@ -4804,7 +4669,6 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(deferred_imports);
 
         mod.phase = .TypeCheck;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .type_check = .{
                 .package_name = pkg.name,
@@ -4965,37 +4829,6 @@ pub const Coordinator = struct {
         const report = try Report.init(self.gpa, title, headline, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
-    }
-
-    /// Handle cycle detection
-    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) Allocator.Error!void {
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
-                result.package_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
-                result.module_id, result.package_name,
-            });
-            unreachable;
-        };
-
-        // Take ownership of module env
-        mod.replaceModuleEnv(result.module_env);
-
-        // Append reports - we take ownership, so clear result.reports after copying
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
-        result.reports.clearRetainingCapacity();
-
-        try self.completeModulesWithFailure(&.{.{
-            .pkg_name = pkg.name,
-            .module_id = result.module_id,
-        }});
     }
 
     /// Handle a cycle after its closing edge has been recorded. Reachability is
@@ -5323,7 +5156,6 @@ pub const Coordinator = struct {
 
         if (self.appShouldWaitForPlatformRequirements(mod)) {
             mod.phase = .WaitingOnPlatformRequirements;
-            mod.visit_color = .black;
             return;
         }
 
@@ -5348,7 +5180,6 @@ pub const Coordinator = struct {
         }
 
         mod.phase = .Canonicalize;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,
@@ -5751,7 +5582,7 @@ pub const Coordinator = struct {
         try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
 
         var parse_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&parse_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &parse_reports);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -5790,21 +5621,16 @@ pub const Coordinator = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.CorruptParseStageRecord => {
                 releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
-                deinitReports(&parse_reports, worker_alloc);
+                check.module_reports.deinit(worker_alloc, &parse_reports);
                 manager.recordInvalidationFor(.canonicalized);
                 return null;
             },
         };
 
         var canonicalize_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&canonicalize_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &canonicalize_reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &canonicalize_reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &canonicalize_reports, env, 0, task.path);
 
         env_owned = false;
         return .{
@@ -5929,20 +5755,13 @@ pub const Coordinator = struct {
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
         const parse_ast = try parse.file(worker_alloc, &env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendSyntax(worker_alloc, &reports, parse_ast, &env.common, task.path);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -6101,14 +5920,9 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, 0, task.path);
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         return .{
@@ -6215,33 +6029,18 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        var rb = try check.ReportBuilder.init(
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, canonicalize_diagnostics, task.path);
+        try check.module_reports.appendTypes(
             worker_alloc,
+            &reports,
             env,
-            env,
-            &typecheck_output.checker.snapshots,
-            &typecheck_output.checker.problems,
+            &typecheck_output.checker,
             task.path,
             task.imported_envs,
-            &typecheck_output.checker.import_mapping,
-            &typecheck_output.checker.regions,
             if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
-        defer rb.deinit();
-
-        const import_diagnostics = try env.getDiagnosticsFrom(canonicalize_diagnostics);
-        defer env.gpa.free(import_diagnostics);
-        for (import_diagnostics) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-
-        for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = try rb.build(prob);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
 
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
@@ -6764,7 +6563,7 @@ fn compileAppRootIdentityExpecting(
     var reports = coord.iterReports();
     var error_count: usize = 0;
     while (reports.next()) |entry| {
-        if (entry.report.severity == .warning) continue;
+        if (!entry.report.severity.isError()) continue;
         try std.testing.expect(error_count < expected_errors.len);
         try std.testing.expect(std.mem.eql(u8, expected_errors[error_count], entry.report.title));
         error_count += 1;
@@ -10616,7 +10415,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
                     .i128_literal => |literal| if (literal.value == 42) {
                         literal_answers += 1;
                     },
-                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => {},
+                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
                 }
             }
             try std.testing.expectEqual(@as(usize, 0), value_exports);

@@ -46,7 +46,7 @@ pub const ModuleIdentity = @import("module_identity.zig");
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
-pub const safe_memory = @import("safe_memory.zig");
+pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
@@ -54,14 +54,12 @@ pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
 pub const DataSpan = @import("DataSpan.zig").DataSpan;
-pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
-pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
-pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
 /// Exact Unicode bidi-control source policy and visible display helpers.
 pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
+pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
 /// Default expanded-size cap for platform and CLI URL bundles.
@@ -186,14 +184,13 @@ test "base tests" {
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
+    std.testing.refAllDecls(@import("memory_fault.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
-    std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(post_check_task_executor);
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));
-    std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));

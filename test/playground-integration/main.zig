@@ -344,6 +344,16 @@ const TestData = struct {
             \\main = "hello" + 123
         );
     }
+
+    pub fn nonExhaustiveMatchRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
+        return allocator.dupe(u8,
+            \\describe : [Red, Green, Blue] -> Str
+            \\describe = |color| match color {
+            \\    Red => "red"
+            \\    Green => "green"
+            \\}
+        );
+    }
 };
 
 /// Helper to send a message to the WASM Playground and get a response.
@@ -1313,6 +1323,11 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
     try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
+
+    // A buffer checked on its own gets no compile-time finalization, so the
+    // exhaustiveness checks deferred to it are settled when reports are collected.
+    const non_exhaustive_code_val = try TestData.nonExhaustiveMatchRocCode(allocator);
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Non-Exhaustive Match", non_exhaustive_code_val, .{ .min_errors = 1, .error_messages = &.{"NON EXHAUSTIVE MATCH"} }, true));
 
     // Ordinary tokenizer errors retain recovered type information; source-policy
     // rejection must stop before type checking even when the rest is valid.

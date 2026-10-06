@@ -1177,7 +1177,9 @@ const Lowerer = struct {
         self.worker_workspaces = &.{};
     }
 
-    fn deinit(self: *Lowerer) void {
+    /// Release every lowering-time table. The LIR result and the runtime
+    /// schema store are the output and are not touched.
+    fn deinitLoweringState(self: *Lowerer) void {
         self.deinitWorkerWorkspaces();
         self.prepared_worker_types.deinit();
         self.prepared_worker_fns.deinit();
@@ -1240,6 +1242,10 @@ const Lowerer = struct {
         self.padded_backing_owners.deinit();
         self.padded_backing_nominals.deinit();
         self.types.deinit();
+    }
+
+    fn deinit(self: *Lowerer) void {
+        self.deinitLoweringState();
         self.runtime_schemas.deinit();
         self.result.deinit();
     }
@@ -1265,68 +1271,7 @@ const Lowerer = struct {
             .lir_result = self.result,
             .runtime_schemas = self.runtime_schemas,
         };
-        self.deinitWorkerWorkspaces();
-        self.prepared_worker_types.deinit();
-        self.prepared_worker_fns.deinit();
-        self.worker_discovered_fns.deinit(self.allocator);
-        self.inline_scope_rebases.deinit();
-        self.folded_map_matches.deinit(self.allocator);
-        self.return_forwarding_locals.deinit();
-        self.erased_demands.deinit();
-        self.tail_call_scratch.deinit();
-        self.erased_call_owner_uses.deinit(self.allocator);
-        self.erased_owner_states.deinit(self.allocator);
-        self.join_stack.deinit(self.allocator);
-        self.loop_stack.deinit(self.allocator);
-        self.allocator.free(self.comptime_site_map);
-        self.typed_local_map.deinit();
-        self.allocator.free(self.payload_conditions);
-        self.active_loop_params.deinit();
-        self.local_types.deinit();
-        self.local_map.deinit();
-        self.const_plan_map.deinit();
-        self.const_type_map.deinit();
-        self.callable_source_fn_map.deinit();
-        self.deinitPackedPlans();
-        self.static_initializer_queue.deinit(self.allocator);
-        self.static_initializer_map.deinit();
-        self.uniform_constructors.deinit();
-        self.comptime_value_map.deinit();
-        self.comptime_read_shares_root.deinit(self.allocator);
-        self.comptime_root_slots.deinit();
-        self.layout_owner_types.deinit();
-        self.deinitNamedLayoutIndex();
-        self.representation_shapes.deinit();
-        self.expr_context_tys.deinit();
-        self.erased_result_demands.deinit();
-        self.type_layouts.deinit();
-        self.type_layout_digests.deinit();
-        self.runtime_schema_requests.deinit(self.allocator);
-        self.layout_requests.deinit(self.allocator);
-        self.roots.deinit(self.allocator);
-        self.literal_roots.deinit(self.allocator);
-        self.allocator.free(self.own_capture_spans);
-        self.own_captures.deinit(self.allocator);
-        self.recursive_slot_types.deinit();
-        self.recursive_value_capture_ids.deinit();
-        self.recursive_value_locals.deinit();
-        self.captures.deinit();
-        self.capture_types.deinit();
-        self.source_symbols.deinit();
-        self.identity_memo.deinit();
-        if (self.layout_digests) |*digests| digests.deinit();
-        self.fn_reach_queue.deinit(self.allocator);
-        self.kept_spec_fns.deinit(self.allocator);
-        self.fn_reachable.deinit(self.allocator);
-        self.fn_written.deinit(self.allocator);
-        self.fn_spec_map.deinit();
-        self.procs_by_identity.deinit();
-        self.fn_entries.deinit(self.allocator);
-        self.fn_specs.deinit(self.allocator);
-        self.type_map.deinit();
-        self.padded_backing_owners.deinit();
-        self.padded_backing_nominals.deinit();
-        self.types.deinit();
+        self.deinitLoweringState();
         self.result = undefined;
         self.runtime_schemas = RuntimeSchemaStore.init(self.allocator);
         self.local_map = collections.DenseMap(Lifted.LocalId, LIR.LocalId).init(self.allocator);
@@ -10654,149 +10599,44 @@ const Lowerer = struct {
 
         pub fn sequenceLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .tuple => |items| self.lowerer.solved.lifted.patSpan(items).len,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const items = pat_data.data.tuple;
+            return self.lowerer.solved.lifted.patSpan(items).len;
         }
 
         pub fn sequenceChild(self: @This(), pat_id: PatternId, index: usize) PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .tuple => |items| GuardedList.at(self.lowerer.solved.lifted.patSpan(items), index),
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const items = pat_data.data.tuple;
+            return GuardedList.at(self.lowerer.solved.lifted.patSpan(items), index);
         }
 
         pub fn recordLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .record => |fields| self.lowerer.solved.lifted.recordDestructSpan(fields).len,
-                .bind,
-                .wildcard,
-                .as,
-                .tuple,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const fields = pat_data.data.record;
+            return self.lowerer.solved.lifted.recordDestructSpan(fields).len;
         }
 
         pub fn recordChild(self: @This(), pat_id: PatternId, index: usize) PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .record => |fields| GuardedList.at(self.lowerer.solved.lifted.recordDestructSpan(fields), index).pattern,
-                .bind,
-                .wildcard,
-                .as,
-                .tuple,
-                .list,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const fields = pat_data.data.record;
+            return GuardedList.at(self.lowerer.solved.lifted.recordDestructSpan(fields), index).pattern;
         }
 
         pub fn listFixedLen(self: @This(), pat_id: PatternId) usize {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.patterns.len,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.patterns.len;
         }
 
         pub fn listHasRest(self: @This(), pat_id: PatternId) bool {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.rest != null,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.rest != null;
         }
 
         pub fn listRestPattern(self: @This(), pat_id: PatternId) ?PatternId {
             const pat_data = self.lowerer.pat(pat_id);
-            return switch (pat_data.data) {
-                .list => |list| list.rest.?.pattern,
-                .bind,
-                .wildcard,
-                .as,
-                .record,
-                .tuple,
-                .tag,
-                .nominal,
-                .int_lit,
-                .dec_lit,
-                .frac_f32_lit,
-                .frac_f64_lit,
-                .str_lit,
-                .str_pattern,
-                => unreachable,
-            };
+            const list = pat_data.data.list;
+            return list.rest.?.pattern;
         }
     };
 
@@ -11716,8 +11556,7 @@ const Lowerer = struct {
         const eq_op: LIR.LowLevel = switch (primitive) {
             .str => .str_is_eq,
             .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => .num_is_eq,
-            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => unreachable,
-            .bool => unreachable,
+            .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .bool => unreachable,
         };
         const args = [_]LIR.LocalId{ lhs, rhs };
         const not_op: LIR.LowLevel = .bool_not;
@@ -11767,7 +11606,7 @@ const Lowerer = struct {
         if (self.result.store.getLocal(target).layout_idx != .bool) {
             Common.invariant("boolean assignment target was not Bool layout");
         }
-        const discriminant: u32 = if (value) 1 else 0;
+        const discriminant = Common.boolDiscriminant(value);
         return try self.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = discriminant,
@@ -11778,7 +11617,7 @@ const Lowerer = struct {
     }
 
     fn boolSwitchNoContinuation(self: *Lowerer, where: LowerSite, cond: LIR.LocalId, true_body: LIR.CFStmtId, false_body: LIR.CFStmtId) Common.LowerError!LIR.CFStmtId {
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         return try self.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try self.result.store.addCFSwitchBranches(&branches),
@@ -13741,8 +13580,7 @@ const Lowerer = struct {
 
                 switch (lhs) {
                     .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-                    .zst => return .{ .value = true },
-                    .erased_capture_ptr => return .{ .value = true },
+                    .zst, .erased_capture_ptr => return .{ .value = true },
                     .list => |elem| try addPair(items, elem, rhs.list),
                     .box => |elem| try addPair(items, elem, rhs.box),
                     .tuple => |elems| if (!try scan.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },
@@ -14623,8 +14461,7 @@ const Lowerer = struct {
                 break :blk variants.get(@intCast(variant_index)).payload_layout;
             },
             .box => unreachable,
-            .box_of_zst => .zst,
-            .zst, .scalar => .zst,
+            .box_of_zst, .zst, .scalar => .zst,
             .erased_box, .list, .list_of_zst, .struct_, .closure, .erased_callable, .ptr => Common.invariant("tag payload operation expected tag-union layout"),
         };
     }
@@ -14737,8 +14574,7 @@ const TypeEquivalence = struct {
 
         switch (lhs) {
             .primitive => |primitive| return .{ .value = primitive == rhs.primitive },
-            .zst => return .{ .value = true },
-            .erased_capture_ptr => return .{ .value = true },
+            .zst, .erased_capture_ptr => return .{ .value = true },
             .list => |elem| try addPair(items, elem, rhs.list),
             .box => |elem| try addPair(items, elem, rhs.box),
             .tuple => |elems| if (!try self.addSpanPairs(items, elems, rhs.tuple)) return .{ .value = false },

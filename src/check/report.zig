@@ -103,8 +103,6 @@ const RedundantOpenTagUnion = problem_mod.RedundantOpenTagUnion;
 // Comptime errors
 const ComptimeOrigin = problem_mod.ComptimeOrigin;
 const ComptimeCrash = problem_mod.ComptimeCrash;
-const ComptimeInvalidNumeral = problem_mod.ComptimeInvalidNumeral;
-const ComptimeInvalidQuote = problem_mod.ComptimeInvalidQuote;
 const ComptimeInvalidInterpolation = problem_mod.ComptimeInvalidInterpolation;
 const ComptimeExpectFailed = problem_mod.ComptimeExpectFailed;
 const ComptimeEvalError = problem_mod.ComptimeEvalError;
@@ -295,27 +293,23 @@ pub const ReportBuilder = struct {
         return region;
     }
 
+    /// Appends the checked module's source excerpt for `region_info` to `document`.
+    fn addSourceRegionTo(self: *const Self, document: *Document, region_info: base.RegionInfo, annotation: reporting.Annotation) Allocator.Error!void {
+        try document.addSourceRegion(region_info, annotation, self.filename, self.source, self.module_env.getLineStarts());
+    }
+
+    /// Appends the checked module's source excerpt for `region` to `document`.
+    fn addSourceRegionOf(self: *const Self, document: *Document, region: Region, annotation: reporting.Annotation) Allocator.Error!void {
+        try self.addSourceRegionTo(document, self.module_env.calcRegionInfo(region), annotation);
+    }
+
     fn addSourceHighlightRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(try self.expressionHighlightRegion(region));
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, try self.expressionHighlightRegion(region), .error_highlight);
     }
 
     /// Add source code warning highlighting for a region.
     fn addSourceWarningRegion(self: *Self, report: *Report, region: Region) Allocator.Error!void {
-        const region_info = self.module_env.calcRegionInfo(region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, region, .warning_highlight);
     }
 
     fn addPlatformRequirementSourceHighlight(self: *Self, report: *Report, region: Region) Allocator.Error!void {
@@ -627,13 +621,11 @@ pub const ReportBuilder = struct {
 
         if (actual_display == expected_display) {
             try D.renderSlice(&.{D.bytes("The type involved is:")}, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const type_str = try report.addOwnedString(actual_formatted);
             try report.document.addCodeBlock(type_str);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(
                 &.{D.bytes("The difference is inside this type, but it is not visible in this display.")},
                 self,
@@ -642,18 +634,15 @@ pub const ReportBuilder = struct {
         } else {
             // Print the actual
             try D.renderSlice(actual_label, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const actual_type_str = try report.addOwnedString(actual_formatted);
             try report.document.addCodeBlock(actual_type_str);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             // Print the expected
             try D.renderSlice(expected_label, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const expected_type_str = try report.addOwnedString(expected_formatted);
             try report.document.addCodeBlock(expected_type_str);
         }
@@ -712,8 +701,7 @@ pub const ReportBuilder = struct {
 
         // Print the actual
         try D.renderSlice(actual_label, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const actual_type_str = try report.addOwnedString(self.getFormattedString(actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
 
@@ -805,23 +793,13 @@ pub const ReportBuilder = struct {
                         }
                     }
                 },
-                .field_typo => |ft| {
+                inline .field_typo, .tag_typo => |ft| {
                     try D.renderSlice(&.{
                         D.bytes("Hint:").withAnnotation(.emphasized),
                         D.bytes("Maybe"),
                         D.ident(ft.typo).withAnnotation(.inline_code),
                         D.bytes("should be"),
                         D.ident(ft.suggestion).withAnnotation(.inline_code),
-                        D.bytes("?").withNoPrecedingSpace(),
-                    }, self, report);
-                },
-                .tag_typo => |tt| {
-                    try D.renderSlice(&.{
-                        D.bytes("Hint:").withAnnotation(.emphasized),
-                        D.bytes("Maybe"),
-                        D.ident(tt.typo).withAnnotation(.inline_code),
-                        D.bytes("should be"),
-                        D.ident(tt.suggestion).withAnnotation(.inline_code),
                         D.bytes("?").withNoPrecedingSpace(),
                     }, self, report);
                 },
@@ -968,7 +946,7 @@ pub const ReportBuilder = struct {
                 }
                 // All error contexts are now handled via mismatch.context
                 return switch (mismatch.context) {
-                    .if_condition => self.buildIfConditionReport(mismatch.types),
+                    .if_condition => self.buildNonBoolReport(mismatch.types, "if", "condition must evaluate to a"),
                     .if_branch => |ctx| self.buildIfBranchReport(mismatch.types, ctx),
                     .match_pattern => |ctx| self.buildMatchPatternReport(mismatch.types, ctx),
                     .match_alt_binder => |ctx| self.buildMatchAltBinderReport(mismatch.types, ctx),
@@ -987,13 +965,13 @@ pub const ReportBuilder = struct {
                     .try_operator => |ctx| self.buildTryOperatorReport(mismatch.types, ctx),
                     .nominal_constructor => |ctx| switch (ctx.backing_type) {
                         .tag => self.buildInvalidNominalTag(mismatch.types),
-                        .record => self.buildInvalidNominalRecord(mismatch.types),
-                        .tuple => self.buildInvalidNominalTuple(mismatch.types),
-                        .value => self.buildInvalidNominalValue(mismatch.types),
+                        .record => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", "The record I found is:"),
+                        .tuple => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", "The tuple I found is:"),
+                        .value => self.buildInvalidNominalBacking(mismatch.types, "Invalid Nominal Type", "I'm having trouble with this nominal type.", "The value I found has type:"),
                     },
                     .fn_args_bound_var => |ctx| self.buildIncompatibleFnArgsBoundVar(mismatch.types, ctx),
                     .method_type => |ctx| self.buildIncompatibleMethodType(mismatch.types, ctx),
-                    .expect => self.buildExpect(mismatch.types),
+                    .expect => self.buildNonBoolReport(mismatch.types, "expect", "statement must evaluate to a"),
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
@@ -1164,8 +1142,8 @@ pub const ReportBuilder = struct {
                 return self.buildPlatformDefNotFound(data);
             },
             .comptime_crash => |data| return self.buildComptimeCrashReport(data),
-            .comptime_invalid_numeral => |data| return self.buildComptimeInvalidNumeralReport(data),
-            .comptime_invalid_quote => |data| return self.buildComptimeInvalidQuoteReport(data),
+            .comptime_invalid_numeral => |data| return self.buildComptimeInvalidLiteralReport(data, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it."),
+            .comptime_invalid_quote => |data| return self.buildComptimeInvalidLiteralReport(data, "Invalid String", "The from_quote implementation for this string literal's type rejected it."),
             .comptime_invalid_interpolation => |data| return self.buildComptimeInvalidInterpolationReport(data),
             .comptime_expect_failed => |data| return self.buildComptimeExpectFailedReport(data),
             .comptime_eval_error => |data| return self.buildComptimeEvalErrorReport(data),
@@ -1327,14 +1305,16 @@ pub const ReportBuilder = struct {
         return true;
     }
 
-    /// Build a report for if condition type error
-    fn buildIfConditionReport(self: *Self, types: TypePair) Allocator.Error!Report {
+    /// Build a report for an `if` condition or `expect` statement that is not a
+    /// `Bool`. `keyword` names the construct and `requirement` continues the
+    /// sentence after it.
+    fn buildNonBoolReport(self: *Self, types: TypePair, keyword: []const u8, requirement: []const u8) Allocator.Error!Report {
         return try self.makeBadTypeReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
             &.{
                 D.bytes("This"),
-                D.bytes("if").withAnnotation(.inline_code),
-                D.bytes("condition must evaluate to a"),
+                D.bytes(keyword).withAnnotation(.inline_code),
+                D.bytes(requirement),
                 D.bytes("Bool").withAnnotation(.inline_code),
                 D.bytes("– either"),
                 D.bytes("True").withAnnotation(.inline_code),
@@ -1354,27 +1334,28 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Build a report for if branch type mismatch
-    fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
-        const branch_index = ctx.branch_index + 1;
+    /// Build a report for a branch of an `if` or `match` (named by `keyword`)
+    /// whose type does not match. `branch_index_0` is the 0-based branch index.
+    fn buildBranchReport(self: *Self, types: TypePair, branch_index_0: u32, keyword: []const u8, hints: []const []const Doc) Allocator.Error!Report {
+        const branch_index = branch_index_0 + 1;
         // The first branch has no previous branches, so a mismatch there is
-        // against the type the whole `if` is expected to have.
-        const is_first = ctx.branch_index == 0;
+        // against the type the whole expression is expected to have.
+        const is_first = branch_index_0 == 0;
         return try self.makeMismatchReport(
             .{ .simple = regionIdxFrom(types.actual_var) },
             if (is_first) &.{
                 D.bytes("The first branch of this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("does not have the type this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("is expected to have."),
             } else &.{
                 D.bytes("The"),
                 D.num_ord(branch_index),
                 D.bytes("branch of this"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("does not match the previous"),
-                if (ctx.branch_index > 1)
+                if (branch_index_0 > 1)
                     D.bytes("branches")
                 else
                     D.bytes("branch"),
@@ -1388,19 +1369,24 @@ pub const ReportBuilder = struct {
             types.actual_snapshot,
             if (is_first) &.{
                 D.bytes("But the"),
-                D.bytes("if").withAnnotation(.inline_code),
+                D.bytes(keyword).withAnnotation(.inline_code),
                 D.bytes("is expected to have the type:"),
             } else &.{
                 D.bytes("But the previous"),
-                if (ctx.branch_index > 1)
+                if (branch_index_0 > 1)
                     D.bytes("branches result")
                 else
                     D.bytes("branch results"),
                 D.bytes("in:"),
             },
             types.expected_snapshot,
-            &.{},
+            hints,
         );
+    }
+
+    /// Build a report for if branch type mismatch
+    fn buildIfBranchReport(self: *Self, types: TypePair, ctx: Context.IfBranchContext) Allocator.Error!Report {
+        return self.buildBranchReport(types, ctx.branch_index, "if", &.{});
     }
 
     /// Build a report for match pattern type mismatch
@@ -1499,65 +1485,21 @@ pub const ReportBuilder = struct {
 
     /// Build a report for match branch type mismatch
     fn buildMatchBranchReport(self: *Self, types: TypePair, ctx: Context.MatchBranchContext) Allocator.Error!Report {
-        const branch_index = ctx.branch_index + 1;
-        // The first branch has no previous branches, so a mismatch there is
-        // against the type the whole `match` is expected to have.
-        const is_first = ctx.branch_index == 0;
-        return try self.makeMismatchReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
-            if (is_first) &.{
-                D.bytes("The first branch of this"),
+        return self.buildBranchReport(types, ctx.branch_index, "match", &.{
+            &.{
+                D.bytes("All branches in a"),
                 D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("does not have the type this"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("is expected to have."),
-            } else &.{
-                D.bytes("The"),
-                D.num_ord(branch_index),
-                D.bytes("branch of this"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("does not match the previous"),
-                if (ctx.branch_index > 1)
-                    D.bytes("branches")
-                else
-                    D.bytes("branch"),
-                D.bytes(".").withNoPrecedingSpace(),
+                D.bytes("must have compatible types."),
             },
             &.{
-                D.bytes("The"),
-                D.num_ord(branch_index),
-                D.bytes("branch is:"),
+                D.bytes("Note:").withAnnotation(.underline),
+                D.bytes("You can wrap branch values in a tag to make them compatible."),
             },
-            types.actual_snapshot,
-            if (is_first) &.{
-                D.bytes("But the"),
-                D.bytes("match").withAnnotation(.inline_code),
-                D.bytes("is expected to have the type:"),
-            } else &.{
-                D.bytes("But the previous"),
-                if (ctx.branch_index > 1)
-                    D.bytes("branches result")
-                else
-                    D.bytes("branch results"),
-                D.bytes("in:"),
-            },
-            types.expected_snapshot,
             &.{
-                &.{
-                    D.bytes("All branches in a"),
-                    D.bytes("match").withAnnotation(.inline_code),
-                    D.bytes("must have compatible types."),
-                },
-                &.{
-                    D.bytes("Note:").withAnnotation(.underline),
-                    D.bytes("You can wrap branch values in a tag to make them compatible."),
-                },
-                &.{
-                    D.bytes("To learn about tags, see"),
-                    D.link("https://www.roc-lang.org/tutorial#tags"),
-                },
+                D.bytes("To learn about tags, see"),
+                D.link("https://www.roc-lang.org/tutorial#tags"),
             },
-        );
+        });
     }
 
     fn buildMatchAltBinderReport(self: *Self, types: TypePair, ctx: Context.MatchAltBinderContext) Allocator.Error!Report {
@@ -1813,16 +1755,13 @@ pub const ReportBuilder = struct {
             }, self, &report);
         }
         if (!has_error_payload_type) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{D.bytes("But its body evaluates to:")}, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const body_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(body_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         if (ctx.body_tail_try) |tail_try| {
             try D.renderSlice(&.{
@@ -1831,8 +1770,7 @@ pub const ReportBuilder = struct {
                 D.bytes("?").withAnnotation(.inline_code),
                 D.bytes(":").withNoPrecedingSpace(),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try self.addSourceHighlightRegion(&report, self.trySuffixOperatorRegion(tail_try));
             try report.document.addLineBreak();
             try D.renderSlice(&.{
@@ -1902,12 +1840,10 @@ pub const ReportBuilder = struct {
             D.bytes("Err").withAnnotation(.inline_code),
             D.bytes("whose payload has this type:"),
         }, self, report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const err_type_str = try report.addOwnedString(err_type);
         try report.document.addCodeBlock(err_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         return true;
     }
 
@@ -1943,8 +1879,7 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("It has the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
@@ -2007,14 +1942,12 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes(" function has the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
 
         if (ctx.actual_args < ctx.expected_args) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try D.renderSlice(&.{
                 D.bytes("Are there any missing commas?"),
@@ -2104,24 +2037,15 @@ pub const ReportBuilder = struct {
             null;
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
         // Show the invalid tag
         try report.document.addText("The tag is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(actual_tag_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         // Show the expected tags when the nominal wraps a non-empty tag union.
         // Otherwise, explain the backing shape mismatch directly.
@@ -2131,8 +2055,7 @@ pub const ReportBuilder = struct {
                 const expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(expected_tag));
 
                 try report.document.addText("But the nominal type needs it to be:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 try report.document.addCodeBlock(expected_tag_str);
                 return report;
             }
@@ -2140,8 +2063,7 @@ pub const ReportBuilder = struct {
             const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
             try report.document.addText("But the nominal type needs it to one of:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(expected_type);
 
             // Check if there's a tag with the same name in the list of possible tags
@@ -2153,8 +2075,7 @@ pub const ReportBuilder = struct {
                 if (actual_tag.name.eql(cur_expected_tag.name)) {
                     const cur_expected_tag_str = try report.addOwnedString(snapshot.Store.getFormattedTagString(cur_expected_tag));
 
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                     try report.document.addAnnotated("Hint:", .emphasized);
                     try report.document.addReflowingText(" The nominal type has a tag with the same name, but different args:");
                     try report.document.addLineBreak();
@@ -2169,122 +2090,39 @@ pub const ReportBuilder = struct {
 
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addText("But the nominal type wraps:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
     }
 
-    /// Build a report for invalid nominal record (record fields don't match)
-    fn buildInvalidNominalRecord(
+    /// Build a report for a nominal type whose wrapped record, tuple, or value
+    /// does not match what the nominal type expects.
+    fn buildInvalidNominalBacking(
         self: *Self,
         types: TypePair,
+        title: []const u8,
+        headline: []const u8,
+        found_intro: []const u8,
     ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Record", "I'm having trouble with this nominal type that wraps a record.", .runtime_error);
+        var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
         const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
 
-        try report.document.addText("The record I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addText(found_intro);
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal tuple (tuple elements don't match)
-    fn buildInvalidNominalTuple(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Tuple", "I'm having trouble with this nominal type that wraps a tuple.", .runtime_error);
-        errdefer report.deinit();
-
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The tuple I found is:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(expected_type);
-
-        return report;
-    }
-
-    /// Build a report for invalid nominal value (value type doesn't match)
-    fn buildInvalidNominalValue(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Nominal Type", "I'm having trouble with this nominal type.", .runtime_error);
-        errdefer report.deinit();
-
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
-            try report.document.addLineBreak();
-        }
-
-        const actual_type = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
-        const expected_type = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
-
-        try report.document.addText("The value I found has type:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(actual_type);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-
-        try report.document.addText("But the nominal type expects:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
@@ -2394,14 +2232,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         return report;
     }
@@ -2426,14 +2257,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2462,14 +2286,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2494,14 +2311,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2526,14 +2336,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2550,8 +2353,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceWarningRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Tag unions in output positions, like the return type of a function, are automatically open. Remove the"),
             D.bytes("..").withAnnotation(.inline_code),
@@ -2576,14 +2378,7 @@ pub const ReportBuilder = struct {
             D.bytes("method to it."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -2624,14 +2419,7 @@ pub const ReportBuilder = struct {
     ) Allocator.Error!void {
         const region: Region = owner_region orelse
             (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
-        const region_info = self.module_env.calcRegionInfo(region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, region, .error_highlight);
         try report.document.addLineBreak();
     }
 
@@ -2663,8 +2451,7 @@ pub const ReportBuilder = struct {
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -2844,12 +2631,10 @@ pub const ReportBuilder = struct {
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         switch (data.dispatcher_type) {
             .nominal => {
@@ -2966,14 +2751,7 @@ pub const ReportBuilder = struct {
 
         // Add source region highlighting on the offending dispatch call (the
         // primary region).
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         // When the dispatch is hidden inside a helper, the call site (primary
@@ -2991,13 +2769,7 @@ pub const ReportBuilder = struct {
                 try report.document.addLineBreak();
 
                 const secondary_info = self.module_env.calcRegionInfo(secondary);
-                try report.document.addSourceRegion(
-                    secondary_info,
-                    .error_highlight,
-                    self.filename,
-                    self.source,
-                    self.module_env.getLineStarts(),
-                );
+                try self.addSourceRegionTo(&report.document, secondary_info, .error_highlight);
                 try report.document.addLineBreak();
             }
         }
@@ -3026,25 +2798,16 @@ pub const ReportBuilder = struct {
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
         try D.renderSlice(&.{
             D.bytes("The method is being selected for this type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         if (data.grown_from_snapshot) |grown_from_snapshot| {
             const grown_from_str = try report.addOwnedString(self.getFormattedString(grown_from_snapshot));
@@ -3053,31 +2816,26 @@ pub const ReportBuilder = struct {
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("with a dispatch state that has grown—in its dispatcher or in the method type it requires—since an earlier step on the same chain, whose dispatcher was:"),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(grown_from_str);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("The dispatch state grows on every such step, so the chain can never terminate."),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
         } else {
             try D.renderSlice(&.{
                 D.bytes("Using"),
                 D.ident(data.method_name).withAnnotation(.inline_code),
                 D.bytes("for this type requires the same method again, before all of its type requirements have been determined."),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
         }
 
         try D.renderSlice(&.{
             D.bytes("Recursive function calls are allowed. This error is about a cycle in the type requirements, before the function can run."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -3103,20 +2861,13 @@ pub const ReportBuilder = struct {
             (if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero());
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("The type was determined to be:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -3141,13 +2892,7 @@ pub const ReportBuilder = struct {
         // This might be different if the type came from somewhere else (e.g., a type annotation)
         const dispatcher_region = if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero();
 
-        try report.document.addSourceRegion(
-            num_region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionTo(&report.document, num_region_info, .error_highlight);
         try report.document.addLineBreak();
 
         // Check if we have a different origin region we can show
@@ -3160,21 +2905,14 @@ pub const ReportBuilder = struct {
             }, self, &report);
             try report.document.addLineBreak();
 
-            try report.document.addSourceRegion(
-                dispatcher_region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionTo(&report.document, dispatcher_region_info, .error_highlight);
             try report.document.addLineBreak();
         }
 
         try D.renderSlice(&.{
             D.bytes("Other code expects this to have the type:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
 
         return report;
@@ -3189,21 +2927,13 @@ pub const ReportBuilder = struct {
 
         const expected_type = try report.addOwnedString(self.getFormattedString(data.expected_type));
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("The inferred type is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(expected_type);
 
         return report;
@@ -3226,14 +2956,7 @@ pub const ReportBuilder = struct {
             D.bytes("access alone."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -3266,14 +2989,7 @@ pub const ReportBuilder = struct {
         const owned_message = try report.addOwnedString(message);
         try D.renderSliceInto(&.{D.bytes(owned_message)}, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
 
         return report;
     }
@@ -3300,14 +3016,7 @@ pub const ReportBuilder = struct {
             D.bytes("instead."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         const hint: []const u8 = switch (data.kind) {
@@ -3349,11 +3058,9 @@ pub const ReportBuilder = struct {
         try D.renderSlice(&.{
             D.bytes("The type is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         // Get the content and explain which parts don't support equality
         const content = self.snapshots.?.getContentUnwrapAlias(data.dispatcher_snapshot);
@@ -3396,19 +3103,16 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("The compiler can derive"),
             D.ident(data.method_name).withAnnotation(.inline_code),
             D.bytes("when exactly one direct tag payload is non-zero-sized and every other direct payload is zero-sized."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("If every payload is zero-sized, one tag must have exactly one payload and every other tag must have no payloads. Opaque payload types always count as non-zero-sized, and nested values are not searched for a different payload to transform."),
         }, self, &report);
@@ -3432,11 +3136,9 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
         try D.renderSlice(&.{D.bytes("The type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(snapshot_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("A type annotation that names the full type would let the compiler derive it."),
         }, self, &report);
@@ -3608,38 +3310,6 @@ pub const ReportBuilder = struct {
         );
     }
 
-    /// Build a report for when a method exists but its type doesn't match the where clause requirement
-    fn buildExpect(
-        self: *Self,
-        types: TypePair,
-    ) Allocator.Error!Report {
-        // Note: The unifier's actual/expected are opposite to display order.
-        // We want to show "type has X" (from expected_snapshot) then "expected Y" (from actual_snapshot)
-        return try self.makeBadTypeReport(
-            .{ .simple = regionIdxFrom(types.actual_var) },
-            &.{
-                D.bytes("This"),
-                D.bytes("expect").withAnnotation(.inline_code),
-                D.bytes("statement must evaluate to a"),
-                D.bytes("Bool").withAnnotation(.inline_code),
-                D.bytes("– either"),
-                D.bytes("True").withAnnotation(.inline_code),
-                D.bytes("or"),
-                D.bytes("False").withAnnotation(.inline_code),
-                D.bytes(".").withNoPrecedingSpace(),
-            },
-            &.{D.bytes("It is:")},
-            types.actual_snapshot,
-            &.{
-                &.{
-                    D.bytes("But I need this to be a"),
-                    D.bytes("Bool").withAnnotation(.inline_code),
-                    D.bytes("value."),
-                },
-            },
-        );
-    }
-
     /// Build a typo suggestions report for when a record field is not found.
     /// This is used by both buildRecordAccess and buildRecordUpdate.
     fn buildTypoSuggestionsReport(
@@ -3684,8 +3354,7 @@ pub const ReportBuilder = struct {
             try report.document.addText("    - ");
             try report.document.addAnnotated(self.can_ir.getIdentText(suggestion.ident), .inline_code);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("So maybe ");
         try report.document.addAnnotated(self.can_ir.getIdentText(field_name), .inline_code);
         try report.document.addReflowingText(" should be ");
@@ -3694,8 +3363,7 @@ pub const ReportBuilder = struct {
 
         // Add note about record update syntax limitations
         if (is_record_update) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("Note:").withAnnotation(.underline),
                 D.bytes("You cannot add new fields to a record with the record update syntax."),
@@ -3781,15 +3449,12 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{D.bytes("One type is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const actual_type_str = try report.addOwnedString(self.getFormattedString(types.actual_snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("The other is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const expected_type_str = try report.addOwnedString(self.getFormattedString(types.expected_snapshot));
         try report.document.addCodeBlock(expected_type_str);
         try report.document.addLineBreak();
@@ -3867,14 +3532,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A field default can never place a requirement on the type's parameters: type declarations do not carry where clauses, and the compiler never infers such requirements onto a type. Make the field's type concrete, or use a default value that demands nothing of the parameter.");
 
@@ -3894,14 +3552,7 @@ pub const ReportBuilder = struct {
             D.bytes("field performs effects, but a field default must be pure."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A default is filled in by the compiler wherever construction omits the field, so running effects here would happen at unpredictable times. Compute the value with an effectful function first, then pass it explicitly.");
 
@@ -3921,14 +3572,7 @@ pub const ReportBuilder = struct {
             D.bytes("field constructs a record that eventually needs this same default again."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Every omitted defaulted field is filled in by the compiler. This chain of omitted fields comes back to the default it started from, so construction would never finish. Supply a field explicitly somewhere in the cycle or use a non-recursive default.");
 
@@ -3948,8 +3592,7 @@ pub const ReportBuilder = struct {
             D.bytes("is part of a recursive non-function definition cycle."),
         }, self, &report, &report.headline);
         try self.addSourceHighlightRegion(&report, data.region);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
 
         return report;
@@ -3968,14 +3611,7 @@ pub const ReportBuilder = struct {
             D.bytes("field is always present, but it is being accessed as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("An optional access produces a ");
         try report.document.addAnnotated("Try", .inline_code);
@@ -4016,21 +3652,13 @@ pub const ReportBuilder = struct {
             },
         }
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         switch (data.reason) {
             .required_field => {
                 try report.document.addReflowingText("The parser is derived for the record type:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 const record_str = try report.addOwnedString(self.getFormattedString(data.record_snapshot.?));
                 try report.document.addCodeBlock(record_str);
                 try report.document.addLineBreak();
@@ -4047,18 +3675,15 @@ pub const ReportBuilder = struct {
             },
             .nested_row => {
                 try report.document.addReflowingText("The nested parser can produce the tags:");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
                 const tags_str = try report.addOwnedString(self.getFormattedString(data.tags_snapshot.?));
                 try report.document.addCodeBlock(tags_str);
             },
         }
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addReflowingText("But the error row is closed at:");
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         const row_str = try report.addOwnedString(self.getFormattedString(data.row_snapshot));
         try report.document.addCodeBlock(row_str);
         try report.document.addLineBreak();
@@ -4155,14 +3780,7 @@ pub const ReportBuilder = struct {
             D.bytes("field is required, but it is being unset as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("Unsetting a field selects the missing state of an optional field\u{2014}but a required field is always present, so there is no missing state to select. You cannot change whether a field is required or optional here. To get a record without this field, construct a new record that omits it.");
 
@@ -4187,14 +3805,7 @@ pub const ReportBuilder = struct {
             D.bytes("field has a default value, but it is being unset as if it were optional."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
         try report.document.addReflowingText("A defaulted field always has a value, so there is no missing state to select. If you want the field to take its default, construct a new record that omits the field instead.");
 
@@ -4501,14 +4112,7 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4534,14 +4138,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
         try report.document.addLineBreak();
@@ -4572,10 +4169,9 @@ pub const ReportBuilder = struct {
 
         if (has_problem_fields) {
             try report.document.addReflowingText("This record does not support equality because these fields have types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const field_names = fields.items(.name);
             const field_contents = fields.items(.content);
@@ -4597,9 +4193,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Anonymous records only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their fields have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -4624,10 +4220,9 @@ pub const ReportBuilder = struct {
 
         if (has_problem_elems) {
             try report.document.addReflowingText("This tuple does not support equality because these elements have types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             for (elems, 0..) |elem_content_idx, i| {
                 if (!self.snapshotSupportsEquality(elem_content_idx)) {
@@ -4645,9 +4240,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tuples only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their elements have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -4676,10 +4271,9 @@ pub const ReportBuilder = struct {
 
         if (has_problem_tags) {
             try report.document.addReflowingText("This tag union does not support equality because these tags have payload types that don't support ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(":");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const tag_names = tags.items(.name);
             const tag_args_list = tags.items(.args);
@@ -4722,9 +4316,9 @@ pub const ReportBuilder = struct {
             }
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Tag unions only have an ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" method if all of their payload types have ");
-            try report.document.addAnnotated("is_eq", .emphasized);
+            try report.document.addAnnotated(Ident.IS_EQ_METHOD_NAME, .emphasized);
             try report.document.addReflowingText(" methods.");
             try report.document.addLineBreak();
         }
@@ -4930,27 +4524,18 @@ pub const ReportBuilder = struct {
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
         try D.renderSlice(&.{
             D.bytes("Its definition is:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         switch (data.kind) {
             .infinite, .anonymous => try D.renderSlice(&.{
@@ -4981,14 +4566,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -4997,8 +4575,7 @@ pub const ReportBuilder = struct {
             D.bytes("<RecursiveType>").withAnnotation(.inline_code),
             D.bytes("for parts of the type that repeat infinitely."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
@@ -5042,20 +4619,16 @@ pub const ReportBuilder = struct {
         }
         try report.document.addLineBreak();
         try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.outer_snapshot)));
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes("It also comes from here:")}, self, &report);
         try report.document.addLineBreak();
         try self.addSourceHighlightRegion(&report, data.inner_region);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{D.bytes("where it is:")}, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(try report.addOwnedString(self.getFormattedString(data.inner_snapshot)));
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{D.bytes(rule)}, self, &report);
         return report;
@@ -5077,14 +4650,7 @@ pub const ReportBuilder = struct {
         }
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -5093,13 +4659,11 @@ pub const ReportBuilder = struct {
             D.bytes("<RecursiveType>").withAnnotation(.inline_code),
             D.bytes("for parts of the type that repeat."),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         const actual_type_str = try report.addOwnedString(self.getFormattedString(data.snapshot));
         try report.document.addCodeBlock(actual_type_str);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Hint:").withAnnotation(.emphasized),
@@ -5117,14 +4681,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
-            const region_info = self.module_env.calcRegionInfo(region.*);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                self.filename,
-                self.source,
-                self.module_env.getLineStarts(),
-            );
+            try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
 
@@ -5288,126 +4845,81 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error);
+    /// Build a report that highlights `region` and follows it with `details`.
+    fn buildHighlightedRegionReport(
+        self: *Self,
+        title: []const u8,
+        headline: []const u8,
+        severity: reporting.Severity,
+        region: Region,
+        details: []const D,
+    ) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, title, headline, severity);
         errdefer report.deinit();
 
-        try self.addSourceHighlightRegion(&report, data.region);
+        try self.addSourceHighlightRegion(&report, region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
-            D.bytes("Wrap function types in"),
-            D.bytes("Box").withAnnotation(.inline_code),
-            D.bytes("when crossing the host boundary."),
-        }, self, &report);
+        try report.document.addLineBreaks(2);
+        try D.renderSlice(details, self, &report);
         return report;
     }
 
+    fn buildHostedUnboxedFunctionReport(self: *Self, data: HostedUnboxedFunction) Allocator.Error!Report {
+        return self.buildHighlightedRegionReport("Hosted Function Requires Boxed Lambda", "Hosted functions cannot accept or return unboxed functions.", .runtime_error, data.region, &.{
+            D.bytes("Wrap function types in"),
+            D.bytes("Box").withAnnotation(.inline_code),
+            D.bytes("when crossing the host boundary."),
+        });
+    }
+
     fn buildHostedFunctionNotEffectfulReport(self: *Self, data: HostedFunctionNotEffectful) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Hosted Function Must Be Effectful", "Every function the host provides is effectful.", .runtime_error, data.region, &.{
             D.bytes("Every use of it crashes at runtime until it is declared with"),
             D.bytes("=>").withAnnotation(.inline_code),
             D.bytes("instead of"),
             D.bytes("->").withAnnotation(.inline_code),
             D.bytes("like every other hosted function."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostedTypeVariableNotBoxedReport(self: *Self, data: HostedTypeVariableNotBoxed) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Hosted Type Variable Must Be Boxed", "A hosted function's type variables can only appear inside a Box.", .runtime_error, data.region, &.{
             D.bytes("The host has one C signature for every use of this function, so it can only receive or return a value of an unknown type through a pointer. Wrap each type variable in"),
             D.bytes("Box").withAnnotation(.inline_code),
             D.bytes("so the host only ever sees that pointer."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostBoundaryOpenRowReport(self: *Self, data: HostBoundaryOpenRow) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Host Boundary Requires Closed Rows", "Host-bound types cannot contain open record or tag-union rows.", .runtime_error, data.region, &.{
             D.bytes("Close every record and tag-union row in this type before it crosses the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildHostBoundaryOptionalFieldReport(self: *Self, data: HostBoundaryOptionalField) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Host Boundary Forbids Optional Fields", "Host-bound types cannot contain `?:` record fields.", .runtime_error, data.region, &.{
             D.bytes("Replace each"),
             D.bytes("?:").withAnnotation(.inline_code),
             D.bytes("field with a required field whose value explicitly represents absence before it crosses the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulTopLevelReport(self: *Self, data: EffectfulTopLevel) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Top Level Value", "This top-level definition performs an effect while initializing.", .runtime_error, data.region, &.{
             D.bytes("Move the effect into a function body so it runs when the function is called."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulComptimeExpressionReport(self: *Self, data: EffectfulComptimeExpression) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Compile Time Expression", "This REPL expression performs an effect, but REPL expressions are evaluated at compile time.", .runtime_error, data.region, &.{
             D.bytes("Use a pure expression here, or run effectful code from a Roc application."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulExpectReport(self: *Self, data: EffectfulExpect) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Effectful Expect", "This expect performs an effect while evaluating its condition.", .runtime_error, data.region, &.{
             D.bytes("Keep expect conditions pure, and test effectful behavior from a function body instead."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildEffectfulFunctionNameReport(self: *Self, data: EffectfulFunctionName) Allocator.Error!Report {
@@ -5416,8 +4928,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceWarningRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Add a trailing"),
             D.bytes("!").withAnnotation(.inline_code),
@@ -5427,31 +4938,15 @@ pub const ReportBuilder = struct {
     }
 
     fn buildAnnotationOnlyValueReport(self: *Self, data: AnnotationOnlyValue) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Declaration Has No Value", "This declaration has a type annotation but no implementation.", .warning, data.region, &.{
             D.bytes("Add a value body here, or put hosted functions in a platform type module so they are published through the host boundary."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildAnnotationOnlyValueUseReport(self: *Self, data: AnnotationOnlyValueUse) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Reference Has No Value", "This refers to a declaration that has a type annotation but no implementation, so there is no value here to use.", .runtime_error, data.region, &.{
             D.bytes("Give that declaration a value body, or stop referring to it here."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildCapturingLocalTypeEscapeReport(self: *Self, data: CapturingLocalTypeEscape) Allocator.Error!Report {
@@ -5473,8 +4968,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Its"),
             D.ident(data.method_name).withAnnotation(.inline_code),
@@ -5504,8 +4998,7 @@ pub const ReportBuilder = struct {
 
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Call it here with its arguments instead."),
         }, self, &report);
@@ -5523,19 +5016,18 @@ pub const ReportBuilder = struct {
         }, self, &report, &report.headline);
         try self.addSourceHighlightRegion(&report, data.region);
 
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
             D.bytes("Using"),
             D.bytes("_").withAnnotation(.inline_code),
             D.bytes("as the entire annotation requests a compiler-generated implementation. The compiler currently supports this for"),
-            D.bytes("is_eq").withAnnotation(.inline_code),
+            D.bytes(Ident.IS_EQ_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("to_hash").withAnnotation(.inline_code),
+            D.bytes(Ident.TO_HASH_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("parser_for").withAnnotation(.inline_code),
+            D.bytes(Ident.PARSER_FOR_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
-            D.bytes("encoder_for").withAnnotation(.inline_code),
+            D.bytes(Ident.ENCODER_FOR_METHOD_NAME).withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
             D.bytes("map").withAnnotation(.inline_code),
             D.bytes(",").withNoPrecedingSpace(),
@@ -5564,21 +5056,13 @@ pub const ReportBuilder = struct {
     /// Build a report for a mutable `var` whose annotation introduces an unbound
     /// type variable.
     fn buildPolymorphicVarAnnotationReport(self: *Self, data: PolymorphicVarAnnotation) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Polymorphic Var", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type.", .runtime_error);
-        errdefer report.deinit();
-
-        try self.addSourceHighlightRegion(&report, data.region);
-
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try D.renderSlice(&.{
+        return self.buildHighlightedRegionReport("Polymorphic Var", "This var is declared with a polymorphic type annotation, but a mutable variable must have a single concrete type.", .runtime_error, data.region, &.{
             D.bytes("Give it a concrete type, or replace the type variable with"),
             D.bytes("_").withAnnotation(.inline_code),
             D.bytes("to let the type be inferred from how the"),
             D.bytes("var").withAnnotation(.inline_code),
             D.bytes("is used."),
-        }, self, &report);
-        return report;
+        });
     }
 
     fn buildPolymorphicValueAnnotationReport(self: *Self, data: PolymorphicValueAnnotation) Allocator.Error!Report {
@@ -5722,8 +5206,10 @@ pub const ReportBuilder = struct {
     }
 
     /// Build a report for compile-time crash
-    fn buildComptimeInvalidNumeralReport(self: *Self, data: ComptimeInvalidNumeral) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid Number", "The from_numeral implementation for this number literal's type rejected it.", .runtime_error);
+    /// Build a report for a literal that its type's compile-time conversion
+    /// (`from_numeral` or `from_quote`) rejected.
+    fn buildComptimeInvalidLiteralReport(self: *Self, data: anytype, title: []const u8, headline: []const u8) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
         const owned_message = try report.addOwnedString(
@@ -5731,14 +5217,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5755,48 +5234,7 @@ pub const ReportBuilder = struct {
                 D.bytes("It returned this error message:"),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
-        try report.document.addCodeBlock(owned_message);
-
-        return report;
-    }
-
-    fn buildComptimeInvalidQuoteReport(self: *Self, data: ComptimeInvalidQuote) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Invalid String", "The from_quote implementation for this string literal's type rejected it.", .runtime_error);
-        errdefer report.deinit();
-
-        const owned_message = try report.addOwnedString(
-            self.problems.getExtraString(data.message),
-        );
-
-        // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-
-        if (data.origin) |origin| {
-            // The rejected literal was inlined from another module (see
-            // ComptimeOrigin); name its declaring module and exact location.
-            const owned_origin_location = try self.comptimeOriginLocation(&report, origin);
-            try D.renderSlice(&.{
-                D.bytes("The rejected literal is in the module"),
-                D.bytes(owned_origin_location).withAnnotation(.emphasized),
-                D.bytes("and the implementation returned this error message:"),
-            }, self, &report);
-        } else {
-            try D.renderSlice(&.{
-                D.bytes("It returned this error message:"),
-            }, self, &report);
-        }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5848,14 +5286,7 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         if (data.origin) |origin| {
@@ -5871,8 +5302,7 @@ pub const ReportBuilder = struct {
                 D.bytes(owned_origin_location).withAnnotation(.emphasized),
                 D.bytes("with this message:"),
             }, self, &report);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock(owned_message);
 
             return report;
@@ -5883,8 +5313,7 @@ pub const ReportBuilder = struct {
             D.bytes("crash").withAnnotation(.keyword),
             D.bytes("happened with this message:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5899,16 +5328,8 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting - shows the expect expression with syntax highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
+        try report.document.addLineBreaks(2);
         if (data.origin) |origin| {
             // The expect was in source inlined from another module (e.g. a
             // `??` field default materialized per specialization), so the
@@ -5929,8 +5350,7 @@ pub const ReportBuilder = struct {
                 D.bytes("failed with this message:"),
             }, self, &report);
         }
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_message);
 
         return report;
@@ -5946,21 +5366,13 @@ pub const ReportBuilder = struct {
         );
 
         // Add source region highlighting
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .error_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .error_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
             D.bytes("The evaluation failed with error:"),
         }, self, &report);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addCodeBlock(owned_error_name);
 
         return report;
@@ -5983,8 +5395,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("        ");
         try report.document.addAnnotated(condition_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Missing patterns:"),
@@ -6007,8 +5418,7 @@ pub const ReportBuilder = struct {
             D.bytes("to match anything."),
         }, self, &report);
         if (data.empirical) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try D.renderSlice(&.{
                 D.bytes("Note: This non-exhaustive match was discovered empirically during compile-time evaluation."),
             }, self, &report);
@@ -6031,8 +5441,7 @@ pub const ReportBuilder = struct {
         try report.document.addLineBreak();
         try report.document.addText("        ");
         try report.document.addAnnotated(value_type, .type_variable);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
 
         try D.renderSlice(&.{
             D.bytes("Missing patterns:"),
@@ -6135,14 +5544,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Unreachable Code", "This code is unreachable because an earlier expression always exits.", .warning);
         errdefer report.deinit();
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .warning_highlight);
 
         return report;
     }
@@ -6160,14 +5562,7 @@ pub const ReportBuilder = struct {
             D.bytes("was not taken during compile-time evaluation."),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.branch_region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.branch_region, .warning_highlight);
         try report.document.addLineBreak();
 
         try D.renderSlice(&.{
@@ -6200,14 +5595,7 @@ pub const ReportBuilder = struct {
             D.bytes(consequence),
         }, self, &report, &report.headline);
 
-        const region_info = self.module_env.calcRegionInfo(data.region);
-        try report.document.addSourceRegion(
-            region_info,
-            .warning_highlight,
-            self.filename,
-            self.source,
-            self.module_env.getLineStarts(),
-        );
+        try self.addSourceRegionOf(&report.document, data.region, .warning_highlight);
 
         return report;
     }

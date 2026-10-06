@@ -355,15 +355,6 @@ pub const Solution = struct {
         return self.unique.isSet(index);
     }
 
-    /// True when some occurrence can add another holder to the local's
-    /// value (or consume it a second time), so a born-unique seed on this
-    /// local would not survive to a consuming use.
-    pub fn isUniqueDestroyed(self: *const Solution, local: LIR.LocalId) bool {
-        const index = @intFromEnum(local);
-        if (index >= self.leader.len) return true;
-        return self.unique_destroyed.isSet(index);
-    }
-
     /// True when the local's value is unique in an emission of its proc
     /// whose demand vector seeds the parameter positions in `seeds`
     /// born-unique: its birth holds under those seeds and nothing adds a
@@ -1203,8 +1194,7 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_tag,
         .set_local,
         => |binding| binding.target,
-        .store_struct => |store_stmt| store_stmt.dest,
-        .store_tag => |store_stmt| store_stmt.dest,
+        inline .store_struct, .store_tag => |store_stmt| store_stmt.dest,
         .debug,
         .expect,
         .expect_err,
@@ -1431,7 +1421,7 @@ fn computeOutcomeRestitution(
                 }.go;
 
                 switch (stmt) {
-                    .assign_ref => |assign| {
+                    inline .assign_ref, .init_uninitialized => |assign| {
                         if (assign.target == active_param) {
                             valid = false;
                             break;
@@ -1439,13 +1429,6 @@ fn computeOutcomeRestitution(
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
                     .assign_literal => |assign| try pushNext(&stack, allocator, next_state, assign.next),
-                    .init_uninitialized => |assign| {
-                        if (assign.target == active_param) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
                     .assign_call => |assign| {
                         const callee_sig = solution.sigOf(assign.proc);
                         const args = store.getLocalSpan(assign.args);
@@ -1503,21 +1486,7 @@ fn computeOutcomeRestitution(
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
-                    .assign_boxy_unbox => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_adapt => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_inspect => |assign| {
+                    inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
                             valid = false;
                             break;
@@ -1548,13 +1517,6 @@ fn computeOutcomeRestitution(
                                 valid = false;
                                 break;
                             }
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .assign_boxy_tag_payload => |assign| {
-                        if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
-                            valid = false;
-                            break;
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
@@ -1590,7 +1552,7 @@ fn computeOutcomeRestitution(
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
-                    .assign_struct => |assign| {
+                    inline .assign_struct, .store_struct => |assign| {
                         if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
                             valid = false;
                             break;
@@ -1609,13 +1571,6 @@ fn computeOutcomeRestitution(
                             break;
                         }
                         if (assign.target == ret_local) next_state.discriminant = assign.discriminant;
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
-                    .store_struct => |assign| {
-                        if (!consumeOutcomeSpan(store, solution, active_param, &next_state.present, assign.fields)) {
-                            valid = false;
-                            break;
-                        }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
                     .store_tag => |assign| {
@@ -2719,14 +2674,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .field => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
                 .tag_payload => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
                 .tag_payload_struct => |op| try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.source } }),
-                .list_reinterpret => |op| {
-                    try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
-                    try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
-                    if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
-                        try solver.binding_facts.append(allocator, .{ .demand = assign.target });
-                    }
-                },
-                .nominal => |op| {
+                inline .list_reinterpret, .nominal => |op| {
                     try solver.binding_facts.append(allocator, .{ .borrow = .{ .target = assign.target, .source = op.backing_ref } });
                     try solver.binding_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref } });
                     if (!aliasPreservesBoxyRcDescriptor(solver, assign.target, op.backing_ref)) {
@@ -2739,25 +2687,11 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                     try liftVisibilityLink(solver, assign.target, source);
                     try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = source, .stmt = current } });
                 },
-                .list_reinterpret => |op| {
+                inline .list_reinterpret, .nominal => |op| {
                     try liftVisibilityLink(solver, assign.target, op.backing_ref);
                     try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref, .stmt = current } });
                 },
-                .nominal => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.backing_ref);
-                    try solver.unique_facts.append(allocator, .{ .alias = .{ .target = assign.target, .source = op.backing_ref, .stmt = current } });
-                },
-                .field => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.source);
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
-                },
-                .tag_payload => |op| {
-                    try liftVisibilityLink(solver, assign.target, op.source);
-                    try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-                    try solver.unique_facts.append(allocator, .{ .read = op.source });
-                },
-                .tag_payload_struct => |op| {
+                inline .field, .tag_payload, .tag_payload_struct => |op| {
                     try liftVisibilityLink(solver, assign.target, op.source);
                     try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .read = op.source });
@@ -2784,7 +2718,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                 .dec_literal,
                 .boxy_dynamic_num_literal,
                 .boxy_dynamic_frac_literal,
-                .null_ptr,
                 .proc_ref,
                 => try solver.unique_facts.append(allocator, .{ .birth = assign.target }),
             }
@@ -3565,7 +3498,7 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.initialized_branch);
                         try stack.append(allocator, stmt.uninitialized_branch);
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try stack.append(allocator, stmt.on_match);
                         try stack.append(allocator, stmt.on_miss);
                     },
@@ -3575,10 +3508,6 @@ fn computeVisibilityFromLift(
                             const arm = GuardedList.at(arms, arm_index);
                             try stack.append(allocator, arm.on_match);
                         }
-                        try stack.append(allocator, stmt.on_miss);
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try stack.append(allocator, stmt.on_match);
                         try stack.append(allocator, stmt.on_miss);
                     },
                     .join => |stmt| {
@@ -3645,8 +3574,7 @@ fn computeVisibilityFromLift(
                 const target = @intFromEnum(assign.target);
                 switch (assign.op) {
                     .local => |source| addEdge(parent, rank, rc_local, target, @intFromEnum(source)),
-                    .list_reinterpret => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
-                    .nominal => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
+                    inline .list_reinterpret, .nominal => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.backing_ref)),
                     .field => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
                     .tag_payload => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
                     .tag_payload_struct => |op| addEdge(parent, rank, rc_local, target, @intFromEnum(op.source)),
@@ -3693,22 +3621,13 @@ fn computeVisibilityFromLift(
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.base));
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.fields));
             },
-            .assign_boxy_reuse_box => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
-            },
-            .assign_boxy_unbox => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
-            },
-            .assign_boxy_adapt => |assign| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign| {
                 addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
             },
             .assign_boxy_tag => |assign| {
                 if (assign.payload) |payload| {
                     addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(payload));
                 }
-            },
-            .assign_boxy_tag_payload => |assign| {
-                addEdge(parent, rank, rc_local, @intFromEnum(assign.target), @intFromEnum(assign.source));
             },
             .assign_call_dict => |assign| {
                 if (assign.dict.localOrNull()) |local| seedLocal(&visible, rc_local, @intFromEnum(local));
@@ -4581,42 +4500,6 @@ fn settleUniqueOrigins(
             }
         }
     }
-}
-
-/// Marks every local whose value's outermost allocation provably has count 1
-/// at the local's definition with nothing later adding a holder: born unique
-/// by a fresh allocation or a direct call to a unique-returning callee,
-/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
-/// allocation—an incref, an aggregate or capture operand, a `set_local`
-/// value or target, or a second consuming use. Consuming uses (a consumed
-/// low-level argument, an owned-position direct-call argument, a return)
-/// take the value's single unit with them, so the first one preserves
-/// uniqueness and any further one destroys it; borrowed-position call
-/// arguments and erased-call arguments conservatively destroy. A pure
-/// same-value alias (`.local`, `.list_reinterpret`, `.nominal`—not
-/// payload reads, which name interior allocations of a possibly-shared
-/// outer value) inherits uniqueness: its definition is the chain's
-/// consuming use of the source, so the source's single unit moves through
-/// to the target, and any other occurrence of the source—consuming,
-/// holder-adding, or a mere read, before or after, since the analysis is
-/// flow-insensitive—destroys the target's uniqueness (a read elsewhere
-/// forces emission to give the alias its own unit, holding the count above
-/// 1). A multi-bound alias target never inherits. Parameters are born on
-/// the condition that their position is seeded, and the condition travels
-/// with every transfer, so one analysis answers for every emission of a
-/// proc: emission and the certifier test a local's condition against the
-/// `RcSig.unique_params` of the variant at hand. Only reachable statements contribute;
-/// the solver consumes its shared per-proc lift, while final-LIR
-/// certification analyzes one emitted proc at a time because base and
-/// specialized bodies deliberately share every source LocalId.
-pub fn computeUniqueness(
-    allocator: Allocator,
-    store: *const LirStore,
-    rc_local: []const bool,
-    sigs: arc_sig.SigTable,
-    layouts: *const layout_mod.Store,
-) SolveError!Uniqueness {
-    return computeUniquenessDetailed(allocator, store, rc_local, sigs, null, null, null, null, true, layouts, .none, null, null, null, null);
 }
 
 const ProcUniquenessDomain = struct {
@@ -5559,6 +5442,32 @@ fn settleUniquenessOracle(
     }
 }
 
+/// Marks every local whose value's outermost allocation provably has count 1
+/// at the local's definition with nothing later adding a holder: born unique
+/// by a fresh allocation or a direct call to a unique-returning callee,
+/// destroyed by any occurrence in the analyzed procedure set that can create another handle to the
+/// allocation—an incref, an aggregate or capture operand, a `set_local`
+/// value or target, or a second consuming use. Consuming uses (a consumed
+/// low-level argument, an owned-position direct-call argument, a return)
+/// take the value's single unit with them, so the first one preserves
+/// uniqueness and any further one destroys it; borrowed-position call
+/// arguments and erased-call arguments conservatively destroy. A pure
+/// same-value alias (`.local`, `.list_reinterpret`, `.nominal`—not
+/// payload reads, which name interior allocations of a possibly-shared
+/// outer value) inherits uniqueness: its definition is the chain's
+/// consuming use of the source, so the source's single unit moves through
+/// to the target, and any other occurrence of the source—consuming,
+/// holder-adding, or a mere read, before or after, since the analysis is
+/// flow-insensitive—destroys the target's uniqueness (a read elsewhere
+/// forces emission to give the alias its own unit, holding the count above
+/// 1). A multi-bound alias target never inherits. Parameters are born on
+/// the condition that their position is seeded, and the condition travels
+/// with every transfer, so one analysis answers for every emission of a
+/// proc: emission and the certifier test a local's condition against the
+/// `RcSig.unique_params` of the variant at hand. Only reachable statements contribute;
+/// the solver consumes its shared per-proc lift, while final-LIR
+/// certification analyzes one emitted proc at a time because base and
+/// specialized bodies deliberately share every source LocalId.
 fn computeUniquenessDetailed(
     allocator: Allocator,
     store: *const LirStore,
@@ -5822,8 +5731,7 @@ fn computeUniquenessDetailed(
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 const alias_of: ?LIR.LocalId = switch (assign.op) {
                     .local => |source| source,
-                    .list_reinterpret => |op| op.backing_ref,
-                    .nominal => |op| op.backing_ref,
+                    inline .list_reinterpret, .nominal => |op| op.backing_ref,
                     .discriminant, .field, .tag_payload, .tag_payload_struct => null,
                 };
                 const is_view = alias_of != null and borrowed != null and
@@ -5891,7 +5799,6 @@ fn computeUniquenessDetailed(
                     .dec_literal,
                     .boxy_dynamic_num_literal,
                     .boxy_dynamic_frac_literal,
-                    .null_ptr,
                     .proc_ref,
                     => marks.noteBirth(&born, assign.target),
                 }
@@ -5982,11 +5889,7 @@ fn computeUniquenessDetailed(
                 if (assign.capture) |capture| marks.destroy(&destroyed, capture);
                 if (assign.reuse) |reuse| try marks.consumeAt(allocator, &consumes, reuse, @intCast(stmt_index));
             },
-            .assign_boxy_desc_ref => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-            },
-            .assign_boxy_dict_ref => |assign| {
+            inline .assign_boxy_desc_ref, .assign_boxy_dict_ref => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
             },
@@ -6006,12 +5909,7 @@ fn computeUniquenessDetailed(
                 marks.destroy(&foreign_def, assign.target);
                 try marks.consumeAt(allocator, &consumes, assign.source, @intCast(stmt_index));
             },
-            .assign_boxy_unbox => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-                try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));
-            },
-            .assign_boxy_adapt => |assign| {
+            inline .assign_boxy_unbox, .assign_boxy_adapt => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
                 try marks.transfer(allocator, &consumes, &destroyed, assign.source, assign.source_mode, @intCast(stmt_index));

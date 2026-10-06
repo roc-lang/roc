@@ -31,7 +31,6 @@ const ListInfo = layout_mod.ListInfo;
 const BoxInfo = layout_mod.BoxInfo;
 const StructInfo = layout_mod.StructInfo;
 const TagUnionInfo = layout_mod.TagUnionInfo;
-const ScalarInfo = layout_mod.ScalarInfo;
 const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
@@ -611,16 +610,6 @@ pub const Store = struct {
         const layout = Layout.list(elem_idx);
         return try self.insertLayout(layout);
     }
-
-    /// Insert a struct layout with the given alignment and struct metadata
-    pub fn insertStruct(self: *Self, struct_alignment: std.mem.Alignment, struct_idx: StructIdx) std.mem.Allocator.Error!Idx {
-        const layout = Layout.struct_(struct_alignment, struct_idx);
-        return try self.insertLayout(layout);
-    }
-
-    /// Backwards-compat aliases
-    pub const insertRecord = insertStruct;
-    pub const insertTuple = insertStruct;
 
     /// Insert a record layout from field layouts in canonical record-field order.
     /// The shared layout commit sorts by descending sort key, then canonical
@@ -1835,12 +1824,11 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             raw_layouts[i] = try self.reserveLayout(switch (node) {
                 .pending, .committed => unreachable,
-                .nominal => Layout.zst(),
+                .nominal, .struct_, .tag_union => Layout.zst(),
                 .box => Layout.box(.zst),
                 .list => Layout.list(.zst),
                 .closure => Layout.closure(.zst),
                 .erased_callable => Layout.erasedCallable(),
-                .struct_, .tag_union => Layout.zst(),
             });
         }
 
@@ -2373,12 +2361,6 @@ pub const Store = struct {
         };
     }
 
-    pub fn internGraph(self: *Self, graph: *const LayoutGraph, root: GraphRef) std.mem.Allocator.Error!Idx {
-        var commit = try self.commitGraph(graph, root);
-        defer commit.deinit(self.allocator);
-        return commit.root_idx;
-    }
-
     /// Create a struct layout representing the sequential layout of closure captures.
     /// Captures are stored with alignment padding between them, like struct fields.
     pub fn putCaptureStruct(self: *Self, capture_layout_idxs: []const Idx) std.mem.Allocator.Error!Idx {
@@ -2394,46 +2376,6 @@ pub const Store = struct {
             self.structSizes(temp_fields.items),
             temp_fields.items,
         );
-    }
-
-    /// Create a struct layout representing the sequential layout of a lambda set union.
-    /// The layout is: 8-byte tag + max(capture struct size per variant).
-    pub fn putCaptureUnion(self: *Self, variants: []const []const Idx) std.mem.Allocator.Error!Idx {
-        // The 8-byte tag dominates, so the alignment class is at least align_8 and
-        // is target-independent (a pointer payload never exceeds the tag).
-        var sort_key: layout_mod.SortKey = .align_8;
-        for (variants) |capture_idxs| {
-            for (capture_idxs) |cap_idx| sort_key = sort_key.max(self.getLayout(cap_idx).sortKey());
-        }
-
-        const dummy_fields = [_]StructField{.{ .index = 0, .layout = .u64 }};
-        return self.internStructShape(
-            sort_key,
-            layout_mod.WidthValues(u32).both(
-                self.captureUnionSizeAt(variants, .u32),
-                self.captureUnionSizeAt(variants, .u64),
-            ),
-            dummy_fields[0..],
-        );
-    }
-
-    /// Total size of a lambda-set capture union (8-byte tag + max capture-struct
-    /// payload, aligned) for one target.
-    fn captureUnionSizeAt(self: *const Self, variants: []const []const Idx, target_usize: target.TargetUsize) u32 {
-        var max_payload_size: u32 = 0;
-        var max_alignment: u32 = 8; // At least 8 for the tag
-        for (variants) |capture_idxs| {
-            var current_offset: u32 = 0;
-            for (capture_idxs) |cap_idx| {
-                const cap_layout = self.getLayout(cap_idx);
-                const cap_align: u32 = @intCast(cap_layout.alignment(target_usize).toByteUnits());
-                max_alignment = @max(max_alignment, cap_align);
-                current_offset = @intCast(std.mem.alignForward(u32, current_offset, cap_align));
-                current_offset += self.sizeAt(cap_layout, target_usize);
-            }
-            max_payload_size = @max(max_payload_size, current_offset);
-        }
-        return @intCast(std.mem.alignForward(u32, 8 + max_payload_size, max_alignment));
     }
 
     /// Whether a value stored in this layout is described by a Boxy
@@ -2460,10 +2402,6 @@ pub const Store = struct {
     pub fn getStructData(self: *const Self, idx: StructIdx) *const StructData {
         return self.struct_data.get(@enumFromInt(idx.int_idx));
     }
-
-    /// Backwards-compat aliases
-    pub const getRecordData = getStructData;
-    pub const getTupleData = getStructData;
 
     pub fn getTagUnionData(self: *const Self, idx: TagUnionIdx) *const TagUnionData {
         return self.tag_union_data.get(@enumFromInt(idx.int_idx));
@@ -2567,10 +2505,6 @@ pub const Store = struct {
         };
     }
 
-    /// Backwards-compat aliases
-    pub const getRecordInfo = getStructInfo;
-    pub const getTupleInfo = getStructInfo;
-
     /// Get bundled information about a tag union layout
     pub fn getTagUnionInfo(self: *const Self, layout: Layout) TagUnionInfo {
         std.debug.assert(layout.tag == .tag_union);
@@ -2583,21 +2517,6 @@ pub const Store = struct {
             .discriminant_offset = tu_data.discriminant_offset.get(self.targetUsize()),
             .variants = self.tag_union_variants.sliceRange(tu_data.getVariants()),
             .contains_refcounted = self.layoutContainsRefcounted(layout),
-        };
-    }
-
-    /// Get bundled information about a scalar layout
-    pub fn getScalarInfo(self: *const Self, layout: Layout) ScalarInfo {
-        std.debug.assert(layout.tag == .scalar);
-        const scalar = layout.getScalar();
-        const size_align = self.layoutSizeAlign(layout);
-        return ScalarInfo{
-            .tag = scalar.tag,
-            .size = size_align.size,
-            .alignment = @as(u32, 1) << @intFromEnum(size_align.alignment),
-            .int_precision = if (scalar.tag == .int) scalar.getInt() else null,
-            .frac_precision = if (scalar.tag == .frac) scalar.getFrac() else null,
-            .vector = if (scalar.tag == .vector) scalar.getVector() else null,
         };
     }
 
@@ -2635,10 +2554,6 @@ pub const Store = struct {
     pub fn getStructSizeAt(self: *const Self, struct_idx: StructIdx, target_usize: target.TargetUsize) u32 {
         return self.getStructData(struct_idx).size.get(target_usize);
     }
-
-    /// Backwards-compat aliases
-    pub const getTupleSize = getStructSize;
-    pub const getRecordSize = getStructSize;
 
     /// Get the offset of a struct field at the given sorted index.
     /// Effective alignment (in bytes) of a struct field for offset/size
@@ -2704,10 +2619,6 @@ pub const Store = struct {
         return self.getStructFieldOffsetAt(struct_idx, field_index_in_sorted_fields, self.targetUsize());
     }
 
-    /// Backwards-compat aliases
-    pub const getRecordFieldOffset = getStructFieldOffset;
-    pub const getTupleElementOffset = getStructFieldOffset;
-
     /// Get the size of a struct field at the given sorted index.
     pub fn getStructFieldSize(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) u32 {
         return self.getStructFieldSizeAt(struct_idx, field_index_in_sorted_fields, self.targetUsize());
@@ -2719,17 +2630,6 @@ pub const Store = struct {
         const field_layout = self.getLayout(field.layout);
         return self.layoutSizeAlignAt(field_layout, target_usize).size;
     }
-
-    /// Get the alignment of a struct field at the given sorted index for an explicit pointer width.
-    pub fn getStructFieldAlignmentAt(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32, target_usize: target.TargetUsize) u32 {
-        const field = self.getStructField(struct_idx, field_index_in_sorted_fields);
-        const field_layout = self.getLayout(field.layout);
-        return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
-    }
-
-    /// Backwards-compat aliases
-    pub const getRecordFieldSize = getStructFieldSize;
-    pub const getTupleElementSize = getStructFieldSize;
 
     /// Get the layout index of a struct field at the given sorted index.
     pub fn getStructFieldLayout(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) Idx {
@@ -2743,10 +2643,6 @@ pub const Store = struct {
     pub fn getStructFieldIsPadding(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) bool {
         return self.getStructField(struct_idx, field_index_in_sorted_fields).is_padding;
     }
-
-    /// Backwards-compat aliases
-    pub const getRecordFieldLayout = getStructFieldLayout;
-    pub const getTupleElementLayout = getStructFieldLayout;
 
     /// Position in committed struct field order for an original field index.
     fn getStructFieldPositionByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) u32 {
@@ -2792,18 +2688,11 @@ pub const Store = struct {
         return self.getStructFieldOffsetByOriginalIndexAt(struct_idx, original_index, self.targetUsize());
     }
 
-    /// Backwards-compat alias
-    pub const getTupleElementOffsetByOriginalIndex = getStructFieldOffsetByOriginalIndex;
-    pub const getTupleElementOffsetByOriginalIndexAt = getStructFieldOffsetByOriginalIndexAt;
-
     /// Get the layout index of a struct field by its ORIGINAL index (source order).
     pub fn getStructFieldLayoutByOriginalIndex(self: *const Self, struct_idx: StructIdx, original_index: u32) Idx {
         const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
         return self.getStructField(struct_idx, pos).layout;
     }
-
-    /// Backwards-compat alias
-    pub const getTupleElementLayoutByOriginalIndex = getStructFieldLayoutByOriginalIndex;
 
     /// Get the size of a struct field by its ORIGINAL index for a target width.
     pub fn getStructFieldSizeByOriginalIndexAt(
@@ -2823,18 +2712,6 @@ pub const Store = struct {
         return self.getStructFieldSizeByOriginalIndexAt(struct_idx, original_index, self.targetUsize());
     }
 
-    /// Get the alignment of a struct field by its ORIGINAL index at an explicit pointer width.
-    pub fn getStructFieldAlignmentByOriginalIndexAt(self: *const Self, struct_idx: StructIdx, original_index: u32, target_usize: target.TargetUsize) u32 {
-        const pos = self.getStructFieldPositionByOriginalIndex(struct_idx, original_index);
-        const field = self.getStructField(struct_idx, pos);
-        const field_layout = self.getLayout(field.layout);
-        return structFieldAlignmentBytes(field, self.layoutSizeAlignAt(field_layout, target_usize));
-    }
-
-    /// Backwards-compat alias
-    pub const getTupleElementSizeByOriginalIndex = getStructFieldSizeByOriginalIndex;
-    pub const getTupleElementSizeByOriginalIndexAt = getStructFieldSizeByOriginalIndexAt;
-
     pub fn targetUsize(self: *const Self) target.TargetUsize {
         return self.target_usize;
     }
@@ -2842,13 +2719,6 @@ pub const Store = struct {
     /// Get or create an empty struct layout (for closures with no captures, empty records, etc.)
     fn getEmptyStructLayout(self: *Self) Allocator.Error!Idx {
         return self.ensureZstLayout();
-    }
-
-    /// Backwards-compat alias
-    pub const getEmptyRecordLayout = getEmptyStructLayout;
-
-    pub fn ensureEmptyRecordLayout(self: *Self) Allocator.Error!Idx {
-        return self.getEmptyStructLayout();
     }
 
     /// Get or create a zero-sized type layout

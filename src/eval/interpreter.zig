@@ -887,28 +887,6 @@ pub const Interpreter = struct {
         );
     }
 
-    /// Construct an interpreter with an explicit hosted-call dependency. When
-    /// present, every hosted call is routed exclusively through this handler
-    /// and the RocOps function table is never consulted.
-    pub fn initWithHostedCallHandler(
-        allocator: Allocator,
-        store: *const LirStore,
-        layout_store: *const layout_mod.Store,
-        static_strings: backend.StaticStringData.View,
-        caller_roc_ops: *RocOps,
-        hosted_call_handler: ?HostedCallHandler,
-    ) Allocator.Error!LirInterpreter {
-        return initWithBoxyTablesAndHostedCallHandler(
-            allocator,
-            store,
-            layout_store,
-            .{},
-            static_strings,
-            caller_roc_ops,
-            hosted_call_handler,
-        );
-    }
-
     /// Construct an interpreter from the checked LIR image's explicit Boxy
     /// tables and optional hosted-call dependency.
     pub fn initWithBoxyTablesAndHostedCallHandler(
@@ -1061,10 +1039,6 @@ pub const Interpreter = struct {
         return self.roc_env.runtime_error_message;
     }
 
-    pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
-        return self.roc_env.expect_message;
-    }
-
     pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
         return self.roc_env.expect_failures.items;
     }
@@ -1079,10 +1053,6 @@ pub const Interpreter = struct {
     /// The source region of the `?` whose Err failed the expect.
     pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
         return self.roc_env.expect_err_region;
-    }
-
-    pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
-        return self.failed_call_stack.items;
     }
 
     /// The crash statement that ended the last evaluation, if one did.
@@ -2322,13 +2292,8 @@ pub const Interpreter = struct {
                 .store_struct => |assign| assign.next,
                 .store_tag => |assign| assign.next,
                 .set_local => |assign| assign.next,
-                .debug => |stmt_next| stmt_next.next,
-                .expect => |stmt_next| stmt_next.next,
+                inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt_next| stmt_next.next,
                 .comptime_branch_taken => |marker| marker.next,
-                .incref => |stmt_next| stmt_next.next,
-                .decref => |stmt_next| stmt_next.next,
-                .decref_if_initialized => |stmt_next| stmt_next.next,
-                .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .switch_initialized_payload,
@@ -2345,125 +2310,6 @@ pub const Interpreter = struct {
                 .loop_break,
                 => break,
             };
-        }
-    }
-
-    fn debugPrintLayoutShapeLines(
-        self: *LirInterpreter,
-        layout_idx: layout_mod.Idx,
-        indent: usize,
-        visited: *std.ArrayList(u32),
-    ) void {
-        for (visited.items) |existing| {
-            if (existing == @intFromEnum(layout_idx)) {
-                debugPrint("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
-                return;
-            }
-        }
-
-        visited.append(self.evalAllocator(), @intFromEnum(layout_idx)) catch return;
-        defer _ = visited.pop();
-
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
-            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
-            .struct_ => {
-                const info = self.layout_store.getStructInfo(layout_val);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    debugPrint("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
-                    self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
-                }
-            },
-            .tag_union => {
-                const info = self.layout_store.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(@intCast(i));
-                    debugPrint("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
-                    self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
-                }
-            },
-        }
-    }
-
-    fn debugIndent(indent: usize) []const u8 {
-        const spaces = "                                ";
-        return spaces[0..@min(indent * 2, spaces.len)];
-    }
-
-    fn debugPrintValueSummary(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx, depth: u8) void {
-        if (depth > 2) {
-            debugPrint("...", .{});
-            return;
-        }
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{d}:{s}", .{ @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar => {
-                const size = self.helper.sizeOf(layout_idx);
-                const raw = switch (size) {
-                    0 => @as(u64, 0),
-                    1 => @as(u64, value.read(u8)),
-                    2 => @as(u64, value.read(u16)),
-                    4 => @as(u64, value.read(u32)),
-                    8 => value.read(u64),
-                    else => @as(u64, 0),
-                };
-                debugPrint("(raw={d})", .{raw});
-            },
-            .tag_union => {
-                const disc = self.helper.readTagDiscriminant(value, layout_idx);
-                debugPrint("(disc={d}", .{disc});
-                const payload_layout = self.requireBoxyTagPayloadLayout(layout_idx, disc);
-                debugPrint(",payload=", .{});
-                if (self.helper.sizeOf(payload_layout) == 0) {
-                    debugPrint("{d}:zst", .{@intFromEnum(payload_layout)});
-                } else {
-                    self.debugPrintValueSummary(value, payload_layout, depth + 1);
-                }
-                debugPrint(")", .{});
-            },
-            .struct_ => {
-                const struct_idx = layout_val.getStruct().idx;
-                const data = self.layout_store.getStructData(struct_idx);
-                debugPrint("(", .{});
-                var field_index: u32 = 0;
-                while (field_index < data.fields.count) : (field_index += 1) {
-                    if (field_index != 0) debugPrint(",", .{});
-                    const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(struct_idx, field_index);
-                    const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, field_index);
-                    debugPrint("f{d}=", .{field_index});
-                    if (self.helper.sizeOf(field_layout) == 0) {
-                        debugPrint("{d}:zst", .{@intFromEnum(field_layout)});
-                    } else {
-                        self.debugPrintValueSummary(value.offset(field_offset), field_layout, depth + 1);
-                    }
-                }
-                debugPrint(")", .{});
-            },
-            .list, .list_of_zst => {
-                const list = self.valueToRocListForLayout(value, layout_idx);
-                debugPrint("(len={d},bytes={any})", .{ list.len(), list.bytes });
-            },
-            .box, .box_of_zst => {
-                debugPrint("(ptr={any})", .{self.readBoxedDataPointer(value)});
-            },
-            .erased_callable => {
-                const ptr = self.readBoxedDataPointer(value);
-                debugPrint("(ptr={any}", .{ptr});
-                if (ptr) |data_ptr| {
-                    debugPrint(",proc={d}", .{@intFromEnum(erasedCallableInterpreterProcId(data_ptr))});
-                }
-                debugPrint(")", .{});
-            },
-            .zst => {},
-            .ptr, .closure => {
-                debugPrint("(ptr=0x{x})", .{@intFromPtr(value.ptr)});
-            },
         }
     }
 
@@ -4530,7 +4376,6 @@ pub const Interpreter = struct {
                 .{},
             ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
-            .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
             .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
         };
@@ -4560,16 +4405,6 @@ pub const Interpreter = struct {
         target_layout: layout_mod.Idx,
     ) Error!Value {
         return try self.boxy_runtime.boxyDynamicFracLiteral(self.boxyFrameHooks(null), dec_bits, desc, target_layout);
-    }
-
-    fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {
-        const val = try self.alloc(.opaque_ptr);
-        switch (self.layout_store.targetUsize().size()) {
-            4 => val.write(u32, 0),
-            8 => val.write(usize, 0),
-            else => unreachable,
-        }
-        return val;
     }
 
     fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {
@@ -5236,18 +5071,18 @@ pub const Interpreter = struct {
         );
 
         const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => .none,
+            .none => .none,
             .rc_helper => .rc_helper,
             .boxy_capture => .boxy_capture,
         };
         const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => null,
+            .none => null,
             .rc_helper => |helper| helper.layout_idx,
             .boxy_capture => |plan| plan.capture_layout,
         };
         const drop_desc_field_offset: u32 = switch (assign.on_drop) {
             .boxy_capture => |plan| plan.desc_field_offset,
-            .none, .rc_helper, .interpreter_context_drop => 0,
+            .none, .rc_helper => 0,
         };
         const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
             &interpreterErasedCallableOnDrop
@@ -6932,16 +6767,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return self.crashError();
-                var result: RocStr = undefined;
-                const roc_str = valueToRocStr(args[0]);
-                const entered = builtins.in_process_host.enter(&self.roc_ops, null);
-                defer builtins.in_process_host.leave(entered);
-                dev_wrappers.roc_builtins_str_escape_and_quote(
-                    &result,
-                    roc_str.bytes,
-                    roc_str.length,
-                    roc_str.capacity_or_alloc_ptr,
-                );
+                const result = builtins.str.strEscapeAndQuote(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
 
@@ -7623,8 +7449,7 @@ pub const Interpreter = struct {
             => self.evalIntegerFamily(ll.op, args[0], args[1], ll.ret_layout, arg_layout),
             .num_float_add => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
             .num_float_sub => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
-            .num_float_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
-            .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .num_float_mul, .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
             .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
             .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
             .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
@@ -8264,8 +8089,7 @@ pub const Interpreter = struct {
 
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
-            .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
-            .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
+            .box_unbox, .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
             .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
@@ -8374,6 +8198,16 @@ pub const Interpreter = struct {
     const ShiftOp = enum { shl, shr, shr_zf };
     const BitwiseOp = enum { @"and", @"or", xor, not };
     const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
+    /// The unsigned integer type a numeric operand of `bits` bits is read as.
+    fn UInt(comptime bits: u16) type {
+        return std.meta.Int(.unsigned, bits);
+    }
+
+    /// The signed integer type a numeric operand of `bits` bits is read as.
+    fn SInt(comptime bits: u16) type {
+        return std.meta.Int(.signed, bits);
+    }
+
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -8528,19 +8362,11 @@ pub const Interpreter = struct {
         if (checked_op != null and is_division_like) {
             switch (kind) {
                 .unsigned_int => |bits| switch (bits) {
-                    8 => if (b.read(u8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(u16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(u32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(u64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(u128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(UInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
                 .signed_int => |bits| switch (bits) {
-                    8 => if (b.read(i8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(i16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(i32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(i64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(i128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(SInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
                 .dec, .float => return self.invariantFailedError(
@@ -8552,19 +8378,11 @@ pub const Interpreter = struct {
 
         switch (kind) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op, checked_op)),
-                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op, checked_op)),
-                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op, checked_op)),
-                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op, checked_op)),
-                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), try self.intBinOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op, checked_op)),
-                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op, checked_op)),
-                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op, checked_op)),
-                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op, checked_op)),
-                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), try self.intBinOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8627,19 +8445,11 @@ pub const Interpreter = struct {
     ) Error!bool {
         return switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => intBinOverflows(u8, a.read(u8), b.read(u8), operation),
-                16 => intBinOverflows(u16, a.read(u16), b.read(u16), operation),
-                32 => intBinOverflows(u32, a.read(u32), b.read(u32), operation),
-                64 => intBinOverflows(u64, a.read(u64), b.read(u64), operation),
-                128 => intBinOverflows(u128, a.read(u128), b.read(u128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(UInt(w), a.read(UInt(w)), b.read(UInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => intBinOverflows(i8, a.read(i8), b.read(i8), operation),
-                16 => intBinOverflows(i16, a.read(i16), b.read(i16), operation),
-                32 => intBinOverflows(i32, a.read(i32), b.read(i32), operation),
-                64 => intBinOverflows(i64, a.read(i64), b.read(i64), operation),
-                128 => intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(SInt(w), a.read(SInt(w)), b.read(SInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .dec => if (operation == .mul)
@@ -8669,19 +8479,11 @@ pub const Interpreter = struct {
 
         const result: bool = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOp(u8, a.read(u8), b.read(u8), op),
-                16 => cmpOp(u16, a.read(u16), b.read(u16), op),
-                32 => cmpOp(u32, a.read(u32), b.read(u32), op),
-                64 => cmpOp(u64, a.read(u64), b.read(u64), op),
-                128 => cmpOp(u128, a.read(u128), b.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOp(i8, a.read(i8), b.read(i8), op),
-                16 => cmpOp(i16, a.read(i16), b.read(i16), op),
-                32 => cmpOp(i32, a.read(i32), b.read(i32), op),
-                64 => cmpOp(i64, a.read(i64), b.read(i64), op),
-                128 => cmpOp(i128, a.read(i128), b.read(i128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8704,19 +8506,11 @@ pub const Interpreter = struct {
         // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOrder(u8, a.read(u8), b.read(u8)),
-                16 => cmpOrder(u16, a.read(u16), b.read(u16)),
-                32 => cmpOrder(u32, a.read(u32), b.read(u32)),
-                64 => cmpOrder(u64, a.read(u64), b.read(u64)),
-                128 => cmpOrder(u128, a.read(u128), b.read(u128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(UInt(w), a.read(UInt(w)), b.read(UInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOrder(i8, a.read(i8), b.read(i8)),
-                16 => cmpOrder(i16, a.read(i16), b.read(i16)),
-                32 => cmpOrder(i32, a.read(i32), b.read(i32)),
-                64 => cmpOrder(i64, a.read(i64), b.read(i64)),
-                128 => cmpOrder(i128, a.read(i128), b.read(i128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(SInt(w), a.read(SInt(w)), b.read(SInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8734,19 +8528,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, shiftOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, shiftOp(u16, a.read(u16), b.read(u8), op)),
-                32 => val.write(u32, shiftOp(u32, a.read(u32), b.read(u8), op)),
-                64 => val.write(u64, shiftOp(u64, a.read(u64), b.read(u8), op)),
-                128 => val.write(u128, shiftOp(u128, a.read(u128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), shiftOp(UInt(w), a.read(UInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer shift width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, shiftOp(i8, a.read(i8), b.read(u8), op)),
-                16 => val.write(i16, shiftOp(i16, a.read(i16), b.read(u8), op)),
-                32 => val.write(i32, shiftOp(i32, a.read(i32), b.read(u8), op)),
-                64 => val.write(i64, shiftOp(i64, a.read(i64), b.read(u8), op)),
-                128 => val.write(i128, shiftOp(i128, a.read(i128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), shiftOp(SInt(w), a.read(SInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer shift width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
@@ -8761,19 +8547,11 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, bitwiseOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, bitwiseOp(u16, a.read(u16), b.read(u16), op)),
-                32 => val.write(u32, bitwiseOp(u32, a.read(u32), b.read(u32), op)),
-                64 => val.write(u64, bitwiseOp(u64, a.read(u64), b.read(u64), op)),
-                128 => val.write(u128, bitwiseOp(u128, a.read(u128), b.read(u128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), bitwiseOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, bitwiseOp(i8, a.read(i8), b.read(i8), op)),
-                16 => val.write(i16, bitwiseOp(i16, a.read(i16), b.read(i16), op)),
-                32 => val.write(i32, bitwiseOp(i32, a.read(i32), b.read(i32), op)),
-                64 => val.write(i64, bitwiseOp(i64, a.read(i64), b.read(i64), op)),
-                128 => val.write(i128, bitwiseOp(i128, a.read(i128), b.read(i128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), bitwiseOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
@@ -8795,11 +8573,7 @@ pub const Interpreter = struct {
             // operand's signedness does not affect the result; read each width
             // as its unsigned counterpart.
             .unsigned_int, .signed_int => |bits| switch (bits) {
-                8 => bitCount(u8, a.read(u8), op),
-                16 => bitCount(u16, a.read(u16), op),
-                32 => bitCount(u32, a.read(u32), op),
-                64 => bitCount(u64, a.read(u64), op),
-                128 => bitCount(u128, a.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| bitCount(UInt(w), a.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported integer bit-count width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(

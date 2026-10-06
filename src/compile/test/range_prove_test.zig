@@ -1732,3 +1732,57 @@ test "a loop parameter bounded by its loop head keeps a test it does not decide"
     // since the loop head bounds `level` by 12 inside the body.
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
 }
+
+const BareCompareShape = struct {
+    found: bool = false,
+    is_lt: usize = 0,
+    switches: usize = 0,
+    checked_arithmetic: bool = true,
+};
+var bare_compare_shape: BareCompareShape = .{};
+
+fn countBareCompareShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    bare_compare_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_bitwise_and(") == 0) continue;
+        bare_compare_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .switches = std.mem.count(u8, text, "switch "),
+            .checked_arithmetic = store.getProcSpec(proc_id).shapes.checked_arithmetic,
+        };
+        return;
+    }
+}
+
+test "a comparison a mask decides folds in a body with no branch and no checked arithmetic" {
+    try harness.expectLirInspectionWithOptions(
+        \\masked_small : U64 -> Bool
+        \\masked_small = |n| n.bitwise_and(7) < 8
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    first = masked_small(args.len())
+        \\    second = masked_small(Str.count_utf8_bytes(Str.join_with(args, ",")))
+        \\    echo!("${Str.inspect(first)} ${Str.inspect(second)}")
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countBareCompareShape,
+    );
+    try std.testing.expect(bare_compare_shape.found);
+    // The comparison is the only statement of the body the prover can
+    // decide: nothing else there admits the body to the range phase.
+    try std.testing.expectEqual(@as(usize, 0), bare_compare_shape.switches);
+    try std.testing.expect(!bare_compare_shape.checked_arithmetic);
+    // The mask bounds the left operand by 7, so `< 8` is a constant.
+    try std.testing.expectEqual(@as(usize, 0), bare_compare_shape.is_lt);
+}

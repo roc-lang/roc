@@ -767,10 +767,6 @@ pub const LowLevel = enum(u16) {
             };
         }
 
-        pub fn retainsOrReleases() RcEffect {
-            return .{ .may_retain_or_release = true };
-        }
-
         pub fn retainsResult() RcEffect {
             return .{
                 .may_retain_or_release = true,
@@ -783,13 +779,6 @@ pub const LowLevel = enum(u16) {
                 .may_retain_or_release = true,
                 .retain_result = true,
                 .result_borrows_args = mask,
-            };
-        }
-
-        pub fn allocatesAndRetainsOrReleases() RcEffect {
-            return .{
-                .may_allocate = true,
-                .may_retain_or_release = true,
             };
         }
 

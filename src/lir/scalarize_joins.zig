@@ -687,17 +687,13 @@ const Pass = struct {
                         try self.stack.append(self.allocator, s.initialized_branch);
                         try self.stack.append(self.allocator, s.uninitialized_branch);
                     },
-                    .str_match => |s| {
+                    inline .str_match, .boxy_tag_match => |s| {
                         try self.stack.append(self.allocator, s.on_match);
                         try self.stack.append(self.allocator, s.on_miss);
                     },
                     .str_match_set => |s| {
                         const arms = self.store.getStrMatchArms(s.arms);
                         for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
-                        try self.stack.append(self.allocator, s.on_miss);
-                    },
-                    .boxy_tag_match => |s| {
-                        try self.stack.append(self.allocator, s.on_match);
                         try self.stack.append(self.allocator, s.on_miss);
                     },
                     inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
@@ -1808,7 +1804,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                .str_match => |*s| {
+                inline .str_match, .boxy_tag_match => |*s| {
                     s.on_match = self.resolveRemoved(s.on_match);
                     s.on_miss = self.resolveRemoved(s.on_miss);
                     try self.stack.append(self.allocator, s.on_match);
@@ -1827,12 +1823,6 @@ const Pass = struct {
                     }
                     s.arms = try self.store.addStrMatchArms(rewritten_arms);
                     s.on_miss = self.resolveRemoved(s.on_miss);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                .boxy_tag_match => |*s| {
-                    s.on_match = self.resolveRemoved(s.on_match);
-                    s.on_miss = self.resolveRemoved(s.on_miss);
-                    try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .join => |*j| {
@@ -1910,17 +1900,13 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                .str_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 .str_match_set => |s| {
                     const arms = self.store.getStrMatchArms(s.arms);
                     for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                .boxy_tag_match => |s| {
-                    try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
                 inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
@@ -1982,11 +1968,8 @@ const Pass = struct {
                                 continue;
                             }
                         },
-                        .discriminant => |op| try self.noteTagRead(op.source, current),
-                        .tag_payload => |op| try self.noteTagRead(op.source, current),
-                        .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
-                        .list_reinterpret => |op| try self.noteUse(op.backing_ref),
-                        .nominal => |op| try self.noteUse(op.backing_ref),
+                        inline .discriminant, .tag_payload, .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
+                        inline .list_reinterpret, .nominal => |op| try self.noteUse(op.backing_ref),
                     }
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
@@ -2253,20 +2236,12 @@ const Pass = struct {
                 },
                 .ret => |ret_stmt| try self.noteUse(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteUse(message),
-                .incref => |rc| {
-                    try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
-                },
-                .decref => |rc| {
+                inline .incref, .decref, .free => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },
                 .decref_if_initialized => |rc| {
                     try self.noteUse(rc.cond);
-                    try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
-                },
-                .free => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },

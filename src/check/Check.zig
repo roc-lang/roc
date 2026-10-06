@@ -2939,11 +2939,7 @@ const HoistSelectionTransaction = struct {
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.func);
             },
-            .e_method_call => |call| {
-                try self.pushStageExprs(run, store.sliceExpr(call.args));
-                try self.pushStageExpr(run, call.receiver);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushStageExprs(run, store.sliceExpr(call.args));
                 try self.pushStageExpr(run, call.receiver);
             },
@@ -4134,9 +4130,7 @@ fn noteTypeDeclReferenceForLocalProcedures(self: *Self, decl_idx: CIR.Statement.
 
 fn typeDeclHeaderArgs(self: *const Self, decl_idx: CIR.Statement.Idx) []const CIR.TypeAnno.Idx {
     const header = switch (self.cir.store.getStatement(decl_idx)) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -6007,17 +6001,9 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
             try visitor.expr(for_.expr);
             try visitor.expr(for_.body);
         },
-        .s_while => |while_| {
+        inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_| {
             try visitor.expr(while_.cond);
             try visitor.expr(while_.body);
-        },
-        .s_infinite_loop => |loop| {
-            try visitor.expr(loop.cond);
-            try visitor.expr(loop.body);
-        },
-        .s_breakable_loop => |loop| {
-            try visitor.expr(loop.cond);
-            try visitor.expr(loop.body);
         },
         .s_return => |ret| {
             try visitor.expr(ret.expr);
@@ -6090,11 +6076,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
         },
         .e_unary_minus => |unary| try visitor.expr(unary.expr),
         .e_field_access => |field| try visitor.expr(field.receiver),
-        .e_method_call => |call| {
-            try visitor.expr(call.receiver);
-            for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
-        },
-        .e_dispatch_call => |call| {
+        inline .e_method_call, .e_dispatch_call => |call| {
             try visitor.expr(call.receiver);
             for (self.cir.store.sliceExpr(call.args)) |child| try visitor.expr(child);
         },
@@ -10529,25 +10511,6 @@ fn isCheckingBuiltinModuleDirectly(self: *const Self) bool {
     return self.cir.module_role == .builtin;
 }
 
-fn builtinNumTypeIdent(self: *const Self, num_kind: CIR.NumKind) Ident.Idx {
-    return switch (num_kind) {
-        .u8 => self.cir.idents.u8_type,
-        .i8 => self.cir.idents.i8_type,
-        .u16 => self.cir.idents.u16_type,
-        .i16 => self.cir.idents.i16_type,
-        .u32 => self.cir.idents.u32_type,
-        .i32 => self.cir.idents.i32_type,
-        .u64 => self.cir.idents.u64_type,
-        .i64 => self.cir.idents.i64_type,
-        .u128 => self.cir.idents.u128_type,
-        .i128 => self.cir.idents.i128_type,
-        .f32 => self.cir.idents.f32_type,
-        .f64 => self.cir.idents.f64_type,
-        .dec => self.cir.idents.dec_type,
-        .num_unbound, .int_unbound => unreachable,
-    };
-}
-
 fn builtinNumStmtFromIndices(indices: CIR.BuiltinIndices, num_kind: CIR.NumKind) CIR.Statement.Idx {
     inline for (CIR.builtin_type_specs) |spec| {
         if (spec.num_kind == num_kind) return @field(indices, spec.type_field);
@@ -10565,7 +10528,7 @@ fn builtinNominalIdent(self: *const Self, decl: BuiltinNominalDecl) Ident.Idx {
         .fields => self.cir.idents.builtin_encoding_field_names,
         .field => self.cir.idents.builtin_encoding_field_name,
         .numeral => self.cir.idents.builtin_numeral,
-        .num => |num_kind| self.builtinNumTypeIdent(num_kind),
+        .num => |num_kind| self.cir.idents.numTypeIdent(num_kind),
     };
 }
 
@@ -10579,21 +10542,11 @@ fn builtinNominalLabel(decl: BuiltinNominalDecl) []const u8 {
         .fields => "Encoding.FieldName.FieldNames",
         .field => "Encoding.FieldName",
         .numeral => "Num.Numeral",
-        .num => |num_kind| switch (num_kind) {
-            .u8 => "Num.U8",
-            .i8 => "Num.I8",
-            .u16 => "Num.U16",
-            .i16 => "Num.I16",
-            .u32 => "Num.U32",
-            .i32 => "Num.I32",
-            .u64 => "Num.U64",
-            .i64 => "Num.I64",
-            .u128 => "Num.U128",
-            .i128 => "Num.I128",
-            .f32 => "Num.F32",
-            .f64 => "Num.F64",
-            .dec => "Num.Dec",
-            .num_unbound, .int_unbound => unreachable,
+        .num => |num_kind| {
+            inline for (CIR.builtin_type_specs) |spec| {
+                if (spec.num_kind == num_kind) return spec.qualified_name["Builtin.".len..];
+            }
+            unreachable; // unbound kinds name no builtin type
         },
     };
 }
@@ -10893,7 +10846,7 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind) Allocator.Error!Conte
     defer trace.end();
 
     const type_ident = types_mod.TypeIdent{
-        .ident_idx = self.builtinNumTypeIdent(num_kind),
+        .ident_idx = self.cir.idents.numTypeIdent(num_kind),
     };
 
     // Number types have no type arguments; their backing lives in the
@@ -10908,23 +10861,6 @@ fn mkNumberTypeContent(self: *Self, num_kind: CIR.NumKind) Allocator.Error!Conte
         true, // Number types are opaque (defined with ::)
         true,
     );
-}
-
-fn builtinNumKindFromTypeName(self: *const Self, type_name: Ident.Idx) ?CIR.NumKind {
-    if (type_name.eql(self.cir.idents.u8) or type_name.eql(self.cir.idents.u8_type)) return .u8;
-    if (type_name.eql(self.cir.idents.i8) or type_name.eql(self.cir.idents.i8_type)) return .i8;
-    if (type_name.eql(self.cir.idents.u16) or type_name.eql(self.cir.idents.u16_type)) return .u16;
-    if (type_name.eql(self.cir.idents.i16) or type_name.eql(self.cir.idents.i16_type)) return .i16;
-    if (type_name.eql(self.cir.idents.u32) or type_name.eql(self.cir.idents.u32_type)) return .u32;
-    if (type_name.eql(self.cir.idents.i32) or type_name.eql(self.cir.idents.i32_type)) return .i32;
-    if (type_name.eql(self.cir.idents.u64) or type_name.eql(self.cir.idents.u64_type)) return .u64;
-    if (type_name.eql(self.cir.idents.i64) or type_name.eql(self.cir.idents.i64_type)) return .i64;
-    if (type_name.eql(self.cir.idents.u128) or type_name.eql(self.cir.idents.u128_type)) return .u128;
-    if (type_name.eql(self.cir.idents.i128) or type_name.eql(self.cir.idents.i128_type)) return .i128;
-    if (type_name.eql(self.cir.idents.f32) or type_name.eql(self.cir.idents.f32_type)) return .f32;
-    if (type_name.eql(self.cir.idents.f64) or type_name.eql(self.cir.idents.f64_type)) return .f64;
-    if (type_name.eql(self.cir.idents.dec) or type_name.eql(self.cir.idents.dec_type)) return .dec;
-    return null;
 }
 
 fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u32) ?BuiltinNominalDecl {
@@ -13178,10 +13114,7 @@ const StoredConstScan = struct {
             .statement => |statement| {
                 const module = statement.module;
                 switch (module.store.getStatement(statement.statement)) {
-                    .s_decl => |decl| try addExpr(items, module, decl.expr),
-                    .s_var => |var_stmt| try addExpr(items, module, var_stmt.expr),
-                    .s_reassign => |reassign| try addExpr(items, module, reassign.expr),
-                    .s_expr => |expr_stmt| try addExpr(items, module, expr_stmt.expr),
+                    inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try addExpr(items, module, decl.expr),
                     .s_dbg,
                     .s_expect,
                     => return .{ .value = false },
@@ -13284,11 +13217,7 @@ const StoredConstScan = struct {
                 try addExpr(items, module, call.func);
                 try addExprSpan(items, module, call.args);
             },
-            .e_method_call => |call| {
-                try addExpr(items, module, call.receiver);
-                try addExprSpan(items, module, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try addExpr(items, module, call.receiver);
                 try addExprSpan(items, module, call.args);
             },
@@ -13929,9 +13858,7 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(owner));
     const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
         .s_decl => |decl| decl.pattern,
-        .s_var => |var_| var_.pattern_idx,
-        .s_var_uninitialized => |var_| var_.pattern_idx,
-        .s_reassign => |reassign| reassign.pattern_idx,
+        inline .s_var, .s_var_uninitialized, .s_reassign => |var_| var_.pattern_idx,
         .s_for => |for_| for_.patt,
         .s_crash, .s_dbg, .s_expr, .s_expect, .s_while, .s_infinite_loop, .s_breakable_loop, .s_break, .s_return, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => unreachable,
     };
@@ -16358,20 +16285,6 @@ fn processAppPlatformRequirements(self: *Self, env: *Env) std.mem.Allocator.Erro
 /// checker-owned and remain valid until `deinit`.
 pub fn platformRequirementSolutions(self: *const Self) []const requirement_solution.SolutionInput {
     return self.platform_requirement_solutions.items;
-}
-
-/// Whether any of this module's requires-clause type annotations still carry
-/// erroneous type content after checking. A platform root in that state keeps
-/// its check-time publication: the env-derived requirement context a deferred
-/// publication needs is a canonical key digest, and erroneous content has no
-/// canonical key.
-pub fn requiresTypesContainError(self: *Self) std.mem.Allocator.Error!bool {
-    for (self.cir.requires_types.items.items) |required_type| {
-        if (try self.canonical_key_writer.containsError(ModuleEnv.varFrom(required_type.type_anno))) {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn instantiatePlatformRequiredType(
@@ -19231,18 +19144,6 @@ fn generateHeaderVars(
 }
 
 // type gen config //
-
-const OutVar = enum {
-    in_place,
-    fresh,
-
-    pub fn voidOrVar(comptime out_var: OutVar) type {
-        return switch (out_var) {
-            .in_place => void,
-            .fresh => Var,
-        };
-    }
-};
 
 // annotations //
 
@@ -22123,11 +22024,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
 
         // Get the slice of tags
         const tags_slice = self.scratch_tags.sliceFromStart(state.scratch_top);
-        std.mem.sort(types_mod.Tag, tags_slice, self, struct {
-            fn less(checker: *const Self, a: types_mod.Tag, b: types_mod.Tag) bool {
-                return std.mem.order(u8, checker.cir.getIdentStoreConst().getText(a.name), checker.cir.getIdentStoreConst().getText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(types_mod.Tag, tags_slice, self.cir.getIdentStoreConst(), comptime types_mod.Tag.sortByNameAsc);
 
         // Materialize the tags into the types store before processing the
         // ext. `tags_slice` points into the scratch_tags buffer, and
@@ -23561,9 +23458,7 @@ fn stepPatternCheck(
 fn getPatternIdent(self: *const Self, ptrn_idx: CIR.Pattern.Idx) ?Ident.Idx {
     const pattern = self.cir.store.getPattern(ptrn_idx);
     switch (pattern) {
-        .assign => |assign| return assign.ident,
-        .var_assign => |assign| return assign.ident,
-        .as => |as_pattern| return as_pattern.ident,
+        inline .assign, .var_assign, .as => |assign| return assign.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -23861,9 +23756,7 @@ fn collectPatternBindings(
     try pending.append(self.gpa, root);
     while (pending.pop()) |pattern_idx| {
         switch (self.cir.store.getPattern(pattern_idx)) {
-            .assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
-            .var_assign => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
-            .as => |as_pat| try out.append(self.gpa, .{ .ident = as_pat.ident, .pattern_idx = pattern_idx }),
+            inline .assign, .var_assign, .as => |assign| try out.append(self.gpa, .{ .ident = assign.ident, .pattern_idx = pattern_idx }),
             .tuple,
             .applied_tag,
             .record_destructure,
@@ -24083,7 +23976,7 @@ fn borrowExpectedRecordField(self: *Self, base_var: Var, name: Ident.Idx, env: *
         var hi = names.len;
         while (lo < hi) {
             const mid = lo + (hi - lo) / 2;
-            switch (std.mem.order(u8, wanted, idents.getText(names[mid]))) {
+            switch (Ident.textOrder(wanted, idents.getText(names[mid]))) {
                 .lt => hi = mid,
                 .gt => lo = mid + 1,
                 .eq => return field_slice.items(.presence)[mid].typeVar(),
@@ -24951,17 +24844,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
             }
         },
-        .e_dec => |frac| {
-            if (frac.has_suffix) {
-                const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
-                const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
-                _ = try self.reportInvalidBuiltinFromNumeralInfo(expr_var, .dec, num_literal_info, env);
-                try self.unifyWith(expr_var, try self.mkNumberTypeContent(.dec), env);
-            } else {
-                try self.checkNumeralLiteral(ModuleEnv.nodeIdxFrom(expr_idx), expr_var, expr_region, .expression, null, env);
-            }
-        },
-        .e_dec_small => |frac| {
+        inline .e_dec, .e_dec_small => |frac| {
             if (frac.has_suffix) {
                 const literal = self.recordedNumeralLiteralForNode(ModuleEnv.nodeIdxFrom(expr_idx));
                 const num_literal_info = try self.exactNumeralInfoForLiteral(literal, expr_region);
@@ -25389,10 +25272,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 try self.markErroneous(expr_var);
             }
         },
-        .e_crash => {
-            try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
-        },
-        .e_ellipsis => {
+        .e_crash, .e_ellipsis => {
             try self.unifyWith(expr_var, .{ .flex = Flex.init() }, env);
         },
         .e_anno_only => |anno| {
@@ -27417,9 +27297,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
                 switch (self.types.resolveVar(var_).desc.content) {
                     .structure => |flat_type| {
                         switch (flat_type) {
-                            .fn_pure => |func| break :blk func,
-                            .fn_unbound => |func| break :blk func,
-                            .fn_effectful => |func| break :blk func,
+                            inline .fn_pure, .fn_unbound, .fn_effectful => |func| break :blk func,
                             .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => break :blk null,
                         }
                     },
@@ -29838,9 +29716,7 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
         return null;
     const pattern = module_env.store.getPattern(pattern_idx);
     return switch (pattern) {
-        .assign => |assign| assign.ident,
-        .var_assign => |assign| assign.ident,
-        .as => |as_pattern| as_pattern.ident,
+        inline .assign, .var_assign, .as => |assign| assign.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -31222,9 +31098,7 @@ fn reportDefinitelyInvalidNumericBinopOperand(
         .add => .plus,
         .sub => .minus,
         .mul => .times,
-        .div => .div,
-        .rem => .div,
-        .div_trunc => .div,
+        .div, .rem, .div_trunc => .div,
         .lt,
         .gt,
         .le,
@@ -34729,11 +34603,7 @@ fn appendDefaultWalkStmtExprs(
 ) std.mem.Allocator.Error!void {
     try self.recordDefaultWalkStmtBindings(stmt_idx, local_pattern_to_expr);
     switch (self.cir.store.getStatement(stmt_idx)) {
-        .s_decl => |decl| try expr_work.append(self.gpa, decl.expr),
-        .s_var => |var_stmt| try expr_work.append(self.gpa, var_stmt.expr),
-        .s_reassign => |reassign| try expr_work.append(self.gpa, reassign.expr),
-        .s_dbg => |dbg| try expr_work.append(self.gpa, dbg.expr),
-        .s_expr => |expr_stmt| try expr_work.append(self.gpa, expr_stmt.expr),
+        inline .s_decl, .s_var, .s_reassign, .s_dbg, .s_expr => |decl| try expr_work.append(self.gpa, decl.expr),
         .s_expect => |expect| try expr_work.append(self.gpa, expect.body),
         .s_return => |ret| try expr_work.append(self.gpa, ret.expr),
         .s_for => |for_stmt| {
@@ -43464,7 +43334,7 @@ inline fn processDeferredDispatchEntry(
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
                 if (constraint.origin == .from_literal) {
-                    if (self.builtinNumKindFromTypeName(rigid.name)) |num_kind| {
+                    if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                         if (try self.reportInvalidBuiltinFromNumeralLiteral(
                             deferred_constraint.var_,
                             constraint,
@@ -49997,7 +49867,7 @@ fn parseFormatMethodName(self: *Self, decl: BuiltinParseSpecDecl) Allocator.Erro
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
-fn parseSpecDeclForNumKind(num_kind: CIR.NumKind) BuiltinParseSpecDecl {
+fn specDeclForNumKind(comptime SpecDecl: type, num_kind: CIR.NumKind) SpecDecl {
     return switch (num_kind) {
         .u8 => .u8,
         .i8 => .i8,
@@ -50022,69 +49892,29 @@ fn protocolMethodName(self: *Self, comptime text: []const u8) Allocator.Error!Id
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
 }
 
-fn parseDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
+/// The Dict key method name for `key_var` in the `direction` ("parse" or
+/// "encode") half of the format protocol, or null when the key type has none.
+fn dictKeyMethodText(self: *Self, key_var: Var, comptime direction: []const u8) Allocator.Error!?[]const u8 {
     return switch (self.resolveThroughAliases(key_var).desc.content) {
         .structure => |structure| switch (structure) {
             .nominal_type => |nominal| {
-                if (self.nominalIsBuiltinBoolType(nominal)) return "parse_key_bool";
-                if (self.nominalIsBuiltinStrType(nominal)) return "parse_key_str";
+                if (self.nominalIsBuiltinBoolType(nominal)) return direction ++ "_key_bool";
+                if (self.nominalIsBuiltinStrType(nominal)) return direction ++ "_key_str";
                 if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
                     return switch (num_kind) {
-                        .u8 => "parse_key_u8",
-                        .i8 => "parse_key_i8",
-                        .u16 => "parse_key_u16",
-                        .i16 => "parse_key_i16",
-                        .u32 => "parse_key_u32",
-                        .i32 => "parse_key_i32",
-                        .u64 => "parse_key_u64",
-                        .i64 => "parse_key_i64",
-                        .u128 => "parse_key_u128",
-                        .i128 => "parse_key_i128",
-                        .dec => "parse_key_dec",
-                        .f32 => "parse_key_f32",
-                        .f64 => "parse_key_f64",
-                        .num_unbound, .int_unbound => unreachable,
-                    };
-                }
-                return null;
-            },
-            .record,
-            .tuple,
-            .fn_pure,
-            .fn_effectful,
-            .fn_unbound,
-            .empty_record,
-            .tag_union,
-            .empty_tag_union,
-            => null,
-        },
-        .alias => unreachable,
-        .err => null,
-        .flex, .rigid, .field_presence => null,
-    };
-}
-
-fn encodeDictKeyMethodText(self: *Self, key_var: Var) Allocator.Error!?[]const u8 {
-    return switch (self.resolveThroughAliases(key_var).desc.content) {
-        .structure => |structure| switch (structure) {
-            .nominal_type => |nominal| {
-                if (self.nominalIsBuiltinBoolType(nominal)) return "encode_key_bool";
-                if (self.nominalIsBuiltinStrType(nominal)) return "encode_key_str";
-                if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-                    return switch (num_kind) {
-                        .u8 => "encode_key_u8",
-                        .i8 => "encode_key_i8",
-                        .u16 => "encode_key_u16",
-                        .i16 => "encode_key_i16",
-                        .u32 => "encode_key_u32",
-                        .i32 => "encode_key_i32",
-                        .u64 => "encode_key_u64",
-                        .i64 => "encode_key_i64",
-                        .u128 => "encode_key_u128",
-                        .i128 => "encode_key_i128",
-                        .dec => "encode_key_dec",
-                        .f32 => "encode_key_f32",
-                        .f64 => "encode_key_f64",
+                        .u8 => direction ++ "_key_u8",
+                        .i8 => direction ++ "_key_i8",
+                        .u16 => direction ++ "_key_u16",
+                        .i16 => direction ++ "_key_i16",
+                        .u32 => direction ++ "_key_u32",
+                        .i32 => direction ++ "_key_i32",
+                        .u64 => direction ++ "_key_u64",
+                        .i64 => direction ++ "_key_i64",
+                        .u128 => direction ++ "_key_u128",
+                        .i128 => direction ++ "_key_i128",
+                        .dec => direction ++ "_key_dec",
+                        .f32 => direction ++ "_key_f32",
+                        .f64 => direction ++ "_key_f64",
                         .num_unbound, .int_unbound => unreachable,
                     };
                 }
@@ -50131,25 +49961,6 @@ fn encodeFormatMethodName(self: *Self, decl: BuiltinEncodeSpecDecl) Allocator.Er
         .dict => "encode_dict",
     };
     return try @constCast(self.cir).insertIdent(base.Ident.for_text(text));
-}
-
-fn encodeSpecDeclForNumKind(num_kind: CIR.NumKind) BuiltinEncodeSpecDecl {
-    return switch (num_kind) {
-        .u8 => .u8,
-        .i8 => .i8,
-        .u16 => .u16,
-        .i16 => .i16,
-        .u32 => .u32,
-        .i32 => .i32,
-        .u64 => .u64,
-        .i64 => .i64,
-        .u128 => .u128,
-        .i128 => .i128,
-        .dec => .dec,
-        .f32 => .f32,
-        .f64 => .f64,
-        .num_unbound, .int_unbound => unreachable,
-    };
 }
 
 fn parseFormatMethodVarForEncoding(
@@ -50543,7 +50354,7 @@ fn beginParseKeyMethod(
     const env = inputs.env;
     const region = inputs.region;
     const failure_expr = inputs.failure_expr;
-    const method_text = try self.parseDictKeyMethodText(key_var) orelse return .{ .done = .ok };
+    const method_text = try self.dictKeyMethodText(key_var, "parse") orelse return .{ .done = .ok };
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const dispatchers_start = self.instantiation_dispatchers.items.len;
     const deferred_start = env.deferred_static_dispatch_constraints.items.items.len;
@@ -50586,7 +50397,7 @@ fn validateEncodeKeyMethod(
     env: *Env,
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
-    const method_text = try self.encodeDictKeyMethodText(key_var) orelse return .ok;
+    const method_text = try self.dictKeyMethodText(key_var, "encode") orelse return .ok;
     const method_name = try @constCast(self.cir).insertIdent(base.Ident.for_text(method_text));
     const method = try self.parseFormatMethodVarForEncoding(encoding_var, method_name, env, region) orelse {
         return try self.reportDerivedParseMissingMethod(encoding_var, method_name, constraint, env);
@@ -52016,7 +51827,7 @@ fn stepDerivedParseNominal(
         return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = .str } } } };
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = parseSpecDeclForNumKind(num_kind) } } } };
+        return .{ .tail = .{ .method = .{ .format = .{ .shape_var = nominal_var, .spec_decl = specDeclForNumKind(BuiltinParseSpecDecl, num_kind) } } } };
     }
     if (self.nominalListPayloadVar(nominal)) |payload_var| {
         frame.then_var = payload_var;
@@ -52661,7 +52472,7 @@ fn stepDerivedEncodeNominal(
         return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .str, err_var, constraint, env, region) };
     }
     if (self.builtinNumKindFromNominalType(nominal)) |num_kind| {
-        return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, encodeSpecDeclForNumKind(num_kind), err_var, constraint, env, region) };
+        return .{ .done = try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, specDeclForNumKind(BuiltinEncodeSpecDecl, num_kind), err_var, constraint, env, region) };
     }
     // A user opaque over a builtin scalar (`Money := F64`, `Username := Str`) validates its derived
     // encoder through the backing scalar, threading the same err_var: error-row unification then

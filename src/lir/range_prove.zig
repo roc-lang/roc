@@ -2045,7 +2045,30 @@ const Pass = struct {
             if (seen.contains(current)) continue;
             try seen.put(current, {});
             switch (self.store.getCFStmt(current)) {
-                .init_uninitialized => |s| {
+                inline .init_uninitialized,
+                .assign_literal,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_low_level,
+                .assign_list,
+                .assign_struct,
+                .assign_tag,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .assign_call_dict,
+                .set_local,
+                => |s| {
                     try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
@@ -2054,100 +2077,8 @@ const Pass = struct {
                     if (s.op == .local) try self.alias_of.put(s.target, s.op.local);
                     try self.edgeTo(s.next);
                 },
-                .assign_literal => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call_erased => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_packed_erased_fn => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_low_level => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_list => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_struct => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_tag => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_desc_ref => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_dict_ref => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_box => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_record_update => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_reuse_box => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_unbox => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_adapt => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_inspect => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_eq => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_hash => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_tag => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_boxy_tag_payload => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .assign_call_dict => |s| {
-                    try self.bumpAssign(s.target);
-                    try self.edgeTo(s.next);
-                },
-                .store_struct => |s| {
+                inline .store_struct, .store_tag => |s| {
                     try self.bumpAssign(s.dest);
-                    try self.edgeTo(s.next);
-                },
-                .store_tag => |s| {
-                    try self.bumpAssign(s.dest);
-                    try self.edgeTo(s.next);
-                },
-                .set_local => |s| {
-                    try self.bumpAssign(s.target);
                     try self.edgeTo(s.next);
                 },
                 .debug => |s| try self.edgeTo(s.next),
@@ -2171,11 +2102,7 @@ const Pass = struct {
                     try self.edgeTo(s.initialized_branch);
                     try self.edgeTo(s.uninitialized_branch);
                 },
-                .str_match => |s| {
-                    try self.edgeTo(s.on_match);
-                    try self.edgeTo(s.on_miss);
-                },
-                .boxy_tag_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try self.edgeTo(s.on_match);
                     try self.edgeTo(s.on_miss);
                 },
@@ -4693,92 +4620,25 @@ const Pass = struct {
                         }
                         current = s.next;
                     },
-                    .init_uninitialized => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call_erased => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_packed_erased_fn => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_desc_ref => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_dict_ref => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_box => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_record_update => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_reuse_box => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_unbox => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_adapt => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_inspect => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_eq => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_hash => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_tag => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_boxy_tag_payload => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_call_dict => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.target);
-                        current = s.next;
-                    },
-                    .assign_list => |s| {
+                    inline .init_uninitialized,
+                    .assign_call,
+                    .assign_call_erased,
+                    .assign_packed_erased_fn,
+                    .assign_boxy_desc_ref,
+                    .assign_boxy_dict_ref,
+                    .assign_boxy_box,
+                    .assign_boxy_record_update,
+                    .assign_boxy_reuse_box,
+                    .assign_boxy_unbox,
+                    .assign_boxy_adapt,
+                    .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
+                    .assign_boxy_tag,
+                    .assign_boxy_tag_payload,
+                    .assign_call_dict,
+                    .assign_list,
+                    => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.target);
                         current = s.next;
@@ -4788,41 +4648,12 @@ const Pass = struct {
                         try self.modelStruct(s.target, s.fields);
                         current = s.next;
                     },
-                    .store_struct => |s| {
+                    inline .store_struct, .store_tag => |s| {
                         try self.visited.put(current, {});
                         try self.bindFresh(s.dest);
                         current = s.next;
                     },
-                    .store_tag => |s| {
-                        try self.visited.put(current, {});
-                        try self.bindFresh(s.dest);
-                        current = s.next;
-                    },
-                    .debug => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .expect => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .comptime_branch_taken => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .incref => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .decref => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .decref_if_initialized => |s| {
-                        try self.visited.put(current, {});
-                        current = s.next;
-                    },
-                    .free => |s| {
+                    inline .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                         try self.visited.put(current, {});
                         current = s.next;
                     },
@@ -4842,13 +4673,7 @@ const Pass = struct {
                         try self.pushFrame(s.uninitialized_branch, null);
                         break :walk;
                     },
-                    .str_match => |s| {
-                        try self.visited.put(current, {});
-                        try self.pushFrame(s.on_match, null);
-                        try self.pushFrame(s.on_miss, null);
-                        break :walk;
-                    },
-                    .boxy_tag_match => |s| {
+                    inline .str_match, .boxy_tag_match => |s| {
                         try self.visited.put(current, {});
                         try self.pushFrame(s.on_match, null);
                         try self.pushFrame(s.on_miss, null);
@@ -5035,9 +4860,8 @@ const Pass = struct {
 
     fn modelLiteral(self: *Pass, target: LocalId, value: LIR.LiteralValue) ResourceError!void {
         const literal: ?i128 = switch (value) {
-            .i64_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
+            inline .i64_literal, .i128_literal => |lit| if (lit.value >= 0) lit.value else null,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .static_data, .bytes_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => null,
         };
         if (literal) |v| {
             // A non-negative literal is the same number whatever its type,
@@ -6392,11 +6216,7 @@ const RangeProveCertify = struct {
                     try list.append(allocator, t.initialized_branch);
                     try list.append(allocator, t.uninitialized_branch);
                 },
-                .str_match => |t| {
-                    try list.append(allocator, t.on_match);
-                    try list.append(allocator, t.on_miss);
-                },
-                .boxy_tag_match => |t| {
+                inline .str_match, .boxy_tag_match => |t| {
                     try list.append(allocator, t.on_match);
                     try list.append(allocator, t.on_miss);
                 },

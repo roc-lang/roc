@@ -242,9 +242,6 @@ const Policy = struct {
     pub fn count(self: *const SerialStringInterner) u32 {
         return @intCast(self.ranges.items.items.len);
     }
-    pub fn entryCount(self: *const SerialStringInterner, _: *const Index) u32 {
-        return @intCast(self.ranges.items.items.len);
-    }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
     }
@@ -297,15 +294,6 @@ pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) A
         self.index = index.cells;
     }
     return index.insert(self, gpa, string);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// Used by serialized compiler artifacts whose internal pointers are stored
-/// relative to the artifact buffer.
-pub fn relocate(self: *SerialStringInterner, offset: isize) void {
-    self.bytes.relocate(offset);
-    self.ranges.relocate(offset);
-    self.index.relocate(offset);
 }
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,

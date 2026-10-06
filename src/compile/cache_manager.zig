@@ -9,7 +9,6 @@ const std = @import("std");
 const ctx_mod = @import("ctx");
 const threading = @import("threading.zig");
 
-const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 pub const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const CoreCtx = ctx_mod.CoreCtx;
@@ -106,12 +105,6 @@ pub const CacheManager = struct {
         self.stats.recordStoreFor(kind, bytes_written);
     }
 
-    pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const entries_dir = try self.config.getCheckedArtifactCacheDir(self.allocator);
-        defer self.allocator.free(entries_dir);
-        return self.computeCacheFilePath(cache_key, entries_dir);
-    }
-
     pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
         return computeCacheFilePathIn(self.allocator, cache_key, entries_dir);
     }
@@ -131,10 +124,6 @@ pub const CacheManager = struct {
         defer allocator.free(cache_subdir);
 
         return std.fs.path.join(allocator, &.{ cache_subdir, filename });
-    }
-
-    pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) (Allocator.Error || error{ AccessDenied, IoError })!void {
-        return self.ensureCacheSubdirWith(self.allocator, cache_key, entries_dir);
     }
 
     /// Create a cache entry's subdirectory using a caller-supplied allocator.
@@ -291,14 +280,5 @@ pub const CacheManager = struct {
 
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
-    }
-
-    pub fn printStats(self: *const Self, allocator: Allocator) void {
-        if (!self.config.verbose) return;
-
-        var buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
-        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, fbs.writer()) catch return;
-        self.roc_ctx.writeStderr(fbs.getWritten()) catch {};
     }
 };

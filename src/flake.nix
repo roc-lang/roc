@@ -99,7 +99,7 @@
           export -f covcmd
 
           cicmd() {
-            zig build run-fmt-zig && zig build run-check-zig-lints && zig build roc && zig build run-check-snapshots && zig build run-test-zig && zig build run-test-playground && zig build run-coverage-parser
+            zig build minici
           }
           export -f cicmd
         '';

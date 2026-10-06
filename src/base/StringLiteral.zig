@@ -152,50 +152,11 @@ pub const Store = struct {
             return start;
         }
 
-        pub fn serialize(
-            self: *const Buffer,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!*const Buffer {
-            const offset_self = try writer.appendAlloc(allocator, Buffer);
-            offset_self.* = try self.toOffsetBuffer(allocator, writer);
-            return @constCast(offset_self);
-        }
-
-        pub fn relocate(self: *Buffer, offset: isize) void {
-            if (self.items.capacity == 0) return;
-
-            const old_addr: isize = @intCast(@intFromPtr(self.items.items.ptr));
-            const new_addr = @as(usize, @intCast(old_addr + offset));
-            self.items.items.ptr = @ptrFromInt(new_addr);
-        }
-
         pub fn fromMappedSlice(items: []u8, capacity: usize) Buffer {
             return .{
                 .items = .{
                     .items = items,
                     .capacity = capacity,
-                },
-            };
-        }
-
-        fn toOffsetBuffer(
-            self: *const Buffer,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!Buffer {
-            const data_ref = try self.writeData(allocator, writer);
-
-            if (data_ref.capacity == 0) {
-                return Buffer{};
-            }
-
-            const items_ptr: [*]u8 = @ptrFromInt(data_ref.offset);
-
-            return Buffer{
-                .items = .{
-                    .items = items_ptr[0..data_ref.len],
-                    .capacity = data_ref.capacity,
                 },
             };
         }
@@ -339,31 +300,6 @@ pub const Store = struct {
         if (required > current) std.mem.writeInt(u32, slot, required, .little);
     }
 
-    /// Serialize this Store to the given CompactWriter. The resulting Store
-    /// in the writer's buffer will have offsets instead of pointers. Calling any
-    /// methods on it or dereferencing its internal "pointers" (which are now
-    /// offsets) is illegal behavior!
-    pub fn serialize(
-        self: *const Store,
-        allocator: std.mem.Allocator,
-        writer: *CompactWriter,
-    ) std.mem.Allocator.Error!*const Store {
-        // First, write the Store struct itself
-        const offset_self = try writer.appendAlloc(allocator, Store);
-
-        // Then serialize the byte buffer and update the struct
-        offset_self.* = .{
-            .buffer = (try self.buffer.serialize(allocator, writer)).*,
-        };
-
-        return @constCast(offset_self);
-    }
-
-    /// Add the given offset to the memory addresses of all pointers in `self`.
-    pub fn relocate(self: *Store, offset: isize) void {
-        self.buffer.relocate(offset);
-    }
-
     /// Serialized representation of a Store
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
@@ -470,10 +406,6 @@ const StringLiteralPolicy = struct {
 
     pub fn appendEntry(owner: anytype, gpa: std.mem.Allocator, string: []const u8) std.mem.Allocator.Error!Id {
         return owner.store.appendFresh(gpa, string);
-    }
-
-    pub fn entryCount(_: anytype, index: *const InternedBytes.Index(StringLiteralPolicy)) u32 {
-        return index.len;
     }
 
     pub fn hash(string: []const u8) u64 {
@@ -611,8 +543,8 @@ test "Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -623,9 +555,10 @@ test "Store empty CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify empty
     try std.testing.expectEqual(@as(usize, 0), deserialized.buffer.len());
@@ -665,8 +598,8 @@ test "Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -677,9 +610,10 @@ test "Store basic CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify the strings are accessible
     try std.testing.expectEqualStrings("hello", deserialized.get(idx1));
@@ -733,8 +667,8 @@ test "Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -745,9 +679,10 @@ test "Store comprehensive CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all strings
     for (test_strings, 0..) |expected_str, i| {
@@ -786,8 +721,8 @@ test "Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -798,9 +733,10 @@ test "Store CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify the strings are accessible
     try std.testing.expectEqualStrings("test1", deserialized.get(idx1));
@@ -898,8 +834,8 @@ test "Store edge case indices CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -910,9 +846,10 @@ test "Store edge case indices CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*Store, @ptrCast(@alignCast(buffer.ptr)));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all strings with their exact indices
     try std.testing.expectEqualStrings("first", deserialized.get(idx1));

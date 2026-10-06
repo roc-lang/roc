@@ -41,9 +41,6 @@ pub const SidePoolSpan = extern struct {
 /// Compatibility name for existing Monotype type side-pool spans.
 pub const Span = SidePoolSpan;
 
-/// Cached structural digest stored beside a durable Monotype type node.
-pub const MonoTypeDigest = names.TypeDigest;
-
 /// Primitive type copied from checked module data.
 pub const Primitive = checked.CheckedPrimitive;
 
@@ -2874,70 +2871,6 @@ pub const Store = struct {
         if (index >= self.constructing.len() or self.constructing.unsafeRawItemsForView()[index]) {
             Common.invariant("Monotype digest requested for an unfinished type slot");
         }
-    }
-
-    fn typeRefInBounds(self: *const Store, ty: TypeId) bool {
-        return @intFromEnum(ty) < self.types.len();
-    }
-
-    fn spanInBounds(_: *const Store, len: usize, span_: Span) bool {
-        const start: usize = span_.start;
-        const span_len: usize = span_.len;
-        return start <= len and span_len <= len - start;
-    }
-
-    fn verifyTypeSpan(self: *const Store, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.spans.len(), span_)) return .type_span_out_of_bounds;
-        for (self.span(span_)) |ty| {
-            if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds;
-        }
-        return null;
-    }
-
-    fn verifyFieldSpan(self: *const Store, name_store: *const names.NameStore, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.fields.len(), span_)) return .field_span_out_of_bounds;
-        const fields_ = self.fieldSpan(span_);
-        for (fields_) |field| {
-            if (!self.typeRefInBounds(field.ty)) return .type_ref_out_of_bounds;
-            if (field.value_ty) |value_ty| {
-                if (!self.typeRefInBounds(value_ty)) return .type_ref_out_of_bounds;
-            }
-        }
-        if (fields_.len > 1) {
-            for (fields_[1..], 1..) |field, index| {
-                if (!name_store.recordFieldLabelTextLessThan(fields_[index - 1].name, field.name)) {
-                    return .record_fields_not_sorted;
-                }
-            }
-        }
-        return null;
-    }
-
-    fn verifyTagSpan(self: *const Store, name_store: *const names.NameStore, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.tags.len(), span_)) return .tag_span_out_of_bounds;
-        const tags_ = self.tagSpan(span_);
-        for (tags_) |tag| {
-            if (self.verifyTypeSpan(tag.payloads)) |err| return err;
-        }
-        if (tags_.len > 1) {
-            for (tags_[1..], 1..) |tag, index| {
-                if (!name_store.tagLabelTextLessThan(tags_[index - 1].name, tag.name)) {
-                    return .tag_union_tags_not_sorted;
-                }
-            }
-        }
-        return null;
-    }
-
-    fn verifyDeclaredFieldSpan(self: *const Store, span_: Span) ?VerifyError {
-        if (!self.spanInBounds(self.declared_fields.len(), span_)) return .declared_field_span_out_of_bounds;
-        for (self.declaredFieldSpan(span_)) |field| {
-            switch (field) {
-                .named => {},
-                .padding => |ty| if (!self.typeRefInBounds(ty)) return .type_ref_out_of_bounds,
-            }
-        }
-        return null;
     }
 
     /// Cache lookup for one digest mode. Filled nodes are immutable, so a

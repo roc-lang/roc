@@ -498,10 +498,7 @@ pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
     for (self.checker.problems.problems.items) |problem| {
         var report = try report_builder.build(problem);
         defer report.deinit();
-        switch (report.severity) {
-            .runtime_error, .fatal => count += 1,
-            .warning => {},
-        }
+        count += @intFromBool(report.severity.isError());
     }
     return count;
 }

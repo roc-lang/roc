@@ -161,11 +161,7 @@ const BranchRewriter = struct {
     /// Claim releases of the matched union and reads of its payload.
     pub fn interceptStmt(self: *BranchRewriter, cloner: anytype, _: LIR.CFStmtId, stmt: LIR.CFStmt, _: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
-            .decref => |release| {
-                if (!self.namesUnion(release.value)) return .none;
-                return body_clone.Intercept.one(release.next);
-            },
-            .decref_if_initialized => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (!self.namesUnion(release.value)) return .none;
                 return body_clone.Intercept.one(release.next);
             },
@@ -668,56 +664,7 @@ fn findCandidate(
                 while (true) {
                     if ((predecessors.get(current) orelse 0) != 1) shared_edge = true;
                     if (current == build.edge_jump) break;
-                    current = switch (store.getCFStmt(current)) {
-                        .decref => |release| release.next,
-                        .incref => |retain| retain.next,
-                        .decref_if_initialized => |release| release.next,
-                        .init_uninitialized,
-                        .assign_ref,
-                        .assign_literal,
-                        .assign_call,
-                        .assign_call_erased,
-                        .assign_packed_erased_fn,
-                        .assign_low_level,
-                        .assign_list,
-                        .assign_struct,
-                        .assign_tag,
-                        .store_struct,
-                        .store_tag,
-                        .set_local,
-                        .debug,
-                        .expect,
-                        .expect_err,
-                        .runtime_error,
-                        .comptime_exhaustiveness_failed,
-                        .comptime_branch_taken,
-                        .free,
-                        .switch_stmt,
-                        .switch_initialized_payload,
-                        .str_match,
-                        .str_match_set,
-                        .loop_continue,
-                        .loop_break,
-                        .join,
-                        .jump,
-                        .ret,
-                        .crash,
-                        .assign_boxy_desc_ref,
-                        .assign_boxy_dict_ref,
-                        .assign_boxy_box,
-                        .assign_boxy_record_update,
-                        .assign_boxy_reuse_box,
-                        .assign_boxy_unbox,
-                        .assign_boxy_adapt,
-                        .assign_boxy_inspect,
-                        .assign_boxy_eq,
-                        .assign_boxy_hash,
-                        .assign_boxy_tag,
-                        .assign_boxy_tag_payload,
-                        .boxy_tag_match,
-                        .assign_call_dict,
-                        => unreachable,
-                    };
+                    current = edgeStmtNext(store.getCFStmt(current));
                 }
             }
         }
@@ -851,17 +798,13 @@ fn producerEdgeJump(
     while (true) {
         switch (store.getCFStmt(current)) {
             .jump => |jump| return if (jump.target == join_id) current else null,
-            .decref => |release| {
+            inline .decref, .decref_if_initialized => |release| {
                 if (release.value == param or release.value == payload) return null;
                 current = release.next;
             },
             .incref => |retain| {
                 if (retain.value == param or retain.value == payload) return null;
                 current = retain.next;
-            },
-            .decref_if_initialized => |release| {
-                if (release.value == param or release.value == payload) return null;
-                current = release.next;
             },
             .init_uninitialized,
             .assign_ref,
@@ -983,11 +926,9 @@ const ArmRewrite = struct {
 
     fn changes(self: ArmRewrite, stmt: LIR.CFStmt) bool {
         return switch (stmt) {
-            .decref => |release| namesLocal(self.union_locals, release.value),
-            .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
+            inline .decref, .decref_if_initialized => |release| namesLocal(self.union_locals, release.value),
             .assign_ref => |assign| switch (assign.op) {
-                .tag_payload => |payload| payload.source == self.matched_value,
-                .tag_payload_struct => |payload| payload.source == self.matched_value,
+                inline .tag_payload, .tag_payload_struct => |payload| payload.source == self.matched_value,
                 .local, .discriminant, .field, .list_reinterpret, .nominal => false,
             },
             .init_uninitialized,
@@ -1361,6 +1302,60 @@ fn applyCandidate(
     if (store.procNeedsStackProbe(layouts, proc.*)) proc.stack_probe = .required;
 }
 
+/// The statement after `stmt` on a producer edge, whose statements between
+/// the constructor and the edge's jump are reference-count operations only.
+inline fn edgeStmtNext(stmt: LIR.CFStmt) LIR.CFStmtId {
+    return switch (stmt) {
+        inline .decref, .decref_if_initialized => |release| release.next,
+        .incref => |retain| retain.next,
+        .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .comptime_branch_taken,
+        .free,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .boxy_tag_match,
+        .assign_call_dict,
+        => unreachable,
+    };
+}
+
 /// Copy the releases carried on a producer edge so that the edge ends in
 /// a jump to the variant's own join. The original statements are left in
 /// place: an edge is only ever redirected through a fresh copy, so a release
@@ -1378,56 +1373,7 @@ fn redirectProducerEdge(
     var cursor = start;
     while (cursor != edge_jump) {
         try chain.append(store.allocator, cursor);
-        cursor = switch (store.getCFStmt(cursor)) {
-            .decref => |release| release.next,
-            .incref => |retain| retain.next,
-            .decref_if_initialized => |release| release.next,
-            .init_uninitialized,
-            .assign_ref,
-            .assign_literal,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_low_level,
-            .assign_list,
-            .assign_struct,
-            .assign_tag,
-            .store_struct,
-            .store_tag,
-            .set_local,
-            .debug,
-            .expect,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .comptime_branch_taken,
-            .free,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
-            => unreachable,
-        };
+        cursor = edgeStmtNext(store.getCFStmt(cursor));
     }
     var next = try store.addCFStmt(.{ .jump = .{ .target = target } }, fusionOrigin(store.stmtOrigin(edge_jump)));
     while (chain.pop()) |stmt_id| {

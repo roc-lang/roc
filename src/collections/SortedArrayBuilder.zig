@@ -258,83 +258,6 @@ pub fn SortedArrayBuilder(comptime K: type, comptime V: type) type {
             self.deduplicated = true;
         }
 
-        /// Detect duplicates without modifying the array - returns list of duplicate keys
-        pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]K {
-            var duplicates = std.array_list.Managed(K).init(allocator);
-
-            if (self.entries.items.len <= 1) return duplicates.toOwnedSlice();
-
-            // Ensure sorted first
-            if (!self.sorted) {
-                std.sort.pdq(Entry, self.entries.items, {}, Entry.lessThan);
-                self.sorted = true;
-            }
-
-            var reported_keys = if (K == []const u8)
-                std.StringHashMap(void).init(allocator)
-            else
-                std.AutoHashMap(K, void).init(allocator);
-            defer reported_keys.deinit();
-
-            var i: usize = 1;
-            while (i < self.entries.items.len) {
-                const prev_entry = self.entries.items[i - 1];
-                const curr_entry = self.entries.items[i];
-                const is_duplicate = keyEql(prev_entry.key, curr_entry.key);
-
-                if (is_duplicate) {
-                    // Report duplicate only once per unique key
-                    const result = try reported_keys.getOrPut(curr_entry.key);
-                    if (!result.found_existing) {
-                        try duplicates.append(curr_entry.key);
-                    }
-                }
-                i += 1;
-            }
-
-            return duplicates.toOwnedSlice();
-        }
-
-        /// Relocate pointers after memory movement
-        pub fn relocate(self: *Self, offset: isize) void {
-            // Relocate the entries array pointer
-            if (self.entries.items.len > 0) {
-                const old_ptr = @intFromPtr(self.entries.items.ptr);
-                // Skip relocation if this is a sentinel value
-                // Define sentinel value locally since iovec_serialize is not available
-                const EMPTY_ARRAY_SENTINEL: usize = 0xDEADBEEF;
-                if (old_ptr != EMPTY_ARRAY_SENTINEL) {
-                    // Handle negative offsets properly
-                    if (offset >= 0) {
-                        const new_ptr = old_ptr + @as(usize, @intCast(offset));
-                        // Ensure proper alignment for Entry type
-                        const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
-                        if (aligned_ptr_opt) |aligned_ptr| {
-                            self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
-                        } else {
-                            // If we can't align properly, skip relocation
-                            return;
-                        }
-                    } else {
-                        // For negative offsets, we need to ensure we don't underflow
-                        const abs_offset = @as(usize, @intCast(-offset));
-                        if (old_ptr >= abs_offset) {
-                            const new_ptr = old_ptr - abs_offset;
-                            // Ensure proper alignment for Entry type
-                            const aligned_ptr_opt = std.mem.alignPointer(@as([*]u8, @ptrFromInt(new_ptr)), @alignOf(Entry));
-                            if (aligned_ptr_opt) |aligned_ptr| {
-                                self.entries.items.ptr = @as([*]Entry, @ptrCast(@alignCast(aligned_ptr)));
-                            } else {
-                                // If we can't align properly, skip relocation
-                                return;
-                            }
-                        }
-                        // If old_ptr < abs_offset, we can't relocate safely, so skip
-                    }
-                }
-            }
-        }
-
         /// Get the number of entries
         pub fn count(self: *const Self) usize {
             return self.entries.items.len;
@@ -442,36 +365,6 @@ test "SortedArrayBuilder maintains sorted order when added in order" {
     // Get should work without sorting
     try testing.expectEqual(@as(?u16, 1), builder.get(allocator, "aaa"));
     try testing.expectEqual(@as(?u16, 4), builder.get(allocator, "ddd"));
-}
-
-test "SortedArrayBuilder detectDuplicates sorts if unsorted" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var builder = SortedArrayBuilder(u32, u16).init();
-    defer builder.deinit(allocator);
-
-    // Add some entries with duplicates
-    try builder.put(allocator, 100, 1);
-    try builder.put(allocator, 200, 2);
-    try builder.put(allocator, 100, 3); // duplicate of 100
-    try builder.put(allocator, 300, 4);
-    try builder.put(allocator, 200, 5); // duplicate of 200
-
-    // Detect duplicates before sorting/deduplicating
-    const duplicates = try builder.detectDuplicates(allocator);
-    defer allocator.free(duplicates);
-
-    // Verify we found the expected duplicates
-    try testing.expectEqual(@as(usize, 2), duplicates.len);
-    try testing.expectEqual(@as(u32, 100), duplicates[0]);
-    try testing.expectEqual(@as(u32, 200), duplicates[1]);
-
-    // After detection, normal operations work as expected
-    builder.ensureSorted(allocator);
-    try testing.expectEqual(@as(usize, 3), builder.count()); // Deduplicated
-    try testing.expectEqual(@as(?u16, 3), builder.get(allocator, 100)); // Last value kept
-    try testing.expectEqual(@as(?u16, 5), builder.get(allocator, 200)); // Last value kept
 }
 
 test "SortedArrayBuilder handles duplicates with string keys" {

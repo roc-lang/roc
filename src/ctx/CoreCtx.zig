@@ -211,11 +211,6 @@ pub fn mapFilePrivate(self: Self, path: []const u8) ?MappedFile {
     return self.vtable.mapFilePrivate(self.ctx, self.std_io, path);
 }
 
-/// Backward-compat alias for `stat`.
-pub fn getFileInfo(self: Self, path: []const u8) StatError!FileInfo {
-    return self.vtable.stat(self.ctx, self.std_io, path);
-}
-
 /// List all entries under `path` recursively. Caller owns the returned slice
 /// and every `.path` string in it (free with `allocator`).
 pub fn listDir(self: Self, path: []const u8, allocator: Allocator) ListError![]FileEntry {
@@ -369,9 +364,6 @@ pub const StatError = error{
     AccessDenied,
     IoError,
 };
-
-/// Backward-compat alias.
-pub const GetFileInfoError = StatError;
 
 /// Errors that can occur when listing directory contents.
 pub const ListError = error{
@@ -1038,29 +1030,15 @@ fn osFetchUrl(_: ?*anyopaque, _: std.Io, _: Allocator, _: []const u8, _: []const
 }
 
 fn osWriteStdout(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stdout().writeStreamingAll(std_io, data) catch |err| return switch (err) {
-        error.AccessDenied,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileTooBig,
-        error.InputOutput,
-        error.LockViolation,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotOpenForWriting,
-        error.PermissionDenied,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => error.IoError,
-        error.BrokenPipe => error.BrokenPipe,
-    };
+    return osWriteStream(std.Io.File.stdout(), std_io, data);
 }
 
 fn osWriteStderr(_: ?*anyopaque, std_io: std.Io, data: []const u8) StdioError!void {
-    std.Io.File.stderr().writeStreamingAll(std_io, data) catch |err| return switch (err) {
+    return osWriteStream(std.Io.File.stderr(), std_io, data);
+}
+
+fn osWriteStream(file: std.Io.File, std_io: std.Io, data: []const u8) StdioError!void {
+    file.writeStreamingAll(std_io, data) catch |err| return switch (err) {
         error.AccessDenied,
         error.Canceled,
         error.DeviceBusy,

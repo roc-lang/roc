@@ -1213,12 +1213,6 @@ pub const PreparedMonotype = struct {
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
 
-    /// Fork only the target-dependent continuation. Specialization output is
-    /// copied exactly; checked lowering and its executor are not run again.
-    pub fn forkForTarget(self: *const PreparedMonotype, target_usize: base.target.TargetUsize) Allocator.Error!PreparedMonotype {
-        return self.forkForConsumer(target_usize, self.target.inline_expects);
-    }
-
     /// A shared program preserves both expect semantics explicitly. A program
     /// specialized for one mode cannot acquire the missing continuation later.
     pub fn forkForConsumer(self: *const PreparedMonotype, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedMonotype {
@@ -2263,8 +2257,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         const def_idx = key.source_def_idx orelse return "?";
         const def = info.env.store.getDef(@enumFromInt(def_idx));
         return switch (info.env.store.getPattern(def.pattern)) {
-            .assign => |assign| info.env.getIdent(assign.ident),
-            .var_assign => |assign| info.env.getIdent(assign.ident),
+            inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
             .as,
             .applied_tag,
             .nominal,

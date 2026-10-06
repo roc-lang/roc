@@ -748,15 +748,6 @@ pub const VarPool = struct {
         try self.ranks.items[@intFromEnum(rank)].append(variable);
     }
 
-    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) Allocator.Error!void {
-        if (builtin.mode == .Debug) {
-            if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
-                base.invariant("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
-            }
-        }
-        try self.ranks.items[@intFromEnum(rank)].appendSlice(variables);
-    }
-
     /// Shrink the vars recorded for `rank` back to `new_len`, discarding
     /// entries appended after a speculative probe captured the length—
     /// the rollback counterpart to the `addVarToRank` calls the probe made.

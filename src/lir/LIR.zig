@@ -620,6 +620,9 @@ pub const ErasedArgDescParam = extern struct {
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
+    /// The bytes alignment adds after `read`, declared so that every byte of
+    /// the struct is defined wherever its raw bytes are persisted.
+    _padding: [3]u8 = [_]u8{0} ** 3,
 };
 
 /// How a boxy operation observes or transfers its source value.
@@ -902,7 +905,6 @@ pub const LiteralValue = union(enum) {
     },
     static_data: StaticDataId,
     bytes_literal: ListLiteral,
-    null_ptr,
     proc_ref: LirProcSpecId,
 };
 
@@ -1021,7 +1023,6 @@ pub const ErasedCallableOnDrop = union(enum) {
         capture_layout: layout.Idx,
         desc_field_offset: u32,
     },
-    interpreter_context_drop,
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -1670,9 +1671,12 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    /// A numeric equality or ordering comparison.
-    num_comparison: bool = false,
-    _padding: u3 = 0,
+    /// An equality or ordering comparison of fixed-width unsigned integers of
+    /// at most 64 bits, the only comparison a value-range proof can decide.
+    unsigned_compare: bool = false,
+    /// A SIMD byte concat-shift, whose count a value-range proof can fix.
+    simd_concat_shift: bool = false,
+    _padding: u2 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));

@@ -378,6 +378,7 @@ fn glueRuntimeHostFileName(language: GlueLanguage, target: GlueRuntimeTarget) []
 const CustomCase = enum {
     noop,
     default_app_all_syntax_checked_cache,
+    build_all_syntax_interpreter_output_runs,
     pipeline_parity_diagnostics,
     pipeline_parity_shared_cache,
     source_file_identity,
@@ -404,6 +405,13 @@ const CustomCase = enum {
     default_platform_build_arm64glibc,
     default_platform_build_x64freebsd,
     default_platform_build_x64netbsd,
+    default_platform_float_libcalls_x64musl,
+    default_platform_float_libcalls_arm64musl,
+    default_platform_float_libcalls_x64glibc,
+    default_platform_float_libcalls_arm64glibc,
+    default_platform_float_libcalls_x64v1musl,
+    default_platform_float_libcalls_x64freebsd,
+    default_platform_float_libcalls_x64netbsd,
     default_platform_build_x64openbsd_rejected,
     default_platform_build_wasm32,
     default_platform_wasm32_archive_reproducible,
@@ -450,6 +458,7 @@ const CustomCase = enum {
     issue_11355_boxy_built_platform_codec_root,
     issue_11355_boxy_built_try_low_levels,
     build_default_app_interpreter_args,
+    build_interpreter_owns_intermediates,
     build_glibc_target_non_linux_error,
     build_windows_shared_library,
     cache_passing_results,
@@ -1133,6 +1142,7 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: no main is not a default app (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/no_main.roc", .exit = .failure } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{"--opt=interpreter"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc run populates checked module cache", .backend = .interpreter, .body = .{ .custom = .default_app_all_syntax_checked_cache } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc built executable prints expected output (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_all_syntax_interpreter_output_runs } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend)", .backend = .dev, .body = .{ .command = .{ .args = &.{"--opt=dev"}, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (interpreter, specialize=no)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: all_syntax_test.roc prints expected output (dev backend, specialize=no)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache", "--specialize=no" }, .roc_file = "test/echo/all_syntax_test.roc", .stdout_exact = all_syntax_expected_stdout, .stderr_exact = all_syntax_expected_stderr } } },
@@ -1434,6 +1444,21 @@ const echo_cases = [_]CliCase{
     .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: forced-dynamic iterators cross closure and return boundaries (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/forced_dynamic_iterator_boundaries.roc", .stdout_exact = "13 6 13 13 13" } } },
+    // A default-platform executable links no host, so nothing outside the
+    // compiler's own objects can define a compiler-rt helper: a 128-bit
+    // integer to float conversion has to reach the builtins on every backend.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime 128-bit integers convert to floats (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/runtime_i128_to_float.roc", .stdout_exact = "3e20 3e20 -3e20 -3e20" } } },
+    // No target has a float remainder instruction, and a baseline x86-64 CPU
+    // has none for rounding either, so compiled code calls `fmod`, `floor`,
+    // `ceil` and `trunc`. The freestanding default platform links no libc and
+    // provides them from its own compiler-rt carrier.
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "--opt=size", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
+    .{ .id = 0, .suite = .echo, .name = "echo platform: runtime float operations with no instruction (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/echo/runtime_float_libcalls.roc", .stdout_exact = default_platform_float_libcalls_stdout } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: issue 11353 Boxy callable adapter reads Try backing descriptor (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--specialize=no" }, .roc_file = "test/echo/issue_11353.roc", .stdout_exact = "[Err(Unset), Err(Unset)]\n[Ok(7), Ok(7)]\n" } } },
     .{ .id = 0, .suite = .echo, .name = "echo platform: boxy open-union argument descriptor describes the value (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--specialize=no" }, .roc_file = "test/echo/boxy_open_union_arg.roc", .stdout_exact = "other color\nred\ngreen\n" } } },
@@ -2367,6 +2392,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11322: retained branch environments preserve bindings and captures (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/Issue11322BranchEnvironments.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11322: retained branch environments preserve bindings and captures (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/Issue11322BranchEnvironments.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11322: retained branch environments preserve bindings and captures (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/Issue11322BranchEnvironments.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (4) tests passed" }} } } },
+    // An optimized `roc test` loads the compiled expects into the compiler's
+    // own process, so the compiler itself supplies the C math routines a
+    // float remainder or a baseline-CPU rounding calls.
+    .{ .id = 0, .suite = .subcommands, .name = "roc test: runtime float operations with no instruction (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RuntimeFloatLibcalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test: runtime float operations with no instruction (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--no-cache" }, .roc_file = "test/cli/RuntimeFloatLibcalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test: runtime float operations with no instruction (size)", .backend = .size, .body = .{ .command = .{ .args = &.{ "test", "--opt=size", "--no-cache" }, .roc_file = "test/cli/RuntimeFloatLibcalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc test: runtime float operations with no instruction (speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "test", "--opt=speed", "--no-cache" }, .roc_file = "test/cli/RuntimeFloatLibcalls.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (10) tests passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test finalizes nested closure captures by identity", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/CaptureOrderFinalization.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10698: closure captures a while-loop var through its loop parameter", .body = .{ .command = .{ .args = &.{ "test", "--no-cache" }, .roc_file = "test/cli/Issue10698WhileVarCapture.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (2) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10693: Boxy list concat uses the erased closure element descriptor", .backend = .dev, .body = .{ .command = .{ .args = &.{ "test", "--opt=dev", "--specialize=no", "--no-cache" }, .roc_file = "test/cli/Issue10693ClosureTuplesInList.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "All (3) tests passed" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "Segmentation fault" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -2563,6 +2595,13 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc succeeds", .body = .{ .custom = .default_platform_build_arm64glibc } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64freebsd succeeds", .body = .{ .custom = .default_platform_build_x64freebsd } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64netbsd succeeds", .body = .{ .custom = .default_platform_build_x64netbsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_arm64musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform arm64glibc links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_arm64glibc } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64v1musl links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64v1musl } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64freebsd links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64freebsd } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build default platform x64netbsd links float library calls on every backend", .body = .{ .custom = .default_platform_float_libcalls_x64netbsd } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10598: roc build default platform x64openbsd explains unsupported cross-link", .body = .{ .custom = .default_platform_build_x64openbsd_rejected } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive succeeds", .body = .{ .custom = .default_platform_build_wasm32 } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default platform wasm32 archive output is reproducible", .body = .{ .custom = .default_platform_wasm32_archive_reproducible } },
@@ -2894,6 +2933,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 10492: roc build default-platform executable receives args", .body = .{ .custom = .issue_10492_build_default_app_args } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 11995: roc build --opt=dev default-platform executable for a glibc target runs", .body = .{ .custom = .issue_11995_build_default_app_glibc_dev } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build default-platform executable receives args (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_default_app_interpreter_args } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc build writes intermediates only to its own scratch directory (interpreter)", .backend = .interpreter, .body = .{ .custom = .build_interpreter_owns_intermediates } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with file not found error", .body = .{ .command = .{ .args = &.{"build"}, .roc_file = "nonexistent_file.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "FileNotFound" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "not found" }, .{ .stream = .stderr, .text = "Failed" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build fails with invalid target error", .body = .{ .command = .{ .args = &.{ "build", "--target=invalid_target_name" }, .roc_file = "test/int/app.roc", .exit = .failure, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stderr, .text = "Invalid target" }, .{ .stream = .stderr, .text = "invalid" } } }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build wasm32 shared module succeeds for list builtins", .body = .{ .command = .{ .args = &.{ "build", "--target=wasm32", "--no-cache" }, .roc_file = "test/wasm/list_builtin_static_lib_app.roc", .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "FunctionTypeMismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
@@ -4355,6 +4395,7 @@ fn runCustomCase(
     const result: ?TestResult = switch (custom) {
         .noop => null,
         .default_app_all_syntax_checked_cache => customDefaultAppAllSyntaxCheckedCache(io, allocator, &env, &timer, timeout_ms),
+        .build_all_syntax_interpreter_output_runs => customBuildAllSyntaxInterpreterOutputRuns(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_diagnostics => customPipelineParityDiagnostics(io, allocator, &env, &timer, timeout_ms),
         .pipeline_parity_shared_cache => customPipelineParitySharedCache(io, allocator, &env, &timer, timeout_ms),
         .source_file_identity => customSourceFileIdentity(io, allocator, &env, &timer, timeout_ms),
@@ -4381,6 +4422,13 @@ fn runCustomCase(
         .default_platform_build_arm64glibc => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
         .default_platform_build_x64freebsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64freebsd),
         .default_platform_build_x64netbsd => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .x64netbsd),
+        .default_platform_float_libcalls_x64musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64musl),
+        .default_platform_float_libcalls_arm64musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .arm64musl),
+        .default_platform_float_libcalls_x64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64glibc),
+        .default_platform_float_libcalls_arm64glibc => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .arm64glibc),
+        .default_platform_float_libcalls_x64v1musl => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64v1musl),
+        .default_platform_float_libcalls_x64freebsd => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64freebsd),
+        .default_platform_float_libcalls_x64netbsd => customDefaultPlatformFloatLibcallsBuild(io, allocator, &env, &timer, timeout_ms, .x64netbsd),
         .default_platform_build_x64openbsd_rejected => customDefaultPlatformOpenBsdRejected(io, allocator, &env, &timer, timeout_ms),
         .default_platform_build_wasm32 => customDefaultPlatformBuild(io, allocator, &env, &timer, timeout_ms, .wasm32),
         .default_platform_wasm32_archive_reproducible => customDefaultPlatformWasm32ArchiveReproducible(io, allocator, &env, &timer, timeout_ms),
@@ -4437,6 +4485,7 @@ fn runCustomCase(
             .stdout_exact = boxy_try_low_levels_built_expected_stdout,
         }),
         .build_default_app_interpreter_args => customBuildDefaultAppArgs(io, allocator, &env, &timer, timeout_ms, .interpreter, null),
+        .build_interpreter_owns_intermediates => customBuildInterpreterOwnsIntermediates(io, allocator, &env, &timer, timeout_ms),
         .build_glibc_target_non_linux_error => customGlibcTargetNonLinux(io, allocator, &env, &timer, timeout_ms),
         .build_windows_shared_library => customWindowsSharedLibrary(io, allocator, &env, &timer, timeout_ms),
         .cache_passing_results => customCachePassingResults(io, allocator, &env, &timer, timeout_ms, spec.backend orelse .interpreter),
@@ -6772,6 +6821,7 @@ fn isHexDigit(byte: u8) bool {
 
 const DefaultPlatformTarget = enum {
     x64musl,
+    x64v1musl,
     arm64musl,
     x64glibc,
     arm64glibc,
@@ -6795,7 +6845,7 @@ const DefaultPlatformTarget = enum {
     fn canRunOnHost(self: DefaultPlatformTarget) bool {
         return switch (builtin.os.tag) {
             .linux => if (builtin.cpu.arch == .x86_64)
-                self == .x64musl or self == .x64glibc
+                self == .x64musl or self == .x64v1musl or self == .x64glibc
             else if (builtin.cpu.arch == .aarch64)
                 self == .arm64musl or self == .arm64glibc
             else
@@ -6972,6 +7022,65 @@ fn customDefaultPlatformBuild(
             .stdout_exact = "Hello, World!",
             .stderr_exact = "",
         })) |failure| return failure;
+    }
+
+    return null;
+}
+
+const default_platform_float_libcalls_app = "test/echo/runtime_float_libcalls.roc";
+const default_platform_float_libcalls_stdout = "rem: 1.5 1.5 -1.5, div_trunc: 3 3, floor: Ok(7) Ok(7), ceiling: Ok(8) Ok(8)";
+
+/// A freestanding default platform links no libc, so every routine the
+/// compiled program calls for a float operation its target has no instruction
+/// for has to be defined inside the link. Builds the float program for
+/// `target` with each backend that can cross-compile, which fails at link
+/// time when one is left undefined, and runs the result where the host can.
+fn customDefaultPlatformFloatLibcallsBuild(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+    target: DefaultPlatformTarget,
+) ?TestResult {
+    if (!target.canBuildOnHost()) {
+        const message = std.fmt.allocPrint(
+            allocator,
+            "{s} default-platform build requires Linux host support",
+            .{target.cliName()},
+        ) catch "default-platform build requires Linux host support";
+        return .{ .status = .skip, .phase = .setup, .duration_ns = timer.read(), .message = message };
+    }
+
+    const target_arg = std.fmt.allocPrint(allocator, "--target={s}", .{target.cliName()}) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate target arg: {}", .{err});
+
+    for ([_][]const u8{ "dev", "size", "speed" }) |opt| {
+        const output_name = std.fmt.allocPrint(allocator, "default_platform_float_libcalls_{s}", .{opt}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate default platform output name: {}", .{err});
+        const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, output_name }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate default platform output path: {}", .{err});
+        const opt_arg = std.fmt.allocPrint(allocator, "--opt={s}", .{opt}) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate opt arg: {}", .{err});
+        const out_arg = outputArg(allocator, output_path) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", opt_arg, "--no-cache", target_arg, out_arg },
+            .roc_file = default_platform_float_libcalls_app,
+            .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+        })) |failure| return failure;
+
+        if (target.canRunOnHost()) {
+            const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+                return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+            if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+                .args = &.{},
+                .stdout_exact = default_platform_float_libcalls_stdout,
+                .stderr_exact = "",
+            })) |failure| return failure;
+        }
     }
 
     return null;
@@ -9000,6 +9109,104 @@ fn customBuildDefaultAppArgs(
     return null;
 }
 
+/// Where the object and bitcode files under a compiler cache root lie.
+const CacheIntermediates = struct {
+    /// Files inside the per-invocation scratch section, `<version>/tmp/`.
+    in_scratch: usize = 0,
+    /// The first file found in a section that builds share, if any.
+    first_shared: ?[]const u8 = null,
+};
+
+/// Find every object and bitcode file under `cache_path`. Those are build
+/// intermediates: the sections that concurrent builds share hold only
+/// content-addressed entries, none of which is an object or bitcode file.
+fn findCacheIntermediates(io: std.Io, allocator: Allocator, cache_path: []const u8) CliRunnerError!CacheIntermediates {
+    var cache_dir = try std.Io.Dir.cwd().openDir(io, cache_path, .{ .iterate = true });
+    defer cache_dir.close(io);
+
+    var walker = try cache_dir.walk(allocator);
+    defer walker.deinit();
+
+    var found: CacheIntermediates = .{};
+    while (try walker.next(io)) |entry| {
+        if (entry.kind != .file) continue;
+        const extension = std.fs.path.extension(entry.basename);
+        const is_intermediate = std.mem.eql(u8, extension, ".o") or
+            std.mem.eql(u8, extension, ".obj") or
+            std.mem.eql(u8, extension, ".bc");
+        if (!is_intermediate) continue;
+        if (cachePathIsInSection(entry.path, "tmp")) {
+            found.in_scratch += 1;
+        } else if (found.first_shared == null) {
+            found.first_shared = try allocator.dupe(u8, entry.path);
+        }
+    }
+    return found;
+}
+
+/// Concurrent interpreter builds share one compiler cache, so every file a
+/// build writes while it works must lie in a directory that build owns. A
+/// build leaves no intermediate in a shared cache section and removes its
+/// scratch directory when it finishes; `--keep-temp` keeps one scratch
+/// directory per build, so two builds never write the same intermediate path.
+fn customBuildInterpreterOwnsIntermediates(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "owns_intermediates" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=interpreter", "--no-cache", out_arg },
+        .roc_file = "test/echo/hello.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const after_build = findCacheIntermediates(io, allocator, env.dirs.roc_cache_dir) catch |err|
+        return customInfraFailure(allocator, timer, "failed to walk the compiler cache: {}", .{err});
+    if (after_build.first_shared) |path| {
+        return customFailure(allocator, timer, "interpreter build wrote the intermediate {s} into a cache section that concurrent builds share", .{path});
+    }
+    if (after_build.in_scratch != 0) {
+        return customFailure(allocator, timer, "interpreter build left {d} intermediate files in its scratch directory", .{after_build.in_scratch});
+    }
+
+    var kept_after_first: usize = 0;
+    for (0..2) |build_index| {
+        if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=interpreter", "--no-cache", "--keep-temp", out_arg },
+            .roc_file = "test/echo/hello.roc",
+            .contains = &.{
+                .{ .stream = .stdout, .text = "successfully building" },
+                .{ .stream = .stderr, .text = "Kept temporary directory" },
+            },
+        })) |failure| return failure;
+
+        const kept = findCacheIntermediates(io, allocator, env.dirs.roc_cache_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to walk the compiler cache: {}", .{err});
+        if (kept.first_shared) |path| {
+            return customFailure(allocator, timer, "interpreter build wrote the intermediate {s} into a cache section that concurrent builds share", .{path});
+        }
+        if (build_index == 0) {
+            if (kept.in_scratch == 0) {
+                return customFailure(allocator, timer, "interpreter build with --keep-temp kept no intermediate files in a scratch directory", .{});
+            }
+            kept_after_first = kept.in_scratch;
+        } else if (kept.in_scratch != 2 * kept_after_first) {
+            // A second build that reused the first build's paths would
+            // overwrite its files rather than add its own.
+            return customFailure(allocator, timer, "expected two --keep-temp builds to keep {d} intermediate files in separate scratch directories, found {d}", .{ 2 * kept_after_first, kept.in_scratch });
+        }
+    }
+
+    return null;
+}
+
 /// The default platform makes no libc calls, so a default app built for a
 /// glibc target must be a static executable that runs on any Linux host of
 /// that architecture, whichever libc the host ships.
@@ -9161,6 +9368,34 @@ fn customDefaultAppAllSyntaxCheckedCache(io: std.Io, allocator: Allocator, env: 
     if (cached_module_count_after_second_run != cached_module_count_after_first_run) {
         return customFailure(allocator, timer, "expected second default app run to reuse {d} checked module cache entries, found {d}", .{ cached_module_count_after_first_run, cached_module_count_after_second_run });
     }
+
+    return null;
+}
+
+/// An interpreter-mode executable runs every program the interpreter run path
+/// runs. The default platform's executable starts without libc and without
+/// thread-local storage, so this covers every low-level operation the program
+/// reaches in a process where touching a thread-local faults.
+fn customBuildAllSyntaxInterpreterOutputRuns(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
+    const output_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "all_syntax_interpreter" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output path: {}", .{err});
+    const out_arg = outputArg(allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate output arg: {}", .{err});
+
+    if (runRocAndCheck(io, allocator, env, timer, timeout_ms, .{
+        .args = &.{ "build", "--opt=interpreter", "--no-cache", out_arg },
+        .roc_file = "test/echo/all_syntax_test.roc",
+        .contains = &.{.{ .stream = .stdout, .text = "successfully building" }},
+    })) |failure| return failure;
+
+    const executable_path = runnableOutputPath(io, allocator, output_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to find built executable: {}", .{err});
+
+    if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{executable_path}, env.dirs.work_dir, .{
+        .args = &.{},
+        .stdout_exact = all_syntax_expected_stdout,
+        .stderr_exact = all_syntax_expected_stderr,
+    })) |failure| return failure;
 
     return null;
 }

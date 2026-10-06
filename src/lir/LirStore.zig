@@ -368,10 +368,6 @@ pub const BodyRelocation = struct {
         return relocateBodyValue(CFStmtId, id, prefix, self);
     }
 
-    pub fn localSpan(self: BodyRelocation, prefix: BodyPrefix, span: LocalSpan) LocalSpan {
-        return relocateBodyValue(LocalSpan, span, prefix, self);
-    }
-
     pub fn joinPointSpan(self: BodyRelocation, prefix: BodyPrefix, span: JoinPointSpan) JoinPointSpan {
         return relocateBodyValue(JoinPointSpan, span, prefix, self);
     }
@@ -1229,6 +1225,53 @@ fn spanRange(existing: usize, count: usize) Allocator.Error!struct { start: u32,
     return .{ .start = @intCast(existing), .len = @intCast(count) };
 }
 
+/// Appends `values` to the `field` backing list and returns the span that
+/// names them in this store's id space, which starts after the coordinator's
+/// rows when this store is a body shard.
+inline fn appendStoreSpan(self: *Self, comptime Span: type, comptime field: []const u8, values: anytype) Allocator.Error!Span {
+    if (values.len == 0) return Span.empty();
+    const range = try spanRange(@field(self, field).len() + if (self.body_coordinator != null) @field(self.body_prefix, field) else 0, values.len);
+    try @field(self, field).appendSlice(self.allocator, values);
+    return .{ .start = range.start, .len = range.len };
+}
+
+/// Resolves `span` in the `field` backing list. Rows below this store's body
+/// prefix live in the coordinator, which `getter`, the list's public accessor,
+/// reads.
+inline fn borrowStoreSpan(self: *const Self, comptime T: type, comptime field: []const u8, comptime getter: anytype, span: anytype) StoreSpanBorrow(T, field) {
+    if (self.body_coordinator) |coordinator| {
+        if (span.start < @field(self.body_prefix, field)) return getter(coordinator, span);
+        return @field(self, field).borrowSpan(span.start - @field(self.body_prefix, field), span.len);
+    }
+    return @field(self, field).borrowSpan(span.start, span.len);
+}
+
+/// `borrowStoreSpan` for a list whose rows a procedure rewrite may hold
+/// private copies of, which take precedence.
+inline fn borrowRewritableStoreSpan(self: *const Self, comptime T: type, comptime field: []const u8, comptime getter: anytype, span: anytype) StoreSpanBorrow(T, field) {
+    if (self.proc_rewrite) |*rewrite| {
+        if (@field(rewrite, field).index(span.start, span.len)) |private| {
+            if (@field(rewrite, field).owned(private)) return @field(rewrite, field).rows.borrowSpan(private, span.len);
+        }
+    }
+    return self.borrowStoreSpan(T, field, getter, span);
+}
+
+/// Resolves `span` in the `field` backing list for mutation. A procedure
+/// rewrite mutates a private copy of coordinator rows; without one, those
+/// rows are immutable.
+inline fn borrowStoreSpanMut(self: *Self, comptime T: type, comptime field: []const u8, span: anytype) StoreSpanBorrowMut(T, field) {
+    if (span.len == 0) return @field(self, field).borrowSpanMut(0, 0);
+    if (self.body_coordinator != null and span.start < @field(self.body_prefix, field)) {
+        if (self.proc_rewrite) |*rewrite| {
+            const private = @field(rewrite, field).mark(self.body_coordinator.?, span.start, span.len);
+            return @field(rewrite, field).rows.borrowSpanMut(private, span.len);
+        }
+        self.assertBodyMetadataImmutable();
+    }
+    return @field(self, field).borrowSpanMut(span.start - if (self.body_coordinator != null) @field(self.body_prefix, field) else 0, span.len);
+}
+
 /// Appends a slice of pattern ids and returns the span.
 pub fn addPatternSpan(self: *Self, ids: []const LirPatternId) Allocator.Error!LirPatternSpan {
     const range = try spanRange(self.pattern_ids.len() + if (self.body_coordinator != null) self.body_prefix.pattern_ids else 0, ids.len);
@@ -1238,11 +1281,7 @@ pub fn addPatternSpan(self: *Self, ids: []const LirPatternId) Allocator.Error!Li
 
 /// Returns the pattern ids for a given span.
 pub fn getPatternSpan(self: *const Self, span: LirPatternSpan) StoreSpanBorrow(LirPatternId, "pattern_ids") {
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.pattern_ids) return coordinator.getPatternSpan(span);
-        return self.pattern_ids.borrowSpan(span.start - self.body_prefix.pattern_ids, span.len);
-    }
-    return self.pattern_ids.borrowSpan(span.start, span.len);
+    return self.borrowStoreSpan(LirPatternId, "pattern_ids", getPatternSpan, span);
 }
 
 /// Returns a fresh synthetic symbol for compiler-generated locals and procs.
@@ -1427,55 +1466,32 @@ pub fn setLocalBoxyDesc(self: *Self, id: LocalId, desc: lir_defs.BoxyDescRef) vo
 /// Attaches descriptor metadata without mutating existing LIR statements.
 /// Stores local ids and returns the corresponding flat-storage span.
 pub fn addLocalSpan(self: *Self, ids: []const LocalId) Allocator.Error!LocalSpan {
-    if (ids.len == 0) return LocalSpan.empty();
-
-    const range = try spanRange(self.local_ids.len() + if (self.body_coordinator != null) self.body_prefix.local_ids else 0, ids.len);
-    try self.local_ids.appendSlice(self.allocator, ids);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(LocalSpan, "local_ids", ids);
 }
 
 /// Resolves a local-id span to its stored slice.
 pub fn getLocalSpan(self: *const Self, span: LocalSpan) StoreSpanBorrow(LocalId, "local_ids") {
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.local_ids) return coordinator.getLocalSpan(span);
-        return self.local_ids.borrowSpan(span.start - self.body_prefix.local_ids, span.len);
-    }
-    return self.local_ids.borrowSpan(span.start, span.len);
+    return self.borrowStoreSpan(LocalId, "local_ids", getLocalSpan, span);
 }
 
 /// Stores u64 values and returns the corresponding flat-storage span.
 pub fn addU64Span(self: *Self, values: []const u64) Allocator.Error!U64Span {
-    if (values.len == 0) return U64Span.empty();
-
-    const range = try spanRange(self.u64s.len() + if (self.body_coordinator != null) self.body_prefix.u64s else 0, values.len);
-    try self.u64s.appendSlice(self.allocator, values);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(U64Span, "u64s", values);
 }
 
 /// Resolves a u64 span to its stored slice.
 pub fn getU64Span(self: *const Self, span: U64Span) StoreSpanBorrow(u64, "u64s") {
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.u64s) return coordinator.getU64Span(span);
-        return self.u64s.borrowSpan(span.start - self.body_prefix.u64s, span.len);
-    }
-    return self.u64s.borrowSpan(span.start, span.len);
+    return self.borrowStoreSpan(u64, "u64s", getU64Span, span);
 }
 
 /// Stores u32 values and returns the corresponding flat-storage span.
 pub fn addU32Span(self: *Self, values: []const u32) Allocator.Error!U32Span {
-    if (values.len == 0) return U32Span.empty();
-    const range = try spanRange(self.u32s.len() + if (self.body_coordinator != null) self.body_prefix.u32s else 0, values.len);
-    try self.u32s.appendSlice(self.allocator, values);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(U32Span, "u32s", values);
 }
 
 /// Resolves a u32 span to its stored slice.
 pub fn getU32Span(self: *const Self, span: U32Span) StoreSpanBorrow(u32, "u32s") {
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.u32s) return coordinator.getU32Span(span);
-        return self.u32s.borrowSpan(span.start - self.body_prefix.u32s, span.len);
-    }
-    return self.u32s.borrowSpan(span.start, span.len);
+    return self.borrowStoreSpan(u32, "u32s", getU32Span, span);
 }
 
 /// Intern the canonical erased-call argument layout for an ordered signature.
@@ -1614,11 +1630,6 @@ pub fn getCFStmtLocs(self: *const Self) []const base.SourceLoc {
     return self.cf_stmt_locs.unsafeRawItemsForView();
 }
 
-/// Number of stored statement source-region entries.
-pub fn cfStmtRegionCount(self: *const Self) usize {
-    return self.cf_stmt_regions.len();
-}
-
 /// Returns all stored statement source-region entries.
 pub fn getCFStmtRegions(self: *const Self) []const base.Region {
     return self.cf_stmt_regions.unsafeRawItemsForView();
@@ -1665,130 +1676,77 @@ fn verifyCFStmtId(self: *const Self, id: CFStmtId) void {
     }
 }
 
+/// Appends `target = op(args)` followed by `next`, with the op's own RC effect.
+pub fn addLowLevelStmt(
+    self: *Self,
+    target: LocalId,
+    op: lir_defs.LowLevel,
+    args: []const LocalId,
+    next: CFStmtId,
+    origin: StmtOrigin,
+) Allocator.Error!CFStmtId {
+    return self.addCFStmt(.{ .assign_low_level = .{
+        .target = target,
+        .op = op,
+        .rc_effect = op.rcEffect(),
+        .args = try self.addLocalSpan(args),
+        .next = next,
+    } }, origin);
+}
+
 /// Appends switch branches and returns the corresponding flat-storage span.
 pub fn addCFSwitchBranches(self: *Self, branches: []const CFSwitchBranch) Allocator.Error!CFSwitchBranchSpan {
-    if (branches.len == 0) return CFSwitchBranchSpan.empty();
-
-    const range = try spanRange(self.cf_switch_branches.len() + if (self.body_coordinator != null) self.body_prefix.cf_switch_branches else 0, branches.len);
-    try self.cf_switch_branches.appendSlice(self.allocator, branches);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(CFSwitchBranchSpan, "cf_switch_branches", branches);
 }
 
 /// Resolves a switch-branch span to its stored slice.
 pub fn getCFSwitchBranches(self: *const Self, span: CFSwitchBranchSpan) StoreSpanBorrow(CFSwitchBranch, "cf_switch_branches") {
-    if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_switch_branches.index(span.start, span.len)) |private| {
-            if (rewrite.cf_switch_branches.owned(private)) return rewrite.cf_switch_branches.rows.borrowSpan(private, span.len);
-        }
-    }
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.cf_switch_branches) return coordinator.getCFSwitchBranches(span);
-        return self.cf_switch_branches.borrowSpan(span.start - self.body_prefix.cf_switch_branches, span.len);
-    }
-    return self.cf_switch_branches.borrowSpan(span.start, span.len);
+    return self.borrowRewritableStoreSpan(CFSwitchBranch, "cf_switch_branches", getCFSwitchBranches, span);
 }
 
 /// Resolves a switch-branch span to its stored mutable slice.
 pub fn getCFSwitchBranchesMut(self: *Self, span: CFSwitchBranchSpan) StoreSpanBorrowMut(CFSwitchBranch, "cf_switch_branches") {
-    if (span.len == 0) return self.cf_switch_branches.borrowSpanMut(0, 0);
-    if (self.body_coordinator != null and span.start < self.body_prefix.cf_switch_branches) {
-        if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.cf_switch_branches.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.cf_switch_branches.rows.borrowSpanMut(private, span.len);
-        }
-        self.assertBodyMetadataImmutable();
-    }
-    return self.cf_switch_branches.borrowSpanMut(span.start - if (self.body_coordinator != null) self.body_prefix.cf_switch_branches else 0, span.len);
+    return self.borrowStoreSpanMut(CFSwitchBranch, "cf_switch_branches", span);
 }
 
 /// Appends string-match steps and returns the corresponding flat-storage span.
 pub fn addStrMatchSteps(self: *Self, steps: []const StrMatchStep) Allocator.Error!StrMatchStepSpan {
-    if (steps.len == 0) return StrMatchStepSpan.empty();
-
-    const range = try spanRange(self.str_match_steps.len() + if (self.body_coordinator != null) self.body_prefix.str_match_steps else 0, steps.len);
-    try self.str_match_steps.appendSlice(self.allocator, steps);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(StrMatchStepSpan, "str_match_steps", steps);
 }
 
 /// Resolves a string-match-step span to its stored slice.
 pub fn getStrMatchSteps(self: *const Self, span: StrMatchStepSpan) StoreSpanBorrow(StrMatchStep, "str_match_steps") {
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.str_match_steps) return coordinator.getStrMatchSteps(span);
-        return self.str_match_steps.borrowSpan(span.start - self.body_prefix.str_match_steps, span.len);
-    }
-    return self.str_match_steps.borrowSpan(span.start, span.len);
+    return self.borrowStoreSpan(StrMatchStep, "str_match_steps", getStrMatchSteps, span);
 }
 
 /// Appends string-match arms and returns the corresponding flat-storage span.
 pub fn addStrMatchArms(self: *Self, arms: []const StrMatchArm) Allocator.Error!StrMatchArmSpan {
-    if (arms.len == 0) return StrMatchArmSpan.empty();
-
-    const range = try spanRange(self.str_match_arms.len() + if (self.body_coordinator != null) self.body_prefix.str_match_arms else 0, arms.len);
-    try self.str_match_arms.appendSlice(self.allocator, arms);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(StrMatchArmSpan, "str_match_arms", arms);
 }
 
 /// Resolves a string-match-arm span to its stored slice.
 pub fn getStrMatchArms(self: *const Self, span: StrMatchArmSpan) StoreSpanBorrow(StrMatchArm, "str_match_arms") {
-    if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.str_match_arms.index(span.start, span.len)) |private| {
-            if (rewrite.str_match_arms.owned(private)) return rewrite.str_match_arms.rows.borrowSpan(private, span.len);
-        }
-    }
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.str_match_arms) return coordinator.getStrMatchArms(span);
-        return self.str_match_arms.borrowSpan(span.start - self.body_prefix.str_match_arms, span.len);
-    }
-    return self.str_match_arms.borrowSpan(span.start, span.len);
+    return self.borrowRewritableStoreSpan(StrMatchArm, "str_match_arms", getStrMatchArms, span);
 }
 
 /// Resolves a string-match-arm span to its stored mutable slice.
 pub fn getStrMatchArmsMut(self: *Self, span: StrMatchArmSpan) StoreSpanBorrowMut(StrMatchArm, "str_match_arms") {
-    if (span.len == 0) return self.str_match_arms.borrowSpanMut(0, 0);
-    if (self.body_coordinator != null and span.start < self.body_prefix.str_match_arms) {
-        if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.str_match_arms.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.str_match_arms.rows.borrowSpanMut(private, span.len);
-        }
-        self.assertBodyMetadataImmutable();
-    }
-    return self.str_match_arms.borrowSpanMut(span.start - if (self.body_coordinator != null) self.body_prefix.str_match_arms else 0, span.len);
+    return self.borrowStoreSpanMut(StrMatchArm, "str_match_arms", span);
 }
 
 /// Appends join-point entries and returns the corresponding flat-storage span.
 pub fn addJoinPointSpan(self: *Self, join_points: []const JoinPoint) Allocator.Error!JoinPointSpan {
-    if (join_points.len == 0) return JoinPointSpan.empty();
-
-    const range = try spanRange(self.join_points.len() + if (self.body_coordinator != null) self.body_prefix.join_points else 0, join_points.len);
-    try self.join_points.appendSlice(self.allocator, join_points);
-    return .{ .start = range.start, .len = range.len };
+    return self.appendStoreSpan(JoinPointSpan, "join_points", join_points);
 }
 
 /// Resolves a join-point span to its stored slice.
 pub fn getJoinPointSpan(self: *const Self, span: JoinPointSpan) StoreSpanBorrow(JoinPoint, "join_points") {
-    if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.join_points.index(span.start, span.len)) |private| {
-            if (rewrite.join_points.owned(private)) return rewrite.join_points.rows.borrowSpan(private, span.len);
-        }
-    }
-    if (self.body_coordinator) |coordinator| {
-        if (span.start < self.body_prefix.join_points) return coordinator.getJoinPointSpan(span);
-        return self.join_points.borrowSpan(span.start - self.body_prefix.join_points, span.len);
-    }
-    return self.join_points.borrowSpan(span.start, span.len);
+    return self.borrowRewritableStoreSpan(JoinPoint, "join_points", getJoinPointSpan, span);
 }
 
 /// Resolves a join-point span to its stored mutable slice.
 pub fn getJoinPointSpanMut(self: *Self, span: JoinPointSpan) StoreSpanBorrowMut(JoinPoint, "join_points") {
-    if (span.len == 0) return self.join_points.borrowSpanMut(0, 0);
-    if (self.body_coordinator != null and span.start < self.body_prefix.join_points) {
-        if (self.proc_rewrite) |*rewrite| {
-            const private = rewrite.join_points.mark(self.body_coordinator.?, span.start, span.len);
-            return rewrite.join_points.rows.borrowSpanMut(private, span.len);
-        }
-        self.assertBodyMetadataImmutable();
-    }
-    return self.join_points.borrowSpanMut(span.start - if (self.body_coordinator != null) self.body_prefix.join_points else 0, span.len);
+    return self.borrowStoreSpanMut(JoinPoint, "join_points", span);
 }
 
 /// Appends a proc specification and returns its id.
@@ -1827,13 +1785,19 @@ fn noteStmtShapes(self: *Self, stmt: CFStmt) void {
         },
         .assign_literal => |assign| switch (assign.value) {
             .static_data, .bytes_literal => self.shapes.static_literal = true,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .null_ptr, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .proc_ref, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal => {},
         },
         .assign_low_level => |assign| {
             if (assign.op == .box_box) self.shapes.box_box = true;
             if (CheckedArithmetic.isFamily(assign.op)) self.shapes.checked_arithmetic = true;
-            if (assign.op == .num_is_eq or assign.op == .num_is_lt or assign.op == .num_is_lte or
-                assign.op == .num_is_gt or assign.op == .num_is_gte) self.shapes.num_comparison = true;
+            if (assign.op == .simd_concat_shift_bytes) self.shapes.simd_concat_shift = true;
+            if (assign.op == .num_is_eq or assign.op == .num_is_lt or assign.op == .num_is_lte or assign.op == .num_is_gt or assign.op == .num_is_gte) {
+                const args = self.getLocalSpan(assign.args);
+                if (GuardedList.borrowLen(args) != 0) {
+                    const operand_layout = self.getLocal(GuardedList.at(args, 0)).layout_idx;
+                    if (operand_layout == .u8 or operand_layout == .u16 or operand_layout == .u32 or operand_layout == .u64) self.shapes.unsigned_compare = true;
+                }
+            }
         },
         .switch_stmt => self.shapes.switch_stmt = true,
         .assign_struct => self.shapes.struct_build = true,
@@ -1887,11 +1851,6 @@ pub fn procSpecCount(self: *const Self) usize {
     return self.proc_specs.len() + if (self.body_coordinator != null) self.body_prefix.proc_specs else 0;
 }
 
-/// Number of stored proc source-location entries.
-pub fn procLocCount(self: *const Self) usize {
-    return self.proc_locs.len();
-}
-
 /// Returns all stored proc source-location entries.
 pub fn getProcLocs(self: *const Self) []const base.SourceLoc {
     return self.proc_locs.unsafeRawItemsForView();
@@ -1905,11 +1864,6 @@ pub fn procDebugNameCount(self: *const Self) usize {
 /// Returns all stored proc debug-name entries.
 pub fn getProcDebugNames(self: *const Self) []const ProcDebugName {
     return self.proc_debug_names.unsafeRawItemsForView();
-}
-
-/// Number of stored local-name entries.
-pub fn localNameCount(self: *const Self) usize {
-    return self.local_names.len();
 }
 
 /// Returns all raw local-name table entries.
@@ -1932,11 +1886,6 @@ pub fn setProcSpecBody(self: *Self, idx: LirProcSpecId, body: ?CFStmtId) void {
     const proc = self.getProcSpecPtr(idx);
     proc.body = body;
     proc.shapes = proc.shapes.merged(self.shapes);
-}
-
-/// Updates the final join-point span for a stored proc specification.
-pub fn setProcSpecJoinPoints(self: *Self, idx: LirProcSpecId, join_points: JoinPointSpan) void {
-    self.getProcSpecPtr(idx).join_points = join_points;
 }
 
 /// Updates body and final join points after all fallible/appending work has completed.

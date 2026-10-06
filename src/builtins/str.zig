@@ -653,14 +653,6 @@ pub const RocStr = extern struct {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asSliceWithCapacity(self: *const RocStr) []const u8 {
-        return self.asU8ptr()[0..self.getCapacity()];
-    }
-
-    pub fn asSliceWithCapacityMut(self: *RocStr) []u8 {
-        return self.asU8ptrMut()[0..self.getCapacity()];
-    }
-
     pub fn asU8ptr(self: *const RocStr) [*]const u8 {
         if (self.isSmallStr()) {
             return @as([*]const u8, @ptrCast(self));
@@ -818,74 +810,8 @@ pub fn strStaticSmallWordCaselessEq(self: RocStr, offset: u64, active_len: u64, 
 }
 
 // Str.numberOfBytes
-/// TODO: Document strNumberOfBytes.
-pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
-    return string.len();
-}
-
 // Str.fromInt
-/// TODO: Document exportFromInt.
-pub fn exportFromInt(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            int: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromIntHelp, .{ T, int, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromIntHelp(
-    comptime T: type,
-    int: T,
-    roc_ops: *RocOps,
-) RocStr {
-    const size = compiler_rt_128.int_string_capacity(T);
-    var buf: [size]u8 = undefined;
-    const result = compiler_rt_128.int_to_str(T, &buf, int);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 // Str.fromFloat
-/// TODO: Document exportFromFloat.
-pub fn exportFromFloat(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            float: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromFloatHelp, .{ T, float, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromFloatHelp(
-    comptime T: type,
-    float: T,
-    roc_ops: *RocOps,
-) RocStr {
-    var buf: [32]u8 = undefined;
-    const val_bits: u64 = if (T == f32)
-        @as(u64, @as(u32, @bitCast(float)))
-    else
-        @bitCast(float);
-    const result = floatToStrBytes(&buf, val_bits, T == f32);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 /// Format a Roc float into caller-owned scratch bytes.
 pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     return if (is_f32) blk: {
@@ -2745,6 +2671,79 @@ pub fn reserve(
     }
 }
 
+/// The text `Str.inspect` renders for a string: the string wrapped in double
+/// quotes, with a backslash before each `"` and each backslash it contains.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - Returns: **independent** - a small string or a new allocation
+pub fn strEscapeAndQuote(
+    string: RocStr,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    const slice = string.asSlice();
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    const small_string_size = @sizeOf(RocStr);
+
+    if (result_len < small_string_size) {
+        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        buf[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                buf[pos] = '\\';
+                pos += 1;
+            }
+            buf[pos] = ch;
+            pos += 1;
+        }
+        buf[pos] = '"';
+        buf[small_string_size - 1] = @intCast(result_len | 0x80);
+        return @bitCast(buf);
+    }
+
+    const heap_ptr = utils.allocateWithRefcountC(result_len, 1, false, roc_ops);
+    heap_ptr[0] = '"';
+    var pos: usize = 1;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') {
+            heap_ptr[pos] = '\\';
+            pos += 1;
+        }
+        heap_ptr[pos] = ch;
+        pos += 1;
+    }
+    heap_ptr[pos] = '"';
+    return .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
+}
+
+test "strEscapeAndQuote quotes through the host operations it is given" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "", .expected = "\"\"" },
+        .{ .input = "hi", .expected = "\"hi\"" },
+        .{ .input = "a\"b\\c", .expected = "\"a\\\"b\\\\c\"" },
+        .{ .input = "a string too long to be stored inline", .expected = "\"a string too long to be stored inline\"" },
+        .{ .input = "a \"quoted\" string too long to store inline", .expected = "\"a \\\"quoted\\\" string too long to store inline\"" },
+    };
+    for (cases) |case| {
+        const input = RocStr.fromSlice(case.input, ops);
+        defer input.decref(ops);
+        const quoted = strEscapeAndQuote(input, ops);
+        defer quoted.decref(ops);
+        try std.testing.expectEqualStrings(case.expected, quoted.asSlice());
+    }
+}
+
 /// Creates a new RocStr with the specified capacity.
 pub fn withCapacityC(
     capacity: u64,
@@ -2753,47 +2752,6 @@ pub fn withCapacityC(
     var str = RocStr.allocate(@intCast(capacity), roc_ops);
     str.setLen(0);
     return str;
-}
-
-/// Clones the contents of the given RocStr into the provided pointer, starting at the given offset and extra_offset.
-pub fn strCloneTo(
-    string: RocStr,
-    ptr: [*]u8,
-    offset: usize,
-    extra_offset: usize,
-) callconv(.c) usize {
-    const WIDTH: usize = @sizeOf(RocStr);
-    if (string.isSmallStr()) {
-        const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
-
-        var i: usize = 0;
-        while (i < WIDTH) : (i += 1) {
-            ptr[offset + i] = array[i];
-        }
-
-        return extra_offset;
-    } else {
-        const slice = string.asSlice();
-
-        var relative = string;
-        relative.bytes = @as(?[*]u8, @ptrFromInt(extra_offset)); // i.e. just after the string struct
-
-        // write the string struct
-        const array = relative.asArray();
-        @memcpy(ptr[offset..(offset + WIDTH)], array[0..WIDTH]);
-
-        // write the string bytes just after the struct
-        @memcpy(ptr[extra_offset..(extra_offset + slice.len)], slice);
-
-        return extra_offset + slice.len;
-    }
-}
-
-/// Returns a pointer to the allocation backing the given RocStr
-pub fn strAllocationPtr(
-    string: RocStr,
-) callconv(.c) ?[*]u8 {
-    return string.getAllocationPtr();
 }
 
 /// Release excess capacity

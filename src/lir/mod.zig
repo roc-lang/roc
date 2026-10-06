@@ -79,7 +79,6 @@ pub const ImmortalLocals = @import("immortal_locals.zig");
 pub const TailDrive = @import("tail_drive.zig");
 /// Final immutable failure-image guards and explicit completion.
 pub const ComptimeValueGuards = @import("comptime_value_guards.zig");
-pub const ComptimeRootAccessors = @import("comptime_root_accessors.zig");
 
 /// Symbol identifiers used throughout statement-only LIR.
 pub const Symbol = LIR.Symbol;
@@ -181,7 +180,6 @@ test "lir tests" {
     std.testing.refAllDecls(PruneJoinParams);
     std.testing.refAllDecls(ScalarizeJoins);
     std.testing.refAllDecls(ComptimeValueGuards);
-    std.testing.refAllDecls(ComptimeRootAccessors);
     std.testing.refAllDecls(RangeProve);
     std.testing.refAllDecls(TagReachability);
     std.testing.refAllDecls(CheckedArithmetic);

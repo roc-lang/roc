@@ -206,20 +206,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
@@ -310,20 +298,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
@@ -416,20 +392,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,

@@ -1930,14 +1930,4 @@ test "write occurrences preserve binding identity and token regions across CIR c
     var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
     defer mutable.regions.deinit(gpa);
     try testing.expectEqualDeep(original.write_occurrences.items.items, mutable.write_occurrences.items.items);
-
-    // Relocation must move the new table along with the existing CIR columns.
-    const moved_buffer = try gpa.alignedAlloc(u8, .@"16", buffer.len);
-    defer gpa.free(moved_buffer);
-    @memcpy(moved_buffer, buffer);
-    var moved = restored;
-    const delta = @as(isize, @intCast(@intFromPtr(moved_buffer.ptr))) - @as(isize, @intCast(@intFromPtr(buffer.ptr)));
-    moved.relocate(delta);
-    try testing.expectEqual(@intFromPtr(restored.write_occurrences.items.items.ptr) +% @as(usize, @bitCast(delta)), @intFromPtr(moved.write_occurrences.items.items.ptr));
-    try testing.expectEqualDeep(original.write_occurrences.items.items, moved.write_occurrences.items.items);
 }

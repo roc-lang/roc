@@ -253,36 +253,9 @@ pub const BuiltinIdents = struct {
     }
 };
 
-/// 1-based index for user-facing error messages.
-/// Provides ordinal formatting like "1st", "2nd", "3rd", etc.
+/// Position of an item in a user-facing error message, stored 0-based.
 pub const HumanIndex = struct {
     value: u32, // 0-based internally
-
-    pub fn fromZeroBased(index: u32) HumanIndex {
-        return .{ .value = index };
-    }
-
-    /// Returns the 1-based index number
-    pub fn toHuman(self: HumanIndex) u32 {
-        return self.value + 1;
-    }
-
-    /// Returns ordinal string: "1st", "2nd", "3rd", "4th", etc.
-    pub fn ordinal(self: HumanIndex, allocator: std.mem.Allocator) Allocator.Error![]const u8 {
-        const n = self.toHuman();
-        const suffix = switch (n % 100) {
-            11, 12, 13 => "th",
-            else => switch (n % 10) {
-                // spellchecker:off
-                1 => "st",
-                2 => "nd",
-                3 => "rd",
-                else => "th",
-                // spellchecker:on
-            },
-        };
-        return std.fmt.allocPrint(allocator, "{d}{s}", .{ n, suffix });
-    }
 };
 
 /// A pattern for exhaustiveness checking.
@@ -312,13 +285,6 @@ pub const Pattern = union(enum) {
         /// Patterns for list elements
         elements: []const Pattern,
     };
-
-    /// Check if this pattern can ever match a value (is inhabited).
-    /// A pattern is uninhabited if it matches a type with no possible values,
-    /// such as an empty tag union or a constructor with uninhabited arguments.
-    pub fn isInhabited(self: Pattern, type_store: *TypeStore, builtin_idents: BuiltinIdents) error{OutOfMemory}!bool {
-        return self.isInhabitedWithKnownEmpty(type_store, builtin_idents, &.{});
-    }
 
     /// Every node of the pattern must be inhabited; nodes are checked in
     /// source order from an explicit work list.
@@ -441,11 +407,6 @@ pub const ListArity = union(enum) {
             .exact => |n| n,
             .slice => |s| s.prefix + s.suffix,
         };
-    }
-
-    /// Does this arity cover all lengths that `other` covers?
-    pub fn coversAritiesOf(self: ListArity, other: ListArity) bool {
-        return self.coversLength(other.minLen());
     }
 
     pub fn coversLength(self: ListArity, length: usize) bool {
@@ -1459,341 +1420,12 @@ fn isTypeInhabitedWithKnownEmpty(
     return if (results.items.len > 0) results.items[0] else true;
 }
 
-fn isUnresolvedUnboundFlex(flex: types.Flex) bool {
-    return flex.constraints.len() == 0;
-}
-
-fn isUnresolvedUnboundRigid(rigid: types.Rigid) bool {
-    return rigid.constraints.len() == 0 and rigid.name.attributes.ignored;
-}
-
 fn appendUniqueVar(gpa: std.mem.Allocator, out: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
     const resolved_var = var_;
     for (out.items) |existing| {
         if (@intFromEnum(existing) == @intFromEnum(resolved_var)) return;
     }
     try out.append(gpa, resolved_var);
-}
-
-/// Check constructor payload inhabitedness.
-///
-/// This differs from general type inhabitedness only for unresolved unbound
-/// variables: as a constructor payload, one means no value of that payload type
-/// has been constructed, so the constructor is not constructible unless a later
-/// constraint has already resolved it to a concrete type.
-pub fn isCtorPayloadTypeInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-) error{OutOfMemory}!bool {
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-    return isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, type_var, &seen);
-}
-
-fn isCtorPayloadTypeInhabitedHelp(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    const resolved = type_store.resolveVar(type_var);
-    const content = resolved.desc.content;
-
-    switch (content) {
-        .flex => |flex| return !isUnresolvedUnboundFlex(flex),
-        .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-        .field_presence, .err => return true,
-        .alias, .structure => {},
-    }
-
-    const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
-    if (gop.found_existing) return true;
-
-    return switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
-        .alias => |alias| blk: {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
-                break :blk true;
-            }
-            break :blk try isCtorPayloadTypeInhabitedHelp(
-                type_store,
-                builtin_idents,
-                type_store.getAliasBackingVar(alias),
-                seen,
-            );
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => false,
-            .empty_record => true,
-            .tag_union => |tag_union| try isCtorPayloadTagUnionInhabited(
-                type_store,
-                builtin_idents,
-                tag_union,
-                seen,
-            ),
-            .nominal_type => |nominal| blk: {
-                if (builtin_idents.isBuiltinNumericType(nominal)) {
-                    break :blk true;
-                }
-                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse break :blk true;
-                break :blk try isCtorPayloadTypeInhabitedHelp(
-                    type_store,
-                    builtin_idents,
-                    backing_var,
-                    seen,
-                );
-            },
-            .record => |record| blk: {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                for (0..tuple.elems.count) |offset| {
-                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
-                    if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, elem_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => true,
-        },
-    };
-}
-
-fn isCtorPayloadTagUnionInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    initial_tag_union: types.TagUnion,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(type_store.gpa);
-
-    var current_tags = initial_tag_union.tags;
-    var current_ext = initial_tag_union.ext;
-
-    while (true) {
-        for (0..current_tags.count) |tag_offset| {
-            const args_range = type_store.getTagAt(current_tags, @intCast(tag_offset)).args;
-            var all_args_inhabited = true;
-            for (0..args_range.count) |arg_offset| {
-                const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
-                if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, arg_var, seen)) {
-                    all_args_inhabited = false;
-                    break;
-                }
-            }
-            if (all_args_inhabited) return true;
-        }
-
-        const ext_resolved = type_store.resolveVar(current_ext);
-        const gop = try seen_exts.getOrPut(type_store.gpa, ext_resolved.var_);
-        if (gop.found_existing) return false;
-
-        switch (ext_resolved.desc.content) {
-            .flex => |flex| return !isUnresolvedUnboundFlex(flex),
-            .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |ext_tag_union| {
-                    current_tags = ext_tag_union.tags;
-                    current_ext = ext_tag_union.ext;
-                },
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .alias => |alias| {
-                current_ext = type_store.getAliasBackingVar(alias);
-            },
-            .field_presence, .err => return false,
-        }
-    }
-}
-
-/// Collects unresolved unbound type variables that make a constructor payload uninhabited.
-pub fn collectCtorPayloadBlockers(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    out: *std.ArrayList(Var),
-) error{OutOfMemory}!void {
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-    try collectCtorPayloadBlockersHelp(type_store, builtin_idents, type_var, out, &seen);
-}
-
-fn collectCtorPayloadBlockersHelp(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    out: *std.ArrayList(Var),
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!void {
-    const resolved = type_store.resolveVar(type_var);
-    const content = resolved.desc.content;
-
-    switch (content) {
-        .flex => |flex| {
-            if (isUnresolvedUnboundFlex(flex)) {
-                try appendUniqueVar(type_store.gpa, out, resolved.var_);
-            }
-            return;
-        },
-        .rigid => |rigid| {
-            if (isUnresolvedUnboundRigid(rigid)) {
-                try appendUniqueVar(type_store.gpa, out, resolved.var_);
-            }
-            return;
-        },
-        .field_presence, .err => return,
-        .alias, .structure => {},
-    }
-
-    const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
-    if (gop.found_existing) return;
-
-    switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
-        .alias => |alias| {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) return;
-            try collectCtorPayloadBlockersHelp(
-                type_store,
-                builtin_idents,
-                type_store.getAliasBackingVar(alias),
-                out,
-                seen,
-            );
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union, .empty_record => {},
-            .tag_union => |tag_union| try collectCtorPayloadTagUnionBlockers(
-                type_store,
-                builtin_idents,
-                tag_union,
-                out,
-                seen,
-            ),
-            .nominal_type => |nominal| {
-                if (builtin_idents.isBuiltinNumericType(nominal)) return;
-                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse return;
-                try collectCtorPayloadBlockersHelp(
-                    type_store,
-                    builtin_idents,
-                    backing_var,
-                    out,
-                    seen,
-                );
-            },
-            .record => |record| {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
-            .tuple => |tuple| {
-                for (0..tuple.elems.count) |offset| {
-                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, elem_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, elem_var, out, seen);
-                    }
-                }
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => {},
-        },
-    }
-}
-
-fn collectCtorPayloadTagUnionBlockers(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    initial_tag_union: types.TagUnion,
-    out: *std.ArrayList(Var),
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!void {
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(type_store.gpa);
-
-    var current_tags = initial_tag_union.tags;
-    var current_ext = initial_tag_union.ext;
-
-    while (true) {
-        for (0..current_tags.count) |tag_offset| {
-            const args_range = type_store.getTagAt(current_tags, @intCast(tag_offset)).args;
-            var all_args_inhabited = true;
-            for (0..args_range.count) |arg_offset| {
-                const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
-                if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, arg_var)) {
-                    all_args_inhabited = false;
-                    break;
-                }
-            }
-            if (!all_args_inhabited) {
-                for (0..args_range.count) |arg_offset| {
-                    const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, arg_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, arg_var, out, seen);
-                    }
-                }
-            }
-        }
-
-        const ext_resolved = type_store.resolveVar(current_ext);
-        const gop = try seen_exts.getOrPut(type_store.gpa, ext_resolved.var_);
-        if (gop.found_existing) return;
-
-        switch (ext_resolved.desc.content) {
-            .flex => |flex| {
-                if (isUnresolvedUnboundFlex(flex)) {
-                    try appendUniqueVar(type_store.gpa, out, ext_resolved.var_);
-                }
-                return;
-            },
-            .rigid => |rigid| {
-                if (isUnresolvedUnboundRigid(rigid)) {
-                    try appendUniqueVar(type_store.gpa, out, ext_resolved.var_);
-                }
-                return;
-            },
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |ext_tag_union| {
-                    current_tags = ext_tag_union.tags;
-                    current_ext = ext_tag_union.ext;
-                },
-                .empty_tag_union => return,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return,
-            },
-            .alias => |alias| {
-                current_ext = type_store.getAliasBackingVar(alias);
-            },
-            .field_presence, .err => return,
-        }
-    }
 }
 
 fn isKnownAbsentCtorPayloadTypeInhabited(
@@ -4272,42 +3904,18 @@ pub const CheckResult = struct {
     }
 };
 
-/// Perform full exhaustiveness and redundancy checking on a match expression.
-///
-/// This is the main entry point for the type checker.
-/// Uses 1-phase on-demand resolution: patterns are converted to UnresolvedPattern
-/// and resolved on-demand during checking when type information is needed.
-///
-/// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
-/// (e.g., polymorphic types, type mismatches). The caller should handle this by
-/// skipping exhaustiveness error reporting for that match expression.
-pub fn checkMatch(
-    allocator: std.mem.Allocator,
+/// Run redundancy and exhaustiveness checking over converted `rows`. Every
+/// allocation lives in `arena`, which the returned result takes ownership of.
+fn checkRows(
+    arena: *base.SingleThreadArena,
     type_store: *TypeStore,
-    module_env: *const Can.ModuleEnv,
-    node_store: *const NodeStore,
     builtin_idents: BuiltinIdents,
-    branches_span: CIR.Expr.Match.Branch.Span,
+    rows: []const UnresolvedRow,
     scrutinee_type: Var,
-    overall_region: Region,
     known_empty_payload_vars: []const Var,
     scrutinee_constructors_known: bool,
 ) PatternResolveError!CheckResult {
-    // Every allocation, results included, lives in one arena that the result
-    // owns.
-    var arena = base.SingleThreadArena.init(allocator);
-    errdefer arena.deinit();
     const arena_alloc = arena.allocator();
-
-    // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
-    var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
-    const sketched = try convertMatchBranches(
-        arena_alloc,
-        node_store,
-        &numeral_keys,
-        branches_span,
-        overall_region,
-    );
 
     // Create initial column types for on-demand resolution
     const initial_types = try arena_alloc.alloc(Var, 1);
@@ -4329,7 +3937,7 @@ pub fn checkMatch(
         arena_alloc,
         type_store,
         builtin_idents,
-        sketched.rows,
+        rows,
         column_types,
         &payload_vars_to_close,
         scrutinee_constructors_known,
@@ -4370,7 +3978,7 @@ pub fn checkMatch(
     }
 
     return .{
-        .arena = arena,
+        .arena = arena.*,
         .is_exhaustive = missing.len == 0,
         .missing_patterns = missing,
         .redundant_indices = redundancy.redundant_indices,
@@ -4380,6 +3988,46 @@ pub fn checkMatch(
         .ext_vars_to_close = filtered_close.items,
         .payload_vars_to_close = payload_vars_to_close.items,
     };
+}
+
+/// Perform full exhaustiveness and redundancy checking on a match expression.
+///
+/// This is the main entry point for the type checker.
+/// Uses 1-phase on-demand resolution: patterns are converted to UnresolvedPattern
+/// and resolved on-demand during checking when type information is needed.
+///
+/// Returns `error.TypeError` when a pattern cannot be resolved due to type issues
+/// (e.g., polymorphic types, type mismatches). The caller should handle this by
+/// skipping exhaustiveness error reporting for that match expression.
+pub fn checkMatch(
+    allocator: std.mem.Allocator,
+    type_store: *TypeStore,
+    module_env: *const Can.ModuleEnv,
+    node_store: *const NodeStore,
+    builtin_idents: BuiltinIdents,
+    branches_span: CIR.Expr.Match.Branch.Span,
+    scrutinee_type: Var,
+    overall_region: Region,
+    known_empty_payload_vars: []const Var,
+    scrutinee_constructors_known: bool,
+) PatternResolveError!CheckResult {
+    // Every allocation, results included, lives in one arena that the result
+    // owns.
+    var arena = base.SingleThreadArena.init(allocator);
+    errdefer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    // Phase 1: Convert CIR patterns to sketched (unresolved) patterns
+    var numeral_keys = NumeralKeyInterner{ .module_env = module_env };
+    const sketched = try convertMatchBranches(
+        arena_alloc,
+        node_store,
+        &numeral_keys,
+        branches_span,
+        overall_region,
+    );
+
+    return checkRows(&arena, type_store, builtin_idents, sketched.rows, scrutinee_type, known_empty_payload_vars, scrutinee_constructors_known);
 }
 
 /// Perform exhaustiveness checking for a single destructuring pattern.
@@ -4414,69 +4062,7 @@ pub fn checkDestructure(
         .branch_index = 0,
     };
 
-    const initial_types = try arena_alloc.alloc(Var, 1);
-    initial_types[0] = scrutinee_type;
-    const column_types = ColumnTypes{
-        .types = initial_types,
-        .type_store = type_store,
-        .builtin_idents = builtin_idents,
-    };
-
-    var payload_vars_to_close: std.ArrayList(Var) = .empty;
-    for (known_empty_payload_vars) |payload_var| {
-        try appendUniqueVar(arena_alloc, &payload_vars_to_close, type_store.resolveVar(payload_var).var_);
-    }
-
-    const redundancy = try checkRedundancySketched(
-        arena_alloc,
-        type_store,
-        builtin_idents,
-        rows,
-        column_types,
-        &payload_vars_to_close,
-        scrutinee_constructors_known,
-    );
-
-    const sketched_matrix = SketchedMatrix.init(arena_alloc, redundancy.non_redundant_rows);
-    var ext_vars_to_close: std.ArrayList(Var) = .empty;
-    var ext_vars_to_keep_open: std.ArrayList(Var) = .empty;
-    const missing = try checkExhaustiveSketched(
-        arena_alloc,
-        type_store,
-        builtin_idents,
-        sketched_matrix,
-        column_types,
-        &ext_vars_to_close,
-        &ext_vars_to_keep_open,
-        &payload_vars_to_close,
-        scrutinee_constructors_known,
-    );
-
-    var filtered_close: std.ArrayList(Var) = .empty;
-    for (ext_vars_to_close.items) |close_var| {
-        var dominated = false;
-        for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
-                dominated = true;
-                break;
-            }
-        }
-        if (!dominated) {
-            try filtered_close.append(arena_alloc, close_var);
-        }
-    }
-
-    return .{
-        .arena = arena,
-        .is_exhaustive = missing.len == 0,
-        .missing_patterns = missing,
-        .redundant_indices = redundancy.redundant_indices,
-        .redundant_regions = redundancy.redundant_regions,
-        .unmatchable_indices = redundancy.unmatchable_indices,
-        .unmatchable_regions = redundancy.unmatchable_regions,
-        .ext_vars_to_close = filtered_close.items,
-        .payload_vars_to_close = payload_vars_to_close.items,
-    };
+    return checkRows(&arena, type_store, builtin_idents, rows, scrutinee_type, known_empty_payload_vars, scrutinee_constructors_known);
 }
 
 /// Format a pattern for display in error messages.

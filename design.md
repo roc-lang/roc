@@ -3469,8 +3469,10 @@ bytes.
 This section governs the raw-byte boundaries: the paths that persist a value by
 copying its in-memory representation rather than encoding it field by field, which
 is how the checked module cache, the baked builtin `CheckedModule` blob, and the
-`SafeList` and `SafeMultiList` tables they hold are written. Other serialized forms
-in the compiler encode explicitly and are not bound by the rules here.
+`SafeList` and `SafeMultiList` tables they hold are written, and how a persisted
+LirImage and the Boxy sidecar copy their tables into an executable. Other
+serialized forms in the compiler encode explicitly and are not bound by the rules
+here.
 
 Every byte such a boundary writes is a function of the logical contents alone. A
 byte no declaration accounts for holds whatever that memory held before—allocator-
@@ -16791,6 +16793,19 @@ The coordinator reserves pointer layouts and helper summaries before dispatch;
 workers cannot intern layouts or derive helper summaries from other workers'
 partially rewritten bodies.
 
+A phase visits only the procedures whose recorded shapes admit it.
+`LirProcSpec.shapes` is a superset of what a body contains: the store records
+each statement-level shape as the statement is appended, lowering and TRMC
+record the loops they build, a rewrite's commit merges the shapes of
+everything it appended, and single-use inlining gives the caller the shapes of
+the body it receives. A phase's admission names every shape one of its
+rewrites can start from, not only the shape the phase exists for. Range
+proving decides a switch or a checked-arithmetic operation, and equally a
+comparison of unsigned integers with no branch beside it and the count of a
+SIMD concat-shift, so each of those four shapes admits a body to it. Debug
+builds also run every phase on the procedures its shapes excluded and fail if
+one of them would be rewritten.
+
 The same patch boundary applies with one worker. Every phase finishes its
 callbacks before committing in procedure order, so neither input visibility
 nor output identity depends on worker count or completion order. Each commit
@@ -20676,6 +20691,26 @@ columns until `deinit`. The mapped bytes and the scratch allocator must both
 outlive the view. Format version 15 introduced the portable columns; version 16
 added `LirProcSpec.ret_desc`.
 
+The producer of a copied LirImage states which of two byte contracts the image
+has. A *persisted* image is one whose bytes are written into an artifact that
+outlives the compiler process, as `roc build --opt=interpreter` embeds one in the
+executable it links. It is a raw-byte boundary under "Fully Defined Persisted
+Bytes": every scrubbable table item is canonicalized in the image's own copy,
+never in the store it was copied from, and the producer supplies a zero-filled
+image buffer so the bytes between allocations are defined too. A persisted image
+built in shared memory is detached from that mapping: the shared-memory header
+at its start records the image's own length as both its used and total size,
+never the size of the address-space reservation the producing process obtained.
+
+A *mapped* image lives in shared or process memory for one run, is read only
+through typed views, and is never hashed, compared, or written to a file, so its
+tables are copied verbatim with no canonicalization pass. Both contracts
+classify every table item type at compile time, so a type with undefined bytes
+that nothing identifies cannot enter either form, and moving a producer from
+mapped to persisted never meets an item that cannot be canonicalized. The rows
+the image authors itself, such as its header and frozen-graph export and
+relocation rows, are fixed layouts that declare every byte.
+
 An interpreter-mode host entry pins each root's `LirInterpreter` on the heap.
 Every interpreter-created erased-callable allocation owns one reference to that
 interpreter, independent of the callable allocation's own Roc reference count,
@@ -20723,6 +20758,15 @@ One-shot build pipelines return the linked output path and explicit checking
 diagnostic counts to command orchestration; code generation and linking do not
 decide process status.
 
+Every intermediate file a build writes, such as generated bitcode and objects,
+extracted runtime objects, and linker scratch files, lies in a scratch
+directory that only that build writes to. The build removes the directory when
+it finishes unless `--keep-temp` is given. A directory that builds share holds
+only content-addressed cache entries. A build publishes such an entry by
+writing it in full inside its own scratch directory and renaming it into place,
+so no build ever reads a file that another build is still writing or a file
+that belongs to a different program.
+
 A platform's `targets:` header section declares, per target, both the link
 inputs and the output kind the build produces. The application author never
 chooses the output kind; `roc build` produces what the platform declares for
@@ -20742,6 +20786,50 @@ introduce libc requirements into the freestanding default-platform program.
 Because that startup also supplies no TLS, interpreter execution ownership on
 Linux without libc uses the kernel thread id directly, preserving concurrent
 host calls and same-thread reentrancy without accessing TLS.
+
+No code compiled into a platform archive or shim reads or writes a
+thread-local. The thread-local scope that names the current `RocOps` belongs to
+the compiler's in-process host alone: entering it from a platform build is a
+compile error, and every builtin the interpreter calls receives the
+interpreter's `RocOps` as an explicit argument. An interpreter-mode executable
+therefore runs every program the interpreter run path runs, including in a
+process that has no thread-local storage.
+
+The Linux default-platform runtime is the only default-platform runtime that
+installs fatal-signal handlers. It decides whether a `SIGSEGV` is a stack
+overflow with `classifyFault` in `src/base/memory_fault.zig`, the same
+dependency-free function the compiler's own crash handler calls, so the two
+never disagree about what a stack overflow is. The runtime passes the fault
+address and the interrupted stack pointer from the signal context and no stack
+bounds, because a process without libc has no exact stack range to report: a
+fault within `stack_overflow_proximity` of the stack pointer is reported as
+`Roc application overflowed its stack memory`, and every other `SIGSEGV` is
+reported as a segmentation fault together with its fault address. A fault that
+is not a stack overflow is never reported as one.
+
+A freestanding default platform (Linux, FreeBSD, NetBSD) links no C runtime,
+so it also owns a compiler-rt carrier: one target-specific object defining
+compiler-rt and the C math and memory routines that code generation calls for
+operations the target has no instruction for, such as `fmod` for a float
+remainder or `floor` on a baseline x86-64 CPU. The shared-memory run link and
+every standalone default-platform link consume the carrier as an explicit
+input after the Roc objects: an LLVM app object comes from target-independent
+builtin bitcode and bundles no compiler-rt of its own, and the dev backend's
+builtins object bundles none on the BSDs. Default platforms that link a C
+runtime (macOS, Windows) resolve those routines from it and have no carrier.
+Each routine occupies its own section and the carrier has no debug info, so a
+link keeps only the routines it references.
+
+An object the compiler loads into its own process has no link at all: an
+optimized `roc test`, REPL evaluation or glue run compiles through LLVM and
+hands the object to the relocatable loader. There the compiler is what
+completes the program, so the loader binds the same routines itself, the
+compiler-rt arithmetic helpers to the decomposed implementations the builtins
+already carry and the C routines to the definitions in the compiler binary. The
+C routines are named in one place, `shim_symbols.c_memory_set` and
+`shim_symbols.c_math_set`. The loader's resolver and the machine-code shim's
+permitted imports are both derived from those sets, so a routine code
+generation starts calling is declared once for every provider.
 
 Windows C runtime ABI is part of target identity. `x64win` and `arm64win`
 (plus their `v1` twins) retain the existing MSVC meaning. `x64mingw` and

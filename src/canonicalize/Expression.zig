@@ -841,49 +841,34 @@ pub const Expr = union(enum) {
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, expr_idx: Self.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .e_num => |int_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-num");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-num", expr_idx);
 
                 try int_expr.value.pushStringPair(tree, "value");
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_frac_f32 => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-frac-f32");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-frac-f32", expr_idx);
 
                 const value_begin = try tree.reserveStringBuffer(400);
                 errdefer tree.discardReservedStringBuffer(value_begin);
                 const value_str = builtins.compiler_rt_128.f32_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_frac_f64 => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-frac-f64");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-frac-f64", expr_idx);
 
                 const value_begin = try tree.reserveStringBuffer(400);
                 errdefer tree.discardReservedStringBuffer(value_begin);
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], e.value);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_dec => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-frac-dec");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-frac-dec", expr_idx);
 
                 const dec_value_f64: f64 = builtins.compiler_rt_128.i128_to_f64(e.value.num) / std.math.pow(f64, 10, @as(f64, @floatFromInt(RocDec.decimal_places)));
                 const value_begin = try tree.reserveStringBuffer(400);
@@ -891,14 +876,10 @@ pub const Expr = union(enum) {
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], dec_value_f64);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_dec_small => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dec-small");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-dec-small", expr_idx);
 
                 try tree.pushStringPairFmt("numerator", "{}", .{e.value.numerator});
 
@@ -913,89 +894,61 @@ pub const Expr = union(enum) {
                 const value_str = builtins.compiler_rt_128.f64_to_str(tree.reservedStringBuffer(value_begin)[0..400], value_f64);
                 try tree.pushReservedStringPair("value", value_begin, value_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_num_from_numeral => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-num-from-numeral");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-num-from-numeral", expr_idx);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_typed_int => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-int");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-typed-int", expr_idx);
 
                 try e.value.pushStringPair(tree, "value");
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_typed_num_from_numeral => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-num-from-numeral");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-typed-num-from-numeral", expr_idx);
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_typed_frac => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-typed-frac");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-typed-frac", expr_idx);
 
                 try e.value.pushStringPair(tree, "value");
 
                 const type_name = ir.getIdent(e.type_name);
                 try tree.pushStringPair("type", type_name);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_str_segment => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-literal");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-literal", expr_idx);
 
                 const value = ir.getString(e.literal);
                 try tree.pushStringPair("string", value);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_bytes_literal => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-bytes-literal");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-bytes-literal", expr_idx);
 
                 const value = ir.getString(e.literal);
                 const len_str = try std.fmt.allocPrint(ir.gpa, "{d}", .{value.len});
                 defer ir.gpa.free(len_str);
                 try tree.pushStringPair("len", len_str);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_str => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-string");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-string", expr_idx);
                 const attrs = tree.beginNode();
 
                 for (ir.store.sliceExpr(e.span)) |segment| {
@@ -1005,14 +958,10 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_list => |l| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-list");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-list", expr_idx);
                 const attrs = tree.beginNode();
 
-                const elems_begin = tree.beginNode();
-                try tree.pushStaticAtom("elems");
+                const elems_begin = try tree.beginNamedNode("elems");
                 const elems_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(l.elems)) |elem_idx| {
                     try ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree, elem_idx);
@@ -1022,22 +971,14 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_empty_list => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-empty_list");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "e-empty_list", expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_tuple => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tuple");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-tuple", expr_idx);
                 const attrs = tree.beginNode();
 
-                const elems_begin = tree.beginNode();
-                try tree.pushStaticAtom("elems");
+                const elems_begin = try tree.beginNamedNode("elems");
                 const elems_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(t.elems)) |elem_idx| {
                     try ir.store.getExpr(elem_idx).pushToSExprTree(ir, tree, elem_idx);
@@ -1047,10 +988,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_lookup_local => |local| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-local");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lookup-local", expr_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getPattern(local.pattern_idx).pushToSExprTree(ir, tree, local.pattern_idx);
@@ -1058,8 +996,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_lookup_external => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-external");
+                const begin = try tree.beginNamedNode("e-lookup-external");
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
 
@@ -1069,10 +1006,8 @@ pub const Expr = union(enum) {
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("builtin");
-                    const field_attrs = tree.beginNode();
-                    try tree.endNode(field_begin, field_attrs);
+                    const field_begin = try tree.beginNamedNode("builtin");
+                    try tree.endNodeWithoutChildren(field_begin);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
                 }
@@ -1080,10 +1015,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_deferred_import_ref => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-deferred-import-ref");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-deferred-import-ref", expr_idx);
                 const entry = ir.deferred_import_refs.items.items[@intFromEnum(e.ref)];
                 try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
                 try tree.pushStringPair("path", ir.getIdent(entry.path()));
@@ -1094,54 +1026,37 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_lookup_associated_local => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-associated-local");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lookup-associated-local", expr_idx);
                 try tree.pushStringPair("type", ir.getIdent(e.type_ident));
                 try tree.pushStringPair("item", ir.getIdent(e.item_ident));
                 try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_lookup_associated => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-associated");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lookup-associated", expr_idx);
                 try tree.pushStringPair("type", ir.getIdent(e.type_ident));
                 try tree.pushStringPair("item", ir.getIdent(e.item_ident));
                 try tree.pushStringPairFmt("import", "{d}", .{@intFromEnum(e.module_idx)});
                 try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_lookup_associated_resolved => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-associated-resolved");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lookup-associated-resolved", expr_idx);
                 try tree.pushStringPair("source", ir.getIdent(e.source_ident));
                 const module_name = ir.moduleIdentityDisplayText(e.module_identity);
                 // Use the same builtin display marker as external lookups.
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("builtin");
-                    const field_attrs = tree.beginNode();
-                    try tree.endNode(field_begin, field_attrs);
+                    const field_begin = try tree.beginNamedNode("builtin");
+                    try tree.endNodeWithoutChildren(field_begin);
                 } else {
                     try tree.pushStringPair("target-module", module_name);
                 }
                 try tree.pushStringPairFmt("target-node", "{d}", .{e.target_node_idx});
                 try tree.pushStringPairFmt("target-def", "{d}", .{@intFromEnum(e.target_def_idx)});
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_lookup_required => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lookup-required");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lookup-required", expr_idx);
                 const attrs = tree.beginNode();
 
                 const requires_items = ir.requires_types.items.items;
@@ -1155,8 +1070,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_match => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-match");
+                const begin = try tree.beginNamedNode("e-match");
                 const region = ir.store.getExprRegion(expr_idx);
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
                 const attrs = tree.beginNode();
@@ -1166,21 +1080,16 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_if => |if_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-if");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-if", expr_idx);
                 const attrs = tree.beginNode();
 
-                const branches_begin = tree.beginNode();
-                try tree.pushStaticAtom("if-branches");
+                const branches_begin = try tree.beginNamedNode("if-branches");
                 const branches_attrs = tree.beginNode();
                 const branch_indices = ir.store.sliceIfBranches(if_expr.branches);
                 for (branch_indices) |branch_idx| {
                     const branch = ir.store.getIfBranch(branch_idx);
 
-                    const branch_begin = tree.beginNode();
-                    try tree.pushStaticAtom("if-branch");
+                    const branch_begin = try tree.beginNamedNode("if-branch");
                     const branch_attrs = tree.beginNode();
 
                     try ir.store.getExpr(branch.cond).pushToSExprTree(ir, tree, branch.cond);
@@ -1190,8 +1099,7 @@ pub const Expr = union(enum) {
                 }
                 try tree.endNode(branches_begin, branches_attrs);
 
-                const else_begin = tree.beginNode();
-                try tree.pushStaticAtom("if-else");
+                const else_begin = try tree.beginNamedNode("if-else");
                 const else_attrs = tree.beginNode();
                 try ir.store.getExpr(if_expr.final_else).pushToSExprTree(ir, tree, if_expr.final_else);
                 try tree.endNode(else_begin, else_attrs);
@@ -1199,10 +1107,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_call => |c| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-call");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-call", expr_idx);
                 if (c.constraint_fn_var) |constraint_fn_var| {
                     try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
                 }
@@ -1221,22 +1126,17 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_record => |record_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-record");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-record", expr_idx);
                 const attrs = tree.beginNode();
 
                 if (record_expr.ext) |ext_idx| {
-                    const ext_begin = tree.beginNode();
-                    try tree.pushStaticAtom("ext");
+                    const ext_begin = try tree.beginNamedNode("ext");
                     const ext_attrs = tree.beginNode();
                     try ir.store.getExpr(ext_idx).pushToSExprTree(ir, tree, ext_idx);
                     try tree.endNode(ext_begin, ext_attrs);
                 }
 
-                const fields_begin = tree.beginNode();
-                try tree.pushStaticAtom("fields");
+                const fields_begin = try tree.beginNamedNode("fields");
                 const fields_attrs = tree.beginNode();
                 for (ir.store.sliceRecordFields(record_expr.fields)) |field_idx| {
                     try ir.store.getRecordField(field_idx).pushToSExprTree(ir, tree);
@@ -1244,8 +1144,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(fields_begin, fields_attrs);
 
                 if (record_expr.unsets.span.len > 0) {
-                    const unsets_begin = tree.beginNode();
-                    try tree.pushStaticAtom("unsets");
+                    const unsets_begin = try tree.beginNamedNode("unsets");
                     const unsets_attrs = tree.beginNode();
                     for (ir.store.sliceUnsetFields(record_expr.unsets)) |unset_idx| {
                         try ir.store.getUnsetField(unset_idx).pushToSExprTree(ir, tree);
@@ -1256,19 +1155,12 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_empty_record => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-empty_record");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "e-empty_record", expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
 
             .e_block => |block_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-block");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-block", expr_idx);
                 const attrs = tree.beginNode();
 
                 for (ir.store.sliceStatements(block_expr.stmts)) |stmt_idx| {
@@ -1280,16 +1172,12 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_tag => |tag_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tag");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-tag", expr_idx);
                 try tree.pushStringPair("name", ir.getIdent(tag_expr.name));
                 const attrs = tree.beginNode();
 
                 if (tag_expr.args.span.len > 0) {
-                    const args_begin = tree.beginNode();
-                    try tree.pushStaticAtom("args");
+                    const args_begin = try tree.beginNamedNode("args");
                     const args_attrs = tree.beginNode();
                     for (ir.store.sliceExpr(tag_expr.args)) |arg_idx| {
                         try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1300,10 +1188,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_nominal => |nominal_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-nominal");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-nominal", expr_idx);
 
                 const stmt = ir.store.getStatement(nominal_expr.nominal_type_decl);
                 if (stmt == .s_nominal_decl) {
@@ -1321,10 +1206,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_nominal_external => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-nominal-external");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-nominal-external", expr_idx);
                 const attrs = tree.beginNode();
 
                 const module_idx_int = @intFromEnum(e.module_idx);
@@ -1333,10 +1215,8 @@ pub const Expr = union(enum) {
                 const module_name = ir.common.strings.get(string_lit_idx);
                 // Special case: Builtin module is an implementation detail, print as (builtin)
                 if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("builtin");
-                    const field_attrs = tree.beginNode();
-                    try tree.endNode(field_begin, field_attrs);
+                    const field_begin = try tree.beginNamedNode("builtin");
+                    try tree.endNodeWithoutChildren(field_begin);
                 } else {
                     try tree.pushStringPair("external-module", module_name);
                 }
@@ -1346,38 +1226,28 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_zero_argument_tag => |zero_arg_tag_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-zero-argument-tag");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-zero-argument-tag", expr_idx);
                 try tree.pushStringPair("closure", ir.getIdentText(zero_arg_tag_expr.closure_name));
                 try tree.pushStringPair("name", ir.getIdentText(zero_arg_tag_expr.name));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_closure => |closure_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-closure");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-closure", expr_idx);
                 const attrs = tree.beginNode();
 
                 // Display capture information if present
                 if (closure_expr.captures.span.len > 0) {
-                    const captures_begin = tree.beginNode();
-                    try tree.pushStaticAtom("captures");
+                    const captures_begin = try tree.beginNamedNode("captures");
                     const captures_attrs = tree.beginNode();
                     for (ir.store.sliceCaptures(closure_expr.captures)) |captured_var_idx| {
                         const captured_var = ir.store.getCapture(captured_var_idx);
-                        const capture_begin = tree.beginNode();
-                        try tree.pushStaticAtom("capture");
+                        const capture_begin = try tree.beginNamedNode("capture");
 
                         const capture_region = ir.store.getPatternRegion(captured_var.pattern_idx);
                         try ir.appendRegionInfoToSExprTreeFromRegion(tree, capture_region);
 
                         try tree.pushStringPair("ident", ir.getIdentText(captured_var.name));
-                        const capture_attrs = tree.beginNode();
-                        try tree.endNode(capture_begin, capture_attrs);
+                        try tree.endNodeWithoutChildren(capture_begin);
                     }
                     try tree.endNode(captures_begin, captures_attrs);
                 }
@@ -1387,14 +1257,10 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_lambda => |lambda_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-lambda");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-lambda", expr_idx);
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.slicePatterns(lambda_expr.args)) |arg_idx| {
                     try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1406,10 +1272,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_binop => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-binop");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-binop", expr_idx);
                 try tree.pushStringPair("op", @tagName(e.op));
                 const attrs = tree.beginNode();
 
@@ -1419,10 +1282,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_unary_minus => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-unary-minus");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-unary-minus", expr_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
@@ -1430,54 +1290,42 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_field_access => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-field-access");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-field-access", expr_idx);
                 const attrs = tree.beginNode();
 
-                const receiver_begin = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
+                const receiver_begin = try tree.beginNamedNode("receiver");
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
 
-                const segments_begin = tree.beginNode();
-                try tree.pushStaticAtom("segments");
+                const segments_begin = try tree.beginNamedNode("segments");
                 const segments_attrs = tree.beginNode();
                 var segment_position: u32 = 0;
                 while (segment_position < e.segments.len) : (segment_position += 1) {
                     const segment_idx = ir.store.fieldAccessSegmentAt(e.segments, segment_position);
                     const segment = ir.store.getFieldAccessSegment(segment_idx);
-                    const segment_begin = tree.beginNode();
-                    try tree.pushStaticAtom("segment");
+                    const segment_begin = try tree.beginNamedNode("segment");
                     const segment_region = ir.store.getFieldAccessSegmentRegion(segment_idx);
                     try ir.appendRegionInfoToSExprTreeFromRegion(tree, segment_region);
                     try tree.pushStringPair("name", ir.getIdentText(segment.name));
                     try tree.pushStringPair("mode", @tagName(segment.mode));
-                    const segment_attrs = tree.beginNode();
-                    try tree.endNode(segment_begin, segment_attrs);
+                    try tree.endNodeWithoutChildren(segment_begin);
                 }
                 try tree.endNode(segments_begin, segments_attrs);
 
                 try tree.endNode(begin, attrs);
             },
             .e_method_call => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-method-call");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-method-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 const attrs = tree.beginNode();
 
-                const receiver_begin = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
+                const receiver_begin = try tree.beginNamedNode("receiver");
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(e.args)) |arg_idx| {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1487,22 +1335,17 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_dispatch_call => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dispatch-call");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-dispatch-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
-                const receiver_begin = tree.beginNode();
-                try tree.pushStaticAtom("receiver");
+                const receiver_begin = try tree.beginNamedNode("receiver");
                 const receiver_attrs = tree.beginNode();
                 try ir.store.getExpr(e.receiver).pushToSExprTree(ir, tree, e.receiver);
                 try tree.endNode(receiver_begin, receiver_attrs);
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(e.args)) |arg_idx| {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1512,10 +1355,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_interpolation => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-interpolation");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-interpolation", expr_idx);
                 if (e.constraint_fn_var) |constraint_fn_var| {
                     try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
                 }
@@ -1525,16 +1365,14 @@ pub const Expr = union(enum) {
                 const attrs = tree.beginNode();
 
                 {
-                    const first_begin = tree.beginNode();
-                    try tree.pushStaticAtom("first");
+                    const first_begin = try tree.beginNamedNode("first");
                     const first_attrs = tree.beginNode();
                     try ir.store.getExpr(e.first).pushToSExprTree(ir, tree, e.first);
                     try tree.endNode(first_begin, first_attrs);
                 }
 
                 {
-                    const parts_begin = tree.beginNode();
-                    try tree.pushStaticAtom("parts");
+                    const parts_begin = try tree.beginNamedNode("parts");
                     const parts_attrs = tree.beginNode();
                     for (ir.store.sliceExpr(e.parts)) |part_idx| {
                         try ir.store.getExpr(part_idx).pushToSExprTree(ir, tree, part_idx);
@@ -1545,21 +1383,16 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_structural_eq => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-structural-eq");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-structural-eq", expr_idx);
                 try tree.pushStringPair("negated", if (e.negated) "true" else "false");
                 const attrs = tree.beginNode();
 
-                const lhs_begin = tree.beginNode();
-                try tree.pushStaticAtom("lhs");
+                const lhs_begin = try tree.beginNamedNode("lhs");
                 const lhs_attrs = tree.beginNode();
                 try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
                 try tree.endNode(lhs_begin, lhs_attrs);
 
-                const rhs_begin = tree.beginNode();
-                try tree.pushStaticAtom("rhs");
+                const rhs_begin = try tree.beginNamedNode("rhs");
                 const rhs_attrs = tree.beginNode();
                 try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
                 try tree.endNode(rhs_begin, rhs_attrs);
@@ -1567,20 +1400,15 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_structural_hash => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-structural-hash");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-structural-hash", expr_idx);
                 const attrs = tree.beginNode();
 
-                const value_begin = tree.beginNode();
-                try tree.pushStaticAtom("value");
+                const value_begin = try tree.beginNamedNode("value");
                 const value_attrs = tree.beginNode();
                 try ir.store.getExpr(e.value).pushToSExprTree(ir, tree, e.value);
                 try tree.endNode(value_begin, value_attrs);
 
-                const hasher_begin = tree.beginNode();
-                try tree.pushStaticAtom("hasher");
+                const hasher_begin = try tree.beginNamedNode("hasher");
                 const hasher_attrs = tree.beginNode();
                 try ir.store.getExpr(e.hasher).pushToSExprTree(ir, tree, e.hasher);
                 try tree.endNode(hasher_begin, hasher_attrs);
@@ -1588,21 +1416,16 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_method_eq => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-method-eq");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-method-eq", expr_idx);
                 try tree.pushStringPair("negated", if (e.negated) "true" else "false");
                 const attrs = tree.beginNode();
 
-                const lhs_begin = tree.beginNode();
-                try tree.pushStaticAtom("lhs");
+                const lhs_begin = try tree.beginNamedNode("lhs");
                 const lhs_attrs = tree.beginNode();
                 try ir.store.getExpr(e.lhs).pushToSExprTree(ir, tree, e.lhs);
                 try tree.endNode(lhs_begin, lhs_attrs);
 
-                const rhs_begin = tree.beginNode();
-                try tree.pushStaticAtom("rhs");
+                const rhs_begin = try tree.beginNamedNode("rhs");
                 const rhs_attrs = tree.beginNode();
                 try ir.store.getExpr(e.rhs).pushToSExprTree(ir, tree, e.rhs);
                 try tree.endNode(rhs_begin, rhs_attrs);
@@ -1610,17 +1433,13 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_type_method_call => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-type-method-call");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-type-method-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 const attrs = tree.beginNode();
 
                 try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(e.args)) |arg_idx| {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1630,10 +1449,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_type_dispatch_call => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-type-dispatch-call");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-type-dispatch-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 switch (e.owner) {
                     .statement => |stmt| try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(stmt)),
@@ -1642,8 +1458,7 @@ pub const Expr = union(enum) {
                 try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.sliceExpr(e.args)) |arg_idx| {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1653,10 +1468,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_tuple_access => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-tuple-access");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-tuple-access", expr_idx);
 
                 // Push the index as an attribute
                 try tree.pushStringPairFmt("index", "{d}", .{e.elem_index});
@@ -1668,8 +1480,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_runtime_error => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-runtime-error");
+                const begin = try tree.beginNamedNode("e-runtime-error");
 
                 const diagnostic = ir.store.getDiagnostic(e.diagnostic);
                 const msg = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(diagnostic)});
@@ -1684,44 +1495,31 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_ellipsis => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-not-implemented");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "e-not-implemented", expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_anno_only => |anno_only| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-anno-only");
+                const begin = try tree.beginNamedNode("e-anno-only");
                 if (anno_only.kind != .ordinary) {
                     try tree.pushStringPair("kind", @tagName(anno_only.kind));
                 }
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try ir.appendRegionInfoToSExprTree(tree, expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_derived_method => |derived| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-derived-method");
+                const begin = try tree.beginNamedNode("e-derived-method");
                 try tree.pushStringPair("kind", @tagName(derived.kind));
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try ir.appendRegionInfoToSExprTree(tree, expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_hosted_lambda => |hosted| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-hosted-lambda");
+                const begin = try tree.beginNamedNode("e-hosted-lambda");
                 const symbol_name = ir.common.getIdent(hosted.symbol_name);
                 try tree.pushStringPair("symbol", symbol_name);
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try ir.appendRegionInfoToSExprTree(tree, expr_idx);
                 const attrs = tree.beginNode();
 
-                const args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
                 for (ir.store.slicePatterns(hosted.args)) |arg_idx| {
                     try ir.store.getPattern(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1731,17 +1529,14 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_run_low_level => |run_ll| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-run-low-level");
+                const begin = try tree.beginNamedNode("e-run-low-level");
                 const op_name = try std.fmt.allocPrint(ir.gpa, "{s}", .{@tagName(run_ll.op)});
                 defer ir.gpa.free(op_name);
                 try tree.pushStringPair("op", op_name);
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try ir.appendRegionInfoToSExprTree(tree, expr_idx);
                 const attrs = tree.beginNode();
 
-                const run_args_begin = tree.beginNode();
-                try tree.pushStaticAtom("args");
+                const run_args_begin = try tree.beginNamedNode("args");
                 const run_args_attrs = tree.beginNode();
                 for (ir.store.exprSlice(run_ll.args)) |arg_idx| {
                     try ir.store.getExpr(arg_idx).pushToSExprTree(ir, tree, arg_idx);
@@ -1751,19 +1546,12 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_crash => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-crash");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-crash", expr_idx);
                 try tree.pushStringPair("msg", ir.getString(e.msg));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_dbg => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-dbg");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-dbg", expr_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getExpr(e.expr).pushToSExprTree(ir, tree, e.expr);
@@ -1771,10 +1559,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_expect_err => |e| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-expect-err");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-expect-err", expr_idx);
                 try tree.pushStringPair("snippet", ir.getString(e.snippet));
                 const attrs = tree.beginNode();
 
@@ -1783,10 +1568,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_expect => |expect_expr| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-expect");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-expect", expr_idx);
                 const attrs = tree.beginNode();
 
                 // Add body expression
@@ -1795,10 +1577,7 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_return => |ret| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-return");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "e-return", expr_idx);
                 const attrs = tree.beginNode();
 
                 // Add inner expression
@@ -1807,12 +1586,8 @@ pub const Expr = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .e_break => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("e-break");
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "e-break", expr_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .e_for => |for_expr| {
                 const begin = tree.beginNode();
@@ -1820,8 +1595,7 @@ pub const Expr = union(enum) {
                     .iter => "e-for",
                     .stream => "e-for-bang",
                 });
-                const region = ir.store.getExprRegion(expr_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                try ir.appendRegionInfoToSExprTree(tree, expr_idx);
                 const attrs = tree.beginNode();
 
                 // Add pattern
@@ -1891,18 +1665,15 @@ pub const Expr = union(enum) {
             redundant: TypeVar,
 
             pub fn pushToSExprTree(self: *const Match.Branch, ir: *const ModuleEnv, tree: *SExprTree, _: Match.Branch.Idx) std.mem.Allocator.Error!void {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("branch");
+                const begin = try tree.beginNamedNode("branch");
                 const attrs = tree.beginNode();
 
-                const patterns_begin = tree.beginNode();
-                try tree.pushStaticAtom("patterns");
+                const patterns_begin = try tree.beginNamedNode("patterns");
                 const patterns_attrs = tree.beginNode();
                 const patterns_slice = ir.store.sliceMatchBranchPatterns(self.patterns);
                 for (patterns_slice) |branch_pat_idx| {
                     const branch_pat = ir.store.getMatchBranchPattern(branch_pat_idx);
-                    const pattern_begin = tree.beginNode();
-                    try tree.pushStaticAtom("pattern");
+                    const pattern_begin = try tree.beginNamedNode("pattern");
                     try tree.pushBoolPair("degenerate", branch_pat.degenerate);
                     const pattern_attrs = tree.beginNode();
                     const pattern = ir.store.getPattern(branch_pat.pattern);
@@ -1911,15 +1682,13 @@ pub const Expr = union(enum) {
                 }
                 try tree.endNode(patterns_begin, patterns_attrs);
 
-                const value_begin = tree.beginNode();
-                try tree.pushStaticAtom("value");
+                const value_begin = try tree.beginNamedNode("value");
                 const value_attrs = tree.beginNode();
                 try ir.store.getExpr(self.value).pushToSExprTree(ir, tree, self.value);
                 try tree.endNode(value_begin, value_attrs);
 
                 if (self.guard) |guard_idx| {
-                    const guard_begin = tree.beginNode();
-                    try tree.pushStaticAtom("guard");
+                    const guard_begin = try tree.beginNamedNode("guard");
                     const guard_attrs = tree.beginNode();
                     try ir.store.getExpr(guard_idx).pushToSExprTree(ir, tree, guard_idx);
                     try tree.endNode(guard_begin, guard_attrs);
@@ -1956,19 +1725,16 @@ pub const Expr = union(enum) {
         };
 
         pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, region: Region) std.mem.Allocator.Error!void {
-            const begin = tree.beginNode();
-            try tree.pushStaticAtom("match");
+            const begin = try tree.beginNamedNode("match");
             try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
             const attrs = tree.beginNode();
 
-            const cond_begin = tree.beginNode();
-            try tree.pushStaticAtom("cond");
+            const cond_begin = try tree.beginNamedNode("cond");
             const cond_attrs = tree.beginNode();
             try ir.store.getExpr(self.cond).pushToSExprTree(ir, tree, self.cond);
             try tree.endNode(cond_begin, cond_attrs);
 
-            const branches_begin = tree.beginNode();
-            try tree.pushStaticAtom("branches");
+            const branches_begin = try tree.beginNamedNode("branches");
             const branches_attrs = tree.beginNode();
             for (ir.store.matchBranchSlice(self.branches)) |branch_idx| {
                 try ir.store.getMatchBranch(branch_idx).pushToSExprTree(ir, tree, branch_idx);

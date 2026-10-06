@@ -1747,9 +1747,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const local = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local, .discriminant, .list_reinterpret, .nominal => unreachable,
                 };
                 if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
@@ -1907,11 +1905,7 @@ pub fn compute(
                         if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
-                    .list_reinterpret => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                    .nominal => |op| {
+                    inline .list_reinterpret, .nominal => |op| {
                         try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
@@ -1981,25 +1975,7 @@ pub fn compute(
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_reuse_box => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_unbox => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_adapt => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_inspect => |stmt| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
@@ -2104,25 +2080,16 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error => {},
-            .comptime_exhaustiveness_failed => {},
+            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
-            .incref => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref => |stmt| {
+            inline .incref, .decref, .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref_if_initialized => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
@@ -2174,14 +2141,12 @@ pub fn compute(
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
-            .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
                 // locals are scalar presence words.
                 try stack.append(gpa, stmt.body);
                 try stack.append(gpa, stmt.remainder);
             },
-            .jump => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
             .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
@@ -2669,7 +2634,7 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
                         cursor = stmt.uninitialized_branch;
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
@@ -2678,10 +2643,6 @@ pub fn compute(
                         for (0..GuardedList.borrowLen(arms)) |i| {
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
-                        cursor = stmt.on_miss;
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
                     .loop_continue, .loop_break => {
@@ -2905,9 +2866,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const projection_source = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local,
                     .discriminant,
                     .list_reinterpret,

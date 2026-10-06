@@ -291,17 +291,13 @@ const Pass = struct {
                     if (s.fresh_alternative) |fresh| try self.markProc(fresh);
                     try self.pushStmt(s.next);
                 },
-                .assign_call => |s| {
+                inline .assign_call, .assign_packed_erased_fn => |s| {
                     try self.markProc(s.proc);
                     try self.pushStmt(s.next);
                 },
                 .assign_call_erased => |s| try self.pushStmt(s.next),
-                .assign_packed_erased_fn => |s| {
-                    try self.markProc(s.proc);
-                    try self.pushStmt(s.next);
-                },
                 inline .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| try self.pushStmt(s.next),
-                .boxy_tag_match => |s| {
+                inline .boxy_tag_match, .str_match => |s| {
                     try self.pushStmt(s.on_match);
                     try self.pushStmt(s.on_miss);
                 },
@@ -330,10 +326,6 @@ const Pass = struct {
                 .switch_initialized_payload => |s| {
                     try self.pushStmt(s.initialized_branch);
                     try self.pushStmt(s.uninitialized_branch);
-                },
-                .str_match => |s| {
-                    try self.pushStmt(s.on_match);
-                    try self.pushStmt(s.on_miss);
                 },
                 .str_match_set => |s| {
                     const arms = self.store.getStrMatchArms(s.arms);
@@ -410,8 +402,7 @@ const Pass = struct {
                         for (entry.captures) |capture| try self.plan_stack.append(self.allocator, capture.plan);
                         if (entry.boxy) |boxy| for (boxy.captures) |capture| switch (capture.value) {
                             .value => |plan| try self.plan_stack.append(self.allocator, plan),
-                            .descriptor, .contents_descriptor => {},
-                            .dictionary => {},
+                            .descriptor, .contents_descriptor, .dictionary => {},
                         };
                     }
                 },
@@ -528,13 +519,7 @@ const Pass = struct {
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
                 },
-                .assign_call => |*s| {
-                    s.proc = self.remapProc(s.proc);
-                    const next = s.next;
-                    s.next = self.remapStmt(next);
-                    try self.pushStmt(next);
-                },
-                .assign_packed_erased_fn => |*s| {
+                inline .assign_call, .assign_packed_erased_fn => |*s| {
                     s.proc = self.remapProc(s.proc);
                     const next = s.next;
                     s.next = self.remapStmt(next);
@@ -564,7 +549,7 @@ const Pass = struct {
                     try self.pushStmt(initialized);
                     try self.pushStmt(uninitialized);
                 },
-                .str_match => |*s| {
+                inline .str_match, .boxy_tag_match => |*s| {
                     const on_match = s.on_match;
                     const on_miss = s.on_miss;
                     s.on_match = self.remapStmt(on_match);
@@ -626,14 +611,6 @@ const Pass = struct {
                     const next = s.next;
                     s.next = self.remapStmt(next);
                     try self.pushStmt(next);
-                },
-                .boxy_tag_match => |*s| {
-                    const on_match = s.on_match;
-                    const on_miss = s.on_miss;
-                    s.on_match = self.remapStmt(on_match);
-                    s.on_miss = self.remapStmt(on_miss);
-                    try self.pushStmt(on_match);
-                    try self.pushStmt(on_miss);
                 },
                 .ret,
                 .jump,
@@ -1043,11 +1020,7 @@ const Pass = struct {
                 if (s.fresh_alternative) |proc| self.verifyProcRef(proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
-            .assign_call => |s| {
-                self.verifyProcRef(s.proc, proc_count);
-                self.verifyStmtRef(s.next, stmt_count);
-            },
-            .assign_packed_erased_fn => |s| {
+            inline .assign_call, .assign_packed_erased_fn => |s| {
                 self.verifyProcRef(s.proc, proc_count);
                 self.verifyStmtRef(s.next, stmt_count);
             },
@@ -1095,11 +1068,7 @@ const Pass = struct {
                 self.verifyStmtRef(s.initialized_branch, stmt_count);
                 self.verifyStmtRef(s.uninitialized_branch, stmt_count);
             },
-            .str_match => |s| {
-                self.verifyStmtRef(s.on_match, stmt_count);
-                self.verifyStmtRef(s.on_miss, stmt_count);
-            },
-            .boxy_tag_match => |s| {
+            inline .str_match, .boxy_tag_match => |s| {
                 self.verifyStmtRef(s.on_match, stmt_count);
                 self.verifyStmtRef(s.on_miss, stmt_count);
             },

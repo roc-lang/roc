@@ -290,11 +290,10 @@ fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bo
         .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
         .loop_append => shapes.loop,
-        .forwarding_join => shapes.join_param,
+        .forwarding_join, .prune_join_params => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
-        .prune_join_params => shapes.join_param,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
-        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.num_comparison,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.unsigned_compare or shapes.simd_concat_shift,
         .box_reuse => shapes.box_box,
     };
 }

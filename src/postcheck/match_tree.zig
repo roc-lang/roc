@@ -611,34 +611,18 @@ pub fn Compiler(comptime Ctx: type) type {
                 };
             }
 
-            /// Specialize an exact-length list row inside a length arm:
-            /// element patterns become columns at element occurrences. With
-            /// the length known exactly, back-relative elements canonicalize
-            /// to front indices so rows agree on occurrence identity.
-            fn specListExactRow(self: *Builder, row: Row, col: Col, exact_len: u64) Ctx.LowerError!Row {
+            /// Specialize a list row under a length check: element patterns become
+            /// columns at element occurrences. With the length known
+            /// exactly (`.exact`), back-relative elements canonicalize to front
+            /// indices so rows agree on occurrence identity. Under a rest pattern's
+            /// `len >= k` check (`.rest_relative`), elements before the rest index
+            /// are front-relative, elements after it are back-relative, and the
+            /// rest slice binds between them.
+            fn specListRow(self: *Builder, row: Row, col: Col, indexing: ListIndexing) Ctx.LowerError!Row {
                 var cols: std.ArrayList(Col) = .empty;
                 var binds: std.ArrayList(Bind) = .empty;
                 try binds.appendSlice(self.arena, row.binds);
-                try self.specListInto(row, col, .{ .exact = exact_len }, &cols, &binds);
-                return .{
-                    .cols = cols.items,
-                    .binds = binds.items,
-                    .bindings = row.bindings,
-                    .guard = row.guard,
-                    .body = row.body,
-                    .branch_index = row.branch_index,
-                };
-            }
-
-            /// Specialize a rest-pattern list row under its `len >= k` check:
-            /// elements before the rest index are front-relative, elements
-            /// after it are back-relative, and the rest slice binds between
-            /// them.
-            fn specListRestRow(self: *Builder, row: Row, col: Col) Ctx.LowerError!Row {
-                var cols: std.ArrayList(Col) = .empty;
-                var binds: std.ArrayList(Bind) = .empty;
-                try binds.appendSlice(self.arena, row.binds);
-                try self.specListInto(row, col, .rest_relative, &cols, &binds);
+                try self.specListInto(row, col, indexing, &cols, &binds);
                 return .{
                     .cols = cols.items,
                     .binds = binds.items,
@@ -930,7 +914,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     try self.exits.append(self.arena, .{ .cont = cont, .refs = 0 });
                 }
                 const spec = try self.arena.alloc(Row, 1);
-                spec[0] = try self.specListRestRow(row, col);
+                spec[0] = try self.specListRow(row, col, .rest_relative);
                 return .{ .rest_row = .{
                     .col = col,
                     .min_len = view.fixed_count,
@@ -994,7 +978,7 @@ pub fn Compiler(comptime Ctx: type) type {
                         .tag, .callable => try self.specTagRow(row, col, kind),
                         .int_switch, .eq_chain => try self.specLiteralRow(row, col),
                         .str_set => try self.specStrRow(row, col, @truncate(key)),
-                        .list_len => try self.specListExactRow(row, col, @truncate(key)),
+                        .list_len => try self.specListRow(row, col, .{ .exact = @truncate(key) }),
                     };
                     try arm_rows.items[gop.value_ptr.*].append(self.arena, spec);
                 }

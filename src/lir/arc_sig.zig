@@ -163,10 +163,6 @@ pub const SigTable = struct {
         return self.outcomes[start..][0..len];
     }
 
-    pub fn outcomesForProc(self: SigTable, proc: LIR.LirProcSpecId) []const Outcome {
-        return self.outcomesOf(self.get(proc));
-    }
-
     pub fn retConditionsOf(self: SigTable, sig: RcSig) []const RetCondition {
         const start: usize = @intCast(sig.ret_conditions.start);
         const len: usize = @intCast(sig.ret_conditions.len);

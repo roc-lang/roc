@@ -103,14 +103,6 @@ pub const Store = struct {
         return ExtraStringIdx{ .start = start, .count = end - start };
     }
 
-    /// Put an extra string in the backing store, returning an "id" (range)
-    pub fn putFmtExtraString(self: *Self, comptime format: []const u8, args: anytype) std.mem.Allocator.Error!ExtraStringIdx {
-        const start = self.extra_strings_backing.items.len;
-        try self.extra_strings_backing.print(format, args);
-        const end = self.extra_strings_backing.items.len;
-        return ExtraStringIdx{ .start = start, .count = end - start };
-    }
-
     /// Get a stored pattern string by its range
     pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
         return self.extra_strings_backing.items[idx.start..][0..idx.count];

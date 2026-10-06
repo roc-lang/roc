@@ -482,8 +482,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
-            .uninitialized => return .uninitialized,
-            .uninitialized_payload => return .uninitialized,
+            .uninitialized, .uninitialized_payload => return .uninitialized,
             .if_initialized_payload => |switch_| return try self.evalInitializedPayload(frame, switch_),
             .try_sequence => |seq| return try self.evalTrySequence(frame, expr.ty, seq),
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),

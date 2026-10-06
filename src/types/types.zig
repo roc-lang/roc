@@ -286,9 +286,7 @@ pub const Content = union(enum(u8)) {
         switch (content) {
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .fn_pure => |func| return func,
-                    .fn_effectful => |func| return func,
-                    .fn_unbound => |func| return func,
+                    inline .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
                     .record,
                     .tuple,
                     .nominal_type,
@@ -335,13 +333,6 @@ pub const Flex = struct {
         return .{
             .name = null,
             .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
-        };
-    }
-
-    pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
-        return .{
-            .name = name,
-            .constraints = self.constraints,
         };
     }
 
@@ -417,26 +408,9 @@ pub const SourceDecl = packed struct(u32) {
 
     pub const none: SourceDecl = .{ .statement = 0, .present = false, .builtin_origin = false };
 
-    pub fn fromOptional(source_decl: ?u32) SourceDecl {
-        return fromOptionalWithBuiltinOrigin(source_decl, false);
-    }
-
-    pub fn fromOptionalChecked(source_decl: ?u32) std.mem.Allocator.Error!SourceDecl {
-        return fromOptionalWithBuiltinOriginChecked(source_decl, false);
-    }
-
-    pub fn fromOptionalWithBuiltinOrigin(source_decl: ?u32, builtin_origin: bool) SourceDecl {
-        const statement = source_decl orelse return .none;
-        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
-    }
-
     pub fn fromOptionalWithBuiltinOriginChecked(source_decl: ?u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
         const statement = source_decl orelse return .none;
         return fromStatementWithBuiltinOriginChecked(statement, builtin_origin);
-    }
-
-    pub fn fromStatement(statement: u32) SourceDecl {
-        return fromStatementWithBuiltinOrigin(statement, false);
     }
 
     pub fn fromStatementChecked(statement: u32) std.mem.Allocator.Error!SourceDecl {
@@ -791,9 +765,7 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// Whether a record field's kind is concretely required or still carried
@@ -904,9 +876,7 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// A safe list of tags
@@ -1264,18 +1234,6 @@ pub const StaticDispatchConstraint = struct {
 
     /// A safe multi list of static dispatch constraints
     pub const SafeMultiList = MkSafeMultiList(Self);
-
-    /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByFnNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByFnName(ident_store, a, b) == .lt;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn orderByFnName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.fn_name);
-        const b_text = store.getText(b.fn_name);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 /// Source-type identity for the payload slot selected by derived mapping.
