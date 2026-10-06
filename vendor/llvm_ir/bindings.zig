@@ -399,8 +399,6 @@ pub extern fn LLVMInitializeWebAssemblyAsmPrinter() void;
 pub extern fn LLVMInitializeX86AsmPrinter() void;
 /// Initialize assembly printer for XCore architecture.
 pub extern fn LLVMInitializeXCoreAsmPrinter() void;
-/// Initialize assembly printer for Xtensa architecture.
-pub extern fn LLVMInitializeXtensaAsmPrinter() void;
 /// Initialize assembly printer for LoongArch architecture.
 pub extern fn LLVMInitializeLoongArchAsmPrinter() void;
 
