@@ -15988,17 +15988,26 @@ shared), once per position and bindings.
 
 Boxy derives callable-derived evidence (no checked evidence vector for the
 call, a `from_callable` slot, or an evidence node whose nested evidence is
-`from_callable`) as Monotype does. A receiver reachable through the callable's
-own type is the call's type at that position. A receiver checking reached only
+`from_callable`) as Monotype does. A dispatch whose target derives its evidence
+from its callable has no checked substitution (`EvidenceNode.subst` is empty),
+so the target worker's type related to the call's function type (or to a
+dictionary method's callable type) names its signature's variables, exactly as
+a stored function's use does: its dictionaries' adapters and its literal
+demand edges read those pairs. A receiver reachable through the callable's own
+type is the call's type at that position. A receiver checking reached only
 through another requirement's constraint callable (`constraint_callable`, such
 as the literal in `|c| c.count + 1`, whose type only `plus`'s signature
 relates to `c.count`) is the parameter's checked path walked over the call
 types of the method the same call selected for the requirement owning that
-constraint callable, which is planned earlier in the call. The call's
-requirement substitution then names that receiver, so its dictionary's
-adapter describes requirement positions written in it, and the worker's
-descriptor for the receiver is the representation its dictionary was planned
-at.
+constraint callable, which is planned earlier in the call. A scheme variable
+only the callee's requirements name (the result of `to_str` in
+`|c| "${c.count.to_str()}"`) is bound by relating each requirement's type to
+the call types of the method the call selected for it. The call's requirement
+substitution names these variables, so its dictionaries' adapters describe
+requirement positions written in them, and each of the call's planned
+dictionary arguments records that substitution
+(`DirectCallHiddenDictionaryArg.derived_substitution`), which the call's
+hidden descriptors read as they read a checked substitution.
 
 Derived `is_eq` and `to_hash` compare and hash each component with that
 component type's own method, exactly as a direct comparison would, which is

@@ -524,6 +524,11 @@ pub const DirectCallHiddenDictionaryArg = struct {
     rep: TypeRepId,
     method_evidence: Span = .{},
     source: Source,
+    /// The scheme pairs of the call that planned this argument, when that
+    /// call derived its evidence from its callable and so named variables no
+    /// checked substitution supplied (`DictionaryCallArgs.derived_receivers`).
+    /// Empty for every other call.
+    derived_substitution: Span = .{},
     /// The derived-method formal bindings a `static_rep` inside a generic
     /// nominal's backing is instantiated at (`ProgramPlan.derivedEnvBindings`).
     env: u32 = 0,
@@ -3151,10 +3156,8 @@ const LiteralPlanner = struct {
     fn beginMethodTerm(self: *LiteralPlanner, method_index: u32, frames: *std.ArrayList(MethodTermFrame)) Allocator.Error!void {
         const allocator = self.builder.allocator;
         const method = self.builder.plan.dictionary_method_evidence.items[method_index];
-        const scheme = self.closed_method_schemes.get(method_index) orelse if (method.evidence_edge) |edge|
-            try self.builder.appendSchemeRepSubstitutions(self.builder.evidenceEdgeSchemeSubstitution(method.resolution.worker, edge))
-        else
-            Span{};
+        const scheme = self.closed_method_schemes.get(method_index) orelse
+            try self.builder.dictionaryMethodSchemeRepSubstitutions(method);
         var bindings = std.ArrayList(LiteralRequirements.Binding).empty;
         defer bindings.deinit(allocator);
         for ([_]Span{ scheme, method.requirement_substitution }) |pairs| {
@@ -3656,7 +3659,7 @@ const LiteralPlanner = struct {
             } };
             if (self.call_edges.contains(key)) continue;
             const scheme = self.closed_method_schemes.get(key.dictionary_method.method) orelse
-                try self.builder.appendSchemeRepSubstitutions(if (method.evidence_edge) |edge| self.builder.evidenceEdgeSchemeSubstitution(method.resolution.worker, edge) else null);
+                try self.builder.dictionaryMethodSchemeRepSubstitutions(method);
             try self.addCall(key, caller, method.resolution.worker, method.worker_desc_args, method.nested_dict_args, scheme);
             // Nested dictionaries are constructed in this same frame.
             // They are values captured by the method slot, not calls
@@ -3677,7 +3680,7 @@ const LiteralPlanner = struct {
         }) |channel| {
             for (@field(plan, channel[0]).items, 0..) |call, index| {
                 const scheme = if (comptime std.mem.eql(u8, channel[1], "direct"))
-                    try self.builder.appendSchemeRepSubstitutions(self.builder.directCallSchemeSubstitution(call))
+                    try self.builder.directCallSchemeRepSubstitutions(call)
                 else if (comptime std.mem.eql(u8, channel[1], "callable"))
                     try self.builder.appendSchemeRepSubstitutions(self.builder.useSchemeSubstitution(call.worker, call.use))
                 else
@@ -12632,26 +12635,53 @@ const Builder = struct {
     /// A call through an instantiated lookup records it at the lookup; a
     /// resolved dispatch call records it on the evidence node its plan
     /// selected, which is authoritative for that edge.
+    /// The checked dispatch plan of a direct call lowered from a dispatching
+    /// expression.
+    fn directCallDispatchPlan(call_expr: anytype) ?static_dispatch.StaticDispatchPlanId {
+        return switch (call_expr.data) {
+            .dispatch_call => |plan| plan,
+            .type_dispatch_call => |plan| plan,
+            .method_eq => |plan| plan,
+            .str_from_quote => |quote| quote.plan,
+            .interpolation => |interpolation| interpolation.plan,
+            .numeral => |numeral| numeral.plan,
+            else => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
+        };
+    }
+
+    /// The scheme representation pairs a direct call binds: its checked
+    /// substitution, or the relation of a dispatch that derives its evidence
+    /// from its callable (`directCallCallableDerivedSubstitution`).
+    fn directCallSchemeRepSubstitutions(self: *Builder, direct: DirectCallPlan) Allocator.Error!Span {
+        if (self.directCallSchemeSubstitution(direct)) |substitution| return try self.appendSchemeRepSubstitutions(substitution);
+        return try self.directCallCallableDerivedSubstitution(direct) orelse .{};
+    }
+
+    /// For a dispatch whose target derives its evidence from its callable,
+    /// for which checking recorded no substitution, the worker's type related
+    /// to the call's function type, which fixes every variable of the
+    /// worker's signature exactly as a checked substitution would. Null for
+    /// every other call.
+    fn directCallCallableDerivedSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!?Span {
+        const site_view = self.moduleForId(direct.call.module);
+        const call_expr = site_view.checked_bodies.expr(direct.call.expr);
+        if (call_expr.data == .call) return null;
+        const dispatch_plan = directCallDispatchPlan(call_expr);
+        if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
+        const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
+        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        const call_rep = self.plan.repForSourceType(direct.source_fn_type) orelse
+            boxyPlanInvariant("boxy direct call function type was not analyzed");
+        return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@intFromEnum(direct.worker)].rep, call_rep);
+    }
+
     fn directCallSchemeSubstitution(self: *Builder, direct: DirectCallPlan) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(direct.call.module);
         const call_expr = site_view.checked_bodies.expr(direct.call.expr);
         // A producer call instantiates the binding's scheme at its lookup.
         if (isLookupExpr(call_expr.data)) return self.useSchemeSubstitution(direct.worker, direct.call);
         if (call_expr.data != .call) {
-            const dispatch_plan = if (call_expr.data == .dispatch_call)
-                call_expr.data.dispatch_call
-            else if (call_expr.data == .type_dispatch_call)
-                call_expr.data.type_dispatch_call
-            else if (call_expr.data == .method_eq)
-                call_expr.data.method_eq
-            else if (call_expr.data == .str_from_quote)
-                call_expr.data.str_from_quote.plan
-            else if (call_expr.data == .interpolation)
-                call_expr.data.interpolation.plan
-            else if (call_expr.data == .numeral)
-                call_expr.data.numeral.plan
-            else
-                boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call");
+            const dispatch_plan = directCallDispatchPlan(call_expr);
             // A generated codec constructor is declared at its checked
             // contract's roles and has no evidence scheme to substitute.
             if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
@@ -14880,16 +14910,26 @@ const Builder = struct {
             }
             const arg_types = try self.callSubstitutionTypes(direct.arg_substitutions, .operand);
             defer self.allocator.free(arg_types);
-            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
-                direct.worker,
-                direct.caller,
-                arg_types,
-                direct.ret_substitution.?.call_type,
-                call_view,
-                checked_evidence,
-                self.directCallSchemeSubstitution(direct),
-                0,
-            );
+            // A dispatch deriving its evidence from its callable relates the
+            // worker's variables to the call's types exactly as a stored
+            // function's use does, so its dictionaries' adapters read the
+            // same pairs.
+            var machine = DictionaryArgsMachine{};
+            defer machine.deinit(self.allocator);
+            const hidden_dict_args = if (try self.beginDictionaryCallArgs(&machine, .{
+                .worker_id = direct.worker,
+                .caller_id = direct.caller,
+                .arg_types = arg_types,
+                .ret_type = direct.ret_substitution.?.call_type,
+                .evidence_view = call_view,
+                .evidence = checked_evidence,
+                .scheme_substitution = self.directCallSchemeSubstitution(direct),
+                .relation = try self.directCallCallableDerivedSubstitution(direct),
+                .env = 0,
+            })) |span| span else blk: {
+                try self.runDictionaryArgs(&machine);
+                break :blk machine.span_result;
+            };
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
             const context = try self.contextualizeCall(direct.worker, direct.caller, hidden_dict_args);
             self.plan.direct_calls.items[direct_index].worker = context.worker;
@@ -15644,6 +15684,18 @@ const Builder = struct {
                 try substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
             }
         }
+        // A call that derived its evidence from its callable named, when it
+        // planned its dictionaries, the variables no checked substitution
+        // supplies: receivers reached only through another requirement's
+        // constraint callable, and variables only its requirements name.
+        for (self.plan.directCallHiddenDictionaryArgSlice(dictionary_args)) |arg| {
+            if (arg.derived_substitution.len == 0) continue;
+            for (self.plan.schemeRepSubstitutionSlice(arg.derived_substitution)) |pair| {
+                if (substitutions.get(pair.scheme_rep) != null) continue;
+                try substitutions.put(self.allocator, pair.scheme_rep, pair.site_rep);
+            }
+            break;
+        }
         substitutions.scheme_entries_len = substitutions.entries.items.len;
         const evidence_only_start: usize = if (worker.evidence_only_descs.len == 0)
             params.len
@@ -15727,7 +15779,6 @@ const Builder = struct {
             evidence_view,
             evidence,
             substitutions.entries.items[0..substitutions.scheme_entries_len],
-            dictionary_args,
             &pending,
         );
         if (pending.items.len != params.len) {
@@ -15752,7 +15803,6 @@ const Builder = struct {
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: []const CallDescriptorRepSubstitution,
-        dictionary_args: Span,
         pending: *std.ArrayList(DirectCallHiddenDescriptorArg),
     ) Allocator.Error!void {
         const mappings = self.plan.workerEvidenceDescriptorParamSlice(worker.evidence_descs);
@@ -15777,7 +15827,6 @@ const Builder = struct {
                 ret_type,
                 maybe_view,
                 maybe_evidence,
-                dictionary_args,
             );
             if (mapping.hidden_desc_index < evidence_only_start and
                 !self.callDescriptorRepsAgreeAcrossPresenceSlot(
@@ -15812,7 +15861,6 @@ const Builder = struct {
                     ret_type,
                     maybe_view,
                     maybe_evidence,
-                    dictionary_args,
                 );
                 if (source_rep) |existing| {
                     if (existing != source.rep) {
@@ -15876,7 +15924,6 @@ const Builder = struct {
         ret_type: CheckedTypeIdentity,
         maybe_view: ?ModuleView,
         maybe_evidence: ?[]const static_dispatch.CheckedEvidence,
-        dictionary_args: Span,
     ) Allocator.Error!EvidenceDescriptorCallSource {
         if (call_arg_types.len != call_arg_reps.len) {
             boxyPlanInvariant("worker evidence descriptor call source saw mismatched argument metadata");
@@ -15887,24 +15934,6 @@ const Builder = struct {
             boxyPlanInvariant("worker evidence descriptor index exceeded its checked parameter vector");
         }
         const param = worker_evidence.params[evidence_index];
-        // A receiver reached only through another requirement's constraint
-        // callable has no path over this call's types; when the call derives
-        // its evidence from the callable, the receiver is the one its
-        // dictionary was planned at.
-        const callable_derived = if (maybe_evidence) |evidence|
-            evidence_index < evidence.len and evidence[evidence_index].resolution == .from_callable
-        else
-            true;
-        if (param.source == .constraint_callable and callable_derived) {
-            const rep = self.callDictionaryRepForEvidence(worker, evidence_index, dictionary_args);
-            return .{
-                .source_type = self.plan.representations.items[@intFromEnum(rep)].source_type,
-                .rep = rep,
-                .source_arg_index = null,
-                .source_value_rep = null,
-                .whole_operand = false,
-            };
-        }
         const path_view = worker_evidence.view;
         var path_steps = std.ArrayListUnmanaged(static_dispatch.EvidencePathStep).empty;
         defer path_steps.deinit(self.allocator);
@@ -15937,25 +15966,6 @@ const Builder = struct {
             .whole_operand = source_arg_index != null and
                 call_path[call_path.len - 1].stepKind() == .fn_arg,
         };
-    }
-
-    /// The representation this call planned the dictionary of the worker's
-    /// evidence parameter `evidence_index` at.
-    fn callDictionaryRepForEvidence(
-        self: *const Builder,
-        worker: WorkerPlan,
-        evidence_index: u32,
-        dictionary_args: Span,
-    ) TypeRepId {
-        if (dictionary_args.len != worker.hidden_dicts.len) {
-            boxyPlanInvariant("callable-derived evidence descriptor had no planned dictionary arguments for its call");
-        }
-        for (self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts), 0..) |hidden, index| {
-            const key = hidden.scheme_param orelse continue;
-            if (hidden.evidence_index != evidence_index or key.callable_contract != null) continue;
-            return self.plan.direct_call_hidden_dict_args.items[dictionary_args.start + index].rep;
-        }
-        boxyPlanInvariant("callable-derived evidence descriptor had no dictionary for its requirement");
     }
 
     fn evidenceCallRepAtPath(
@@ -16433,6 +16443,11 @@ const Builder = struct {
         evidence_view: ?ModuleView,
         evidence: ?[]const static_dispatch.CheckedEvidence,
         scheme_substitution: ?SchemeCallSubstitution,
+        /// The worker's types related to the call's, for a call checking
+        /// recorded no substitution for (a stored function's use, or a
+        /// dispatch whose target derives its evidence from its callable):
+        /// it names the worker's variables exactly as a checked substitution.
+        relation: ?Span = null,
         env: u32,
     };
 
@@ -16458,6 +16473,12 @@ const Builder = struct {
         /// `requirement_substitution` names receivers this call derived from
         /// its callable, which no checked substitution supplied.
         derived_receivers: bool = false,
+        /// The call has no checked substitution, so the variables only its
+        /// callee's requirements name are bound by the methods it selects.
+        binds_requirement_variables: bool = false,
+        /// `requirement_substitution` relates the worker's types to the
+        /// call's (`DictionaryCallRequest.relation`).
+        relates_types: bool = false,
         stage: union(enum) {
             next_param,
             /// Waiting on the parameter's evidence source.
@@ -16551,9 +16572,8 @@ const Builder = struct {
         const arg_types = try self.allocator.dupe(CheckedTypeIdentity, request.arg_types);
         var arg_types_owned = true;
         defer if (arg_types_owned) self.allocator.free(arg_types);
-        const requirement_substitution = if (self.active_stored_substitution) |stored|
-            stored
-        else
+        const relation = request.relation orelse self.active_stored_substitution;
+        const requirement_substitution = relation orelse
             try self.appendSchemeRepSubstitutions(request.scheme_substitution);
 
         const worker_function = (self.repQuery().functionChildren(worker.rep)) orelse
@@ -16576,6 +16596,8 @@ const Builder = struct {
             .env = request.env,
             .hidden_dicts = worker.hidden_dicts,
             .requirement_substitution = requirement_substitution,
+            .binds_requirement_variables = request.scheme_substitution == null,
+            .relates_types = relation != null,
             .worker_function = worker_function,
             .fn_children_span = self.plan.representations.items[@intFromEnum(worker_function.rep)].children,
             .body_param_start = @intCast(worker.body_hidden_dicts.start - worker.hidden_dicts.start),
@@ -16682,6 +16704,10 @@ const Builder = struct {
                     boxyPlanInvariant("boxy callable use exhausted its checked dictionary evidence");
                 }
             }
+            if (state.binds_requirement_variables) try self.bindRequirementVariables(state);
+            if (state.derived_receivers) {
+                for (state.pending.items) |*arg| arg.derived_substitution = state.requirement_substitution;
+            }
             const start: u32 = @intCast(self.plan.direct_call_hidden_dict_args.items.len);
             try self.plan.direct_call_hidden_dict_args.appendSlice(self.allocator, state.pending.items);
             machine.span_result = .{ .start = start, .len = @intCast(state.pending.items.len) };
@@ -16717,6 +16743,74 @@ const Builder = struct {
         };
         try self.continueDictionaryParam(machine, state, evidence_source);
         return false;
+    }
+
+    /// Name, in the call's requirement substitution, each scheme variable of
+    /// the callee that only its requirements name and that no substitution
+    /// names yet: relating a requirement's type to the call types of the
+    /// method this call selected for it binds the variable, as checking binds
+    /// it when it instantiates the requirement against that method.
+    fn bindRequirementVariables(self: *Builder, state: *DictionaryCallArgs) Allocator.Error!void {
+        const worker = self.plan.workers.items[@intFromEnum(state.worker_id)];
+        const scheme = self.workerSchemeVars(worker.source) orelse return;
+        var bound = std.AutoHashMapUnmanaged(TypeRepId, TypeRepId).empty;
+        defer bound.deinit(self.allocator);
+        var scheme_reps = std.AutoHashMapUnmanaged(TypeRepId, void).empty;
+        defer scheme_reps.deinit(self.allocator);
+        for (scheme.vars) |scheme_var| {
+            const rep = self.plan.repForSourceType(typeRef(scheme.view, scheme_var)) orelse continue;
+            try scheme_reps.put(self.allocator, rep, {});
+        }
+        for (self.plan.schemeRepSubstitutionSlice(state.requirement_substitution)) |pair| {
+            try bound.put(self.allocator, pair.scheme_rep, pair.site_rep);
+        }
+        var added = std.ArrayList(SchemeRepSubstitution).empty;
+        defer added.deinit(self.allocator);
+        for (state.pending.items, 0..) |arg, arg_index| {
+            const hidden = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + arg_index];
+            if (arg.method_evidence.len != hidden.dictionaries.len) continue;
+            for (self.plan.dictionarySlice(hidden.dictionaries), 0..) |requirement, method_index| {
+                const method = self.plan.dictionary_method_evidence.items[arg.method_evidence.start + method_index];
+                switch (method.resolution) {
+                    .worker, .builtin_numeral => {},
+                    .structural, .constraint, .checked_error, .unreachable_value => continue,
+                }
+                const requirement_rep = self.plan.repForSourceType(requirement.fn_ty) orelse
+                    boxyPlanInvariant("dictionary requirement type was not analyzed");
+                const function = self.repQuery().functionChildren(requirement_rep) orelse
+                    boxyPlanInvariant("dictionary requirement type was not callable");
+                const instantiated = method.instantiation_rep != null or method.instantiation_ret_type != null;
+                const shape = try self.dictionaryMethodCallShape(method, instantiated);
+                defer self.allocator.free(shape.arg_reps);
+                if (shape.arg_reps.len != function.arg_count) {
+                    boxyPlanInvariant("planned dictionary method arity disagreed with its requirement");
+                }
+                for (0..function.arg_count + 1) |position| {
+                    const requirement_position = if (position == function.arg_count)
+                        function.ret
+                    else
+                        self.plan.children.items[self.plan.representations.items[@intFromEnum(function.rep)].children.start + function.args_start + position].rep;
+                    const call_position = if (position == function.arg_count) shape.ret_rep else shape.arg_reps[position];
+                    const pairs = try self.storedUseSchemeRepSubstitutions(requirement_position, call_position);
+                    for (self.plan.schemeRepSubstitutionSlice(pairs)) |pair| {
+                        if (!scheme_reps.contains(pair.scheme_rep)) continue;
+                        const entry = try bound.getOrPut(self.allocator, pair.scheme_rep);
+                        if (entry.found_existing) continue;
+                        entry.value_ptr.* = pair.site_rep;
+                        try added.append(self.allocator, pair);
+                    }
+                }
+            }
+        }
+        if (added.items.len == 0) return;
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, state.requirement_substitution.len + added.items.len);
+        for (0..state.requirement_substitution.len) |index| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[state.requirement_substitution.start + index]);
+        }
+        self.plan.scheme_rep_substitutions.appendSliceAssumeCapacity(added.items);
+        state.requirement_substitution = .{ .start = start, .len = state.requirement_substitution.len + @as(u32, @intCast(added.items.len)) };
+        state.derived_receivers = true;
     }
 
     /// The representation of a requirement whose receiver checking reached
@@ -16897,15 +16991,12 @@ const Builder = struct {
         planned_method_evidence: Span,
     ) Allocator.Error!void {
         const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
-        // A stored function's use relates the worker's variables to the use's
-        // types exactly as a checked site substitution does, and a call that
-        // derives receivers from its callable names them the same way, so its
-        // dictionaries' adapters read the same pairs.
-        const call_substitution: ?Span = if (state.derived_receivers)
-            state.requirement_substitution
-        else
-            self.active_stored_substitution;
-        if (call_substitution) |substitution| {
+        // A call relating the worker's variables to its types, and one that
+        // derives receivers from its callable, names them exactly as a
+        // checked site substitution does, so its dictionaries' adapters read
+        // the same pairs.
+        if (state.derived_receivers or state.relates_types) {
+            const substitution = state.requirement_substitution;
             for (0..planned_method_evidence.len) |index| {
                 const method = &self.plan.dictionary_method_evidence.items[planned_method_evidence.start + index];
                 if (method.requirement_substitution.len == 0) method.requirement_substitution = substitution;
@@ -17189,6 +17280,7 @@ const Builder = struct {
             .evidence_view = evidence_view,
             .evidence = evidence,
             .scheme_substitution = self.evidenceEdgeSchemeSubstitution(worker_id, evidence_edge),
+            .relation = try self.evidenceEdgeCallableRelation(worker_id, callable_type, evidence_edge),
             .env = 0,
         });
     }
@@ -18609,6 +18701,35 @@ const Builder = struct {
 
     /// The checked substitution a dispatch evidence edge applied to its
     /// target's scheme, when checking instantiated one there.
+    /// The scheme pairs a worker dictionary method is instantiated at: its
+    /// evidence edge's checked substitution, or the relation of an edge
+    /// whose target derives its evidence from its callable
+    /// (`evidenceEdgeCallableRelation`).
+    fn dictionaryMethodSchemeRepSubstitutions(self: *Builder, method: DictionaryMethodEvidence) Allocator.Error!Span {
+        const edge = method.evidence_edge orelse return .{};
+        const worker = method.resolution.worker;
+        if (self.evidenceEdgeSchemeSubstitution(worker, edge)) |substitution| return try self.appendSchemeRepSubstitutions(substitution);
+        return try self.evidenceEdgeCallableRelation(worker, method.callable_type, edge) orelse .{};
+    }
+
+    /// For an evidence edge whose target derives its evidence from its
+    /// callable, for which checking recorded no substitution, the target
+    /// worker's type related to the edge's callable type, which fixes every
+    /// variable of the worker's signature exactly as a checked substitution
+    /// would. Null for every other edge.
+    fn evidenceEdgeCallableRelation(
+        self: *Builder,
+        worker_id: WorkerPlanId,
+        callable_type: CheckedTypeIdentity,
+        edge: DictionaryMethodEvidence.EvidenceEdge,
+    ) Allocator.Error!?Span {
+        const node = self.moduleForId(edge.module).static_dispatch_plans.evidenceNode(edge.node);
+        if (node.nested != .from_callable or node.subst.len != 0) return null;
+        const callable_rep = self.plan.repForSourceType(callable_type) orelse
+            boxyPlanInvariant("dictionary method callable type was not analyzed");
+        return try self.storedUseSchemeRepSubstitutions(self.plan.workers.items[@intFromEnum(worker_id)].rep, callable_rep);
+    }
+
     fn evidenceEdgeSchemeSubstitution(
         self: *Builder,
         worker_id: WorkerPlanId,
