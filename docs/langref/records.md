@@ -79,6 +79,16 @@ full_name = |person| {
 }
 ```
 
+A record pattern like `{ first, last }` only matches records with exactly those fields. To
+match a record that might have other fields too, put `..` at the end:
+
+```roc
+first_name = |person| {
+    { first, .. } = person
+    first
+}
+```
+
 ### Record Types
 
 A record type looks like a record literal, except with types instead of values, and
