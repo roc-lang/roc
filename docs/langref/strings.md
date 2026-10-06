@@ -65,7 +65,7 @@ This guide will provide a basic overview of Unicode, including the relevant diff
 * UTF-8
 
 It will also explain why some operations are included in Roc's builtin [Str](../Str)
-module, and why others are in separate packages like [roc-lang/unicode](https://github.com/roc-lang/unicode). 
+module, and why others are in separate packages like [roc-lang/unicode](https://github.com/roc-lang/unicode).
 
 ## Graphemes
 

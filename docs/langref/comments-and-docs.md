@@ -27,7 +27,7 @@ Some shells look for a `#!` (known as a shebang) at the start of an executable t
 #!/usr/bin/env roc
 ```
 
-Roc doesn't have special support for shebangs, but since `#` begins an ordinary Roc comment, 
+Roc doesn't have special support for shebangs, but since `#` begins an ordinary Roc comment,
 this example would be treated as a comment by Roc's compiler, while potentially being read
 as a shebang by a shell.
 
@@ -43,7 +43,7 @@ Doc comments add documentation to a top-level definition. They have a special co
 For example:
 
 ````roc
-## Returns the given number unmodified if it's even, 
+## Returns the given number unmodified if it's even,
 ## and negated if it's odd.
 ##
 ## ```roc

@@ -32,7 +32,7 @@ Roc's compiler will infer the type of your number literal based on how it's used
 List.get(my_list, 3)
 ```
 
-Here, the type of `3` will be `U64` based on how it's used here, because [`List.get`](../List#get) takes a [`List`](../List) as its first argument and a [`U64`](../Num#U64) as its second argument. 
+Here, the type of `3` will be `U64` based on how it's used here, because [`List.get`](../List#get) takes a [`List`](../List) as its first argument and a [`U64`](../Num#U64) as its second argument.
 
 If you want to specify an explicit type for the number (perhaps for documentation, or maybe because you want an error report if it gets used as any other type), you can add the type you want after a dot at the end. For example, here's how you would specify that the number `-12.34` should be interpreted as a [`Dec`](../Num#Dec):
 
@@ -243,7 +243,7 @@ We already saw how you can use optional [number type suffixes](#type-suffixes) t
 
 Here's what will happen if you write this:
 
-* Just based on the syntax here, at compile time, Roc will call `Ratio.from_numeral(...)` 
+* Just based on the syntax here, at compile time, Roc will call `Ratio.from_numeral(...)`
 * It will pass an argument to specify that this is a negative number with the digits `12` before the decimal point and `34` after it.
 * `Ratio.from_numeral` will return a `Try` representing whether the specified digits are a valid `Ratio`. (Some custom number types may have limits on the size of the numbers they store, may or may not support negative numbers, may or may not support digits after the decimal point, etc.)
   * If `Ratio.from_numeral` returned a [`Try.Ok`](../Try) tag, then that tag's [payload](tag-unions#tags) will contain the actual number value that these digits resolved to.
@@ -251,7 +251,7 @@ Here's what will happen if you write this:
 
 `from_numeral` is one of Roc's
 [well-known static-dispatch methods](static-dispatch#literal-conversion).
-  
+
 ### Inferred Custom Number Types
 
 Just like with builtin number types, you don't have to annotate your number literals to specify that they use your custom number type. Instead, you can let the compiler infer the type based on usage. For example, let's say you have a function named `from_ratio` which takes a `Ratio`. Then you could write:
