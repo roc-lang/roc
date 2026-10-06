@@ -10880,10 +10880,11 @@ pub const CheckedExprData = union(enum) {
         tuple: CheckedExprId,
         elem_index: u32,
     },
-    /// A runtime error. `evaluated` lists the operands a call-like expression
-    /// retired for an erroneous operand still evaluates, in order, before it
-    /// crashes; the last of them is that erroneous operand. Empty for every
-    /// other runtime error.
+    /// A runtime error. `evaluated` lists the operands a retired expression
+    /// still evaluates, in order, before it crashes: those up to and
+    /// including an erroneous operand, or every operand of the owner of a
+    /// rejected dispatch on its operands' values. Empty for every other
+    /// runtime error.
     runtime_error: CheckedRuntimeError,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
@@ -23857,12 +23858,14 @@ const NestedProcSiteBuilder = struct {
                     for (substitution) |ty| try self.captureType(ty);
                 }
             },
+            .runtime_error => |runtime_error| {
+                for (runtime_error.evaluated) |operand| try self.pushExpr(operand, owner);
+            },
             .str_segment,
             .bytes_literal,
             .empty_list,
             .empty_record,
             .zero_argument_tag,
-            .runtime_error,
             .crash,
             .ellipsis,
             .anno_only,
@@ -29650,7 +29653,7 @@ fn exhaustivenessReplacingRootForSource(
                 const base_expr, const exact_pattern = switch (body) {
                     .pattern_extraction => |extraction| .{ extraction.base_expr, extraction.scrutinee_pattern },
                     .pattern_validation => |validation| .{ validation.base_expr, validation.scrutinee_pattern },
-                    .expr, .pattern_error => unreachable,
+                    .expr, .pattern_error, .valueless_binding => unreachable,
                 };
                 if (source == .destructure_pattern and source.destructure_pattern == exact_pattern) return root;
 
@@ -29672,7 +29675,7 @@ fn exhaustivenessReplacingRootForSource(
                 if (base_contains) return root;
                 continue;
             },
-            .expr, .pattern_error => {},
+            .expr, .pattern_error, .valueless_binding => {},
         };
         const contains = switch (source) {
             .match_expr => |source_expr| blk: {
@@ -29708,7 +29711,7 @@ fn syntheticExprCapacityForHoistedRoots(selected_hoisted_roots: []const hoist_ro
     var count: usize = 0;
     for (selected_hoisted_roots) |root| {
         count += switch (root.body) {
-            .expr => 0,
+            .expr, .valueless_binding => 0,
             .pattern_extraction => 2,
             .pattern_validation => 2,
             .pattern_error => 1,
@@ -29780,6 +29783,13 @@ fn checkedBodyForSelectedHoistedRoot(
             selected_index,
             validation,
         ),
+        // The right-hand side always crashes, so the root produces no value:
+        // like a validation root, its discarded result is unit-valued.
+        .valueless_binding => .{
+            .expr = checkedExprIdForSource(checked_bodies, selected.expr),
+            .pattern = null,
+            .checked_type = try checked_types.store.ensureEmptyRecordRoot(allocator, names),
+        },
     };
 }
 
@@ -30233,6 +30243,7 @@ pub const HoistedConstTable = struct {
             const source_scheme = if (root.hoisted_body) |body| switch (body) {
                 .pattern_validation => try checked_types.ensureSchemeForRoot(allocator, root.checked_type),
                 .expr, .pattern_extraction, .pattern_error => checked_type_publication.schemeForSourceVar(module, source_var),
+                .valueless_binding => checkedArtifactInvariant("valueless binding root was published as a hoisted constant", .{}),
             } else checked_type_publication.schemeForSourceVar(module, source_var);
             const const_ref = try const_templates.reserveHoisted(
                 allocator,

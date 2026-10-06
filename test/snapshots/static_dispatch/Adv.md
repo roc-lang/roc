@@ -467,7 +467,10 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-lookup-local
+						(p-assign (ident "val")))
+					(e-num (value "100"))))
 			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "mismatch3"))

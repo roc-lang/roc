@@ -12,6 +12,7 @@ a={
 ~~~
 # EXPECTED
 EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
+TYPE MISMATCH - fuzz_crash_101.md:2:3:2:7
 # PROBLEMS
 ~~~clojure
 (reports
@@ -26,6 +27,45 @@ EMPTY TUPLE NOT ALLOWED - fuzz_crash_101.md:2:8:2:10
 			(line-break)
 			(reflow "If you want to represent nothing, try using an empty record: ")
 			(annotated code "{}")
+			(reflow ".")))
+	(report
+		(severity runtime_error)
+		(title "Type Mismatch")
+		(region (start 2 3) (end 2 7))
+		(headline
+			(reflow "This expression is used in an unexpected way."))
+		(document
+			(source-region (file "fuzz_crash_101.md") (start 2 3) (end 2 7) (annotation error) (line-text "r=|()|(()())"))
+			(line-break)
+			(reflow "It has the type:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "() -> _ret")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "But the annotation says it should be:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "(), (({}) -> c), (({}) -> d) -> c")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "This function expects")
+			(reflow " ")
+			(reflow "3")
+			(reflow " ")
+			(reflow "arguments")
+			(reflow " ")
+			(reflow "but got")
+			(reflow " ")
+			(reflow "1")
 			(reflow "."))))
 ~~~
 # TOKENS

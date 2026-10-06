@@ -284,7 +284,9 @@ pub const Constants = struct {
     /// 132: Scheme-use records of replayed uses name their source's
     ///      substitution.
     /// 133: Type descriptor flags mark deferred requirement callables.
-    pub const CACHE_VERSION = 133;
+    /// 134: Hoisted roots record an unannotated top-level value that always
+    ///      crashes as a valueless binding.
+    pub const CACHE_VERSION = 134;
 };
 
 /// Configuration for the Roc cache system.

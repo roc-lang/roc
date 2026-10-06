@@ -517,10 +517,12 @@ pub const Expr = union(enum) {
     /// ```
     e_runtime_error: struct {
         diagnostic: CIR.Diagnostic.Idx,
-        /// The operands a call-like expression retired by an erroneous operand
-        /// still evaluates, in evaluation order, before it crashes: every
-        /// operand before the first erroneous one, then that erroneous
-        /// operand, whose own evaluation crashes. Empty for every other
+        /// The operands a retired expression still evaluates, in evaluation
+        /// order, before it crashes. For an expression retired by an
+        /// erroneous operand: every operand before the first erroneous one,
+        /// then that erroneous operand, whose own evaluation crashes. For the
+        /// owner of a rejected dispatch on its operands' values: every
+        /// operand, after which the dispatch crashes. Empty for every other
         /// runtime error.
         evaluated: CIR.Expr.Span = .{ .span = .{ .start = 0, .len = 0 } },
     },

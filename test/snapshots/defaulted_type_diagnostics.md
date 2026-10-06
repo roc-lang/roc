@@ -472,7 +472,9 @@ written_method = written.foo()
 			(ty-lookup (name "Dec") (builtin))))
 	(d-let
 		(p-assign (ident "written_method"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "written"))))))
 ~~~
 # TYPES
 ~~~clojure

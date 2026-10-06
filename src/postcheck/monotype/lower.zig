@@ -26476,7 +26476,11 @@ const BodyContext = struct {
         }
 
         lowering.declared_ret_node = try ret_cell.toGraphNode(self.graph);
-        lowering.body_ret_cell = if (try self.nodeIsProvenUninhabited(lowering.declared_ret_node))
+        // A runtime error body produces no value, and its checked type can
+        // contain the error it was retired for, so it takes the declared
+        // result's cell like any other consumer's representation.
+        lowering.body_ret_cell = if (self.view.bodies.expr(checked_body).data != .runtime_error and
+            try self.nodeIsProvenUninhabited(lowering.declared_ret_node))
             DraftTypeCell.fromGraphNode(try self.lowerTypeNode(self.view.bodies.expr(checked_body).ty))
         else
             ret_cell;
@@ -30058,9 +30062,8 @@ const BodyContext = struct {
         const data: BodyExprData = switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .runtime_error => |runtime_error| if (runtime_error.evaluated.len != 0)
-                // A call-like expression retired for an erroneous operand
-                // evaluates its earlier operands, then that operand, whose
-                // evaluation crashes.
+                // A retired expression evaluates the operands it still
+                // evaluates, each for its effects, then crashes.
                 return requestLowerTask(self, .{ .operand_sequence = .{
                     .operands = try self.allocator.dupe(checked.CheckedExprId, runtime_error.evaluated),
                     .ty = ty,

@@ -2572,7 +2572,7 @@ const HoistSelectionTransaction = struct {
                     std.debug.assert(root.pattern != null);
                     std.debug.assert(root.pattern.? == pattern);
                 },
-                .pattern_validation => unreachable,
+                .pattern_validation, .valueless_binding => unreachable,
             }
         } else {
             const root = &self.checker.selected_hoisted_roots.items[root_index];
@@ -2992,7 +2992,7 @@ const HoistSelectionTransaction = struct {
             switch (root.body) {
                 .expr => self.checker.hoist_selected_exprs.putAssumeCapacityNoClobber(root.expr, root_index),
                 .pattern_extraction, .pattern_error => {},
-                .pattern_validation => {},
+                .pattern_validation, .valueless_binding => {},
             }
         }
 
@@ -4527,6 +4527,7 @@ pub fn selectedHoistedRootIsTopLevel(self: *const Self, root: hoist_roots.Select
         .pattern_extraction => |extraction| extraction.scrutinee_pattern,
         .pattern_error => |pattern| pattern,
         .pattern_validation => |validation| validation.scrutinee_pattern,
+        .valueless_binding => return false,
     };
     return self.patternIsTopLevelDef(pattern);
 }
@@ -5496,6 +5497,7 @@ fn selectedHoistedRootNamesRetiredBinder(self: *const Self, root: hoist_roots.Se
         .pattern_extraction => |extraction| self.hoist_retired_binders.contains(extraction.scrutinee_pattern) or
             self.hoist_retired_binders.contains(extraction.result_pattern),
         .pattern_validation => |validation| self.hoist_retired_binders.contains(validation.scrutinee_pattern),
+        .valueless_binding => |pattern| self.hoist_retired_binders.contains(pattern),
     };
 }
 
@@ -5819,7 +5821,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         const selected = self.selected_hoisted_roots.items[root_index];
         const validation = switch (selected.body) {
             .pattern_validation => |value| value,
-            .expr, .pattern_extraction, .pattern_error => unreachable,
+            .expr, .pattern_extraction, .pattern_error, .valueless_binding => unreachable,
         };
         std.debug.assert(validation.scrutinee_pattern == entry.key_ptr.*);
     }
@@ -5828,7 +5830,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
         const root_index: u32 = @intCast(i);
         switch (root.body) {
             .expr => std.debug.assert(self.hoist_selected_exprs.get(root.expr) == root_index),
-            .pattern_extraction, .pattern_error => {},
+            .pattern_extraction, .pattern_error, .valueless_binding => {},
             .pattern_validation => |validation| std.debug.assert(self.hoist_selected_pattern_validations.get(validation.scrutinee_pattern) == root_index),
         }
         if (root.pattern) |pattern| {
@@ -5837,7 +5839,7 @@ fn debugAssertHoistSelectionConsistent(self: *const Self) void {
             switch (root.body) {
                 .expr => {},
                 .pattern_extraction, .pattern_error => base.invariant("check invariant violated: pattern extraction hoisted root had no binding pattern", .{}),
-                .pattern_validation => {},
+                .pattern_validation, .valueless_binding => {},
             }
         }
     }
@@ -6181,7 +6183,7 @@ test "hoisted pattern extraction root selection is atomic when binding map alloc
     try std.testing.expectEqual(@as(?u32, 0), state.checker.hoist_selected_bindings.get(result_pattern));
     const selected_extraction = switch (state.checker.selected_hoisted_roots.items[0].body) {
         .pattern_extraction => |selected| selected,
-        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error, .valueless_binding => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(extraction.base_expr, selected_extraction.base_expr);
     try std.testing.expectEqual(extraction.scrutinee_pattern, selected_extraction.scrutinee_pattern);
@@ -12047,7 +12049,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
         const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
-            (root.body == .pattern_error or !self.hoistExprInvalidated(root.expr)) and
+            (root.body == .pattern_error or root.body == .valueless_binding or !self.hoistExprInvalidated(root.expr)) and
             try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
@@ -12055,6 +12057,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         // would reject an expect, dbg, loop, or mutable intermediate.
         const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
             root.body == .pattern_error or
+            root.body == .valueless_binding or
             try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle));
         if (!intrinsic) continue;
         if (!deps) continue;
@@ -12063,7 +12066,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         kept_count += 1;
         switch (root.body) {
             .expr => kept_expr_count += 1,
-            .pattern_extraction, .pattern_error => {},
+            .pattern_extraction, .pattern_error, .valueless_binding => {},
             .pattern_validation => kept_validation_count += 1,
         }
         if (root.pattern != null) kept_pattern_count += 1;
@@ -12092,7 +12095,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         if (!keep_roots[i]) continue;
         const extraction = switch (root.body) {
             .pattern_extraction => |extraction| extraction,
-            .expr, .pattern_validation, .pattern_error => continue,
+            .expr, .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         const validation_index = self.hoist_selected_pattern_validations.get(extraction.scrutinee_pattern) orelse continue;
         if (!keep_roots[validation_index]) continue;
@@ -12123,7 +12126,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const root_index: u32 = @intCast(kept);
         switch (self.selected_hoisted_roots.items[kept].body) {
             .expr => self.hoist_selected_exprs.putAssumeCapacityNoClobber(self.selected_hoisted_roots.items[kept].expr, root_index),
-            .pattern_extraction, .pattern_error => {},
+            .pattern_extraction, .pattern_error, .valueless_binding => {},
             .pattern_validation => |validation| self.hoist_selected_pattern_validations.putAssumeCapacityNoClobber(validation.scrutinee_pattern, root_index),
         }
         if (self.selected_hoisted_roots.items[kept].pattern) |pattern| {
@@ -12142,7 +12145,7 @@ fn hoistedRootIsIntrinsicallyKept(
     self: *Self,
     root: *hoist_roots.SelectedHoistedRoot,
 ) Allocator.Error!bool {
-    if (root.body == .pattern_validation) {
+    if (root.body == .pattern_validation or root.body == .valueless_binding) {
         root.value_kind = .discarded;
         return true;
     }
@@ -12207,6 +12210,9 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
             std.debug.assert(self.cir.store.getExpr(root.expr) == .e_runtime_error);
             continue;
         }
+        // A valueless binding's root is evaluated like the top-level
+        // definition it replaces.
+        if (root.body == .valueless_binding) continue;
         // Required definitions use ordinary top-level evaluation rules, not
         // the optional-hoist dependency predicate.
         if (self.selectedHoistedRootIsTopLevel(root)) continue;
@@ -12486,7 +12492,7 @@ const HoistedRootKeepOracle = struct {
                     entry.value_ptr.* = root_index;
                 },
                 .pattern_extraction, .pattern_error => {},
-                .pattern_validation => {},
+                .pattern_validation, .valueless_binding => {},
             }
             if (root.pattern) |pattern| {
                 const entry = oracle.pattern_roots.getOrPutAssumeCapacity(pattern);
@@ -13599,6 +13605,18 @@ fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnost
     }
 }
 
+/// Record an unannotated top-level value that always crashes. Its name binds
+/// nothing, and a selected root of its own evaluates its right-hand side for
+/// its effects, up to where it crashes, and archives nothing.
+fn recordValuelessTopLevelValue(self: *Self, def: CIR.Def) Allocator.Error!void {
+    try self.erroneous_value_patterns.put(self.gpa, def.pattern, {});
+    try self.selected_hoisted_roots.append(self.gpa, .{
+        .expr = def.expr,
+        .body = .{ .valueless_binding = def.pattern },
+        .value_kind = .discarded,
+    });
+}
+
 /// Replace a rejected statement with an explicit runtime error. A binding
 /// statement's binders must already be poisoned, so later lookups of them
 /// become runtime errors rather than reading a binder with no value.
@@ -13854,8 +13872,93 @@ fn poisonConstraintFailureSource(
     const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
         .region = self.cir.store.getExprRegion(expr_idx),
     } });
-    try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.replaceRejectedOperationWithRuntimeError(expr_idx, diagnostic_idx);
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
+}
+
+/// Replace the owner of a rejected static dispatch with a runtime error. An
+/// expression that dispatches on its operands' values selects its method only
+/// once every operand is evaluated, so it becomes a runtime error that
+/// evaluates every operand, in evaluation order, before it crashes: a call to
+/// a method its receiver does not have still evaluates its receiver and its
+/// arguments. Any other owner, such as a call whose callee's instantiation
+/// carries the rejected requirement or a literal whose conversion is
+/// rejected, fails where its own evaluation begins, so it is the crash alone.
+fn replaceRejectedOperationWithRuntimeError(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+) Allocator.Error!void {
+    const dispatches_on_operands = switch (self.cir.store.getExpr(expr_idx)) {
+        .e_method_call,
+        .e_dispatch_call,
+        .e_type_method_call,
+        .e_type_dispatch_call,
+        .e_binop,
+        .e_unary_minus,
+        .e_structural_eq,
+        .e_method_eq,
+        .e_structural_hash,
+        .e_interpolation,
+        .e_for,
+        => true,
+        .e_call,
+        .e_run_low_level,
+        .e_str,
+        .e_list,
+        .e_tuple,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
+        .e_record,
+        .e_field_access,
+        .e_tuple_access,
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_match,
+        .e_if,
+        .e_empty_record,
+        .e_block,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_hosted_lambda,
+        => false,
+    };
+    if (!dispatches_on_operands) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    const start: u32 = @intCast(self.retired_operand_pool.items.len);
+    defer self.retired_operand_pool.shrinkRetainingCapacity(start);
+    try self.appendEvaluationOperands(expr_idx);
+    const len: u32 = @intCast(self.retired_operand_pool.items.len - start);
+    if (len == 0) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    try self.replaceExprWithRuntimeErrorAfterOperands(expr_idx, diagnostic_idx, .{ .start = start, .len = len });
 }
 
 fn poisonConstraintFailure(
@@ -16736,10 +16839,22 @@ fn finishDef(self: *Self, state: *DefActivity, def_does_fx: bool, env: *Env) std
         try self.markErroneous(expr_var);
         try self.erroneous_value_exprs.put(self.gpa, def.expr, {});
     }
-    // A platform requirement is the def's explicit expected type even when the
-    // source has no annotation. Only truly unconstrained crashing defs default
-    // to unit; otherwise this would overwrite the requirement type with `{}`.
-    if (applied_annotation == null and platform_required == null and try self.exprAlwaysCrashes(def.expr)) {
+    // An unannotated value that always crashes has no value: the crash
+    // happens before its name is bound, exactly as when a pattern meets an
+    // erroneous value, so the name binds nothing and every use of it is
+    // erroneous at the use. The value is still evaluated once, for its
+    // effects, by a root of its own (`recordValuelessTopLevelValue`). An
+    // effectful value is rejected instead, and never evaluated at compile time.
+    const value_always_crashes = applied_annotation == null and platform_required == null and !def_does_fx and
+        self.cir.store.getPattern(def.pattern) == .assign and
+        !isFunctionDef(&self.cir.store, def_expr) and
+        try self.exprAlwaysCrashes(def.expr, .erroneous_values_crash);
+    if (value_always_crashes) {
+        try self.recordValuelessTopLevelValue(def);
+    } else if (applied_annotation == null and platform_required == null and try self.exprAlwaysCrashes(def.expr, .only_explicit_crashes)) {
+        // A platform requirement is the def's explicit expected type even when
+        // the source has no annotation. A crashing destructure has no name of
+        // its own to leave unbound; its pattern relates to `{}`.
         try self.unifyWith(expr_var, .{ .structure = .empty_record }, env);
     }
     if (self.erroneous_value_exprs.contains(def.expr)) {
@@ -27130,6 +27245,17 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
             }
         }
 
+        // An erroneous body value is retired on its own, like an erroneous
+        // block final value: it produces no value, so it does not become the
+        // function's result, and calling the function evaluates the body up to
+        // where it crashes. The result is then whatever the function's other
+        // returns, its annotation, and its uses make it.
+        if (self.branchValueIsErroneous(lambda.body)) {
+            const return_frame = &self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
+            std.debug.assert(return_frame.lambda == expr_idx);
+            return_frame.body_result = try self.fresh(env, expr_region);
+        }
+
         // Process any pending return constraints (from early returns / ?
         // operator) before creating the function type. This must happen
         // after the body is fully checked (for correct error reporting) but
@@ -28723,7 +28849,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             return .{ .child = .{ .expr = match.cond, .expected = child_expected } };
         },
         .cond => {
-            state.cond_always_crashes = try self.exprAlwaysCrashes(match.cond);
+            state.cond_always_crashes = try self.exprAlwaysCrashes(match.cond, .only_explicit_crashes);
             if (!match.is_try_suffix) {
                 try self.closeAbsentConstructedPayloadVars(match.cond, cond_var);
             }
@@ -29920,7 +30046,11 @@ fn annotationWrittenTypeVariables(self: *Self, root: CIR.TypeAnno.Idx) Allocator
     return .{ .open_extension = open_extension, .named_variable = named_variable };
 }
 
-fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!bool {
+/// Whether an erroneous value (`call_operand_type_error_exprs`) in a result
+/// position counts as a crash there.
+const ErroneousValueCrashes = enum { erroneous_values_crash, only_explicit_crashes };
+
+fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx, erroneous_values: ErroneousValueCrashes) Allocator.Error!bool {
     // Every result position must crash: a block's final expression, and
     // each branch of an `if`.
     var pending: std.ArrayList(CIR.Expr.Idx) = .empty;
@@ -29929,6 +30059,7 @@ fn exprAlwaysCrashes(self: *const Self, expr_idx: CIR.Expr.Idx) Allocator.Error!
     while (pending.pop()) |current| {
         const expr = self.cir.store.getExpr(current);
         if (expr == .e_crash or expr == .e_ellipsis or expr == .e_expect_err or expr == .e_break) continue;
+        if (erroneous_values == .erroneous_values_crash and self.branchValueIsErroneous(current)) continue;
         if (expr == .e_run_low_level and expr.e_run_low_level.op == .crash) continue;
         if (expr == .e_block) {
             try pending.append(self.gpa, expr.e_block.final_expr);
@@ -29951,7 +30082,7 @@ fn exprIsAllCrashConditional(self: *const Self, expr_idx: CIR.Expr.Idx) Allocato
     var current = expr_idx;
     while (true) {
         const expr = self.cir.store.getExpr(current);
-        if (expr == .e_if) return try self.exprAlwaysCrashes(current);
+        if (expr == .e_if) return try self.exprAlwaysCrashes(current, .only_explicit_crashes);
         if (expr == .e_block) {
             current = expr.e_block.final_expr;
             continue;

@@ -29,6 +29,11 @@ pub const Body = union(enum) {
     /// The payload retains the owning source pattern identity.
     pattern_error: CIR.Pattern.Idx,
     pattern_validation: PatternValidation,
+    /// An unannotated top-level value that always crashes binds nothing. The
+    /// root evaluates the binding's right-hand side for its effects, up to
+    /// where it crashes, and archives nothing. The payload is the binding's
+    /// pattern; the root does not materialize that binding.
+    valueless_binding: CIR.Pattern.Idx,
 };
 
 /// The runtime value shape produced by a selected root.
@@ -95,13 +100,14 @@ pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
         .pattern_error => |pattern| .{ .pattern_error = pattern },
         .pattern_extraction => |extraction| .{ .pattern_extraction = extraction },
         .pattern_validation => |validation| .{ .pattern_validation = validation },
+        .valueless_binding => |pattern| .{ .valueless_binding = pattern },
     };
 }
 
 /// Releases allocator-owned data inside a hoisted-root body.
 pub fn deinitBody(_: Allocator, body: Body) void {
     switch (body) {
-        .expr, .pattern_error => {},
+        .expr, .pattern_error, .valueless_binding => {},
         .pattern_extraction => {},
         .pattern_validation => {},
     }
