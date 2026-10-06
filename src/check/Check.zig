@@ -1068,7 +1068,7 @@ scratch_embed_cut_count: usize = 0,
 /// Scratch buffer for the (scheme var → fresh var) pairs of one constrained
 /// scheme instantiation, flushed into `cir.scheme_uses`.
 scratch_evidence_pairs: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
-scratch_evidence_pair_set: std.AutoHashMapUnmanaged(ModuleEnv.SchemeUsePair, void) = .empty,
+scratch_evidence_pairs_sorted: std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair) = .empty,
 /// Exact internal calls collected while validating one compiler-generated
 /// parser or encoder. Successful validation publishes this scratch range to
 /// `ModuleEnv`; failed validation discards it.
@@ -1908,51 +1908,81 @@ fn recordSchemeRequirementCandidate(
     owner_entry.value_ptr.appendAssumeCapacity(candidate_idx);
 }
 
-/// Keep the first occurrence of each exact evidence substitution, then group
-/// pairs by scheme var without changing producer order within a group. Small
-/// lists (the overwhelmingly common case) dedup by direct scan: the shared
-/// hash set's `clearRetainingCapacity` memsets its full metadata array, so a
-/// tiny instantiation would pay for the largest list any prior instantiation
-/// produced. Large lists use the checker-owned set, which is reused across
-/// instantiations, avoiding both quadratic scans and a fresh hash-table
-/// allocation on this hot path.
+/// Keep the first occurrence of each exact evidence substitution, grouped
+/// by scheme var in producer order within each group. A stable radix sort on
+/// the scheme var orders the pairs in time linear in their number; an exact
+/// duplicate can only sit in the same group, so it is found by scanning the
+/// pairs already kept for that group.
 fn canonicalizeSchemeUsePairs(
     self: *Self,
     pairs: *std.ArrayListUnmanaged(ModuleEnv.SchemeUsePair),
 ) Allocator.Error!void {
     if (pairs.items.len <= 1) return;
-
-    const direct_scan_max = 32;
-    var write: usize = 0;
-    if (pairs.items.len <= direct_scan_max) {
-        for (pairs.items) |pair| {
-            const already_kept = for (pairs.items[0..write]) |kept| {
-                if (std.meta.eql(kept, pair)) break true;
-            } else false;
-            if (already_kept) continue;
-            pairs.items[write] = pair;
-            write += 1;
+    const sorted = &self.scratch_evidence_pairs_sorted;
+    sorted.clearRetainingCapacity();
+    try sorted.resize(self.gpa, pairs.items.len);
+    const target = sorted.items;
+    if (pairs.items.len <= 32) {
+        // A stable insertion sort, for the few pairs most instantiations have.
+        @memcpy(target, pairs.items);
+        var index: usize = 1;
+        while (index < target.len) : (index += 1) {
+            const pair = target[index];
+            var slot = index;
+            while (slot > 0 and target[slot - 1].old_var > pair.old_var) : (slot -= 1) {
+                target[slot] = target[slot - 1];
+            }
+            target[slot] = pair;
         }
     } else {
-        self.scratch_evidence_pair_set.clearRetainingCapacity();
-        try self.scratch_evidence_pair_set.ensureUnusedCapacity(self.gpa, @intCast(pairs.items.len));
-        for (pairs.items) |pair| {
-            if (self.scratch_evidence_pair_set.contains(pair)) continue;
-            self.scratch_evidence_pair_set.putAssumeCapacity(pair, {});
-            pairs.items[write] = pair;
-            write += 1;
-        }
+        radixSortSchemeUsePairs(pairs.items, target);
+    }
+    var write: usize = 0;
+    var group_start: usize = 0;
+    for (target) |pair| {
+        if (write != 0 and pairs.items[write - 1].old_var != pair.old_var) group_start = write;
+        const duplicate = for (pairs.items[group_start..write]) |kept| {
+            if (kept.fresh_var == pair.fresh_var) break true;
+        } else false;
+        if (duplicate) continue;
+        pairs.items[write] = pair;
+        write += 1;
     }
     pairs.shrinkRetainingCapacity(write);
+}
 
-    std.mem.sort(ModuleEnv.SchemeUsePair, pairs.items, {}, struct {
-        fn lessThan(_: void, a: ModuleEnv.SchemeUsePair, b: ModuleEnv.SchemeUsePair) bool {
-            // pairForResolved deliberately selects the first substitution for
-            // an old root. Preserve the producer's insertion order for ties;
-            // ordering by the fresh id would silently change that selection.
-            return a.old_var < b.old_var;
+/// Stable radix sort of `source_pairs` by scheme var into `target_pairs`,
+/// using `source_pairs` as scratch. Each pass is a stable counting sort on
+/// the next digit, so the result is ordered by scheme var and, within one,
+/// by producer position.
+fn radixSortSchemeUsePairs(source_pairs: []ModuleEnv.SchemeUsePair, target_pairs: []ModuleEnv.SchemeUsePair) void {
+    const digit_bits = 11;
+    var max_old: u32 = 0;
+    for (source_pairs) |pair| max_old = @max(max_old, pair.old_var);
+    var source = source_pairs;
+    var target = target_pairs;
+    var shift: u5 = 0;
+    while (true) {
+        var counts = [_]u32{0} ** (1 << digit_bits);
+        for (source) |pair| counts[(pair.old_var >> shift) & ((1 << digit_bits) - 1)] += 1;
+        var total: u32 = 0;
+        for (&counts) |*count| {
+            const here = count.*;
+            count.* = total;
+            total += here;
         }
-    }.lessThan);
+        for (source) |pair| {
+            const digit = (pair.old_var >> shift) & ((1 << digit_bits) - 1);
+            target[counts[digit]] = pair;
+            counts[digit] += 1;
+        }
+        const swapped = source;
+        source = target;
+        target = swapped;
+        if (shift >= 32 - digit_bits or (max_old >> shift) >> digit_bits == 0) break;
+        shift += digit_bits;
+    }
+    if (source.ptr != target_pairs.ptr) @memcpy(target_pairs, source);
 }
 
 /// Copy one scheme's explicit pending dispatch requirements under
@@ -3860,7 +3890,7 @@ pub fn deinit(self: *Self) void {
     self.scratch_embed_active_pairs.deinit(self.gpa);
     self.scratch_embed_memo.deinit(self.gpa);
     self.scratch_evidence_pairs.deinit(self.gpa);
-    self.scratch_evidence_pair_set.deinit(self.gpa);
+    self.scratch_evidence_pairs_sorted.deinit(self.gpa);
     self.open_literal_vars.deinit(self.gpa);
     self.open_numeral_literals.deinit(self.gpa);
     self.retired_literal_dispatch_plans.deinit(self.gpa);
