@@ -1,7 +1,6 @@
-# An unannotated function whose body declares a type with a capturing method
-# is generalized over the collection it maps, so its caller instantiates it
-# at that type: the type leaves its block through the instantiation, which is
-# reported where the caller uses the function.
+# An unannotated function whose body declares a type with a method that
+# captures `offset`, generalized over the collection it maps. Methods never
+# capture, so the method is rejected at `offset`, and calling it crashes.
 
 total_of = |base, counts| {
 	offset = base * 10

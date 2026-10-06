@@ -89,7 +89,7 @@ const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
 const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
-const CapturingLocalTypeEscape = problem_mod.CapturingLocalTypeEscape;
+const CapturingMethod = problem_mod.CapturingMethod;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -1108,8 +1108,8 @@ pub const ReportBuilder = struct {
             .derived_method_value_use => |data| {
                 return self.buildDerivedMethodValueUseReport(data);
             },
-            .capturing_local_type_escape => |data| {
-                return self.buildCapturingLocalTypeEscapeReport(data);
+            .capturing_method => |data| {
+                return self.buildCapturingMethodReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -4949,40 +4949,41 @@ pub const ReportBuilder = struct {
         });
     }
 
-    fn buildCapturingLocalTypeEscapeReport(self: *Self, data: CapturingLocalTypeEscape) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Local Type Escapes Its Block", "", .runtime_error);
+    fn buildCapturingMethodReport(self: *Self, data: CapturingMethod) Allocator.Error!Report {
+        var report = try Report.init(self.gpa, "Method Captures a Local Value", "", .runtime_error);
         errdefer report.deinit();
 
-        switch (data.kind) {
-            .value => try D.renderSliceInto(&.{
-                D.bytes("This lets a value of type"),
-                D.ident(data.type_name).withAnnotation(.inline_code),
-                D.bytes("leave the block that declares that type."),
-            }, self, &report, &report.headline),
-            .instantiation => try D.renderSliceInto(&.{
-                D.bytes("This uses a definition at type"),
-                D.ident(data.type_name).withAnnotation(.inline_code),
-                D.bytes("outside the block that declares that type."),
-            }, self, &report, &report.headline),
+        if (data.referenced_name.eql(data.captured_name)) {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method uses"),
+                D.ident(data.captured_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("which is defined in the function body around this method's type:"),
+            }, self, &report, &report.headline);
+        } else {
+            try D.renderSliceInto(&.{
+                D.bytes("The"),
+                D.ident(data.method_name).withAnnotation(.inline_code),
+                D.bytes("method uses"),
+                D.ident(data.referenced_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("which uses"),
+                D.ident(data.captured_name).withAnnotation(.inline_code),
+                D.bytes(",").withNoPrecedingSpace(),
+                D.bytes("which is defined in the function body around this method's type:"),
+            }, self, &report, &report.headline);
         }
 
         try self.addSourceHighlightRegion(&report, data.region);
 
         try report.document.addLineBreaks(2);
         try D.renderSlice(&.{
-            D.bytes("Its"),
-            D.ident(data.method_name).withAnnotation(.inline_code),
-            D.bytes("method uses local values or types of the function body around that block, so values of type"),
-            D.ident(data.type_name).withAnnotation(.inline_code),
-            D.bytes("can only be used inside the block that declares it."),
+            D.bytes("Methods can't capture values from the function body around them. Pass"),
+            D.ident(data.captured_name).withAnnotation(.inline_code),
+            D.bytes("to the method as an argument instead."),
         }, self, &report);
-        if (data.kind == .instantiation) {
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            try D.renderSlice(&.{
-                D.bytes("A type annotation on the definition can fix its types inside the block instead."),
-            }, self, &report);
-        }
         return report;
     }
 

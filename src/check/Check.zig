@@ -4272,244 +4272,233 @@ fn dispatchDerivationParent(self: *const Self, fn_var: Var) ?Var {
     return self.component_derivation_by_child_fn_var.get(fn_var);
 }
 
-/// A type declared in a block whose methods include an unpromoted local
-/// procedure, with the block that declares it.
-const CapturingLocalType = struct {
-    decl: CIR.Statement.Idx,
-    /// One of its capturing methods, named by the escape report.
-    method: Ident.Idx,
-    block: ?CIR.Expr.Idx = null,
+/// The right-hand side and name of a method of a type declared in a function
+/// body, keyed by the method binding's pattern.
+const LocalMethod = struct {
+    expr: CIR.Expr.Idx,
+    name: Ident.Idx,
 };
 
-/// POLICY: capturing local types stay in their block (design.md). A type
-/// declared in a block with a method that is an unpromoted local procedure may
-/// not appear in the type of any expression outside that block, because only
-/// code inside the block has the declaration context that method needs. Each
-/// escape is reported where the value leaves the block, and every dispatch
-/// outside the block that would reach such a method becomes a runtime error,
-/// so no later stage meets a method call without its declaration context.
-fn rejectEscapingCapturingLocalTypes(self: *Self) Allocator.Error!void {
+/// POLICY: methods never capture (design.md "Methods Never Capture"). A
+/// method of a type declared in a function body may not refer to a value
+/// bound in an enclosing function body, directly or through a local function
+/// whose body does. Each such reference is reported, and the method's
+/// right-hand side becomes a checked error: the method's declaration binds a
+/// rejected method, so a dispatch to it evaluates its operands and then
+/// crashes. A reference to another method relies on that method alone, which
+/// this check judges on its own. A method is an associated binding that is a
+/// local procedure; any other associated binding is a value of its body. Every
+/// associated binding whose right-hand side is a checked error binds a
+/// rejected method, so its name binds nothing either.
+fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
     if (!try self.moduleDeclaresLocalMethods()) return;
 
-    var types_by_decl: std.AutoArrayHashMapUnmanaged(CIR.Statement.Idx, CapturingLocalType) = .empty;
-    defer types_by_decl.deinit(self.gpa);
+    var methods: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod) = .empty;
+    defer methods.deinit(self.gpa);
     for (self.cir.method_defs.entries.items) |entry| {
-        const pattern = (try self.localProcedureTargetPattern(self.cir, entry.value)) orelse continue;
-        if (self.promoted_local_procedure_patterns.contains(pattern)) continue;
-        const slot = try types_by_decl.getOrPut(self.gpa, entry.key.owner);
-        if (!slot.found_existing) slot.value_ptr.* = .{ .decl = entry.key.owner, .method = entry.key.methodIdent() };
+        if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
+        const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(entry.value.type_node_idx))).s_decl;
+        // An associated value that is not a local procedure is no method:
+        // nothing dispatches to it, and it is a value of the body declaring
+        // its type like any other local binding.
+        if ((try self.localProcedureTargetPattern(self.cir, entry.value)) == null) continue;
+        try methods.put(self.gpa, decl.pattern, .{ .expr = decl.expr, .name = entry.key.methodIdent() });
     }
-    if (types_by_decl.count() == 0) return;
-
-    var walk = LexicalWalk{ .checker = self };
-    defer walk.deinit();
-
-    // The live block declaring each type.
-    try walk.startAtModuleRoots();
-    while (try walk.next()) |expr| {
-        const block = switch (self.cir.store.getExpr(expr)) {
-            .e_block => |block| block,
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_str,
-            .e_bytes_literal,
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_deferred_import_ref,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_record,
-            .e_empty_record,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_field_access,
-            .e_method_call,
-            .e_dispatch_call,
-            .e_interpolation,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_method_eq,
-            .e_type_method_call,
-            .e_type_dispatch_call,
-            .e_tuple_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_return,
-            .e_break,
-            .e_for,
-            .e_hosted_lambda,
-            .e_run_low_level,
-            => continue,
-        };
-        for (self.cir.store.sliceStatements(block.stmts)) |statement| {
-            if (types_by_decl.getPtr(statement)) |local_type| local_type.block = expr;
+    // Reports follow source order.
+    const SourceOrder = struct {
+        checker: *Self,
+        values: []const LocalMethod,
+        pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
+            const store = &ctx.checker.cir.store;
+            return store.getExprRegion(ctx.values[a].expr).start.offset < store.getExprRegion(ctx.values[b].expr).start.offset;
         }
+    };
+    methods.sort(SourceOrder{ .checker = self, .values = methods.values() });
+
+    var captures = LocalFunctionCaptures{ .checker = self, .methods = &methods };
+    defer captures.deinit();
+    for (methods.values()) |method| {
+        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) continue;
+        try captures.collectOuterRefs(method.expr);
     }
+    try captures.settle();
 
-    var inside: LexicalScope = .{};
-    defer inside.deinit(self.gpa);
-    for (types_by_decl.values()) |local_type| {
-        // A declaration whose block was replaced by a checked error is
-        // unreachable, and so is every use of its methods.
-        const block = local_type.block orelse continue;
-        try self.collectLexicalScope(block, &inside);
-        const nominal = self.cir.store.getStatement(local_type.decl).s_nominal_decl;
-        const type_name = self.cir.store.getTypeHeader(nominal.header).relative_name;
-        const escape = try self.findCapturingLocalTypeEscape(local_type.decl, block, &inside);
-        if (escape) |escaping| {
-            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_local_type_escape = .{
-                .type_name = type_name,
-                .method_name = local_type.method,
-                .region = self.cir.store.getExprRegion(escaping),
-                .kind = .value,
-            } });
-            try self.poisonCapturingLocalTypeSite(escaping);
+    var scope: LexicalScope = .{};
+    defer scope.deinit(self.gpa);
+    var reported: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty;
+    defer reported.deinit(self.gpa);
+    for (methods.keys(), methods.values()) |pattern, method| {
+        if (self.cir.store.getExpr(method.expr) == .e_runtime_error) {
+            try self.erroneous_value_patterns.put(self.gpa, pattern, {});
+            continue;
         }
-        var outside_sites: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
-        defer outside_sites.deinit(self.gpa);
-        try self.collectCapturingLocalTypeUsesOutside(local_type.decl, block, &inside, &outside_sites);
-        // With no value leaving the block, a use outside it can select one
-        // of the type's methods only by instantiating a generalized
-        // definition at the type: the type leaves its block through that
-        // instantiation, reported at the first such use.
-        if (escape == null and outside_sites.items.len != 0) {
-            var first = outside_sites.items[0];
-            for (outside_sites.items[1..]) |site| {
-                if (self.cir.store.getExprRegion(site).start.offset < self.cir.store.getExprRegion(first).start.offset) first = site;
-            }
-            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_local_type_escape = .{
-                .type_name = type_name,
-                .method_name = local_type.method,
-                .region = self.cir.store.getExprRegion(first),
-                .kind = .instantiation,
+        try self.collectLexicalScope(method.expr, &scope);
+        // Each name the method refers to is reported once, at its first use.
+        reported.clearRetainingCapacity();
+        for (scope.order.items) |expr| {
+            const referenced = self.localLookupPattern(expr) orelse continue;
+            if (!captures.isOuterRef(&scope, referenced)) continue;
+            const captured = captures.valueReachedBy(referenced) orelse continue;
+            if ((try reported.getOrPut(self.gpa, referenced)).found_existing) continue;
+            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_method = .{
+                .method_name = method.name,
+                .referenced_name = self.getPatternIdent(referenced) orelse method.name,
+                .captured_name = self.getPatternIdent(captured) orelse method.name,
+                .region = self.cir.store.getExprRegion(expr),
             } });
         }
-        for (outside_sites.items) |site| try self.poisonCapturingLocalTypeSite(site);
+        if (reported.count() == 0) continue;
+        const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
+            .region = self.cir.store.getExprRegion(method.expr),
+        } });
+        try self.replaceExprWithRuntimeError(method.expr, diagnostic_idx);
+        try self.erroneous_value_exprs.put(self.gpa, method.expr, {});
+        try self.erroneous_value_patterns.put(self.gpa, pattern, {});
     }
 }
 
-/// The expressions and bound patterns of one block's lexical subtree. A
-/// `return` inside it leaves to its enclosing lambda, which may lie outside, so
-/// a return target is not part of the subtree.
-const LexicalScope = struct {
-    exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty,
-    patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
-    /// Pre-order, so the first escape found is the outermost.
-    order: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+/// The binding a local lookup reads, or null for any other expression.
+fn localLookupPattern(self: *const Self, expr: CIR.Expr.Idx) ?CIR.Pattern.Idx {
+    const data = self.cir.store.getExpr(expr);
+    return if (data == .e_lookup_local) data.e_lookup_local.pattern_idx else null;
+}
 
-    fn deinit(self: *LexicalScope, gpa: Allocator) void {
-        self.exprs.deinit(gpa);
-        self.patterns.deinit(gpa);
-        self.order.deinit(gpa);
+/// Which local functions reach a value of an enclosing function body. A local
+/// binding whose right-hand side is a lambda, a closure, or another local name
+/// is function-like: it reaches whatever the names its right-hand side refers
+/// to from outside it reach. Every other local binding, and every parameter or
+/// pattern binder, is a value. Top-level names and methods reach nothing.
+const LocalFunctionCaptures = struct {
+    checker: *Self,
+    methods: *const std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod),
+    /// Outer references of each function-like binding the methods reach.
+    refs: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.Pattern.Idx)) = .empty,
+    /// Bindings whose outer references are not collected yet.
+    pending: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty,
+    /// The value each function-like binding reaches, once settled.
+    reached: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Pattern.Idx) = .empty,
+    scope: LexicalScope = .{},
+
+    fn deinit(self: *LocalFunctionCaptures) void {
+        const gpa = self.checker.gpa;
+        for (self.refs.values()) |*list| list.deinit(gpa);
+        self.refs.deinit(gpa);
+        self.pending.deinit(gpa);
+        self.reached.deinit(gpa);
+        self.scope.deinit(gpa);
     }
 
-    fn clear(self: *LexicalScope) void {
-        self.exprs.clearRetainingCapacity();
-        self.patterns.clearRetainingCapacity();
-        self.order.clearRetainingCapacity();
+    fn isOuterRef(self: *const LocalFunctionCaptures, scope: *const LexicalScope, pattern: CIR.Pattern.Idx) bool {
+        if (scope.patterns.contains(pattern)) return false;
+        if (self.checker.patternIsTopLevel(pattern)) return false;
+        return !self.methods.contains(pattern);
+    }
+
+    /// The right-hand side of a function-like local binding.
+    fn functionLikeExpr(self: *LocalFunctionCaptures, pattern: CIR.Pattern.Idx) Allocator.Error!?CIR.Expr.Idx {
+        const expr = (try self.checker.localDeclExprForPattern(pattern)) orelse return null;
+        const data = self.checker.cir.store.getExpr(expr);
+        return if (data == .e_lambda or data == .e_closure or data == .e_lookup_local) expr else null;
+    }
+
+    /// Queue every function-like binding `root`'s subtree refers to from
+    /// outside it, and, transitively, those their right-hand sides refer to.
+    fn collectOuterRefs(self: *LocalFunctionCaptures, root: CIR.Expr.Idx) Allocator.Error!void {
+        try self.queueOuterRefs(root, null);
+        while (self.pending.pop()) |pattern| {
+            const expr = (try self.functionLikeExpr(pattern)).?;
+            try self.queueOuterRefs(expr, pattern);
+        }
+    }
+
+    fn queueOuterRefs(self: *LocalFunctionCaptures, root: CIR.Expr.Idx, owner: ?CIR.Pattern.Idx) Allocator.Error!void {
+        const gpa = self.checker.gpa;
+        try self.checker.collectLexicalScope(root, &self.scope);
+        for (self.scope.order.items) |expr| {
+            const referenced = self.checker.localLookupPattern(expr) orelse continue;
+            if (!self.isOuterRef(&self.scope, referenced)) continue;
+            if (owner) |function| try self.refs.getPtr(function).?.append(gpa, referenced);
+            if (self.refs.contains(referenced)) continue;
+            if ((try self.functionLikeExpr(referenced)) == null) continue;
+            try self.refs.put(gpa, referenced, .empty);
+            try self.pending.append(gpa, referenced);
+        }
+    }
+
+    /// Decide which collected bindings reach a value: the least fixpoint of
+    /// "refers to a value, or to a binding that reaches one".
+    fn settle(self: *LocalFunctionCaptures) Allocator.Error!void {
+        const gpa = self.checker.gpa;
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.refs.keys(), self.refs.values()) |function, list| {
+                if (self.reached.contains(function)) continue;
+                for (list.items) |referenced| {
+                    const value = if (self.refs.contains(referenced))
+                        self.reached.get(referenced) orelse continue
+                    else
+                        referenced;
+                    try self.reached.put(gpa, function, value);
+                    changed = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The value of an enclosing function body an outer reference reaches,
+    /// or null when it reaches none.
+    fn valueReachedBy(self: *const LocalFunctionCaptures, referenced: CIR.Pattern.Idx) ?CIR.Pattern.Idx {
+        if (self.refs.contains(referenced)) return self.reached.get(referenced);
+        return referenced;
     }
 };
 
-/// An explicit-stack pre-order walk over the live expression tree.
-const LexicalWalk = struct {
+/// The expressions of one expression's lexical subtree, in pre-order, and the
+/// patterns bound inside it.
+const LexicalScope = struct {
+    patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .empty,
+    order: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+
+    fn deinit(self: *LexicalScope, gpa: Allocator) void {
+        self.patterns.deinit(gpa);
+        self.order.deinit(gpa);
+    }
+};
+
+/// Collect `root`'s lexical subtree into `scope` with an explicit-stack
+/// pre-order walk.
+fn collectLexicalScope(self: *Self, root: CIR.Expr.Idx, scope: *LexicalScope) Allocator.Error!void {
+    scope.patterns.clearRetainingCapacity();
+    scope.order.clearRetainingCapacity();
+    var stack: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer stack.deinit(self.gpa);
+    try stack.append(self.gpa, root);
+    while (stack.pop()) |expr| {
+        try scope.order.append(self.gpa, expr);
+        const start = stack.items.len;
+        try self.visitExprChildren(expr, LexicalScopePusher{ .checker = self, .stack = &stack, .patterns = &scope.patterns });
+        std.mem.reverse(CIR.Expr.Idx, stack.items[start..]);
+    }
+}
+
+const LexicalScopePusher = struct {
     checker: *Self,
-    stack: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
-    /// Patterns the popped expression binds, for a caller that collects them.
-    patterns: ?*std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = null,
+    stack: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+    patterns: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 
-    fn deinit(self: *LexicalWalk) void {
-        self.stack.deinit(self.checker.gpa);
+    fn expr(p: LexicalScopePusher, child: CIR.Expr.Idx) Allocator.Error!void {
+        try p.stack.append(p.checker.gpa, child);
     }
 
-    fn startAtModuleRoots(self: *LexicalWalk) Allocator.Error!void {
-        const checker = self.checker;
-        self.stack.clearRetainingCapacity();
-        // Pushed in reverse so the walk visits roots in declaration order.
-        const statements = checker.cir.store.sliceStatements(checker.cir.all_statements);
-        var statement_index = statements.len;
-        while (statement_index > 0) {
-            statement_index -= 1;
-            try checker.visitStatementChildren(statements[statement_index], self.pusher());
-        }
-        const defs = checker.cir.store.sliceDefs(checker.cir.all_defs);
-        var def_index = defs.len;
-        while (def_index > 0) {
-            def_index -= 1;
-            try self.stack.append(checker.gpa, checker.cir.store.getDef(defs[def_index]).expr);
-        }
+    fn boundPattern(p: LexicalScopePusher, pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try p.checker.collectPatternSubtree(pattern, p.patterns);
     }
 
-    fn startAt(self: *LexicalWalk, root: CIR.Expr.Idx) Allocator.Error!void {
-        self.stack.clearRetainingCapacity();
-        try self.stack.append(self.checker.gpa, root);
-    }
+    fn reassignTarget(_: LexicalScopePusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
 
-    /// Pop the next expression and schedule its children.
-    fn next(self: *LexicalWalk) Allocator.Error!?CIR.Expr.Idx {
-        const expr = self.stack.pop() orelse return null;
-        try self.pushChildren(expr);
-        return expr;
-    }
-
-    /// Pop the next expression without scheduling its children.
-    fn nextSkippingChildren(self: *LexicalWalk) ?CIR.Expr.Idx {
-        return self.stack.pop();
-    }
-
-    fn pushChildren(self: *LexicalWalk, expr: CIR.Expr.Idx) Allocator.Error!void {
-        const start = self.stack.items.len;
-        try self.checker.visitExprChildren(expr, self.pusher());
-        std.mem.reverse(CIR.Expr.Idx, self.stack.items[start..]);
-    }
-
-    fn pusher(self: *LexicalWalk) Pusher {
-        return .{ .walk = self };
-    }
-
-    const Pusher = struct {
-        walk: *LexicalWalk,
-
-        fn expr(p: Pusher, child: CIR.Expr.Idx) Allocator.Error!void {
-            try p.walk.stack.append(p.walk.checker.gpa, child);
-        }
-
-        fn boundPattern(p: Pusher, pattern: CIR.Pattern.Idx) Allocator.Error!void {
-            const patterns = p.walk.patterns orelse return;
-            try p.walk.checker.collectPatternSubtree(pattern, patterns);
-        }
-
-        fn reassignTarget(_: Pusher, _: CIR.Pattern.Idx) Allocator.Error!void {}
-
-        fn returnTarget(_: Pusher, _: CIR.Expr.Idx) Allocator.Error!void {}
-    };
+    fn returnTarget(_: LexicalScopePusher, _: CIR.Expr.Idx) Allocator.Error!void {}
 };
 
 fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void)) Allocator.Error!void {
@@ -4522,228 +4511,6 @@ fn collectPatternSubtree(self: *Self, root: CIR.Pattern.Idx, out: *std.AutoHashM
     }
 }
 
-fn collectLexicalScope(self: *Self, block: CIR.Expr.Idx, scope: *LexicalScope) Allocator.Error!void {
-    scope.clear();
-    var walk = LexicalWalk{ .checker = self, .patterns = &scope.patterns };
-    defer walk.deinit();
-    try walk.startAt(block);
-    while (try walk.next()) |expr| {
-        try scope.exprs.put(self.gpa, expr, {});
-        try scope.order.append(self.gpa, expr);
-    }
-}
-
-/// The expression through which a value whose type mentions the capturing
-/// local type `decl` leaves its block, or null when no expression outside the
-/// block has such a type.
-/// The first crossing inside the block names the escape: the block's own
-/// value, a reference to a binding from outside, a reassignment of one, or a
-/// return to a lambda outside. Every other route leaves an outside expression
-/// mentioning the type, which names the escape when no crossing does.
-fn findCapturingLocalTypeEscape(self: *Self, decl: CIR.Statement.Idx, block: CIR.Expr.Idx, inside: *const LexicalScope) Allocator.Error!?CIR.Expr.Idx {
-    var mentions = TypeMentionSearch{ .checker = self, .decl = decl };
-    defer mentions.deinit();
-
-    var outside_witness: ?CIR.Expr.Idx = null;
-    var walk = LexicalWalk{ .checker = self };
-    defer walk.deinit();
-    try walk.startAtModuleRoots();
-    while (walk.stack.items.len > 0) {
-        const expr = walk.nextSkippingChildren().?;
-        if (expr == block) {
-            // The block's value is the one outside value its subtree types.
-            if (try mentions.inVar(ModuleEnv.varFrom(expr))) {
-                outside_witness = expr;
-                break;
-            }
-            continue;
-        }
-        if (try mentions.inVar(ModuleEnv.varFrom(expr))) {
-            outside_witness = expr;
-            break;
-        }
-        try walk.pushChildren(expr);
-    }
-    const witness = outside_witness orelse return null;
-
-    var crossings = TypeMentionSearch{ .checker = self, .decl = decl };
-    defer crossings.deinit();
-    if (try crossings.inVar(ModuleEnv.varFrom(block))) {
-        return self.cir.store.getExpr(block).e_block.final_expr;
-    }
-    for (inside.order.items) |expr| {
-        switch (self.cir.store.getExpr(expr)) {
-            .e_lookup_local => |lookup| {
-                if (inside.patterns.contains(lookup.pattern_idx)) continue;
-                if (try crossings.inVarFresh(ModuleEnv.varFrom(lookup.pattern_idx))) return expr;
-            },
-            .e_return => |ret| {
-                if (inside.exprs.contains(ret.lambda)) continue;
-                if (try crossings.inVarFresh(ModuleEnv.varFrom(ret.expr))) return ret.expr;
-            },
-            .e_block => |inner| for (self.cir.store.sliceStatements(inner.stmts)) |statement| {
-                switch (self.cir.store.getStatement(statement)) {
-                    .s_reassign => |reassign| {
-                        if (inside.patterns.contains(reassign.pattern_idx)) continue;
-                        if (try crossings.inVarFresh(ModuleEnv.varFrom(reassign.pattern_idx))) return reassign.expr;
-                    },
-                    .s_return => |ret| {
-                        if (inside.exprs.contains(ret.lambda)) continue;
-                        if (try crossings.inVarFresh(ModuleEnv.varFrom(ret.expr))) return ret.expr;
-                    },
-                    .s_decl,
-                    .s_var,
-                    .s_var_uninitialized,
-                    .s_crash,
-                    .s_dbg,
-                    .s_expr,
-                    .s_expect,
-                    .s_for,
-                    .s_while,
-                    .s_infinite_loop,
-                    .s_breakable_loop,
-                    .s_break,
-                    .s_import,
-                    .s_alias_decl,
-                    .s_nominal_decl,
-                    .s_where_alias_decl,
-                    .s_type_anno,
-                    .s_type_var_alias,
-                    .s_runtime_error,
-                    => {},
-                }
-            },
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_str,
-            .e_bytes_literal,
-            .e_lookup_external,
-            .e_deferred_import_ref,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_list,
-            .e_empty_list,
-            .e_tuple,
-            .e_match,
-            .e_if,
-            .e_call,
-            .e_record,
-            .e_empty_record,
-            .e_tag,
-            .e_nominal,
-            .e_nominal_external,
-            .e_zero_argument_tag,
-            .e_closure,
-            .e_lambda,
-            .e_binop,
-            .e_unary_minus,
-            .e_field_access,
-            .e_method_call,
-            .e_dispatch_call,
-            .e_interpolation,
-            .e_structural_eq,
-            .e_structural_hash,
-            .e_method_eq,
-            .e_type_method_call,
-            .e_type_dispatch_call,
-            .e_tuple_access,
-            .e_runtime_error,
-            .e_crash,
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_break,
-            .e_for,
-            .e_hosted_lambda,
-            .e_run_low_level,
-            => {},
-        }
-    }
-    return witness;
-}
-
-/// Whether solved types mention one capturing local type. A function-body
-/// nominal of this module may hold it in its backing; no other nominal can.
-/// `inVar` shares its visited set across queries, so a walk over many
-/// expressions visits each type node once and reports the first expression
-/// whose type reaches the declaration; `inVarFresh` answers one query alone.
-const TypeMentionSearch = struct {
-    checker: *Self,
-    decl: CIR.Statement.Idx,
-    visited: std.AutoHashMapUnmanaged(Var, void) = .empty,
-    stack: std.ArrayListUnmanaged(Var) = .empty,
-
-    fn deinit(self: *TypeMentionSearch) void {
-        self.visited.deinit(self.checker.gpa);
-        self.stack.deinit(self.checker.gpa);
-    }
-
-    fn inVarFresh(self: *TypeMentionSearch, root: Var) Allocator.Error!bool {
-        self.visited.clearRetainingCapacity();
-        return self.inVar(root);
-    }
-
-    fn inVar(self: *TypeMentionSearch, root: Var) Allocator.Error!bool {
-        const checker = self.checker;
-        const types = checker.types;
-        self.stack.clearRetainingCapacity();
-        try self.stack.append(checker.gpa, root);
-        while (self.stack.pop()) |var_| {
-            const resolved = types.resolveVar(var_);
-            const seen = try self.visited.getOrPut(checker.gpa, resolved.var_);
-            if (seen.found_existing) continue;
-            switch (resolved.desc.content) {
-                .flex, .rigid, .field_presence, .err => {},
-                .alias => |alias| {
-                    try self.stack.appendSlice(checker.gpa, types.sliceAliasArgs(alias));
-                    try self.stack.append(checker.gpa, types.getAliasBackingVar(alias));
-                },
-                .structure => |flat| switch (flat) {
-                    .empty_record, .empty_tag_union => {},
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        try self.stack.appendSlice(checker.gpa, types.sliceVars(func.args));
-                        try self.stack.append(checker.gpa, func.ret);
-                    },
-                    .record => |record| {
-                        const fields = types.getRecordFieldsSlice(record.fields);
-                        for (fields.items(.presence)) |presence| try self.stack.append(checker.gpa, presence.typeVar());
-                        try self.stack.append(checker.gpa, record.ext);
-                    },
-                    .tuple => |tuple| try self.stack.appendSlice(checker.gpa, types.sliceVars(tuple.elems)),
-                    .tag_union => |tag_union| {
-                        const tags = types.getTagsSlice(tag_union.tags);
-                        for (tags.items(.args)) |args| try self.stack.appendSlice(checker.gpa, types.sliceVars(args));
-                        try self.stack.append(checker.gpa, tag_union.ext);
-                    },
-                    .nominal_type => |nominal| {
-                        try self.stack.appendSlice(checker.gpa, types.sliceNominalArgs(nominal));
-                        if (checker.getNominalOriginEnv(nominal) != checker.cir) continue;
-                        const source_decl = nominal.sourceDeclOptional() orelse continue;
-                        if (source_decl == @intFromEnum(self.decl)) return true;
-                        if (try checker.isModuleTypeDecl(@enumFromInt(source_decl))) continue;
-                        const backing = checker.nominalDeclBackingTemplate(nominal) orelse continue;
-                        try self.stack.append(checker.gpa, backing);
-                    },
-                },
-            }
-        }
-        return false;
-    }
-};
-
 fn isModuleTypeDecl(self: *Self, decl: CIR.Statement.Idx) Allocator.Error!bool {
     if (self.module_type_decls.count() == 0) {
         for (self.cir.store.sliceStatements(self.cir.type_decls)) |module_decl| {
@@ -4751,155 +4518,6 @@ fn isModuleTypeDecl(self: *Self, decl: CIR.Statement.Idx) Allocator.Error!bool {
         }
     }
     return self.module_type_decls.contains(decl);
-}
-
-/// Collect every live dispatch site outside the declaring block whose lineage
-/// selects a capturing method of `decl`. A lineage's evaluation site is its
-/// outermost dispatch with a site: a target's introducing expression, or the
-/// lookup that instantiated the requirement. Inner sites belong to the generic
-/// bodies the outer site supplies with evidence, so an outer site outside the
-/// block supplies the method from where its declaration context does not
-/// exist.
-fn collectCapturingLocalTypeUsesOutside(
-    self: *Self,
-    decl: CIR.Statement.Idx,
-    block: CIR.Expr.Idx,
-    inside: *const LexicalScope,
-    out: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-) Allocator.Error!void {
-    var instantiation_site_by_fn_var: std.AutoHashMapUnmanaged(Var, CIR.Expr.Idx) = .empty;
-    defer instantiation_site_by_fn_var.deinit(self.gpa);
-    for (self.instantiation_dispatchers.items) |dispatcher| {
-        const expr = dispatcher.instantiation_expr orelse continue;
-        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
-            try instantiation_site_by_fn_var.put(self.gpa, constraint.fn_var, expr);
-        }
-    }
-    for (self.instantiated_literal_conversion_uses.items) |copied| {
-        try instantiation_site_by_fn_var.put(self.gpa, copied.fn_var, copied.use_expr);
-    }
-
-    var sites: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
-    defer sites.deinit(self.gpa);
-    for (self.dispatch_target_instantiations.items) |instantiation| {
-        if (instantiation.target_env != self.cir) continue;
-        if (!self.methodBindingBelongsTo(instantiation.target_binding, decl)) continue;
-        const pattern = (try self.localProcedureTargetPattern(self.cir, instantiation.target_binding)) orelse continue;
-        if (self.promoted_local_procedure_patterns.contains(pattern)) continue;
-
-        var site: ?CIR.Expr.Idx = null;
-        var current: ?Var = instantiation.constraint_fn_var;
-        while (current) |fn_var| {
-            if (instantiation_site_by_fn_var.get(fn_var)) |expr| {
-                site = expr;
-            } else if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
-                if (self.dispatch_target_instantiations.items[raw_index].intro_expr) |expr| site = expr;
-            }
-            current = self.dispatchDerivationParent(fn_var);
-        }
-        const expr = site orelse continue;
-        if (inside.exprs.contains(expr)) continue;
-        try sites.append(self.gpa, expr);
-    }
-    if (sites.items.len == 0) return;
-
-    // A site under an expression already replaced by a checked error is no
-    // longer part of the program; only a live site outside the block remains.
-    var outside: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .empty;
-    defer outside.deinit(self.gpa);
-    var walk = LexicalWalk{ .checker = self };
-    defer walk.deinit();
-    try walk.startAtModuleRoots();
-    while (walk.nextSkippingChildren()) |expr| {
-        if (expr == block) continue;
-        try outside.put(self.gpa, expr, {});
-        try walk.pushChildren(expr);
-    }
-    for (sites.items) |expr| {
-        if (!outside.contains(expr)) continue;
-        try out.append(self.gpa, expr);
-    }
-}
-
-fn poisonCapturingLocalTypeSite(self: *Self, expr: CIR.Expr.Idx) Allocator.Error!void {
-    switch (self.cir.store.getExpr(expr)) {
-        .e_runtime_error => return,
-        // A function value is erroneous in place; its body stays checked.
-        .e_lambda, .e_closure => {},
-        .e_num,
-        .e_frac_f32,
-        .e_frac_f64,
-        .e_dec,
-        .e_dec_small,
-        .e_num_from_numeral,
-        .e_typed_int,
-        .e_typed_frac,
-        .e_typed_num_from_numeral,
-        .e_str_segment,
-        .e_str,
-        .e_bytes_literal,
-        .e_lookup_local,
-        .e_lookup_external,
-        .e_deferred_import_ref,
-        .e_lookup_associated_local,
-        .e_lookup_associated,
-        .e_lookup_associated_resolved,
-        .e_lookup_required,
-        .e_list,
-        .e_empty_list,
-        .e_tuple,
-        .e_match,
-        .e_if,
-        .e_call,
-        .e_record,
-        .e_empty_record,
-        .e_block,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
-        .e_zero_argument_tag,
-        .e_binop,
-        .e_unary_minus,
-        .e_field_access,
-        .e_method_call,
-        .e_dispatch_call,
-        .e_interpolation,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_method_eq,
-        .e_type_method_call,
-        .e_type_dispatch_call,
-        .e_tuple_access,
-        .e_crash,
-        .e_dbg,
-        .e_expect_err,
-        .e_expect,
-        .e_ellipsis,
-        .e_anno_only,
-        .e_derived_method,
-        .e_return,
-        .e_break,
-        .e_for,
-        .e_hosted_lambda,
-        .e_run_low_level,
-        => {
-            const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
-                .region = self.cir.store.getExprRegion(expr),
-            } });
-            try self.replaceExprWithRuntimeError(expr, diagnostic_idx);
-        },
-    }
-    try self.erroneous_value_exprs.put(self.gpa, expr, {});
-}
-
-/// Whether a same-module method binding is a method of the type declared by
-/// `decl`.
-fn methodBindingBelongsTo(self: *const Self, binding: ModuleEnv.MethodBinding, decl: CIR.Statement.Idx) bool {
-    for (self.cir.method_defs.entries.items) |entry| {
-        if (entry.key.owner != decl) continue;
-        if (entry.value.type_node_idx == binding.type_node_idx) return true;
-    }
-    return false;
 }
 
 /// Whether a selected root materializes a top-level binding.
@@ -12358,8 +11976,8 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
 }
 
 fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
+    try self.rejectCapturingMethods();
     try self.finalizePromotedLocalProcedures();
-    try self.rejectEscapingCapturingLocalTypes();
 
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
@@ -15526,11 +15144,14 @@ fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_va
 /// The binding pattern of the local procedure a method binding calls: the
 /// binding's own when it declares a lambda or closure, or the local function
 /// that its chain of local bindings reaches, exactly as the method registry
-/// resolves the binding's target.
+/// resolves the binding's target. A rejected method is its own binding: it is
+/// never promoted, so a dispatch selecting it, which crashes where it runs, is
+/// never available at compile time.
 fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) Allocator.Error!?CIR.Pattern.Idx {
     if (env != self.cir) return null;
     if (self.cir.store.nodes.get(binding.type_node_idx).tag != .statement_decl) return null;
     const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(binding.type_node_idx))).s_decl;
+    if (self.cir.store.getExpr(decl.expr) == .e_runtime_error) return decl.pattern;
     var pattern = decl.pattern;
     var expr = decl.expr;
     // Each hop follows one local binding, and a chain can visit each at most
@@ -29384,7 +29005,44 @@ fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error
         .e_field_access => |field| try pool.append(self.gpa, field.receiver),
         .e_tuple_access => |access| try pool.append(self.gpa, access.tuple),
         .e_for => |for_| try pool.append(self.gpa, for_.expr),
-        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_empty_list, .e_match, .e_if, .e_empty_record, .e_block, .e_zero_argument_tag, .e_closure, .e_lambda, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_hosted_lambda => {},
+        .e_num,
+        .e_frac_f32,
+        .e_frac_f64,
+        .e_dec,
+        .e_dec_small,
+        .e_num_from_numeral,
+        .e_typed_int,
+        .e_typed_frac,
+        .e_typed_num_from_numeral,
+        .e_str_segment,
+        .e_bytes_literal,
+        .e_lookup_local,
+        .e_lookup_external,
+        .e_deferred_import_ref,
+        .e_lookup_associated_local,
+        .e_lookup_associated,
+        .e_lookup_associated_resolved,
+        .e_lookup_required,
+        .e_empty_list,
+        .e_match,
+        .e_if,
+        .e_empty_record,
+        .e_block,
+        .e_zero_argument_tag,
+        .e_closure,
+        .e_lambda,
+        .e_runtime_error,
+        .e_crash,
+        .e_dbg,
+        .e_expect_err,
+        .e_expect,
+        .e_ellipsis,
+        .e_anno_only,
+        .e_derived_method,
+        .e_return,
+        .e_break,
+        .e_hosted_lambda,
+        => {},
     }
 }
 
@@ -32836,9 +32494,7 @@ fn valueIsErroneous(self: *Self, value: CIR.Expr.Idx) Allocator.Error!bool {
     while (true) {
         guard.tick();
         if (self.erroneous_value_exprs.contains(current)) break;
-        const expr = self.cir.store.getExpr(current);
-        if (expr != .e_lookup_local) return false;
-        const pattern = expr.e_lookup_local.pattern_idx;
+        const pattern = self.localLookupPattern(current) orelse return false;
         if (self.erroneous_value_patterns.contains(pattern)) break;
         const source = self.binder_source_exprs.get(pattern) orelse return false;
         try self.binder_source_path.append(self.gpa, pattern);
@@ -34792,71 +34448,190 @@ fn finalizeTypes(self: *Self, env: *Env, scope: FinalizeScope) std.mem.Allocator
 }
 
 /// Record, for each `to_inspect` method this module declares, the use
-/// inspection makes of it: an instance of its type whose result is `Str`
-/// (design.md "Inspect Overrides"). Publication decides from that instance
-/// whether inspection uses the method, and publishes the use's evidence as it
-/// does a dispatch target's. The method's own type is never changed: the
-/// instance is a fresh copy, related exactly as a call site whose result is
-/// `Str` relates one.
+/// inspection makes of it: an instance of its type at `T -> Str`, where `T` is
+/// its owner applied to fresh type variables (design.md "Inspect Overrides").
+/// The method is an override exactly when such an instance exists: its
+/// scheme, annotated or inferred, however general, can be used at `T -> Str`
+/// with every requirement the instance carries satisfied. Publication
+/// publishes the use's evidence as it does a dispatch target's. The method's
+/// own type is never changed: the instance is a fresh copy, related exactly
+/// as a call site at `T -> Str` relates one.
 fn recordInspectOverrideInstances(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.cir.method_defs.entries.items) |entry| {
         if (!entry.key.methodIdent().eql(self.cir.idents.to_inspect)) continue;
+        if (entry.key.ownerIdent().moduleIdentity() != null) continue;
+        if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(entry.key.owner)).tag != .statement_nominal_decl) continue;
         const binding_var = ModuleEnv.varFrom(entry.value.type_node_idx);
-        const use_var = try self.inspectOverrideStrInstance(entry.value.def_idx, binding_var, env) orelse continue;
+        const use_var = try self.inspectOverrideStrInstance(entry.value.def_idx, entry.key.owner, binding_var, env) orelse continue;
         try self.cir.recordInspectOverrideInstance(entry.value.def_idx, use_var);
     }
 }
 
-/// The instance of `binding_var`'s type whose result is `Str`, or null when
-/// its result cannot be `Str`. The returned use var is unified with that
-/// instance and names its dispatch-target scheme-use record. A monomorphic
-/// binding's only instance is its own type.
-fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
-    if (!self.isBindingSchemeVar(binding_var) and self.types.resolveVar(binding_var).desc.rank != .generalized) {
-        return binding_var;
-    }
-
+/// The instance of `binding_var`'s type at `owner -> Str`, or null when the
+/// method cannot be used there. The returned use var is unified with that
+/// instance and names its dispatch-target scheme-use record.
+fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Statement.Idx, binding_var: Var, env: *Env) std.mem.Allocator.Error!?Var {
     var probe = try self.beginCommitProbe(env);
     var committed = false;
     defer if (!committed) probe.rollback();
 
     const region = self.getRegionAt(binding_var);
     const use_var = try self.fresh(env, region);
-    const instance = try self.instantiateBindingVar(binding_var, env, .use_last_var, .{ .dispatch_target = .{
-        .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
-        .constraint_fn_var = use_var,
-    } });
+    const generalized = self.isBindingSchemeVar(binding_var) or self.types.resolveVar(binding_var).desc.rank == .generalized;
+    const instance = if (generalized)
+        try self.instantiateBindingVar(binding_var, env, .use_last_var, .{ .dispatch_target = .{
+            .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
+            .constraint_fn_var = use_var,
+        } })
+    else
+        binding_var;
     if (!(try probe.unify(use_var, instance)).isEstablished()) return null;
     const func = self.pureFunctionThroughAliases(instance) orelse return null;
-    const ret_content = self.types.resolveVar(func.ret).desc.content;
-    if (ret_content == .err) return null;
-    const ret_constraints = contentConstraintRange(ret_content) orelse StaticDispatchConstraint.SafeList.Range.empty();
+    if (self.types.sliceVars(func.args).len != 1) return null;
 
+    var requirements: std.ArrayListUnmanaged(InstanceRequirement) = .empty;
+    defer requirements.deinit(self.gpa);
+    try self.collectInstanceRequirements(instance, &requirements);
+
+    const owner_var = try self.instantiateVar(ModuleEnv.varFrom(owner), env, .{ .explicit = region }, .none);
+    if (!(try probe.unify(self.types.sliceVars(func.args)[0], owner_var)).isEstablished()) return null;
     const str_var = try self.freshStr(env, region);
     if (!(try probe.unify(str_var, func.ret)).isEstablished()) return null;
-    if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, ret_constraints, str_var, env)) return null;
-    // An interpolated result's parts become Str exactly as a call site's do.
-    var constraints = self.types.iterStaticDispatchConstraints(ret_constraints);
-    while (constraints.next()) |constraint| {
-        if (!constraint.interpolation.isPresent()) continue;
-        const parts = constraint.interpolation.interpolated_parts;
-        for (0..parts.len()) |part_i| {
-            const part = self.types.getInterpolationPartAt(parts, @intCast(part_i));
-            const part_content = self.types.resolveVar(part.var_).desc.content;
-            if (part_content == .err) return null;
-            const part_constraints = contentConstraintRange(part_content) orelse StaticDispatchConstraint.SafeList.Range.empty();
-            if (!(try probe.unify(str_var, part.var_)).isEstablished()) return null;
-            if (!try self.interpolationPartConstraintsAcceptBuiltinStr(&probe, part_constraints, str_var, env)) return null;
-        }
-    }
+    if (!try self.instanceRequirementsAccept(&probe, requirements.items, env)) return null;
+
     // Inspection calls the method at any instantiation of its owner, so the
-    // instance's argument must still be a nominal over distinct type
+    // instance's argument must still be the owner over distinct type
     // variables that carry no requirements.
     if (!self.isNominalOverDistinctUnconstrainedVars(func)) return null;
 
     committed = true;
     try probe.commit();
     return use_var;
+}
+
+/// A type variable of a `to_inspect` instance and the requirements it
+/// carried when the instance was made.
+const InstanceRequirement = struct {
+    var_: Var,
+    constraints: StaticDispatchConstraint.SafeList.Range,
+};
+
+/// Collect every constrained type variable `root` reaches, through its
+/// structure and through the callables its requirements name.
+fn collectInstanceRequirements(self: *Self, root: Var, out: *std.ArrayListUnmanaged(InstanceRequirement)) Allocator.Error!void {
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+    var pending: std.ArrayListUnmanaged(Var) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |var_| {
+        const resolved = self.types.resolveVar(var_);
+        if ((try visited.getOrPut(self.gpa, resolved.var_)).found_existing) continue;
+        switch (resolved.desc.content) {
+            .flex, .rigid => {
+                const range = contentConstraintRange(resolved.desc.content).?;
+                if (range.isEmpty()) continue;
+                try out.append(self.gpa, .{ .var_ = resolved.var_, .constraints = range });
+                for (self.types.sliceStaticDispatchConstraints(range)) |constraint| {
+                    try pending.append(self.gpa, constraint.fn_var);
+                    if (!constraint.interpolation.isPresent()) continue;
+                    const parts = constraint.interpolation.interpolated_parts;
+                    for (0..parts.len()) |part_index| {
+                        try pending.append(self.gpa, self.types.getInterpolationPartAt(parts, @intCast(part_index)).var_);
+                    }
+                }
+            },
+            .field_presence, .err => {},
+            .alias => |alias| {
+                try pending.appendSlice(self.gpa, self.types.sliceAliasArgs(alias));
+                try pending.append(self.gpa, self.types.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_record, .empty_tag_union => {},
+                .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                    try pending.appendSlice(self.gpa, self.types.sliceVars(func.args));
+                    try pending.append(self.gpa, func.ret);
+                },
+                .record => |record| {
+                    const fields = self.types.getRecordFieldsSlice(record.fields);
+                    for (fields.items(.presence)) |presence| try pending.append(self.gpa, presence.typeVar());
+                    try pending.append(self.gpa, record.ext);
+                },
+                .tuple => |tuple| try pending.appendSlice(self.gpa, self.types.sliceVars(tuple.elems)),
+                .tag_union => |tag_union| {
+                    const tags = self.types.getTagsSlice(tag_union.tags);
+                    for (tags.items(.args)) |args| try pending.appendSlice(self.gpa, self.types.sliceVars(args));
+                    try pending.append(self.gpa, tag_union.ext);
+                },
+                .nominal_type => |nominal| try pending.appendSlice(self.gpa, self.types.sliceNominalArgs(nominal)),
+            },
+        }
+    }
+}
+
+/// Whether the owner's methods satisfy every collected requirement once its
+/// variable is a nominal type. Satisfying one can bind further variables, so
+/// this repeats until nothing changes; a requirement whose variable stays
+/// unbound is one the instance leaves to its uses.
+fn instanceRequirementsAccept(
+    self: *Self,
+    probe: *CommitProbe,
+    requirements: []const InstanceRequirement,
+    env: *Env,
+) Allocator.Error!bool {
+    const satisfied = try self.gpa.alloc(bool, requirements.len);
+    defer self.gpa.free(satisfied);
+    @memset(satisfied, false);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (requirements, satisfied) |requirement, *done| {
+            if (done.*) continue;
+            const nominal = self.types.resolveVar(requirement.var_).desc.content.unwrapNominalType() orelse continue;
+            var constraints = self.types.iterStaticDispatchConstraints(requirement.constraints);
+            while (constraints.next()) |constraint| {
+                const accepted = switch (constraint.origin) {
+                    .from_literal => |literal| switch (literal) {
+                        .numeral => if (self.builtinNumKindFromNominalType(nominal)) |kind|
+                            literalInfoAcceptsBuiltinNumKind(literal, kind)
+                        else
+                            try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, requirement.var_, env),
+                        .quote, .interpolation => if (self.isBuiltinStrNominal(nominal))
+                            try self.interpolatedPartsAreStr(probe, constraint, env)
+                        else
+                            try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, requirement.var_, env),
+                    },
+                    .desugared_binop,
+                    .desugared_unaryop,
+                    .method_call,
+                    .where_clause,
+                    => try self.staticDispatchConstraintAcceptsCandidate(probe, constraint, requirement.var_, env),
+                };
+                if (!accepted) return false;
+            }
+            done.* = true;
+            changed = true;
+        }
+    }
+    return true;
+}
+
+/// An interpolation producing a builtin `Str` makes each interpolated part a
+/// `Str`, exactly as a call site's does.
+fn interpolatedPartsAreStr(self: *Self, probe: *CommitProbe, constraint: StaticDispatchConstraint, env: *Env) Allocator.Error!bool {
+    if (!constraint.interpolation.isPresent()) return true;
+    const parts = constraint.interpolation.interpolated_parts;
+    for (0..parts.len()) |part_index| {
+        const part = self.types.getInterpolationPartAt(parts, @intCast(part_index));
+        const str_var = try self.freshStr(env, self.getRegionAt(part.var_));
+        if (!(try probe.unify(str_var, part.var_)).isEstablished()) return false;
+    }
+    return true;
+}
+
+fn isBuiltinStrNominal(self: *Self, nominal: types_mod.NominalType) bool {
+    const str = self.types.resolveVar(self.str_var).desc.content.unwrapNominalType() orelse return false;
+    return nominal.originIsBuiltin() and nominal.ident.ident_idx.eql(str.ident.ident_idx);
 }
 
 /// The pure function `var_` stands for, reading through aliases.

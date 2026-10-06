@@ -329,7 +329,11 @@ const Normalizer = struct {
     fn finishStatement(self: *Normalizer, sink_id: SinkId, normalized: Ast.Stmt) Allocator.Error!void {
         if (self.sink(sink_id).terminated) return;
         var stmt = normalized;
-        if (stmt == .let_ and terminal(self.program.getExpr(stmt.let_.value).data)) stmt = .{ .expr = stmt.let_.value };
+        if (stmt == .let_ and terminal(self.program.getExpr(stmt.let_.value).data)) {
+            // Read the value before the assignment rewrites `stmt`'s tag.
+            const value = stmt.let_.value;
+            stmt = .{ .expr = value };
+        }
         try self.append(sink_id, try self.program.addStmt(stmt));
         self.sink(sink_id).terminated = switch (stmt) {
             .return_, .crash, .checked_error => true,

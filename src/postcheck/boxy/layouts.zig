@@ -65,8 +65,6 @@ pub const WorkerLayouts = struct {
     args: Plan.Span = .{},
     hidden_descs: Plan.Span = .{},
     hidden_dicts: Plan.Span = .{},
-    /// One layout per valued context input, after the hidden dictionaries.
-    context: Plan.Span = .{},
     erased_capture_layout: layout.Idx = .zst,
     ret: ?RuntimeLayout = null,
     value: RuntimeLayout,
@@ -280,17 +278,6 @@ const Builder = struct {
                 try self.worker_layout_values.append(self.allocator, .{ .concrete = .opaque_ptr });
             }
             worker_layout.hidden_dicts = self.layoutSpanFrom(hidden_start, @intCast(hidden_dicts.len));
-        }
-        const context = self.program.contextInputSlice(worker.context);
-        if (context.len != 0) {
-            const context_start = self.layoutValueStart(&self.worker_layout_values);
-            var value_count: u32 = 0;
-            for (context) |input| {
-                const rep = input.rep orelse continue;
-                try self.worker_layout_values.append(self.allocator, try self.runtimeLayoutForRep(rep));
-                value_count += 1;
-            }
-            worker_layout.context = self.layoutSpanFrom(context_start, value_count);
         }
         worker_layout.erased_capture_layout = try self.erasedCaptureLayout(worker.erased_captures);
 
