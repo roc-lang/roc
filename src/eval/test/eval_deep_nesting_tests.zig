@@ -25,10 +25,6 @@ const shallow_stack_bytes = 2 * 1024 * 1024;
 /// type, so it costs the square of its depth.
 const shallower_depth = 500;
 
-/// Lowering a custom-parser chain for compile-time evaluation relates each
-/// level's codec contract type, which holds every level inside it.
-const codec_chain_depth = 100;
-
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
 }
@@ -418,9 +414,9 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: custom parsers nesting derived record parsers",
         .source_kind = .module,
-        .source = codecChain(codec_chain_depth),
+        .source = codecChain(depth),
         .expected = .{ .inspect_str = "\"err\"" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: deeply nested records",

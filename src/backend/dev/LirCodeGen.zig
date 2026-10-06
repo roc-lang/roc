@@ -824,6 +824,28 @@ const LirProcSpec = lir.LirProcSpec;
 
 const Allocator = std.mem.Allocator;
 
+/// Maps a stack plan builds for one procedure, reused across the procedures
+/// one executor lane compiles. A procedure's statement and join ids span from
+/// where its body was first lowered to wherever later passes appended its
+/// rewritten statements, which can be most of the program's id range; a fresh
+/// map per procedure would allocate and clear a chunk table for that span.
+pub const StackPlanMaps = struct {
+    nodes: collections.DenseMapPool(CFStmtId, u32),
+    joins: collections.DenseMapPool(LIR.JoinPointId, CFStmtId),
+
+    pub fn init(allocator: Allocator) StackPlanMaps {
+        return .{
+            .nodes = collections.DenseMapPool(CFStmtId, u32).init(allocator),
+            .joins = collections.DenseMapPool(LIR.JoinPointId, CFStmtId).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *StackPlanMaps) void {
+        self.nodes.deinit();
+        self.joins.deinit();
+    }
+};
+
 /// Code generator for statement-only LIR procs
 /// Parameterized by RocTarget for cross-compilation support
 pub fn LirCodeGen(comptime target: RocTarget) type {
@@ -1177,6 +1199,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Compiler-internal hooks enabled only for native compile-time
         /// evaluation. Normal dev backend output leaves these null.
         comptime_hooks: ?ComptimeHooks = null,
+        /// The executor lane's reusable stack-plan maps, when this generator
+        /// compiles on a lane that keeps them.
+        stack_plan_maps: ?*StackPlanMaps = null,
 
         /// Independent emission borrows global LIR metadata but owns only the
         /// requested body's machine-code state. Helpers remain coordinator work.
@@ -9807,14 +9832,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn ensureStableLocationsForStmtLocals(self: *Self, root: CFStmtId) Allocator.Error!void {
             var plan = StackPlan.init(self.allocator);
             defer plan.deinit();
-            var nodes = collections.DenseMap(CFStmtId, u32).init(self.allocator);
-            defer nodes.deinit();
+            var nodes = if (self.stack_plan_maps) |maps| maps.nodes.acquire() else collections.DenseMap(CFStmtId, u32).init(self.allocator);
+            defer if (self.stack_plan_maps) |maps| maps.nodes.release(&nodes) else nodes.deinit();
             var work: std.ArrayList(CFStmtId) = .empty;
             defer work.deinit(self.allocator);
             var successors: std.ArrayList(CFStmtId) = .empty;
             defer successors.deinit(self.allocator);
-            var joins = collections.DenseMap(LIR.JoinPointId, CFStmtId).init(self.allocator);
-            defer joins.deinit();
+            var joins = if (self.stack_plan_maps) |maps| maps.joins.acquire() else collections.DenseMap(LIR.JoinPointId, CFStmtId).init(self.allocator);
+            defer if (self.stack_plan_maps) |maps| maps.joins.release(&joins) else joins.deinit();
             _ = try self.stackPlanNode(&plan, &nodes, &work, root);
             var cursor: usize = 0;
             while (cursor < work.items.len) : (cursor += 1) {

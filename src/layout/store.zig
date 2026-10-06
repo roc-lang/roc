@@ -34,6 +34,44 @@ const TagUnionInfo = layout_mod.TagUnionInfo;
 const LayoutGraph = graph_mod.Graph;
 const GraphNodeId = graph_mod.NodeId;
 const GraphRef = graph_mod.Ref;
+
+/// The local nodes a graph node refers to, in field and variant order.
+const GraphChildren = struct {
+    graph: *const LayoutGraph,
+    node: graph_mod.Node,
+    index: usize = 0,
+
+    fn init(graph: *const LayoutGraph, node: graph_mod.Node) GraphChildren {
+        return .{ .graph = graph, .node = node };
+    }
+
+    fn next(self: *GraphChildren) ?GraphNodeId {
+        while (true) {
+            const ref: GraphRef = switch (self.node) {
+                .pending, .committed, .erased_callable => return null,
+                .nominal, .box, .list, .closure => |child| blk: {
+                    if (self.index != 0) return null;
+                    break :blk child;
+                },
+                .struct_ => |span| blk: {
+                    const fields = self.graph.getFields(span);
+                    if (self.index >= fields.len) return null;
+                    break :blk fields[self.index].child;
+                },
+                .tag_union => |span| blk: {
+                    const refs = self.graph.getRefs(span);
+                    if (self.index >= refs.len) return null;
+                    break :blk refs[self.index];
+                },
+            };
+            self.index += 1;
+            switch (ref) {
+                .canonical => {},
+                .local => |child| return child,
+            }
+        }
+    }
+};
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
@@ -2061,26 +2099,50 @@ pub const Store = struct {
             .component_ids = component_ids,
         };
 
-        while (true) {
-            var progress = false;
-            for (graph.nodes.items, 0..) |_, i| {
-                progress = (try resolver.tryResolveNode(@enumFromInt(i))) or progress;
+        // A node resolves once the children it waits on have, so each node is
+        // tried once and then again only when one of its children resolves.
+        // The parents of each node, as one flat list indexed by `parent_starts`.
+        const node_count = graph.nodes.items.len;
+        const parent_starts = try self.allocator.alloc(u32, node_count + 1);
+        defer self.allocator.free(parent_starts);
+        @memset(parent_starts, 0);
+        for (graph.nodes.items) |node| {
+            var children = GraphChildren.init(graph, node);
+            while (children.next()) |child| parent_starts[@intFromEnum(child) + 1] += 1;
+        }
+        for (1..parent_starts.len) |i| parent_starts[i] += parent_starts[i - 1];
+        const parents = try self.allocator.alloc(GraphNodeId, parent_starts[node_count]);
+        defer self.allocator.free(parents);
+        const parent_fill = try self.allocator.dupe(u32, parent_starts[0..node_count]);
+        defer self.allocator.free(parent_fill);
+        for (graph.nodes.items, 0..) |node, i| {
+            var children = GraphChildren.init(graph, node);
+            while (children.next()) |child| {
+                const slot = &parent_fill[@intFromEnum(child)];
+                parents[slot.*] = @enumFromInt(i);
+                slot.* += 1;
             }
-            if (progress) continue;
+        }
 
-            var unresolved_count: usize = 0;
-            for (resolved) |done| {
-                if (!done) unresolved_count += 1;
+        var pending = try std.ArrayList(GraphNodeId).initCapacity(self.allocator, node_count);
+        defer pending.deinit(self.allocator);
+        // Children are reserved after their parents, so trying the
+        // highest ids first resolves most nodes on their first try.
+        for (0..node_count) |i| pending.appendAssumeCapacity(@enumFromInt(i));
+        while (pending.pop()) |node_id| {
+            if (!try resolver.tryResolveNode(node_id)) continue;
+            const index = @intFromEnum(node_id);
+            for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+                if (!resolved[@intFromEnum(parent)]) try pending.append(self.allocator, parent);
             }
-            if (unresolved_count == 0) break;
+        }
 
-            for (resolved, 0..) |done, i| {
-                if (!done) {
-                    base.invariant(
-                        "layout.Store invariant violated: logical graph node {d} remained unresolved during the shared LIR layout commit",
-                        .{i},
-                    );
-                }
+        for (resolved, 0..) |done, i| {
+            if (!done) {
+                base.invariant(
+                    "layout.Store invariant violated: logical graph node {d} remained unresolved during the shared LIR layout commit",
+                    .{i},
+                );
             }
         }
 
