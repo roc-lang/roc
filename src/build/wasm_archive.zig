@@ -36,6 +36,8 @@ pub fn main(init: std.process.Init) ArchiveError!void {
         std.fmt.parseInt(c_int, args[3], 10) catch usage(io, stderr_file)
     else
         bundle.DEFAULT_COMPRESSION_LEVEL;
+    // Same range as `roc bundle --compression`; zstd asserts on others.
+    if (level < 1 or level > 22) usage(io, stderr_file);
 
     const input_path = args[1];
     const output_path = args[2];
@@ -67,6 +69,6 @@ pub fn main(init: std.process.Init) ArchiveError!void {
 }
 
 fn usage(io: std.Io, stderr_file: std.Io.File) noreturn {
-    stderr_file.writeStreamingAll(io, "Usage: wasm_archive <input> <output.zst> [level]\n") catch {};
+    stderr_file.writeStreamingAll(io, "Usage: wasm_archive <input> <output.zst> [level 1-22]\n") catch {};
     std.process.exit(2);
 }
