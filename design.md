@@ -824,7 +824,11 @@ checker recovery. The recovery rules:
   whose scrutinee was rejected meanwhile binds nothing and is retired), a
   `for` iterable, and the settled-state ambiguity verdicts, where a receiver
   read only from names that bind nothing is retired without a report of its
-  own. Erroneousness only grows and the verdicts are applied at the settled
+  own. Likewise, a receiver left undetermined only by a call through its
+  scheme's instantiation that checking retired for an erroneous argument
+  (`retired_operand_sequences`, as in `Json.to_str(Str.nope("x"))`) is not
+  reported: that call never runs, and the argument's rejection is the report.
+  Erroneousness only grows and the verdicts are applied at the settled
   state, so which relation decided the rejection, and when, does not change
   what is reported. A defaulted literal whose default a requirement then
   rejects is reported once, as the `undetermined_type` problem for its class
@@ -851,9 +855,17 @@ checker recovery. The recovery rules:
   are captured when its checking begins (`relation_operands`). A relation is
   void when one of its operands is erroneous through a name: a use of a name
   that binds nothing, or whose source value (`binder_source_exprs`) is
-  erroneous in any way, or an expression checking retires with such an
-  operand (Erroneous Call Operand Retirement), so a name bound from such an
-  expression binds nothing either. An operand rejected in place is not read
+  erroneous in any way, or an expression whose own value follows such an
+  operand, so a name bound from such an expression binds nothing either. An
+  expression's value follows the values it evaluates before it produces one
+  (`RelationOperands.follows_start`): a call-like expression's operands
+  (Erroneous Call Operand Retirement), a construction's items (a tuple,
+  record, tag, nominal, or list), a field or tuple access's base, a match's
+  scrutinee, and a conditional's first condition. A branch is not always
+  evaluated, so a conditional's or match's value does not follow its
+  branches. Reading `z = (y, 1).0`, `z = r.f` for `r = { f: y }`, or `z` out
+  of `match Wrapped(y) { Wrapped(v) => v }` therefore binds nothing once `y`
+  binds nothing. An operand rejected in place is not read
   through a name; its rejection is reported by the relation that rejected it,
   which may be the relation reading it. Each erroneous value records the
   relation under which it was made erroneous, named by the expression that
@@ -13893,7 +13905,12 @@ requirement rejects (Diagnostics About Defaulted Types). The report says
 which method or operator needs the type, and when the dispatch is inside the
 called function it also shows the argument whose type leaves the receiver
 undetermined; it never describes the receiver as a type that is missing a
-method. The call becomes a runtime error.
+method. The call becomes a runtime error. The report is chosen from the
+receiver's settled type (`appendUnsatisfiedReceiverProblem`): only a receiver
+that is still a flex variable is undetermined. A receiver whose type is
+determined, whether a type variable the program named, a nominal type, or a
+structural type, is reported as that type missing the method, in terms of the
+type the program wrote.
 
 A generalized constrained function instantiation is also an explicit pinning
 frontier for receivers reachable from that function's argument positions. This

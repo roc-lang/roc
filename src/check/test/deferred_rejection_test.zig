@@ -229,6 +229,115 @@ test "a branch that conflicts with a valid branch beside a rejected loop binder 
     , &.{ "Type Mismatch", "Type Not Determined" });
 }
 
+test "conflicting uses of a tuple item read from a rejected loop binder add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        z = (y, 1).0
+        \\        a = Str.concat(z, "a")
+        \\        b = List.len(z)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of a field of a named record holding a rejected loop binder add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        r = { f: y }
+        \\        z = r.f
+        \\        a = Str.concat(z, "a")
+        \\        b = List.len(z)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of an item of a named tuple holding a rejected loop binder add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        t = (y, 1)
+        \\        z = t.0
+        \\        a = Str.concat(z, "a")
+        \\        b = List.len(z)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of a tag payload matched out of a rejected loop binder add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        z = match Wrapped(y) {
+        \\            Wrapped(v) => v
+        \\        }
+        \\        a = Str.concat(z, "a")
+        \\        b = List.len(z)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of a tuple item holding a dispatch rejected at its literal's default add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    s = 5
+        \\    z = (s.foo(), 1).0
+        \\    a = Str.concat(z, "a")
+        \\    b = List.len(z)
+        \\    (a, b)
+        \\}
+    , &.{"Type Not Determined"});
+}
+
+test "conflicting uses of a record field whose literal a later `?` rejects add no report" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    y = { a: "abc" }.a
+        \\    w = y?
+        \\    a = Str.concat(y, "a")
+        \\    b = List.len(y)
+        \\    Ok((w, a, b))
+        \\}
+    , &.{"Type Mismatch"});
+}
+
+test "a field read from a valid record beside a rejected one is still checked" {
+    try expectOnlyTypeProblems(
+        \\run = |_x| {
+        \\    for y in 5 {
+        \\        z = (y, 1).0
+        \\        good = ("s", 1).0
+        \\        a = Str.concat(z, "a")
+        \\        b = List.len(good)
+        \\        _ = (a, b)
+        \\    }
+        \\    {}
+        \\}
+    , &.{ "Type Mismatch", "Type Not Determined" });
+}
+
+test "an encoder call on an associated item that does not exist adds no report of its own" {
+    var test_env = try TestEnv.init("Test",
+        \\out = Json.to_str(Str.nope("foo.json"))
+    );
+    defer test_env.deinit();
+
+    try test_env.assertOneCanError("Does Not Exist");
+    try std.testing.expectEqual(@as(usize, 0), try test_env.typeProblemCount());
+}
+
 test "the relation that rejects a name's literal still reports the rejection" {
     try expectOnlyTypeProblems(
         \\run = |_x| {

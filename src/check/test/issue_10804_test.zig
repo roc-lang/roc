@@ -337,12 +337,12 @@ test "issue 10804: an optional field inside a nested derived codec checks" {
 // whenever the shape crosses a boundary.
 test "issue 10804: an imported type's derived encoder_for still validates its components" {
     const source_a =
-        \\Data := [Url(Str)]
-        \\Chart :: { data : Data }.{
+        \\A :: { data : Data }.{
         \\  encoder_for : _
+        \\  make : Str -> A
+        \\  make = |url| { data: Data.Url(url) }
         \\}
-        \\make : Str -> Chart
-        \\make = |url| { data: Data.Url(url) }
+        \\Data := [Url(Str)]
     ;
     var test_env_a = try TestEnv.init("A", source_a);
     defer test_env_a.deinit();
@@ -356,7 +356,47 @@ test "issue 10804: an imported type's derived encoder_for still validates its co
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
 
-    try test_env_b.assertOneTypeError("Type Not Determined");
+    try test_env_b.assertOneTypeErrorMsg(
+        \\**Missing Method**
+        \\This `encoder_for` method is being called on a value whose type doesn't have that method.
+        \\```roc
+        \\out = Json.to_str(A.make("foo.json"))
+        \\```
+        \\      ^^^^^^^^^^^
+        \\
+        \\The value's type, which does not have a method named `encoder_for`, is:
+        \\
+        \\    Data
+        \\
+        \\**Hint:** For this to work, the type would need to have a method named `encoder_for` associated with it in the type's declaration.
+        \\
+        \\
+    );
+}
+
+// A call whose argument does not exist is retired for that argument, so the
+// encoder it would have selected never runs: the argument's own report is the
+// only one, and nothing reports the encoder's undetermined receiver.
+test "issue 10804: an encoder call on an imported item that does not exist adds no report of its own" {
+    const source_a =
+        \\A :: { data : Str }.{
+        \\  encoder_for : _
+        \\}
+    ;
+    var test_env_a = try TestEnv.init("A", source_a);
+    defer test_env_a.deinit();
+    try test_env_a.assertNoErrors();
+
+    const source_b =
+        \\import A
+        \\
+        \\out = Json.to_str(A.make("foo.json"))
+    ;
+    var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
+    defer test_env_b.deinit();
+
+    try test_env_b.assertOneCanError("Does Not Exist");
+    try std.testing.expectEqual(@as(usize, 0), try test_env_b.typeProblemCount());
 }
 
 test "issue 10804: imported generalized derived codec revalidates accepted and rejected substitutions" {

@@ -14053,6 +14053,13 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     const constraints_range = contentConstraintRange(resolved.desc.content) orelse return;
     if (constraints_range.len() == 0) return;
     if (self.reported_dispatch_vars.contains(resolved.var_)) return;
+    // A call through this instantiation retired for an erroneous argument
+    // never runs: the argument's own rejection is the report, and an
+    // argument that would have determined the receiver was that rejected
+    // value (`Json.to_str(Str.nope("x"))`).
+    if (verdict.instantiation_expr) |instantiation_expr| {
+        if (self.instantiationCallRetiredForErroneousOperand(instantiation_expr)) return;
+    }
 
     // Re-run the origin-policy selection (see `selectAmbiguityConstraint` for
     // the decision table) so the reported constraint reflects the settled
@@ -14163,18 +14170,78 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     try self.reported_dispatch_vars.put(resolved.var_, {});
 
     const primary_region = primary.?;
-    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
-    const is_binop = constraint.origin == .desugared_binop;
+    try self.appendUnsatisfiedReceiverProblem(resolved.var_, constraint, primary_region, secondary, runtime_error_inserted);
+}
 
-    _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
-        .region = primary_region,
-        .secondary_region = secondary,
-        .dispatcher_snapshot = snapshot,
-        .method_name = constraint.fn_name,
-        .is_binop = is_binop,
-        .binop_negated = constraint.origin.binopNegated(),
-        .runtime_error_inserted = runtime_error_inserted,
-    } } });
+/// Report a receiver whose dispatch no owner satisfies, from its settled
+/// type. A receiver whose type nothing in the program determined (a flex
+/// variable) is reported as an undetermined type (`unresolved_dispatcher`).
+/// A receiver whose type is determined—a type variable the program named, a
+/// nominal type, or a structural type—is reported as that type missing the
+/// method, in terms of the type the program wrote.
+fn appendUnsatisfiedReceiverProblem(
+    self: *Self,
+    receiver_var: Var,
+    constraint: StaticDispatchConstraint,
+    region: Region,
+    secondary_region: ?Region,
+    runtime_error_inserted: bool,
+) Allocator.Error!void {
+    const resolved = self.types.resolveVar(receiver_var);
+    const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
+    const determined: ?ConstraintErrorKind = switch (resolved.desc.content) {
+        .flex => null,
+        .rigid => .{ .missing_method = .rigid },
+        .alias => .{ .missing_method = .nominal },
+        .structure => |structure| switch (structure) {
+            .nominal_type => .{ .missing_method = .nominal },
+            .record,
+            .tuple,
+            .fn_pure,
+            .fn_effectful,
+            .fn_unbound,
+            .empty_record,
+            .tag_union,
+            .empty_tag_union,
+            => .not_nominal,
+        },
+        .err, .field_presence => std.debug.panic("check invariant violated: an unsatisfied dispatch receiver had no type to report", .{}),
+    };
+    const kind = determined orelse {
+        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
+            .region = region,
+            .secondary_region = secondary_region,
+            .dispatcher_snapshot = snapshot,
+            .method_name = constraint.fn_name,
+            .is_binop = constraint.origin == .desugared_binop,
+            .binop_negated = constraint.origin.binopNegated(),
+            .runtime_error_inserted = runtime_error_inserted,
+        } } });
+        return;
+    };
+    _ = try self.problems.appendProblem(self.gpa, switch (kind) {
+        .missing_method => |dispatcher_type| problem.Problem{ .static_dispatch = .{
+            .dispatcher_does_not_impl_method = .{
+                .dispatcher_var = resolved.var_,
+                .dispatcher_snapshot = snapshot,
+                .dispatcher_type = dispatcher_type,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+                .origin = constraint.origin,
+                .owner_region = region,
+            },
+        } },
+        .not_nominal => problem.Problem{ .static_dispatch = .{
+            .dispatcher_not_nominal = .{
+                .dispatcher_var = resolved.var_,
+                .dispatcher_snapshot = snapshot,
+                .fn_var = constraint.fn_var,
+                .method_name = constraint.fn_name,
+                .origin = constraint.origin,
+                .owner_region = region,
+            },
+        } },
+    });
 }
 
 /// Validate the static-dispatch contracts copied out of generalized schemes
@@ -14439,6 +14506,21 @@ fn anyPendingSchemeRequirementNewlyGrounded(self: *Self) bool {
     return false;
 }
 
+/// Whether `instantiation_expr`, the callee a scheme was instantiated for, is
+/// evaluated only as an operand of a call retired for a later erroneous
+/// operand (`retired_operand_sequences`), so the call through it never runs.
+/// Runs only on the ambiguity-reporting path.
+fn instantiationCallRetiredForErroneousOperand(self: *const Self, instantiation_expr: CIR.Expr.Idx) bool {
+    var sequences = self.retired_operand_sequences.valueIterator();
+    while (sequences.next()) |sequence| {
+        const operands = self.retired_operand_pool.items[sequence.start..][0..sequence.len];
+        for (operands[0 .. operands.len - 1]) |operand| {
+            if (operand == instantiation_expr) return true;
+        }
+    }
+    return false;
+}
+
 /// Apply the `.creation` ambiguity verdicts: for each unpinnable receiver
 /// whose constraint was created directly at a dispatch expression, report at
 /// the first (innermost, node-order) expression whose own type is the
@@ -14503,19 +14585,7 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
         try self.reported_dispatch_vars.put(resolved.var_, {});
 
         const region = self.cir.store.getExprRegion(expr_idx);
-        const snapshot = try self.snapshots.snapshotVarForError(self.types, &self.type_writer, resolved.var_);
-
-        const is_binop = constraint.origin == .desugared_binop;
-
-        _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
-            .region = region,
-            .secondary_region = null,
-            .dispatcher_snapshot = snapshot,
-            .method_name = constraint.fn_name,
-            .is_binop = is_binop,
-            .binop_negated = constraint.origin.binopNegated(),
-            .runtime_error_inserted = true,
-        } } });
+        try self.appendUnsatisfiedReceiverProblem(resolved.var_, constraint, region, null, true);
 
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = region,
@@ -32368,16 +32438,26 @@ fn exprStepRelation(expr_idx: CIR.Expr.Idx, expr: CIR.Expr) problem.RelationOwne
 const RelationOperands = struct {
     start: u32,
     len: u32,
-    /// Checking retires the expression itself when one of these is erroneous
-    /// (`retireCallLikeExprWithErroneousOperands`), so its own value is then
-    /// erroneous too.
-    retired_with_operands: bool,
+    /// The values the expression's own value follows, a range in
+    /// `relation_operand_pool`: its value is erroneous when one of them is,
+    /// because evaluating the expression evaluates every one of them before
+    /// it produces its value, and an erroneous one is where that evaluation
+    /// crashes. These are the operands of a call-like expression (checking
+    /// retires it when one is erroneous,
+    /// `retireCallLikeExprWithErroneousOperands`), of a construction (a
+    /// tuple, record, tag, nominal, or list), and of a projection (a field or
+    /// tuple access); and the scrutinee of a match and the first condition of
+    /// a conditional, which are evaluated before any branch. The branches
+    /// themselves are not all evaluated, so the value does not follow them.
+    /// Empty for every other expression.
+    follows_start: u32,
+    follows_len: u32,
 };
 
 /// Capture the values an expression's relations read, before its checking
 /// begins (`relation_operands`).
 fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) Allocator.Error!void {
-    const retired_with_operands = switch (expr) {
+    const operands_followed = switch (expr) {
         .e_call,
         .e_run_low_level,
         .e_method_call,
@@ -32389,21 +32469,21 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_method_eq,
         .e_interpolation,
         .e_for,
-        => true,
-        .e_record => |record| record.ext != null,
-        .e_structural_eq,
-        .e_structural_hash,
-        .e_str,
-        .e_field_access,
-        .e_tuple_access,
-        .e_list,
-        .e_if,
-        .e_match,
-        => false,
+        .e_record,
         .e_tuple,
         .e_tag,
         .e_nominal,
         .e_nominal_external,
+        .e_list,
+        .e_field_access,
+        .e_tuple_access,
+        => true,
+        .e_structural_eq,
+        .e_structural_hash,
+        .e_str,
+        .e_if,
+        .e_match,
+        => false,
         .e_block,
         .e_closure,
         .e_lambda,
@@ -32473,16 +32553,16 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_str,
         .e_field_access,
         .e_tuple_access,
+        .e_tuple,
+        .e_tag,
+        .e_nominal,
+        .e_nominal_external,
         => {
             const scratch_start = self.retired_operand_pool.items.len;
             defer self.retired_operand_pool.shrinkRetainingCapacity(scratch_start);
             try self.appendEvaluationOperands(expr_idx);
             try pool.appendSlice(self.gpa, self.retired_operand_pool.items[scratch_start..]);
         },
-        .e_tuple,
-        .e_tag,
-        .e_nominal,
-        .e_nominal_external,
         .e_block,
         .e_closure,
         .e_lambda,
@@ -32520,10 +32600,24 @@ fn recordRelationOperands(self: *Self, expr_idx: CIR.Expr.Idx, expr: CIR.Expr) A
         .e_hosted_lambda,
         => unreachable,
     }
+    const len = @as(u32, @intCast(pool.items.len)) - start;
+    var follows_start = start;
+    var follows_len: u32 = if (operands_followed) len else 0;
+    if (expr == .e_match) {
+        follows_start = @intCast(pool.items.len);
+        try pool.append(self.gpa, expr.e_match.cond);
+        follows_len = 1;
+    } else if (expr == .e_if) {
+        follows_start = @intCast(pool.items.len);
+        const first_branch = self.cir.store.sliceIfBranches(expr.e_if.branches)[0];
+        try pool.append(self.gpa, self.cir.store.getIfBranch(first_branch).cond);
+        follows_len = 1;
+    }
     try self.relation_operands.put(self.gpa, expr_idx, .{
         .start = start,
-        .len = @as(u32, @intCast(pool.items.len)) - start,
-        .retired_with_operands = retired_with_operands,
+        .len = len,
+        .follows_start = follows_start,
+        .follows_len = follows_len,
     });
 }
 
@@ -32628,9 +32722,11 @@ const SettledValueCause = struct {
 /// How a value is erroneous at the settled state. A use of a name is
 /// erroneous through that name when the name's source value
 /// (`binder_source_exprs`) is erroneous in any way, or when the name binds
-/// nothing; an expression checking retires with its operands
-/// (`RelationOperands.retired_with_operands`) is erroneous the way its
-/// operands are. Memoized in `settled`.
+/// nothing; an expression whose value follows values it evaluates first
+/// (`RelationOperands.follows_start`: a call-like expression, a
+/// construction, a field or tuple access, or a match's scrutinee or a
+/// conditional's first condition) is erroneous the way those values are.
+/// Memoized in `settled`.
 fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCauses) Allocator.Error!SettledValueCause {
     if (settled.causes.get(root)) |cause| return cause;
     const Visit = struct { expr: CIR.Expr.Idx, expanded: bool };
@@ -32684,7 +32780,7 @@ const SettledCauseSources = struct {
 
 /// What a value's erroneousness follows from (`settledValueCause`): a local
 /// name's source value, or the name's binder when it records no source, or
-/// the operands of an expression checking retires with them.
+/// the values an expression's own value follows.
 fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *const SettledValueCauses) SettledCauseSources {
     const pattern = settled.lookup_patterns.get(expr_idx) orelse lookup: {
         const expr = self.cir.store.getExpr(expr_idx);
@@ -32698,8 +32794,7 @@ fn settledCauseSources(self: *const Self, expr_idx: CIR.Expr.Idx, settled: *cons
     }
     const none: SettledCauseSources = .{ .values = &.{}, .is_name = false, .unlinked_pattern = null };
     const operands = self.relation_operands.get(expr_idx) orelse return none;
-    if (!operands.retired_with_operands) return none;
-    return .{ .values = self.relation_operand_pool.items[operands.start..][0..operands.len], .is_name = false, .unlinked_pattern = null };
+    return .{ .values = self.relation_operand_pool.items[operands.follows_start..][0..operands.follows_len], .is_name = false, .unlinked_pattern = null };
 }
 
 /// A use of a name reads its value through that name's own binder pattern,
@@ -37477,20 +37572,13 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
                     self.cir.store.getExprRegion(expr_idx)
                 else
                     self.getRegionAt(requirement.receiver_var);
-                const snapshot = try self.snapshots.snapshotVarForError(
-                    self.types,
-                    &self.type_writer,
+                try self.appendUnsatisfiedReceiverProblem(
                     requirement.receiver_var,
+                    requirement.constraint,
+                    region,
+                    null,
+                    source_expr != null,
                 );
-                _ = try self.problems.appendProblem(self.gpa, .{ .static_dispatch = .{ .unresolved_dispatcher = .{
-                    .region = region,
-                    .secondary_region = null,
-                    .dispatcher_snapshot = snapshot,
-                    .method_name = requirement.constraint.fn_name,
-                    .is_binop = requirement.constraint.origin == .desugared_binop,
-                    .binop_negated = requirement.constraint.origin.binopNegated(),
-                    .runtime_error_inserted = source_expr != null,
-                } } });
                 try self.reported_dispatch_vars.put(receiver.var_, {});
                 try self.poisonConstraintFailureSource(
                     requirement.receiver_var,
