@@ -10934,13 +10934,13 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
     return null;
 }
 
-/// Public `CheckedExprData` declaration.
 /// The operands a runtime error evaluates before it crashes
 /// (`CheckedExprData.runtime_error`).
 pub const CheckedRuntimeError = struct {
     evaluated: []const CheckedExprId = &.{},
 };
 
+/// Public `CheckedExprData` declaration.
 pub const CheckedExprData = union(enum) {
     pending,
     /// Any numeric literal: exact digit facts plus an optional dispatch plan.
@@ -12713,6 +12713,15 @@ pub const CheckedBodyStore = struct {
         defer promoted_patterns.deinit(allocator);
         try promoted_patterns.ensureTotalCapacity(allocator, @intCast(promoted_local_procedures.len));
         for (promoted_local_procedures) |promoted| promoted_patterns.putAssumeCapacity(promoted.pattern, {});
+        var rejected_method_decls = std.AutoHashMapUnmanaged(CIR.Statement.Idx, void){};
+        defer rejected_method_decls.deinit(allocator);
+        for (module.methodDefEntries()) |entry| {
+            if (module.moduleEnvConst().store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
+            const method_statement: CIR.Statement.Idx = @enumFromInt(@intFromEnum(entry.value.type_node_idx));
+            const decl = module.getStatement(method_statement).s_decl;
+            if (std.meta.activeTag(module.expr(decl.expr).data) != .e_runtime_error) continue;
+            try rejected_method_decls.put(allocator, method_statement, {});
+        }
         var exprs = std.ArrayList(CheckedExpr).empty;
         errdefer exprs.deinit(allocator);
         errdefer deinitCheckedExprList(allocator, exprs.items);
@@ -12814,6 +12823,7 @@ pub const CheckedBodyStore = struct {
             .match_branch_pattern_pool = &match_branch_pattern_pool,
             .binder_remap_pool = &binder_remap_pool,
             .promoted_patterns = &promoted_patterns,
+            .rejected_method_decls = &rejected_method_decls,
         };
 
         node_idx = 0;
@@ -15359,6 +15369,11 @@ const CheckedBodyPayloadCopier = struct {
     /// Binding patterns of the local functions checking promoted to
     /// procedures of their own.
     promoted_patterns: *const std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
+    /// Declarations of methods of function-body types whose right-hand side
+    /// was rejected. Such a method has no runtime target: dispatch resolves
+    /// it to a checked error and checking retired every lookup of its name,
+    /// so its declaration evaluates nothing and its block omits it.
+    rejected_method_decls: *const std.AutoHashMapUnmanaged(CIR.Statement.Idx, void),
 
     fn copyExprData(self: *@This(), expr_idx: CIR.Expr.Idx) Allocator.Error!CheckedExprData {
         const expr = self.module.expr(expr_idx).data;
@@ -15911,9 +15926,17 @@ const CheckedBodyPayloadCopier = struct {
     fn copyStatementSpan(self: *@This(), span: CIR.Statement.Span) Allocator.Error![]const CheckedStatementId {
         const source = self.module.sliceStatements(span);
         if (source.len == 0) return &.{};
-        const out = try self.allocator.alloc(CheckedStatementId, source.len);
-        for (source, 0..) |statement, i| out[i] = self.checkedStatement(statement);
-        return out;
+        var out = try std.ArrayList(CheckedStatementId).initCapacity(self.allocator, source.len);
+        errdefer out.deinit(self.allocator);
+        for (source) |statement| {
+            if (self.rejected_method_decls.contains(statement)) continue;
+            out.appendAssumeCapacity(self.checkedStatement(statement));
+        }
+        if (out.items.len == 0) {
+            out.deinit(self.allocator);
+            return &.{};
+        }
+        return try out.toOwnedSlice(self.allocator);
     }
 
     fn copyRecordFields(self: *@This(), span: CIR.RecordField.Span) Allocator.Error![]const CheckedRecordExprField {
@@ -22566,7 +22589,6 @@ pub const NestedProcSiteTable = struct {
         entry_wrappers: *const EntryWrapperTable,
         templates: *CheckedProcedureTemplateTable,
         resolved_value_refs: *const ResolvedValueRefTable,
-        names: *const canonical.CanonicalNameStore,
     ) Allocator.Error!NestedProcSiteTable {
         var scope_by_checked_expr = try nestedProcScopeMap(allocator, templates.dispatch_scopes);
         defer scope_by_checked_expr.deinit();
@@ -22581,28 +22603,6 @@ pub const NestedProcSiteTable = struct {
             &scope_by_checked_expr,
         );
         builder.resolved_value_refs = resolved_value_refs;
-        // A structural comparison or hash runs the `is_eq` or `to_hash` of
-        // every nominal component that declares one.
-        var structural_methods = std.ArrayList(NestedProcSiteBuilder.StructuralLocalMethod).empty;
-        defer structural_methods.deinit(allocator);
-        const is_eq_name = names.lookupMethodName("is_eq");
-        const to_hash_name = names.lookupMethodName("to_hash");
-        for (method_registry.entries) |entry| {
-            const target = entry.target orelse continue;
-            const local = switch (target.kind) {
-                .local_proc => |local| local,
-                .procedure, .structural => continue,
-            };
-            const owner = switch (entry.key.owner) {
-                .nominal => |nominal| nominal,
-                .builtin => continue,
-            };
-            const structural = (is_eq_name != null and entry.key.method == is_eq_name.?) or
-                (to_hash_name != null and entry.key.method == to_hash_name.?);
-            if (!structural) continue;
-            try structural_methods.append(allocator, .{ .owner = owner, .proc_expr = local.expr });
-        }
-        builder.structural_local_methods = structural_methods.items;
         defer builder.deinitScratch();
         errdefer builder.deinitAll();
 
@@ -23514,17 +23514,8 @@ const NestedProcSiteBuilder = struct {
     /// Every local procedure a site's own body selects.
     selected_procs: std.ArrayList(SelectedLocalProc) = .empty,
 
-    /// `is_eq` and `to_hash` methods of nominal types declared in function
-    /// bodies that are local procedures.
-    structural_local_methods: []const StructuralLocalMethod = &.{},
-
     const SelectedLocalProc = struct {
         site: u32,
-        proc_expr: CheckedExprId,
-    };
-
-    const StructuralLocalMethod = struct {
-        owner: canonical.NominalTypeKey,
         proc_expr: CheckedExprId,
     };
 
@@ -23945,18 +23936,15 @@ const NestedProcSiteBuilder = struct {
             .numeral => |numeral| if (numeral.plan) |plan_id| try self.pushStaticDispatchPlanArgs(plan_id, owner),
             .str_from_quote => |quote| try self.pushStaticDispatchPlanArgs(quote.plan orelse checkedArtifactInvariant("checked from_quote expression reached nested procedure site collection without a dispatch plan", .{}), owner),
             .structural_eq => |eq| {
-                try self.selectStructuralComponents(self.checked_bodies.expr(eq.lhs).ty);
                 try self.pushExpr(eq.lhs, owner);
                 try self.pushExpr(eq.rhs, owner);
             },
             .structural_hash => |h| {
-                try self.selectStructuralComponents(self.checked_bodies.expr(h.value).ty);
                 try self.pushExpr(h.value, owner);
                 try self.pushExpr(h.hasher, owner);
             },
             .tuple_access => |access| try self.pushExpr(access.tuple, owner),
             .for_ => |for_| {
-                try self.selectIteratorTargets(for_.plan);
                 try self.pushPattern(for_.pattern, owner);
                 try self.pushExpr(for_.expr, owner);
                 try self.pushExpr(for_.body, owner);
@@ -23974,7 +23962,6 @@ const NestedProcSiteBuilder = struct {
             },
             .lookup_local, .lookup_external, .lookup_required => {
                 if (expr.data == .lookup_local) try self.selectLookupTarget(expr_id);
-                if (self.static_dispatch_plans.siteEvidence(expr_id)) |evidence| try self.selectEvidence(evidence);
                 if (self.static_dispatch_plans.siteSubstitution(expr_id)) |substitution| {
                     for (substitution) |ty| try self.captureType(ty);
                 }
@@ -24019,11 +24006,6 @@ const NestedProcSiteBuilder = struct {
         const plan = self.static_dispatch_plans.plans[raw];
         try self.captureType(plan.dispatcher_ty);
         try self.captureType(plan.callable_ty);
-        switch (plan.resolution) {
-            .direct_closed, .direct_parametric => |direct| try self.selectEvidenceNode(direct.evidence),
-            .structural => try self.selectStructuralComponents(plan.dispatcher_ty),
-            .direct_pending, .evidence_dependent, .checked_error, .@"unreachable" => {},
-        }
         for (plan.argsSlice(self.static_dispatch_plans)) |arg| switch (arg) {
             .checked_expr => |expr| try self.pushExpr(expr, owner),
             .generated_interpolation_iter => |expr| try self.pushWork(.{ .generated_interpolation_iter = .{ .id = expr, .owner = owner } }),
@@ -24140,7 +24122,6 @@ const NestedProcSiteBuilder = struct {
                 try self.pushExpr(ret.expr, owner);
             },
             .for_ => |for_| {
-                try self.selectIteratorTargets(for_.plan);
                 try self.pushPattern(for_.pattern, owner);
                 try self.pushExpr(for_.expr, owner);
                 try self.pushExpr(for_.body, owner);
@@ -24211,78 +24192,6 @@ const NestedProcSiteBuilder = struct {
     fn selectLocalProc(self: *NestedProcSiteBuilder, proc_expr: CheckedExprId) Allocator.Error!void {
         const site = self.innermostOpenSite() orelse return;
         try self.selected_procs.append(self.allocator, .{ .site = site, .proc_expr = proc_expr });
-    }
-
-    /// Select the local procedures a checked evidence vector's targets are,
-    /// through every nested vector checking resolved.
-    /// Select the iterator protocol methods a loop's plan calls, which may be
-    /// local procedures.
-    fn selectIteratorTargets(self: *NestedProcSiteBuilder, maybe_plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
-        const plan_id = maybe_plan orelse return;
-        const plan = self.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
-        for ([_]static_dispatch.IteratorDispatchCall{ plan.iter, plan.next }) |call| switch (call.resolution) {
-            .direct_closed, .direct_parametric => |direct| try self.selectEvidenceNode(direct.evidence),
-            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => {},
-        };
-    }
-
-    fn selectEvidence(self: *NestedProcSiteBuilder, evidence: []const static_dispatch.CheckedEvidence) Allocator.Error!void {
-        for (evidence) |entry| switch (entry.resolution) {
-            .direct => |node| try self.selectEvidenceNode(node),
-            .structural => |structural| try self.selectStructuralComponents(structural.dispatcher_ty),
-            .constraint, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-        };
-    }
-
-    fn selectEvidenceNode(self: *NestedProcSiteBuilder, node_id: static_dispatch.EvidenceNodeId) Allocator.Error!void {
-        const node = self.static_dispatch_plans.evidenceNode(node_id);
-        switch (node.target.kind) {
-            .local_proc => |local| try self.selectLocalProc(local.expr),
-            .procedure, .structural => {},
-        }
-        switch (node.nested) {
-            .resolved => |span| try self.selectEvidence(self.static_dispatch_plans.evidence_refs[span.start .. span.start + span.len]),
-            .from_callable => {},
-        }
-    }
-
-    /// Select the local `is_eq` and `to_hash` methods of every nominal a
-    /// structural comparison or hash over `root` reaches.
-    fn selectStructuralComponents(self: *NestedProcSiteBuilder, root: CheckedTypeId) Allocator.Error!void {
-        if (self.structural_local_methods.len == 0 or self.innermostOpenSite() == null) return;
-        var visited = collections.DenseMap(CheckedTypeId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending: std.ArrayList(CheckedTypeId) = .empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, root);
-        while (pending.pop()) |ty| {
-            if ((try visited.getOrPut(ty)).found_existing) continue;
-            switch (self.checked_types.payload(ty)) {
-                .pending, .err, .flex, .rigid, .empty_record, .empty_tag_union => {},
-                .alias => |alias| {
-                    try pending.appendSlice(self.allocator, alias.args);
-                    try pending.append(self.allocator, alias.backing);
-                },
-                .record => |record| {
-                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
-                    try pending.append(self.allocator, record.ext);
-                },
-                .tuple => |items| try pending.appendSlice(self.allocator, items),
-                .function => {},
-                .tag_union => |tags| {
-                    for (tags.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(self.checked_types));
-                    try pending.append(self.allocator, tags.ext);
-                },
-                .nominal => |nominal| {
-                    const key = checkedNominalTypeKey(nominal);
-                    for (self.structural_local_methods) |method| {
-                        if (std.meta.eql(method.owner, key)) try self.selectLocalProc(method.proc_expr);
-                    }
-                    try pending.appendSlice(self.allocator, nominal.args);
-                    if (self.checked_types.view().nominalBackingTemplateForPayload(nominal)) |backing| try pending.append(self.allocator, backing);
-                },
-            }
-        }
     }
 
     fn selectLookupTarget(self: *NestedProcSiteBuilder, expr_id: CheckedExprId) Allocator.Error!void {
@@ -38031,7 +37940,7 @@ pub fn publishFromTypedModule(
     );
     errdefer root_requests.deinit(allocator);
 
-    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, checked_bodies, checked_types, &static_dispatch_plans, &method_registry, &entry_wrappers, &checked_procedure_templates, &resolved_value_refs, &canonical_names);
+    var nested_proc_sites = try NestedProcSiteTable.fromTemplates(allocator, checked_bodies, checked_types, &static_dispatch_plans, &method_registry, &entry_wrappers, &checked_procedure_templates, &resolved_value_refs);
     errdefer nested_proc_sites.deinit(allocator);
 
     sealConstEvalTemplatesForRoots(

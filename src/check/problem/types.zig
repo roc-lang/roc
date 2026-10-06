@@ -55,7 +55,7 @@ pub const Problem = union(enum) {
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
     derived_method_value_use: DerivedMethodValueUse,
-    capturing_local_type_escape: CapturingLocalTypeEscape,
+    capturing_method: CapturingMethod,
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -186,22 +186,17 @@ pub const DerivedMethodValueUse = struct {
     region: base.Region,
 };
 
-/// A type declared in a block, with a method that captures values of the
-/// enclosing function body, reaches a type outside that block.
-pub const CapturingLocalTypeEscape = struct {
-    type_name: Ident.Idx,
+/// A method of a type declared in a function body refers to a value bound in
+/// that function body, directly or through a local function that does.
+/// Methods never capture values.
+pub const CapturingMethod = struct {
     method_name: Ident.Idx,
+    /// The name the method refers to at `region`.
+    referenced_name: Ident.Idx,
+    /// The value of the enclosing function body that the reference reaches:
+    /// `referenced_name` itself, or a value a local function it names uses.
+    captured_name: Ident.Idx,
     region: base.Region,
-    kind: Kind,
-
-    /// How the type leaves its block.
-    pub const Kind = enum {
-        /// A value of the type leaves the block.
-        value,
-        /// A use outside the block instantiates a generalized definition at
-        /// the type, selecting the type's methods from outside the block.
-        instantiation,
-    };
 };
 
 /// A bare underscore requested compiler generation for an unsupported associated method.

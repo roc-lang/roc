@@ -560,20 +560,6 @@ pub const DictionaryMethodEvidence = struct {
     instantiation_ret_type: ?CheckedTypeIdentity = null,
     instantiation_rep: ?TypeRepId = null,
 
-    /// Present when the method's worker needs values of the frame building
-    /// the dictionary: a local procedure with runtime captures, or a worker
-    /// specialized by such context. No runtime dictionary can call that
-    /// worker, so the dictionary's slot is absent and each worker receiving
-    /// the dictionary is specialized to receive the method as a context
-    /// input, which the building frame constructs.
-    context: ?MethodContext = null,
-
-    pub const MethodContext = struct {
-        /// `ContextArg`s supplying the method worker's own context inputs,
-        /// from the frame building the dictionary.
-        context_args: Span = .{},
-    };
-
     pub const EvidenceEdge = struct {
         module: checked.ModuleId,
         node: static_dispatch.EvidenceNodeId,
@@ -629,9 +615,6 @@ pub const ErasedCapture = struct {
     body_dictionary: bool = false,
     capture_id: ?checked.CaptureId = null,
     literal_parameter: ?u32 = null,
-    /// A `captured_value` holding the worker's context input at this index,
-    /// rather than a source capture.
-    context_input: ?u32 = null,
 };
 
 /// Exact checked source and worker selected for a stored function value.
@@ -913,87 +896,6 @@ pub const WorkerDictionaryDescriptor = struct {
     hidden_index: u32,
 };
 
-/// One input of a context-specialized worker: something that needs values
-/// of the frame of a function body, supplied where those values exist.
-pub const ContextInput = struct {
-    key: Key,
-    /// A callable input's checked type and representation.
-    callable_type: ?CheckedTypeIdentity = null,
-    rep: ?TypeRepId = null,
-
-    pub const Key = union(enum) {
-        /// A dictionary method of one of the worker's dictionaries, as an
-        /// erased callable: its dispatches call the input.
-        requirement: DictionaryRequirementId,
-        /// One runtime capture of a local procedure: the worker passes these
-        /// values wherever it calls or constructs that procedure, and a
-        /// specialization of the procedure itself binds its captures from
-        /// them.
-        capture: LocalProcCapture,
-        /// A dictionary method that compares or hashes a closed type
-        /// structurally, reaching local procedures with runtime captures.
-        /// It is no value: the worker performs the derivation itself, and
-        /// receives those procedures' runtime captures as `capture` inputs.
-        structural: StructuralContext,
-    };
-
-    pub fn isValue(self: ContextInput) bool {
-        return self.key != .structural;
-    }
-};
-
-/// A closed representation and derived method identifying frame-local evidence.
-pub const FrameContextKey = struct {
-    rep: TypeRepId,
-    method: DerivedMethod,
-};
-
-/// One runtime capture belonging to a checked local procedure.
-pub const LocalProcCapture = struct {
-    /// The local procedure's declaration.
-    site: CheckedExprIdentity,
-    /// Index into the procedure's runtime captures.
-    index: u32,
-};
-
-/// The dictionary requirement and closed representation a worker derives locally.
-pub const StructuralContext = struct {
-    requirement: DictionaryRequirementId,
-    method: DerivedMethod,
-    rep: TypeRepId,
-};
-
-/// How one call supplies one context input of the worker it calls.
-pub const ContextArg = union(enum) {
-    /// The calling worker's own context input at this index.
-    forward: u32,
-    /// A callable the calling frame constructs.
-    construct: ContextConstructId,
-    /// A structural input, which has no value.
-    structural,
-    /// The calling frame's own binding of a local procedure's runtime
-    /// capture.
-    capture: LocalProcCapture,
-};
-
-/// Identity of a planned context callable construction.
-pub const ContextConstructId = enum(u32) { _ };
-
-/// A callable that one frame constructs because a worker it calls needs
-/// it as a context input: a local procedure reading its captures from the
-/// frame, or a context-specialized worker capturing its own inputs.
-pub const ContextConstruct = struct {
-    caller: WorkerPlanId,
-    worker: WorkerPlanId,
-    callable_type: CheckedTypeIdentity,
-    /// The checked evidence edge that selected the callable, which
-    /// instantiates its worker; null for a local procedure at its own type.
-    evidence_edge: ?DictionaryMethodEvidence.EvidenceEdge = null,
-    hidden_desc_args: Span = .{},
-    hidden_dict_args: Span = .{},
-    context_args: Span = .{},
-};
-
 /// Complete checked source and hidden-input plan for one worker.
 pub const WorkerPlan = struct {
     id: WorkerPlanId,
@@ -1001,11 +903,6 @@ pub const WorkerPlan = struct {
     source: WorkerSource,
     checked_type: CheckedTypeIdentity,
     rep: TypeRepId,
-    /// `ContextInput`s of a worker specialized for dictionary methods that
-    /// need values of a function body's frame. Empty for every other worker.
-    context: Span = .{},
-    /// The unspecialized worker a context-specialized worker copies.
-    context_base: ?WorkerPlanId = null,
     stored_fn: ?StoredFnSource = null,
     hidden_descs: Span = .{},
     body_hidden_descs: Span = .{},
@@ -1048,8 +945,6 @@ pub const DirectCallPlan = struct {
     ret_substitution: ?CallTypeSubstitution = null,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
-    /// `ContextArg`s for a context-specialized `worker`, in its input order.
-    context_args: Span = .{},
 };
 
 /// Exact generic dictionary owner for one unresolved checked dispatch site.
@@ -1074,8 +969,6 @@ pub const NestedCallableUsePlan = struct {
     callable_ty: CheckedTypeIdentity,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
-    /// `ContextArg`s for a context-specialized `worker`, in its input order.
-    context_args: Span = .{},
 };
 
 /// Exact hidden dictionaries captured when a checked procedure lookup becomes
@@ -1089,8 +982,6 @@ pub const CallableUsePlan = struct {
     stored_capture_sources: Span = .{},
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
-    /// `ContextArg`s for a context-specialized `worker`, in its input order.
-    context_args: Span = .{},
 };
 
 /// Exact checked producer expression for a polymorphic callable binding that
@@ -1133,6 +1024,14 @@ pub const InspectMethodPlan = struct {
     /// The checked evidence of inspection's use of the method, which supplies
     /// the call's scheme substitution and nested requirements.
     evidence: DictionaryMethodEvidence.EvidenceEdge,
+    /// Inspection's `T -> Str` instance of the method: the call boundary of
+    /// the method's generalized worker.
+    callable_type: CheckedTypeIdentity,
+    /// When the method is reached through a procedure alias, so its evidence
+    /// derives from its callable and checking recorded no substitution: the
+    /// worker's types related to the call's (the inspected value, and `Str`),
+    /// which name the worker's variables exactly as a checked substitution.
+    relation: ?Span = null,
 };
 
 /// A derived method: compiler-derived `is_eq` or `to_hash`.
@@ -1187,8 +1086,6 @@ pub const DerivedComponentCallPlan = struct {
     ret_type: CheckedTypeIdentity,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
-    /// `ContextArg`s for a context-specialized `worker`, from `frame`.
-    context_args: Span = .{},
 };
 
 /// Which protocol operation an iterator call performs.
@@ -1210,8 +1107,6 @@ pub const IteratorCallPlan = struct {
     ret_substitution: CallTypeSubstitution,
     hidden_desc_args: Span = .{},
     hidden_dict_args: Span = .{},
-    /// `ContextArg`s for a context-specialized `worker`, in its input order.
-    context_args: Span = .{},
 };
 
 /// Worker and return substitution for one compile-time-evaluated call.
@@ -1273,10 +1168,6 @@ pub const ProgramPlan = struct {
     allocator: Allocator,
     literal_sites: std.ArrayList(LiteralSite) = .empty,
     literal_evidence: ?LiteralEvidencePlan = null,
-    /// Literals whose direct conversion reaches a local procedure with
-    /// runtime captures: they convert in place at runtime, in the frame
-    /// holding those captures, and have no compile-time conversion.
-    in_place_conversions: std.ArrayList(CheckedExprIdentity) = .empty,
     roots: std.ArrayList(RootPlan),
     workers: std.ArrayList(WorkerPlan),
     direct_calls: std.ArrayList(DirectCallPlan),
@@ -1287,14 +1178,6 @@ pub const ProgramPlan = struct {
     call_operands: std.ArrayList(CallOperand),
     dictionary_dispatches: std.ArrayList(DictionaryDispatchPlan),
     nested_callable_uses: std.ArrayList(NestedCallableUsePlan),
-    context_inputs: std.ArrayList(ContextInput),
-    context_args: std.ArrayList(ContextArg),
-    context_constructs: std.ArrayList(ContextConstruct),
-    /// For each structural comparison or hash of a closed representation
-    /// that reaches local procedures with runtime captures, those
-    /// procedures' workers (a span of `frame_context_proc_ids`).
-    frame_context_procs: std.AutoHashMapUnmanaged(FrameContextKey, Span) = .{},
-    frame_context_proc_ids: std.ArrayList(WorkerPlanId) = .empty,
     callable_uses: std.ArrayList(CallableUsePlan),
     runtime_callable_eval_uses: std.ArrayList(RuntimeCallableEvalUsePlan),
     stored_callable_capture_sources: std.ArrayList(StoredCallableCaptureSource),
@@ -1371,9 +1254,6 @@ pub const ProgramPlan = struct {
             .call_operands = .empty,
             .dictionary_dispatches = .empty,
             .nested_callable_uses = .empty,
-            .context_inputs = .empty,
-            .context_args = .empty,
-            .context_constructs = .empty,
             .callable_uses = .empty,
             .runtime_callable_eval_uses = .empty,
             .stored_callable_capture_sources = .empty,
@@ -1436,20 +1316,12 @@ pub const ProgramPlan = struct {
         return self.host_reps.get(rep) orelse boxyPlanInvariant("missing checked host ABI request");
     }
 
-    pub fn convertsInPlace(self: *const ProgramPlan, expr: CheckedExprIdentity) bool {
-        for (self.in_place_conversions.items) |candidate| {
-            if (exprRefEql(candidate, expr)) return true;
-        }
-        return false;
-    }
-
     pub fn sortComparatorAbiRep(self: *const ProgramPlan, comparator_rep: TypeRepId) TypeRepId {
         return self.sort_comparator_abis.get(comparator_rep) orelse boxyPlanInvariant("missing planned sort comparator ABI");
     }
 
     pub fn deinit(self: *ProgramPlan) void {
         self.literal_sites.deinit(self.allocator);
-        self.in_place_conversions.deinit(self.allocator);
         if (self.literal_evidence) |*evidence| evidence.deinit(self.allocator);
         self.static_fns.deinit(self.allocator);
         self.dictionary_method_slots.deinit(self.allocator);
@@ -1507,11 +1379,6 @@ pub const ProgramPlan = struct {
         self.runtime_callable_eval_uses.deinit(self.allocator);
         self.callable_uses.deinit(self.allocator);
         self.nested_callable_uses.deinit(self.allocator);
-        self.context_inputs.deinit(self.allocator);
-        self.context_args.deinit(self.allocator);
-        self.context_constructs.deinit(self.allocator);
-        self.frame_context_procs.deinit(self.allocator);
-        self.frame_context_proc_ids.deinit(self.allocator);
         self.dictionary_dispatches.deinit(self.allocator);
         self.call_operands.deinit(self.allocator);
         self.direct_calls.deinit(self.allocator);
@@ -1552,11 +1419,6 @@ pub const ProgramPlan = struct {
     ) Allocator.Error!?WorkerPlanId {
         var visited = collections.DenseMap(TypeRepId, void).init(allocator);
         defer visited.deinit();
-        // A derivation reaching local procedures that need a frame's values
-        // belongs to the frame performing it.
-        if (env == 0 and self.repNeedsFrameContext(rep_id)) {
-            if (worker) |frame| return frame;
-        }
         if (!try self.repNamesTypeVariable(rep_id, self.derivedEnvBindings(env), &visited)) return null;
         return worker orelse boxyPlanInvariant("derived method over a type variable had no enclosing worker");
     }
@@ -1913,45 +1775,6 @@ pub const ProgramPlan = struct {
         return self.call_operands.items[span.start .. span.start + span.len];
     }
 
-    pub fn contextInputSlice(self: *const ProgramPlan, span: Span) []const ContextInput {
-        return self.context_inputs.items[span.start .. span.start + span.len];
-    }
-
-    pub fn contextArgSlice(self: *const ProgramPlan, span: Span) []const ContextArg {
-        return self.context_args.items[span.start .. span.start + span.len];
-    }
-
-    pub fn contextConstruct(self: *const ProgramPlan, id: ContextConstructId) ContextConstruct {
-        return self.context_constructs.items[@intFromEnum(id)];
-    }
-
-    /// The context input of `worker` with `key`, if any.
-    pub fn workerContextInput(self: *const ProgramPlan, worker: WorkerPlanId, key: ContextInput.Key) ?u32 {
-        const inputs = self.contextInputSlice(self.workers.items[@intFromEnum(worker)].context);
-        for (inputs, 0..) |input, index| {
-            if (contextKeyEql(input.key, key)) return @intCast(index);
-        }
-        return null;
-    }
-
-    /// The structural derivation `worker` performs for `requirement`, if any.
-    pub fn workerStructuralContext(self: *const ProgramPlan, worker: WorkerPlanId, requirement: DictionaryRequirementId) ?StructuralContext {
-        for (self.contextInputSlice(self.workers.items[@intFromEnum(worker)].context)) |input| {
-            switch (input.key) {
-                .structural => |structural| if (structural.requirement == requirement) return structural,
-                .requirement, .capture => {},
-            }
-        }
-        return null;
-    }
-
-    /// Whether a structural derivation over `rep` reaches local procedures
-    /// with runtime captures, so it runs in the frame comparing or hashing.
-    pub fn repNeedsFrameContext(self: *const ProgramPlan, rep: TypeRepId) bool {
-        return self.frame_context_procs.contains(.{ .rep = rep, .method = .equality }) or
-            self.frame_context_procs.contains(.{ .rep = rep, .method = .hash });
-    }
-
     pub fn erasedCaptureSlice(self: *const ProgramPlan, span: Span) []const ErasedCapture {
         return self.erased_captures.items[span.start .. span.start + span.len];
     }
@@ -2103,7 +1926,7 @@ pub const ProgramPlan = struct {
 
     pub fn workerForSourceType(self: *const ProgramPlan, source: WorkerSource, checked_type: CheckedTypeIdentity) ?WorkerPlanId {
         for (self.workers.items) |worker| {
-            if (worker.context_base != null or !workerSourceEql(worker.source, source)) continue;
+            if (!workerSourceEql(worker.source, source)) continue;
             if (source == .nested_expr or typeRefEql(worker.checked_type, checked_type)) return worker.id;
         }
         return null;
@@ -3718,7 +3541,6 @@ pub fn analyzeProgram(
 
     if (input.source_modules.len != 0 and input.source_modules.len != input.roots.len)
         boxyPlanInvariant("root source module count differs from request count");
-    builder.has_capturing_local_methods = builder.anyCapturingLocalMethod();
     for (input.roots, 0..) |root, index| {
         const view = if (input.source_modules.len == 0) builder.root_view else builder.moduleForId(input.source_modules[index]);
         try builder.analyzeRoot(root, view);
@@ -3762,7 +3584,6 @@ pub fn analyzeProgram(
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
 
-    try builder.separateContextLiteralSites();
     if (builder.plan.literal_sites.items.len != 0) {
         var literals = LiteralPlanner.init(&builder);
         defer literals.deinit();
@@ -3896,10 +3717,6 @@ const Builder = struct {
     plan_codec_result: GeneratedCodecCallPlan = undefined,
     generated_callable_uses: std.AutoHashMapUnmanaged(GeneratedCallableKey, void) = .empty,
     has_custom_numeral: bool = false,
-    /// Whether any checked module declares a method of a function-body type
-    /// that is a local procedure with runtime captures. Structural
-    /// derivations look for such methods only then.
-    has_capturing_local_methods: bool = false,
     observed_numeral_evidence: std.AutoHashMapUnmanaged(DictionaryMethodEvidence.EvidenceEdge, void) = .empty,
     evidence_workers_walked: usize = 0,
     evidence_calls_walked: usize = 0,
@@ -4068,34 +3885,6 @@ const Builder = struct {
     /// Shared label-comparing queries over the plan built so far.
     fn namedQuery(self: *Builder) NamedRepQuery(*Builder) {
         return .{ .query = self.repQuery(), .modules = self };
-    }
-
-    fn anyCapturingLocalMethod(self: *Builder) bool {
-        if (viewHasCapturingLocalMethod(self.root_view)) return true;
-        for (self.extra_module_views) |view| {
-            if (viewHasCapturingLocalMethod(view)) return true;
-        }
-        for (self.imports) |imported| {
-            if (viewHasCapturingLocalMethod(moduleViewFromImported(imported))) return true;
-        }
-        for (self.relation_modules) |relation| {
-            if (viewHasCapturingLocalMethod(moduleViewFromImported(relation))) return true;
-        }
-        return false;
-    }
-
-    fn viewHasCapturingLocalMethod(view: ModuleView) bool {
-        for (view.method_registry.entries) |entry| {
-            const target = entry.target orelse continue;
-            switch (target.kind) {
-                .local_proc => |local| {
-                    const site_expr = nestedCallableSiteExprFor(view, local.expr) orelse continue;
-                    if (nestedCallableRuntimeCaptures(view, site_expr).len != 0) return true;
-                },
-                .procedure, .structural => {},
-            }
-        }
-        return false;
     }
 
     fn moduleForId(self: *Builder, module_id: checked.ModuleId) ModuleView {
@@ -5072,7 +4861,7 @@ const Builder = struct {
             _ = try self.analyzeType(self.moduleForId(definition_type.module), definition_type.ty);
         }
         for (self.plan.workers.items) |worker| {
-            if (worker.context_base == null and workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
+            if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
                 if (root_request) |request| {
                     if (worker.root_request == null) {
                         self.plan.workers.items[@intFromEnum(worker.id)].root_request = request;
@@ -6174,9 +5963,11 @@ const Builder = struct {
                 boxyPlanInvariant("planned boxy inspect target had no checked use evidence"),
         };
         try self.analyzeEvidenceEdgeSchemeSubstitution(evidence);
-        const nested = inspectUseNestedEvidence(lookup.view, evidence.node);
-        try self.observeNumeralEvidence(lookup.view, nested, self.workerEvidenceParams(source));
-        for (nested) |entry| _ = try self.analyzeType(lookup.view, entry.dispatcher_ty);
+        const relation: ?Span = if (inspectUseNestedEvidence(lookup.view, evidence.node)) |nested| blk: {
+            try self.observeNumeralEvidence(lookup.view, nested, self.workerEvidenceParams(source));
+            for (nested) |entry| _ = try self.analyzeType(lookup.view, entry.dispatcher_ty);
+            break :blk null;
+        } else try self.inspectUseRelation(worker, rep_id, source_function.ret);
         try self.plan.inspect_methods.append(self.allocator, .{
             .source_rep = rep_id,
             .worker = worker,
@@ -6184,6 +5975,8 @@ const Builder = struct {
             .method = lookup.method orelse
                 boxyPlanInvariant("planned boxy inspect target had no checked method identity"),
             .evidence = evidence,
+            .callable_type = source_fn_type,
+            .relation = relation,
         });
     }
 
@@ -6433,12 +6226,6 @@ const Builder = struct {
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyPlanInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
-        // A conversion reaching a local procedure that needs its declaration
-        // context runs where that context exists: in place, at runtime.
-        if (self.conversionNeedsFrameContext(view, plan_id)) {
-            try self.recordInPlaceConversion(view, expr_id);
-            return try actions.append(self.allocator, dispatch_action);
-        }
         const root_id = view.checked_bodies.literalConversionRoot(expr_id) orelse {
             try self.recordLiteralSite(view, expr_id, plan_id);
             return try actions.append(self.allocator, dispatch_action);
@@ -6466,79 +6253,6 @@ const Builder = struct {
         }
     }
 
-    /// Whether a literal's direct conversion selects a local procedure with
-    /// runtime captures, as its target or in that target's nested evidence.
-    fn conversionNeedsFrameContext(self: *Builder, view: ModuleView, plan_id: static_dispatch.StaticDispatchPlanId) bool {
-        if (!self.has_capturing_local_methods) return false;
-        const plans = view.static_dispatch_plans;
-        const node_id = switch (plans.plans[@intFromEnum(plan_id)].resolution) {
-            .direct_closed, .direct_parametric => |direct| direct.evidence,
-            .direct_pending, .evidence_dependent, .structural, .checked_error, .@"unreachable" => return false,
-        };
-        return self.evidenceNodeNeedsFrameContext(view, node_id);
-    }
-
-    /// A literal whose worker received its conversion method as a context
-    /// input converts through that input where it runs, in place, rather
-    /// than through compile-time literal evaluation, which has no frame to
-    /// construct the input from.
-    fn separateContextLiteralSites(self: *Builder) Allocator.Error!void {
-        if (!self.has_capturing_local_methods) return;
-        var kept: usize = 0;
-        for (self.plan.literal_sites.items) |site| {
-            if (self.literalSiteUsesContext(site)) {
-                const expr = site.source;
-                if (!self.plan.convertsInPlace(expr)) try self.plan.in_place_conversions.append(self.allocator, expr);
-                continue;
-            }
-            self.plan.literal_sites.items[kept] = site;
-            kept += 1;
-        }
-        self.plan.literal_sites.shrinkRetainingCapacity(kept);
-    }
-
-    fn literalSiteUsesContext(self: *Builder, site: LiteralSite) bool {
-        const worker = self.plan.workers.items[@intFromEnum(site.worker)];
-        if (worker.context.len == 0) return false;
-        const dispatch = self.plan.dictionaryDispatchPlanForCall(site.source, site.worker) orelse return false;
-        const requirement = dispatch.scheme_requirement orelse blk: {
-            const view = self.moduleForId(site.source.module);
-            const dictionaries = self.plan.representations.items[@intFromEnum(dispatch.dispatcher_rep)].dictionaries;
-            const name = view.canonical_names.?.methodNameText(dispatch.method);
-            for (self.plan.dictionarySlice(dictionaries), 0..) |candidate, offset| {
-                const candidate_view = self.moduleForId(candidate.source_type.module);
-                if (std.mem.eql(u8, name, candidate_view.canonical_names.?.methodNameText(candidate.fn_name)))
-                    break :blk @as(DictionaryRequirementId, @enumFromInt(dictionaries.start + offset));
-            }
-            return false;
-        };
-        return self.plan.workerContextInput(site.worker, .{ .requirement = requirement }) != null;
-    }
-
-    fn recordInPlaceConversion(self: *Builder, view: ModuleView, expr_id: checked.CheckedExprId) Allocator.Error!void {
-        const expr = CheckedExprIdentity{ .module = view.key, .expr = expr_id };
-        if (self.plan.convertsInPlace(expr)) return;
-        try self.plan.in_place_conversions.append(self.allocator, expr);
-    }
-
-    fn evidenceNodeNeedsFrameContext(self: *Builder, view: ModuleView, node_id: static_dispatch.EvidenceNodeId) bool {
-        const plans = view.static_dispatch_plans;
-        const node = plans.evidenceNode(node_id);
-        switch (node.target.kind) {
-            .local_proc => |local| if (!self.nestedCallableHasNoCaptures(.{ .module = view.key, .expr = local.expr })) return true,
-            .procedure, .structural => {},
-        }
-        const nested = switch (node.nested) {
-            .resolved => plans.nestedEvidence(node),
-            .from_callable => return false,
-        };
-        for (nested) |evidence| switch (evidence.resolution) {
-            .direct => |child| if (self.evidenceNodeNeedsFrameContext(view, child)) return true,
-            .constraint, .structural, .from_callable, .from_scheme, .checked_error, .unreachable_value => {},
-        };
-        return false;
-    }
-
     fn stepNumeralConversion(self: *Builder, actions: *std.ArrayList(PlanAction), site: ConversionSite) Allocator.Error!void {
         const view = site.view;
         const expr_id = site.expr;
@@ -6555,10 +6269,7 @@ const Builder = struct {
                     const owner = methodOwnerForModuleType(view, dispatch.dispatcher_ty) orelse
                         boxyPlanInvariant("direct numeral conversion omitted its checked owner");
                     if (owner == .builtin) return;
-                    if (self.conversionNeedsFrameContext(view, plan_id))
-                        try self.recordInPlaceConversion(view, expr_id)
-                    else
-                        try self.recordLiteralSite(view, expr_id, plan_id);
+                    try self.recordLiteralSite(view, expr_id, plan_id);
                     return try actions.append(self.allocator, .{ .dispatch_call_target = .{ .view = view, .call_expr = expr_id, .plan = plan_id } });
                 },
                 .evidence_dependent => {
@@ -6859,30 +6570,10 @@ const Builder = struct {
             selected.target,
             typeRef(view, dispatch.dispatcher_ty),
         );
+        // Methods never capture, so a local procedure a dispatch selects is
+        // called directly as its nested worker.
         if (lookup.source == .nested_expr and !self.nestedCallableHasNoCaptures(lookup.source.nested_expr)) {
-            // A local procedure that needs values of its declaration context
-            // is constructed from this frame, as a lookup of its binding
-            // would construct it, and the dispatch calls that callable. The
-            // use is the dispatch itself, so its evidence edge supplies the
-            // procedure's instantiation and nested evidence.
-            const caller = self.active_worker orelse
-                boxyPlanInvariant("boxy local procedure dispatch was analyzed outside a worker body");
-            const callable_ty = selectedDispatchCallableType(view, lookup.view, selected);
-            _ = try self.analyzeType(self.moduleForId(callable_ty.module), callable_ty.ty);
-            try self.pushPlanActions(actions, &.{
-                .{ .ensure_worker = .{
-                    .source = lookup.source,
-                    .checked_type = self.workerCheckedTypeForSource(lookup.source, callable_ty),
-                    .root_request = null,
-                } },
-                .{ .nested_callable_use_record = .{
-                    .view = view,
-                    .expr = site.call_expr,
-                    .callable_ty = callable_ty,
-                    .caller = caller,
-                } },
-            });
-            return;
+            boxyPlanInvariant("method dispatch selected a local procedure that needs values of its declaration context");
         }
         // The worker is the target's generalized declaration; the call
         // boundary is this edge's instantiation of it. They are separate
@@ -7018,11 +6709,12 @@ const Builder = struct {
             selected.target,
             typeRef(view, site.call.dispatcher_ty),
         );
+        if (lookup.source == .nested_expr and !self.nestedCallableHasNoCaptures(lookup.source.nested_expr)) {
+            boxyPlanInvariant("iterator protocol dispatch selected a local procedure that needs values of its declaration context");
+        }
         // As in ordinary dispatch planning, the worker is the protocol
         // method's generalized declaration while the call boundary is this
-        // edge's instantiation of it. A local procedure that needs values of
-        // its declaration context is reached through its specialization
-        // receiving its runtime captures from the calling frame.
+        // edge's instantiation of it.
         try self.pushPlanActions(actions, &.{
             .{ .ensure_worker = .{
                 .source = lookup.source,
@@ -7051,8 +6743,7 @@ const Builder = struct {
         const caller = self.active_worker orelse
             boxyPlanInvariant("boxy iterator call was analyzed outside a worker body");
         if (self.plan.iteratorCallPlanFor(view.key, site.plan_id, site.kind, caller)) |existing| {
-            const existing_base = self.plan.workers.items[@intFromEnum(existing.worker)].context_base orelse existing.worker;
-            if (existing_base != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
+            if (existing.worker != worker or !typeRefEql(existing.source_fn_type, source_fn_type)) {
                 boxyPlanInvariant("boxy iterator dispatch plan tried to bind a checked iterator call to two workers");
             }
             return;
@@ -11581,11 +11272,6 @@ const Builder = struct {
                 }
             }
         }
-        // A dispatch that uses a local procedure as a callable instantiates
-        // it at the evidence edge its plan selected.
-        if (dispatchPlanOfExpr(view, use.expr)) |plan| {
-            return .{ .view = view, .entries = self.nestedEvidenceForDirectDispatch(view, plan) };
-        }
         return .{ .view = view, .entries = view.static_dispatch_plans.siteEvidence(use.expr) };
     }
 
@@ -12436,15 +12122,20 @@ const Builder = struct {
     /// The checked dispatch plan of a direct call lowered from a dispatching
     /// expression.
     fn directCallDispatchPlan(call_expr: anytype) ?static_dispatch.StaticDispatchPlanId {
-        return switch (call_expr.data) {
-            .dispatch_call => |plan| plan,
-            .type_dispatch_call => |plan| plan,
-            .method_eq => |plan| plan,
-            .str_from_quote => |quote| quote.plan,
-            .interpolation => |interpolation| interpolation.plan,
-            .numeral => |numeral| numeral.plan,
-            else => boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call"),
-        };
+        return if (call_expr.data == .dispatch_call)
+            call_expr.data.dispatch_call
+        else if (call_expr.data == .type_dispatch_call)
+            call_expr.data.type_dispatch_call
+        else if (call_expr.data == .method_eq)
+            call_expr.data.method_eq
+        else if (call_expr.data == .str_from_quote)
+            call_expr.data.str_from_quote.plan
+        else if (call_expr.data == .interpolation)
+            call_expr.data.interpolation.plan
+        else if (call_expr.data == .numeral)
+            call_expr.data.numeral.plan
+        else
+            boxyPlanInvariant("boxy direct call plan referenced a checked expression that is not lowered as a worker call");
     }
 
     /// The scheme representation pairs a direct call binds: its checked
@@ -12511,12 +12202,6 @@ const Builder = struct {
     /// applied to its worker's scheme, when checking instantiated one there.
     fn useSchemeSubstitution(self: *Builder, worker_id: WorkerPlanId, use: CheckedExprIdentity) ?SchemeCallSubstitution {
         const site_view = self.moduleForId(use.module);
-        if (dispatchPlanOfExpr(site_view, use.expr)) |plan| {
-            return self.evidenceEdgeSchemeSubstitution(worker_id, .{
-                .module = use.module,
-                .node = directDispatchEvidenceNode(site_view, plan),
-            });
-        }
         const site_types = site_view.static_dispatch_plans.siteSubstitution(use.expr) orelse return null;
         if (site_types.len == 0) return null;
         const scheme = self.workerSchemeVars(self.plan.workers.items[@intFromEnum(worker_id)].source) orelse return null;
@@ -13038,16 +12723,6 @@ const Builder = struct {
                 });
             }
 
-            for (self.plan.contextInputSlice(worker.context), 0..) |input, input_index| {
-                if (!input.isValue()) continue;
-                try pending.append(self.allocator, .{
-                    .kind = .captured_value,
-                    .source_type = input.callable_type.?,
-                    .rep = input.rep.?,
-                    .context_input = @intCast(input_index),
-                });
-            }
-
             const start: u32 = @intCast(self.plan.erased_captures.items.len);
             try self.plan.erased_captures.appendSlice(self.allocator, pending.items);
             self.plan.workers.items[worker_index].erased_captures = .{
@@ -13482,7 +13157,6 @@ const Builder = struct {
         second_type: CheckedTypeIdentity,
         ret_type: CheckedTypeIdentity,
     ) Allocator.Error!void {
-        if (env == 0) try self.recordFrameContextProcs(rep, method);
         const frame = try self.plan.derivedFrame(self.allocator, worker, rep, env);
         const key = DerivedComponentKey{ .frame = frame, .method = method, .rep = rep, .env = env };
         if ((try self.derived_roots_seen.getOrPut(self.allocator, key)).found_existing) return;
@@ -13950,11 +13624,8 @@ const Builder = struct {
         var index: usize = 0;
         while (index < self.plan.derived_component_calls.items.len) : (index += 1) {
             const call = self.plan.derived_component_calls.items[index];
-            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(call.worker, call.frame, &call.arg_types, call.ret_type, null, null, null, call.env);
-            self.plan.derived_component_calls.items[index].hidden_dict_args = hidden_dict_args;
-            const context = try self.contextualizeDirectLocalProcCall(call.worker, call.frame, hidden_dict_args);
-            self.plan.derived_component_calls.items[index].worker = context.worker;
-            self.plan.derived_component_calls.items[index].context_args = context.args;
+            self.plan.derived_component_calls.items[index].hidden_dict_args =
+                try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(call.worker, call.frame, &call.arg_types, call.ret_type, null, null, null, call.env);
         }
     }
 
@@ -14177,39 +13848,11 @@ const Builder = struct {
             );
         }
 
-        // A context callable instantiates its worker at the evidence edge
-        // that selected its dictionary method.
-        for (self.plan.context_constructs.items) |*construct| {
-            const worker = self.plan.workers.items[@intFromEnum(construct.worker)];
-            if (worker.hidden_descs.len == 0) continue;
-            const edge = construct.evidence_edge;
-            const edge_view = if (edge) |known| self.moduleForId(known.module) else self.moduleForId(construct.callable_type.module);
-            const nested: ?[]const static_dispatch.CheckedEvidence = if (edge) |known| blk: {
-                const node = edge_view.static_dispatch_plans.evidenceNode(known.node);
-                break :blk switch (node.nested) {
-                    .resolved => edge_view.static_dispatch_plans.nestedEvidence(node),
-                    .from_callable => null,
-                };
-            } else null;
-            construct.hidden_desc_args = try self.materializeCallableUseHiddenDescriptorArgsAtType(
-                construct.worker,
-                construct.callable_type,
-                edge_view,
-                nested,
-                if (edge) |known| self.evidenceEdgeSchemeSubstitution(construct.worker, known) else null,
-                null,
-                construct.hidden_dict_args,
-            );
-        }
-
         for (self.plan.callable_uses.items) |*use| {
             try self.fillCallableUseHiddenDescriptorArgs(use.worker, use.caller, &use.hidden_desc_args);
         }
         for (self.plan.nested_callable_uses.items) |*use| {
             try self.fillCallableUseHiddenDescriptorArgs(use.worker, use.caller, &use.hidden_desc_args);
-        }
-        for (self.plan.context_constructs.items) |*construct| {
-            try self.fillCallableUseHiddenDescriptorArgs(construct.worker, construct.caller, &construct.hidden_desc_args);
         }
     }
 
@@ -14226,7 +13869,7 @@ const Builder = struct {
                 boxyPlanInvariant("boxy inspect worker was not callable");
             if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
             const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
-            const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+            const call_ret = self.inspectCallRet(method);
             const evidence_view = self.moduleForId(method.evidence.module);
             var bindings = std.ArrayList(SiteRepBinding).empty;
             defer bindings.deinit(self.allocator);
@@ -14234,13 +13877,13 @@ const Builder = struct {
                 method.worker,
                 &.{method.source_rep},
                 &.{method.source_rep},
-                function.ret,
+                call_ret.rep,
                 &.{source_type},
-                ret_type,
+                call_ret.ty,
                 evidence_view,
                 inspectUseNestedEvidence(evidence_view, method.evidence.node),
                 try self.inspectUseSchemeSubstitution(method, &bindings),
-                null,
+                method.relation,
                 method.hidden_dict_args,
             );
             self.plan.inspect_methods.items[index].hidden_desc_args = hidden_desc_args;
@@ -14526,391 +14169,7 @@ const Builder = struct {
                 break :blk machine.span_result;
             };
             self.plan.direct_calls.items[direct_index].hidden_dict_args = hidden_dict_args;
-            const context = try self.contextualizeCall(direct.worker, direct.caller, hidden_dict_args);
-            self.plan.direct_calls.items[direct_index].worker = context.worker;
-            self.plan.direct_calls.items[direct_index].context_args = context.args;
         }
-    }
-
-    // Context specialization //
-    //
-    // A worker that needs values of a function body's frame (a local
-    // procedure with runtime captures, or a worker specialized as described
-    // here) cannot implement a runtime dictionary's method: no dictionary
-    // call has that frame. The frame whose checked evidence selects such a
-    // method constructs it as an erased callable instead, and every worker
-    // that receives the dictionary is specialized to receive the method as
-    // a context input: its dispatches on that requirement call the input,
-    // and its own calls forward the input to the workers they pass the
-    // dictionary on to. A structural comparison or hash of a closed type
-    // reaching such procedures is a context input too, with no value: the
-    // receiving worker performs the derivation itself and receives the
-    // runtime captures of the procedures it reaches.
-
-    const ContextualizedCall = struct {
-        worker: WorkerPlanId,
-        args: Span = .{},
-    };
-
-    const ContextInputs = struct {
-        inputs: std.ArrayList(ContextInput) = .empty,
-        args: std.ArrayList(ContextArg) = .empty,
-
-        fn deinit(self: *ContextInputs, allocator: Allocator) void {
-            self.inputs.deinit(allocator);
-            self.args.deinit(allocator);
-        }
-
-        fn contains(self: *const ContextInputs, key: ContextInput.Key) bool {
-            for (self.inputs.items) |input| {
-                if (contextKeyEql(input.key, key)) return true;
-            }
-            return false;
-        }
-    };
-
-    /// The worker a call with these hidden dictionary arguments reaches: the
-    /// callee itself, or its specialization for the context inputs the
-    /// arguments carry, with the `ContextArg`s supplying them.
-    fn contextualizeCall(
-        self: *Builder,
-        callee: WorkerPlanId,
-        caller: ?WorkerPlanId,
-        hidden_dict_args: Span,
-    ) Allocator.Error!ContextualizedCall {
-        const base = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
-        var collected = ContextInputs{};
-        defer collected.deinit(self.allocator);
-        try self.collectContextInputs(caller, hidden_dict_args, &collected);
-        if (collected.inputs.items.len == 0) return .{ .worker = base };
-        const worker = try self.ensureContextWorker(base, collected.inputs.items);
-        const start: u32 = @intCast(self.plan.context_args.items.len);
-        try self.plan.context_args.appendSlice(self.allocator, collected.args.items);
-        return .{ .worker = worker, .args = .{ .start = start, .len = @intCast(collected.args.items.len) } };
-    }
-
-    /// Like `contextualizeCall`, for a direct call that may reach a local
-    /// procedure with runtime captures outside the closure carrying them: the
-    /// call reaches the procedure's specialization receiving its own
-    /// captures as context inputs, from the calling frame.
-    fn contextualizeDirectLocalProcCall(
-        self: *Builder,
-        callee: WorkerPlanId,
-        caller: ?WorkerPlanId,
-        hidden_dict_args: Span,
-    ) Allocator.Error!ContextualizedCall {
-        const base = self.plan.workers.items[@intFromEnum(callee)].context_base orelse callee;
-        if (!self.workerIsCapturingLocalProc(base)) return try self.contextualizeCall(callee, caller, hidden_dict_args);
-        var collected = ContextInputs{};
-        defer collected.deinit(self.allocator);
-        try self.collectContextInputs(caller, hidden_dict_args, &collected);
-        try self.collectLocalProcInput(caller, self.plan.workers.items[@intFromEnum(base)].source.nested_expr, &collected);
-        const worker = try self.ensureContextWorker(base, collected.inputs.items);
-        const start: u32 = @intCast(self.plan.context_args.items.len);
-        try self.plan.context_args.appendSlice(self.allocator, collected.args.items);
-        return .{ .worker = worker, .args = .{ .start = start, .len = @intCast(collected.args.items.len) } };
-    }
-
-    /// The context inputs a callee receiving `hidden_dict_args` from `caller`
-    /// needs, with the arguments supplying them.
-    fn collectContextInputs(
-        self: *Builder,
-        caller: ?WorkerPlanId,
-        hidden_dict_args: Span,
-        collected: *ContextInputs,
-    ) Allocator.Error!void {
-        var arg_index: usize = 0;
-        while (arg_index < hidden_dict_args.len) : (arg_index += 1) {
-            const arg = self.plan.direct_call_hidden_dict_args.items[hidden_dict_args.start + arg_index];
-            switch (arg.source) {
-                .static_rep => |source_rep| {
-                    if (arg.method_evidence.len == 0) continue;
-                    if (arg.method_evidence.len != arg.worker_dictionaries.len) {
-                        boxyPlanInvariant("static dictionary checked evidence did not cover every method requirement");
-                    }
-                    var method_index: u32 = 0;
-                    while (method_index < arg.method_evidence.len) : (method_index += 1) {
-                        const method = self.plan.dictionary_method_evidence.items[arg.method_evidence.start + method_index];
-                        const requirement: DictionaryRequirementId = @enumFromInt(arg.worker_dictionaries.start + method_index);
-                        if (method.context) |context| {
-                            const worker = switch (method.resolution) {
-                                .worker => |worker| worker,
-                                .builtin_numeral, .structural, .constraint, .checked_error, .unreachable_value => boxyPlanInvariant("context dictionary method had no worker"),
-                            };
-                            const frame = caller orelse
-                                boxyPlanInvariant("a dictionary method needing a frame's context was built by no frame");
-                            const supplied: ContextArg = .{ .construct = try self.ensureContextConstruct(.{
-                                .caller = frame,
-                                .worker = worker,
-                                .callable_type = method.callable_type,
-                                .evidence_edge = method.evidence_edge,
-                                .hidden_dict_args = method.nested_dict_args,
-                                .context_args = context.context_args,
-                            }) };
-                            try collected.inputs.append(self.allocator, .{
-                                .key = .{ .requirement = requirement },
-                                .callable_type = method.callable_type,
-                                .rep = try self.analyzeType(self.moduleForId(method.callable_type.module), method.callable_type.ty),
-                            });
-                            try collected.args.append(self.allocator, supplied);
-                            continue;
-                        }
-                        const derived: DerivedMethod = switch (method.resolution) {
-                            .structural => |kind| switch (kind) {
-                                .equality => .equality,
-                                .hash => .hash,
-                                .parser, .encoder, .map, .map_effectful => continue,
-                            },
-                            .worker, .builtin_numeral, .constraint, .checked_error, .unreachable_value => continue,
-                        };
-                        const procs = self.plan.frame_context_procs.get(.{ .rep = source_rep, .method = derived }) orelse continue;
-                        try collected.inputs.append(self.allocator, .{ .key = .{ .structural = .{
-                            .requirement = requirement,
-                            .method = derived,
-                            .rep = source_rep,
-                        } } });
-                        try collected.args.append(self.allocator, .structural);
-                        for (self.plan.frame_context_proc_ids.items[procs.start..][0..procs.len]) |proc| {
-                            try self.collectLocalProcInput(caller, self.plan.workers.items[@intFromEnum(proc)].source.nested_expr, collected);
-                        }
-                    }
-                },
-                .bound_dictionaries => |bound| {
-                    const frame = caller orelse continue;
-                    const frame_inputs = self.plan.contextInputSlice(self.plan.workers.items[@intFromEnum(frame)].context);
-                    if (frame_inputs.len == 0) continue;
-                    var forwards_structural = false;
-                    var offset: u32 = 0;
-                    while (offset < arg.worker_dictionaries.len) : (offset += 1) {
-                        const requirement: DictionaryRequirementId = @enumFromInt(arg.worker_dictionaries.start + offset);
-                        const slot = self.plan.dictionaries.items[@intFromEnum(requirement)].slot;
-                        for (frame_inputs, 0..) |frame_input, frame_index| {
-                            const frame_requirement = switch (frame_input.key) {
-                                .requirement => |frame_requirement| frame_requirement,
-                                .structural => |structural| structural.requirement,
-                                .capture => continue,
-                            };
-                            const raw = @intFromEnum(frame_requirement);
-                            if (raw < bound.start or raw >= bound.start + bound.len) continue;
-                            if (self.plan.dictionaries.items[raw].slot != slot) continue;
-                            switch (frame_input.key) {
-                                .requirement => {
-                                    try collected.inputs.append(self.allocator, .{
-                                        .key = .{ .requirement = requirement },
-                                        .callable_type = frame_input.callable_type,
-                                        .rep = frame_input.rep,
-                                    });
-                                    try collected.args.append(self.allocator, .{ .forward = @intCast(frame_index) });
-                                },
-                                .structural => |structural| {
-                                    try collected.inputs.append(self.allocator, .{ .key = .{ .structural = .{
-                                        .requirement = requirement,
-                                        .method = structural.method,
-                                        .rep = structural.rep,
-                                    } } });
-                                    try collected.args.append(self.allocator, .structural);
-                                    forwards_structural = true;
-                                },
-                                .capture => unreachable,
-                            }
-                            break;
-                        }
-                    }
-                    // A forwarded derivation reaches the procedures the frame
-                    // received for its own.
-                    if (forwards_structural) for (frame_inputs) |frame_input| switch (frame_input.key) {
-                        .capture => |capture| try self.collectLocalProcInput(caller, capture.site, collected),
-                        .requirement, .structural => {},
-                    };
-                },
-                .literal => {},
-            }
-        }
-    }
-
-    /// Add a local procedure's runtime captures as inputs, forwarded from
-    /// the caller's own inputs or read from the caller's frame.
-    fn collectLocalProcInput(self: *Builder, caller: ?WorkerPlanId, site: CheckedExprIdentity, collected: *ContextInputs) Allocator.Error!void {
-        if (collected.contains(.{ .capture = .{ .site = site, .index = 0 } })) return;
-        const frame = caller orelse
-            boxyPlanInvariant("a local procedure needing a frame's context was reached by no frame");
-        const view = self.moduleForId(site.module);
-        for (nestedCallableRuntimeCaptures(view, site.expr), 0..) |capture, capture_index| {
-            const key = LocalProcCapture{ .site = site, .index = @intCast(capture_index) };
-            const supplied: ContextArg = if (self.plan.workerContextInput(frame, .{ .capture = key })) |index|
-                .{ .forward = index }
-            else
-                .{ .capture = key };
-            const capture_type = typeRef(view, view.checked_bodies.pattern(capture.pattern).ty);
-            try collected.inputs.append(self.allocator, .{
-                .key = .{ .capture = key },
-                .callable_type = capture_type,
-                .rep = try self.analyzeType(view, capture_type.ty),
-            });
-            try collected.args.append(self.allocator, supplied);
-        }
-    }
-
-    fn ensureContextConstruct(self: *Builder, construct: ContextConstruct) Allocator.Error!ContextConstructId {
-        for (self.plan.context_constructs.items, 0..) |existing, index| {
-            if (existing.caller == construct.caller and
-                existing.worker == construct.worker and
-                typeRefEql(existing.callable_type, construct.callable_type) and
-                std.meta.eql(existing.evidence_edge, construct.evidence_edge))
-            {
-                self.plan.context_constructs.items[index].hidden_dict_args = construct.hidden_dict_args;
-                self.plan.context_constructs.items[index].context_args = construct.context_args;
-                return @enumFromInt(@as(u32, @intCast(index)));
-            }
-        }
-        const id: ContextConstructId = @enumFromInt(@as(u32, @intCast(self.plan.context_constructs.items.len)));
-        try self.plan.context_constructs.append(self.allocator, construct);
-        return id;
-    }
-
-    fn contextInputsEql(self: *const Builder, span: Span, inputs: []const ContextInput) bool {
-        const existing = self.plan.contextInputSlice(span);
-        if (existing.len != inputs.len) return false;
-        for (existing, inputs) |a, b| {
-            if (!contextKeyEql(a.key, b.key)) return false;
-            if (a.callable_type != null and !typeRefEql(a.callable_type.?, b.callable_type.?)) return false;
-        }
-        return true;
-    }
-
-    /// The specialization of `base` that receives `inputs`, planning its body
-    /// under that specialization the first time.
-    fn ensureContextWorker(self: *Builder, base: WorkerPlanId, inputs: []const ContextInput) Allocator.Error!WorkerPlanId {
-        for (self.plan.workers.items) |worker| {
-            if (worker.context_base == base and self.contextInputsEql(worker.context, inputs)) return worker.id;
-        }
-        const base_worker = self.plan.workers.items[@intFromEnum(base)];
-        switch (base_worker.source) {
-            .procedure_template, .procedure_binding, .procedure_use, .nested_expr => {},
-            .generated_codec, .generated_field_iterator, .generated_interpolation_step => boxyPlanInvariant("a generated worker received a dictionary needing a frame's context"),
-        }
-        const start: u32 = @intCast(self.plan.context_inputs.items.len);
-        try self.plan.context_inputs.appendSlice(self.allocator, inputs);
-        const worker_id: WorkerPlanId = @enumFromInt(@as(u32, @intCast(self.plan.workers.items.len)));
-        // The specialization plans the same body, so it starts from its
-        // base's hidden inputs; later planning passes recompute both alike.
-        var specialized = base_worker;
-        specialized.id = worker_id;
-        specialized.root_request = null;
-        specialized.erased_captures = .{};
-        specialized.context = .{ .start = start, .len = @intCast(inputs.len) };
-        specialized.context_base = base;
-        try self.plan.workers.append(self.allocator, specialized);
-        // Each structural input is a derivation this worker performs.
-        for (inputs) |input| switch (input.key) {
-            .structural => |structural| {
-                const requirement = self.plan.dictionaries.items[@intFromEnum(structural.requirement)];
-                const function_rep = self.plan.repForSourceType(requirement.fn_ty) orelse
-                    boxyPlanInvariant("structural context requirement callable type was not analyzed");
-                const function = self.repQuery().functionChildren(function_rep) orelse
-                    boxyPlanInvariant("structural context requirement was not a function");
-                if (function.arg_count != 2) boxyPlanInvariant("structural context requirement did not take two arguments");
-                const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children);
-                try self.registerDerivedRoot(
-                    worker_id,
-                    structural.method,
-                    structural.rep,
-                    0,
-                    children[function.args_start + 1].source_type,
-                    self.plan.representations.items[@intFromEnum(function.ret)].source_type,
-                );
-            },
-            .requirement, .capture => {},
-        };
-        const previous = self.active_worker;
-        self.active_worker = worker_id;
-        defer self.active_worker = previous;
-        try self.runPlanActions(.{ .worker_body = self.rootWorkerBody(base_worker.source) });
-        return worker_id;
-    }
-
-    /// Whether `worker` needs values of the frame calling it: a local
-    /// procedure with runtime captures, or a context-specialized worker.
-    fn workerNeedsFrameContext(self: *Builder, worker_id: WorkerPlanId) bool {
-        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
-        if (worker.context.len != 0) return true;
-        return self.workerIsCapturingLocalProc(worker_id);
-    }
-
-    fn workerIsCapturingLocalProc(self: *Builder, worker_id: WorkerPlanId) bool {
-        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
-        if (worker.context_base != null) return false;
-        return switch (worker.source) {
-            .nested_expr => |expr_ref| !self.nestedCallableHasNoCaptures(expr_ref),
-            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => false,
-        };
-    }
-
-    /// Mark a dictionary method whose worker needs the building frame's
-    /// context, specializing a worker that receives such methods through its
-    /// own dictionaries.
-    fn contextualizeDictionaryMethod(self: *Builder, method: *DictionaryMethodEvidence, caller: ?WorkerPlanId) Allocator.Error!void {
-        const worker = switch (method.resolution) {
-            .worker => |worker| worker,
-            .builtin_numeral, .structural, .constraint, .checked_error, .unreachable_value => return,
-        };
-        const context = try self.contextualizeCall(worker, caller, method.nested_dict_args);
-        method.resolution = .{ .worker = context.worker };
-        method.context = if (self.workerNeedsFrameContext(context.worker))
-            .{ .context_args = context.args }
-        else
-            null;
-    }
-
-    /// Record the local procedures with runtime captures a structural
-    /// comparison or hash over the closed `rep` reaches, through component
-    /// methods and the components a derivation expands into.
-    fn recordFrameContextProcs(self: *Builder, rep_id: TypeRepId, method: DerivedMethod) Allocator.Error!void {
-        if (!self.has_capturing_local_methods) return;
-        if (self.plan.frame_context_procs.contains(.{ .rep = rep_id, .method = method })) return;
-        if (try self.plan.namesTypeVariable(self.allocator, rep_id)) return;
-        var procs = std.ArrayList(WorkerPlanId).empty;
-        defer procs.deinit(self.allocator);
-        var visited = collections.DenseMap(TypeRepId, void).init(self.allocator);
-        defer visited.deinit();
-        var pending = std.ArrayList(TypeRepId).empty;
-        defer pending.deinit(self.allocator);
-        try pending.append(self.allocator, rep_id);
-        while (pending.pop()) |current| {
-            if ((try visited.getOrPut(current)).found_existing) continue;
-            const rep = self.plan.representations.items[@intFromEnum(current)];
-            if (rep.kind == .nominal) {
-                if (self.derivedMethodTarget(current, method)) |found| switch (found) {
-                    .target => |lookup| {
-                        switch (lookup.target.kind) {
-                            .local_proc => {
-                                const source = self.workerSourceForMethodTarget(lookup, rep.source_type, null);
-                                const worker = try self.ensureWorker(source, .{ .module = lookup.view.key, .ty = lookup.target.callable_ty }, null);
-                                if (self.workerIsCapturingLocalProc(worker)) {
-                                    if (std.mem.findScalar(WorkerPlanId, procs.items, worker) == null) try procs.append(self.allocator, worker);
-                                }
-                            },
-                            .procedure, .structural => {},
-                        }
-                        // A component method's own evidence comes from the
-                        // nominal's arguments.
-                        for (self.plan.childSlice(rep.children)) |child| {
-                            if (child.role == .nominal_arg) try pending.append(self.allocator, child.rep);
-                        }
-                        continue;
-                    },
-                    .rejected => continue,
-                };
-            }
-            for (self.plan.childSlice(rep.children)) |child| try pending.append(self.allocator, child.rep);
-            for (self.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-                for (self.plan.childSlice(variant.payloads)) |payload| try pending.append(self.allocator, payload.rep);
-            }
-        }
-        if (procs.items.len == 0) return;
-        const start: u32 = @intCast(self.plan.frame_context_proc_ids.items.len);
-        try self.plan.frame_context_proc_ids.appendSlice(self.allocator, procs.items);
-        try self.plan.frame_context_procs.put(self.allocator, .{ .rep = rep_id, .method = method }, .{ .start = start, .len = @intCast(procs.items.len) });
     }
 
     fn dispatchResolutionIsStructural(
@@ -14962,6 +14221,8 @@ const Builder = struct {
         return switch (view.static_dispatch_plans.plans[raw].resolution) {
             .direct_closed, .direct_parametric => |direct| blk: {
                 const node = view.static_dispatch_plans.evidenceNode(direct.evidence);
+                // A target reached through a procedure alias derives its
+                // evidence from its callable.
                 break :blk switch (node.nested) {
                     .resolved => view.static_dispatch_plans.nestedEvidence(node),
                     .from_callable => null,
@@ -14989,25 +14250,69 @@ const Builder = struct {
                 boxyPlanInvariant("boxy inspect worker was not callable");
             if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
             const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
-            const ret_type = self.plan.representations.items[@intFromEnum(function.ret)].source_type;
+            const ret_type = self.inspectCallRet(method).ty;
             const evidence_view = self.moduleForId(method.evidence.module);
             var bindings = std.ArrayList(SiteRepBinding).empty;
             defer bindings.deinit(self.allocator);
-            self.plan.inspect_methods.items[index].hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
-                method.worker,
-                null,
-                &.{source_type},
-                ret_type,
-                evidence_view,
-                inspectUseNestedEvidence(evidence_view, method.evidence.node),
-                try self.inspectUseSchemeSubstitution(method, &bindings),
-                0,
-            );
+            var machine = DictionaryArgsMachine{};
+            defer machine.deinit(self.allocator);
+            self.plan.inspect_methods.items[index].hidden_dict_args = if (try self.beginDictionaryCallArgs(&machine, .{
+                .worker_id = method.worker,
+                .caller_id = null,
+                .arg_types = &.{source_type},
+                .ret_type = ret_type,
+                .evidence_view = evidence_view,
+                .evidence = inspectUseNestedEvidence(evidence_view, method.evidence.node),
+                .scheme_substitution = try self.inspectUseSchemeSubstitution(method, &bindings),
+                .relation = method.relation,
+                .env = 0,
+            })) |span| span else blk: {
+                try self.runDictionaryArgs(&machine);
+                break :blk machine.span_result;
+            };
         }
     }
 
-    fn inspectUseNestedEvidence(view: ModuleView, node: static_dispatch.EvidenceNodeId) []const static_dispatch.CheckedEvidence {
-        return view.static_dispatch_plans.nestedEvidence(view.static_dispatch_plans.evidenceNode(node));
+    /// The result of inspection's call of an override: its `Str`.
+    fn inspectCallRet(self: *Builder, method: InspectMethodPlan) struct { ty: CheckedTypeIdentity, rep: TypeRepId } {
+        const rep = self.plan.repForSourceType(method.callable_type) orelse
+            boxyPlanInvariant("boxy inspect call type was not analyzed");
+        const function = (self.repQuery().functionChildren(rep)) orelse
+            boxyPlanInvariant("boxy inspect call type was not callable");
+        return .{ .ty = self.plan.representations.items[@intFromEnum(function.ret)].source_type, .rep = function.ret };
+    }
+
+    /// The nested evidence of inspection's use of an override, or null when
+    /// the override is reached through a procedure alias and derives its
+    /// evidence from its callable.
+    fn inspectUseNestedEvidence(view: ModuleView, node_id: static_dispatch.EvidenceNodeId) ?[]const static_dispatch.CheckedEvidence {
+        const node = view.static_dispatch_plans.evidenceNode(node_id);
+        return switch (node.nested) {
+            .resolved => view.static_dispatch_plans.nestedEvidence(node),
+            .from_callable => null,
+        };
+    }
+
+    /// The worker's types related to inspection's call of it: its argument to
+    /// the inspected value's representation and its result to the use's
+    /// `Str`.
+    fn inspectUseRelation(self: *Builder, worker_id: WorkerPlanId, value_rep: TypeRepId, str_rep: TypeRepId) Allocator.Error!Span {
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        const definition_rep = self.plan.repForSourceType(self.workerCheckedTypeForSource(worker.source, worker.checked_type)) orelse
+            boxyPlanInvariant("boxy inspect worker definition type was not analyzed");
+        const function = (self.repQuery().functionChildren(definition_rep)) orelse
+            boxyPlanInvariant("boxy inspect worker was not callable");
+        if (function.arg_count != 1) boxyPlanInvariant("boxy inspect worker did not take exactly one argument");
+        const arg_rep = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children)[function.args_start].rep;
+        const arg_pairs = try self.storedUseSchemeRepSubstitutions(arg_rep, value_rep);
+        const ret_pairs = try self.storedUseSchemeRepSubstitutions(function.ret, str_rep);
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        for ([_]Span{ arg_pairs, ret_pairs }) |pairs| {
+            for (0..pairs.len) |index| {
+                try self.plan.scheme_rep_substitutions.append(self.allocator, self.plan.scheme_rep_substitutions.items[pairs.start + index]);
+            }
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
     }
 
     /// The checked substitution of inspection's use of an override. The use
@@ -15034,16 +14339,11 @@ const Builder = struct {
     }
 
     fn materializeIteratorCallHiddenDictionaryArgs(self: *Builder) Allocator.Error!void {
-        var call_index: usize = 0;
-        while (call_index < self.plan.iterator_calls.items.len) : (call_index += 1) {
-            const call = self.plan.iterator_calls.items[call_index];
+        for (self.plan.iterator_calls.items, 0..) |call, call_index| {
             const arg_types = try self.callSubstitutionTypes(call.arg_substitutions, .operand);
             defer self.allocator.free(arg_types);
-            const hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
-            self.plan.iterator_calls.items[call_index].hidden_dict_args = hidden_dict_args;
-            const context = try self.contextualizeDirectLocalProcCall(call.worker, call.caller, hidden_dict_args);
-            self.plan.iterator_calls.items[call_index].worker = context.worker;
-            self.plan.iterator_calls.items[call_index].context_args = context.args;
+            self.plan.iterator_calls.items[call_index].hidden_dict_args =
+                try self.materializeWorkerCallHiddenDictionaryArgs(call.worker, call.caller, arg_types, call.ret_type);
         }
     }
 
@@ -15305,11 +14605,16 @@ const Builder = struct {
             boxyPlanInvariant("boxy worker call hidden descriptor mapping did not cover every ordinary worker descriptor param");
         }
 
-        // A callee scheme variable takes this call's checked instantiation. Any
-        // other body descriptor names a variable of the scope creating this
-        // use, which the calling frame describes.
+        // A callee scheme variable takes this call's checked instantiation. A
+        // worker planned at a checked type more specific than its
+        // definition's describes its body at the definition's types, so a
+        // position only its definition's signature names takes the call's
+        // representation there. Any other body descriptor names a variable of
+        // the scope creating this use, which the calling frame describes.
         for (params[enclosing_start..evidence_only_start]) |param| {
-            const rep = substitutions.get(param.rep) orelse param.rep;
+            const rep = substitutions.get(param.rep) orelse
+                (try self.specializedDefinitionRep(worker, call_arg_reps, ret_rep, param.rep)) orelse
+                param.rep;
             try pending.append(self.allocator, .{
                 .worker_desc = param.desc,
                 .worker_rep = param.rep,
@@ -15514,6 +14819,39 @@ const Builder = struct {
             .whole_operand = source_arg_index != null and
                 call_path[call_path.len - 1].stepKind() == .fn_arg,
         };
+    }
+
+    /// The representation the call puts at the position `rep` names in the
+    /// signature of `worker`'s definition, when the worker is planned at a
+    /// checked type more specific than that definition's; null otherwise.
+    fn specializedDefinitionRep(
+        self: *Builder,
+        worker: WorkerPlan,
+        call_arg_reps: []const TypeRepId,
+        ret_rep: TypeRepId,
+        rep: TypeRepId,
+    ) Allocator.Error!?TypeRepId {
+        const definition_type = self.workerCheckedTypeForSource(worker.source, worker.checked_type);
+        if (typeRefEql(definition_type, worker.checked_type)) return null;
+        const definition_rep = self.plan.repForSourceType(definition_type) orelse
+            boxyPlanInvariant("boxy specialized worker definition type was not analyzed");
+        const definition_function = (self.repQuery().functionChildren(definition_rep)) orelse
+            boxyPlanInvariant("boxy specialized worker definition was not callable");
+        if (definition_function.arg_count != call_arg_reps.len) {
+            boxyPlanInvariant("boxy specialized worker definition arity disagreed with its call");
+        }
+        for (0..definition_function.arg_count + 1) |position| {
+            const definition_position = if (position == definition_function.arg_count)
+                definition_function.ret
+            else
+                self.plan.children.items[self.plan.representations.items[@intFromEnum(definition_function.rep)].children.start + definition_function.args_start + position].rep;
+            const call_position = if (position == definition_function.arg_count) ret_rep else call_arg_reps[position];
+            const pairs = try self.storedUseSchemeRepSubstitutions(definition_position, call_position);
+            for (self.plan.schemeRepSubstitutionSlice(pairs)) |pair| {
+                if (pair.scheme_rep == rep) return pair.site_rep;
+            }
+        }
+        return null;
     }
 
     fn evidenceCallRepAtPath(
@@ -15997,8 +15335,12 @@ const Builder = struct {
         fn_children_span: Span,
         body_param_start: usize,
         substitutions: CallDictionaryRepSubstitutionMap = .{},
-        pending: std.ArrayList(DirectCallHiddenDictionaryArg) = .empty,
+        /// Each parameter's planned argument, by parameter index.
+        planned: []?DirectCallHiddenDictionaryArg = &.{},
+        /// The parameter indexes in planning order.
+        order: []u32 = &.{},
         next_evidence: usize = 0,
+        /// Position in `order` of the parameter being planned.
         param_index: usize = 0,
         /// `requirement_substitution` names receivers this call derived from
         /// its callable, which no checked substitution supplied.
@@ -16020,7 +15362,19 @@ const Builder = struct {
         fn deinit(self: *DictionaryCallArgs, allocator: Allocator) void {
             allocator.free(self.arg_types);
             self.substitutions.deinit(allocator);
-            self.pending.deinit(allocator);
+            allocator.free(self.planned);
+            allocator.free(self.order);
+        }
+
+        /// The index of the parameter being planned.
+        fn currentParam(self: *const DictionaryCallArgs) usize {
+            return self.order[self.param_index];
+        }
+
+        /// Record the current parameter's argument and move to the next.
+        fn record(self: *DictionaryCallArgs, arg: DirectCallHiddenDictionaryArg) void {
+            self.planned[self.currentParam()] = arg;
+            self.param_index += 1;
         }
     };
 
@@ -16134,6 +15488,10 @@ const Builder = struct {
             state.deinit(self.allocator);
             self.allocator.destroy(state);
         }
+        state.planned = try self.allocator.alloc(?DirectCallHiddenDictionaryArg, worker.hidden_dicts.len);
+        @memset(state.planned, null);
+        state.order = try self.allocator.alloc(u32, worker.hidden_dicts.len);
+        try self.orderDictionaryParams(worker, request.evidence, state.order);
         var seen_substitutions = std.AutoHashMap(u64, void).init(self.allocator);
         defer seen_substitutions.deinit();
 
@@ -16220,34 +15578,33 @@ const Builder = struct {
             },
         }
         if (state.param_index == state.hidden_dicts.len) {
-            if (state.pending.items.len != state.hidden_dicts.len) {
-                boxyPlanInvariant("boxy worker call hidden dictionary mapping did not cover every worker dictionary param");
-            }
             if (state.evidence) |entries| {
                 if (state.next_evidence > entries.len) {
                     boxyPlanInvariant("boxy callable use exhausted its checked dictionary evidence");
                 }
             }
             if (state.binds_requirement_variables) try self.bindRequirementVariables(state);
-            if (state.derived_receivers) {
-                for (state.pending.items) |*arg| arg.derived_substitution = state.requirement_substitution;
-            }
             const start: u32 = @intCast(self.plan.direct_call_hidden_dict_args.items.len);
-            try self.plan.direct_call_hidden_dict_args.appendSlice(self.allocator, state.pending.items);
-            machine.span_result = .{ .start = start, .len = @intCast(state.pending.items.len) };
+            try self.plan.direct_call_hidden_dict_args.ensureUnusedCapacity(self.allocator, state.planned.len);
+            for (state.planned) |maybe_arg| {
+                var arg = maybe_arg orelse
+                    boxyPlanInvariant("boxy worker call hidden dictionary mapping did not cover every worker dictionary param");
+                if (state.derived_receivers) arg.derived_substitution = state.requirement_substitution;
+                self.plan.direct_call_hidden_dict_args.appendAssumeCapacity(arg);
+            }
+            machine.span_result = .{ .start = start, .len = @intCast(state.planned.len) };
             return true;
         }
-        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
+        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.currentParam()];
         if (param.scheme_param != null and param.evidence_index == null) {
             const caller = state.caller_id orelse boxyPlanInvariant("captured codec dictionary had no calling worker");
             const source = try self.requireWorkerSchemeDictionary(caller, param.scheme_param.?);
-            try state.pending.append(self.allocator, .{
+            state.record(.{
                 .worker_dictionaries = param.dictionaries,
                 .source_type = source.source_type,
                 .rep = source.rep,
                 .source = .{ .bound_dictionaries = source.dictionaries },
             });
-            state.param_index += 1;
             return false;
         }
         if (param.evidence_index) |index| state.next_evidence = index;
@@ -16290,7 +15647,8 @@ const Builder = struct {
         }
         var added = std.ArrayList(SchemeRepSubstitution).empty;
         defer added.deinit(self.allocator);
-        for (state.pending.items, 0..) |arg, arg_index| {
+        for (state.planned, 0..) |maybe_arg, arg_index| {
+            const arg = maybe_arg orelse continue;
             const hidden = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + arg_index];
             if (arg.method_evidence.len != hidden.dictionaries.len) continue;
             for (self.plan.dictionarySlice(hidden.dictionaries), 0..) |requirement, method_index| {
@@ -16337,6 +15695,36 @@ const Builder = struct {
         state.derived_receivers = true;
     }
 
+    /// The order a call plans `worker`'s dictionary parameters in. A call
+    /// with checked evidence consumes its vector in parameter order. A call
+    /// deriving its evidence from its callable derives a receiver checking
+    /// reached only through another requirement's constraint callable from
+    /// the method selected for that requirement, so it plans every such
+    /// parameter after the others.
+    fn orderDictionaryParams(
+        self: *Builder,
+        worker: WorkerPlan,
+        evidence: ?[]const static_dispatch.CheckedEvidence,
+        order: []u32,
+    ) Allocator.Error!void {
+        var next: usize = 0;
+        const schema = if (evidence == null) self.workerEvidenceParams(worker.source) else null;
+        for ([_]bool{ false, true }) |constraint_callable_pass| {
+            for (0..worker.hidden_dicts.len) |index| {
+                const param = self.plan.hidden_dictionary_params.items[worker.hidden_dicts.start + index];
+                const from_constraint_callable = if (schema) |params| blk: {
+                    const evidence_index = param.evidence_index orelse break :blk false;
+                    if (evidence_index >= params.params.len) break :blk false;
+                    break :blk std.meta.activeTag(params.params[evidence_index].source) == .constraint_callable;
+                } else false;
+                if (from_constraint_callable != constraint_callable_pass) continue;
+                order[next] = @intCast(index);
+                next += 1;
+            }
+        }
+        if (next != order.len) boxyPlanInvariant("dictionary parameter order did not cover every parameter");
+    }
+
     /// The representation of a requirement whose receiver checking reached
     /// only through another requirement's constraint callable, when the call
     /// derives its evidence from the callable (no checked evidence vector, or
@@ -16350,6 +15738,9 @@ const Builder = struct {
         evidence_source: CallableEvidenceSource,
     ) Allocator.Error!?TypeRepId {
         if (evidence_source.rep != null or evidence_source.bound_evidence != null) return null;
+        // The call's types already name the receiver, as a worker planned at
+        // a type more specific than its definition's does.
+        if (state.substitutions.get(param.rep) != null) return null;
         const evidence_index = param.evidence_index orelse return null;
         const scheme_param = param.scheme_param orelse return null;
         if (scheme_param.callable_contract != null) return null;
@@ -16376,7 +15767,8 @@ const Builder = struct {
         // in this call; its selected method's call types instantiate the
         // callable the path is written against.
         const root_fn_ty = typeRef(schema.view, root.callable_ty);
-        for (state.pending.items, 0..) |arg, arg_index| {
+        for (state.planned, 0..) |maybe_arg, arg_index| {
+            const arg = maybe_arg orelse continue;
             const hidden = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + arg_index];
             for (self.plan.dictionarySlice(hidden.dictionaries), 0..) |requirement, method_index| {
                 if (!typeRefEql(requirement.fn_ty, root_fn_ty)) continue;
@@ -16421,19 +15813,18 @@ const Builder = struct {
         state: *DictionaryCallArgs,
         evidence_source: CallableEvidenceSource,
     ) Allocator.Error!void {
-        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
+        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.currentParam()];
         const caller_id = state.caller_id;
         if (evidence_source.bound_evidence) |bound| {
             const caller = caller_id orelse boxyPlanInvariant("forwarded checked dictionary had no calling worker");
             const source = try self.requireWorkerSchemeDictionary(caller, bound);
-            try state.pending.append(self.allocator, .{
+            state.record(.{
                 .worker_dictionaries = param.dictionaries,
                 .source_type = source.source_type,
                 .rep = source.rep,
                 .method_evidence = evidence_source.method_evidence,
                 .source = .{ .bound_dictionaries = source.dictionaries },
             });
-            state.param_index += 1;
             return;
         }
         const derived_rep = try self.constraintCallableDerivedRep(state, param, evidence_source);
@@ -16451,7 +15842,7 @@ const Builder = struct {
             state.derived_receivers = true;
         }
         const substituted_rep = derived_rep orelse state.substitutions.get(param.rep);
-        if (state.param_index < state.body_param_start and substituted_rep == null and evidence_source.rep == null) {
+        if (state.currentParam() < state.body_param_start and substituted_rep == null and evidence_source.rep == null) {
             boxyPlanInvariant("boxy callable dictionary parameter had no checked call substitution or dispatch evidence");
         }
         const env_bindings = self.plan.derivedEnvBindings(state.env);
@@ -16481,7 +15872,7 @@ const Builder = struct {
             boxyPlanInvariant("boxy callable body dictionary had neither a bound caller dictionary nor concrete checked use-site evidence");
         }
         if (source_is_bound) {
-            try state.pending.append(self.allocator, .{
+            state.record(.{
                 .worker_dictionaries = param.dictionaries,
                 .source_type = self.plan.representations.items[@intFromEnum(source_rep)].source_type,
                 .rep = source_rep,
@@ -16489,7 +15880,6 @@ const Builder = struct {
                 .source = .{ .bound_dictionaries = bound_dictionaries },
                 .env = 0,
             });
-            state.param_index += 1;
             return;
         }
         if (evidence_source.method_evidence.len != 0 and evidence_source.method_evidence.len != param.dictionaries.len) {
@@ -16514,7 +15904,7 @@ const Builder = struct {
         source_env: u32,
         planned_method_evidence: Span,
     ) Allocator.Error!void {
-        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.param_index];
+        const param = self.plan.hidden_dictionary_params.items[state.hidden_dicts.start + state.currentParam()];
         // A call relating the worker's variables to its types, and one that
         // derives receivers from its callable, names them exactly as a
         // checked site substitution does, so its dictionaries' adapters read
@@ -16527,7 +15917,7 @@ const Builder = struct {
             }
         }
         try self.registerStructuralDictionaryDerivations(state.caller_id, source_rep, source_env, planned_method_evidence);
-        try state.pending.append(self.allocator, .{
+        state.record(.{
             .worker_dictionaries = param.dictionaries,
             .source_type = self.plan.representations.items[@intFromEnum(source_rep)].source_type,
             .rep = source_rep,
@@ -16535,7 +15925,6 @@ const Builder = struct {
             .source = .{ .static_rep = source_rep },
             .env = source_env,
         });
-        state.param_index += 1;
     }
 
     /// Select the checked evidence for a requirement group: the source
@@ -16604,7 +15993,6 @@ const Builder = struct {
             var planned = awaiting;
             planned.nested_dict_args = machine.span_result;
             planned.requirement_substitution = state.requirement_substitution;
-            try self.contextualizeDictionaryMethod(&planned, state.caller_id);
             state.methods.appendAssumeCapacity(planned);
             state.awaiting = null;
             state.index += 1;
@@ -16678,7 +16066,6 @@ const Builder = struct {
                     };
                     var with_nested = method;
                     with_nested.nested_dict_args = nested;
-                    try self.contextualizeDictionaryMethod(&with_nested, state.caller_id);
                     break :blk with_nested;
                 },
                 .structural => |structural| blk: {
@@ -16814,7 +16201,6 @@ const Builder = struct {
             var method = awaiting.method;
             method.nested_dict_args = machine.span_result;
             if (awaiting.requirement_substitution) |substitution| method.requirement_substitution = substitution;
-            try self.contextualizeDictionaryMethod(&method, state.call.caller_id);
             try state.planned.append(self.allocator, method);
             state.awaiting = null;
             state.method_index += 1;
@@ -16850,7 +16236,6 @@ const Builder = struct {
             }
             const planned = try self.beginStaticDictionaryMethodEvidence(machine, state, requirement, checked_substitution) orelse return false;
             var method = planned;
-            try self.contextualizeDictionaryMethod(&method, state.call.caller_id);
             if (checked_substitution) |substitution| method.requirement_substitution = substitution;
             try state.planned.append(self.allocator, method);
             state.method_index += 1;
@@ -19201,8 +18586,16 @@ const Builder = struct {
             .procedure => |procedure| .{ .procedure_template = procedure.template },
             .local_proc => |local| if (self.topLevelProcedureBindingForExpr(lookup.view, local.expr)) |binding|
                 .{ .procedure_binding = binding }
-            else
-                .{ .nested_expr = .{ .module = lookup.view.key, .expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr } },
+            else blk: {
+                const site_expr = self.nestedCallableSiteExprForExpr(lookup.view, local.expr) orelse local.expr;
+                // A dictionary slot, generated codec, or derived method calls
+                // its worker without a frame of the procedure's declaring
+                // body, so it can supply no value of that body.
+                if (nestedCallableRuntimeCaptures(lookup.view, site_expr).len != 0) {
+                    boxyPlanInvariant("method evidence selected a local procedure that needs values of its declaration context");
+                }
+                break :blk .{ .nested_expr = .{ .module = lookup.view.key, .expr = site_expr } };
+            },
             .structural => |kind| switch (kind) {
                 .parser => .{ .generated_codec = .{
                     .kind = .parser_constructor,
@@ -20066,7 +19459,7 @@ const Builder = struct {
             var source: ?Span = null;
             var source_is_ambiguous = false;
             for (self.plan.nested_callable_uses.items) |candidate| {
-                if (self.baseWorker(candidate.worker) != self.baseWorker(use.worker) or candidate.caller != use.caller) continue;
+                if (candidate.worker != use.worker or candidate.caller != use.caller) continue;
                 if (candidate.hidden_dict_args.len != worker.hidden_dicts.len) continue;
                 if (source) |existing| {
                     const existing_args = self.plan.directCallHiddenDictionaryArgSlice(existing);
@@ -20082,7 +19475,7 @@ const Builder = struct {
             }
             if (!source_is_ambiguous) {
                 for (self.plan.direct_calls.items) |candidate| {
-                    if (self.baseWorker(candidate.worker) != self.baseWorker(use.worker) or candidate.caller != use.caller) continue;
+                    if (candidate.worker != use.worker or candidate.caller != use.caller) continue;
                     if (candidate.hidden_dict_args.len != worker.hidden_dicts.len) continue;
                     if (source) |existing| {
                         const existing_args = self.plan.directCallHiddenDictionaryArgSlice(existing);
@@ -20122,27 +19515,6 @@ const Builder = struct {
                 boxyPlanInvariant("nested callable value had no checked dictionary capture source");
             }
         }
-
-        // A callable value capturing dictionaries that carry context methods
-        // is the context specialization of its worker, capturing those inputs.
-        index = 0;
-        while (index < self.plan.callable_uses.items.len) : (index += 1) {
-            const use = self.plan.callable_uses.items[index];
-            const context = try self.contextualizeCall(use.worker, use.caller, use.hidden_dict_args);
-            self.plan.callable_uses.items[index].worker = context.worker;
-            self.plan.callable_uses.items[index].context_args = context.args;
-        }
-        index = 0;
-        while (index < self.plan.nested_callable_uses.items.len) : (index += 1) {
-            const use = self.plan.nested_callable_uses.items[index];
-            const context = try self.contextualizeCall(use.worker, use.caller, use.hidden_dict_args);
-            self.plan.nested_callable_uses.items[index].worker = context.worker;
-            self.plan.nested_callable_uses.items[index].context_args = context.args;
-        }
-    }
-
-    fn baseWorker(self: *const Builder, worker: WorkerPlanId) WorkerPlanId {
-        return self.plan.workers.items[@intFromEnum(worker)].context_base orelse worker;
     }
 
     fn materializeNestedCallableUseDictionaries(
@@ -21931,26 +21303,6 @@ fn directDispatchEvidence(
         .checked_error,
         .@"unreachable",
         => null,
-    };
-}
-
-/// Compare context inputs by their explicit checked identities.
-pub fn contextKeyEql(a: ContextInput.Key, b: ContextInput.Key) bool {
-    return switch (a) {
-        .requirement => |requirement| b == .requirement and b.requirement == requirement,
-        .capture => |capture| b == .capture and std.meta.eql(b.capture, capture),
-        .structural => |structural| b == .structural and std.meta.eql(b.structural, structural),
-    };
-}
-
-/// The dispatch plan a dispatch-bearing checked expression owns.
-fn dispatchPlanOfExpr(view: ModuleView, expr_id: checked.CheckedExprId) ?static_dispatch.StaticDispatchPlanId {
-    return switch (view.checked_bodies.expr(expr_id).data) {
-        .dispatch_call, .type_dispatch_call, .method_eq => |plan| plan,
-        .str_from_quote => |quote| quote.plan,
-        .interpolation => |interpolation| interpolation.plan,
-        .numeral => |numeral| numeral.plan,
-        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
     };
 }
 

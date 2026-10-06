@@ -4622,31 +4622,39 @@ follows each selected target's parent, recorded derivation edges, and the
 component edges that link each component dispatch of a structural
 comparison or hash to that operation's constraint callable.
 
-A type declared in a block whose methods include an unpromoted local procedure
-is a capturing local type, and it stays in that block: no expression outside
-the block may have a type that mentions it, directly, through a type argument,
-or through the backing of another type declared in a function body. Only code
-inside the block has the declaration context such a method needs; a closure
-created inside the block may still use the type and leave the block, because
-its own type does not mention it. Checking enforces this once promotion
-settles. It reports each escaping type once, at the first point where a value
-leaves the block in source order: the block's own value, a reference to or
-reassignment of a binding from outside the block, or a return to a lambda
-outside it, and otherwise at the outermost outside expression whose type
-mentions the capturing local type. That point becomes a runtime error, and
-so does every live dispatch outside the block whose lineage selects one of the
-type's capturing methods. A lineage's evaluation site is its outermost
-dispatch with a site: a target's introducing expression, or the lookup that
-instantiated the requirement, including a literal conversion the lookup
-copied out of a scheme. That site supplies the evidence, so a site outside
-the block selects a capturing method where its declaration context does not
-exist. With no value leaving the block, such a site exists only when a use
-outside the block instantiates a generalized definition at the type: the
-type mentioned by that use's instantiated requirements leaves its block, and
-checking reports the escape at the first such use and makes every such site a
-runtime error. An annotation that fixes the definition's types inside the
-block avoids it. Later stages therefore never meet a local method call without
-its declaration context.
+### Methods Never Capture
+
+A method of a type declared in a function body never captures a value of that
+function body. A method is an associated binding that is a local procedure (a
+lambda or closure, or a chain of local bindings reaching one); any other
+associated binding is a value of the function body like any other local
+binding, and may refer to its values. A method's right-hand side may refer to
+top-level names, its own
+parameters and the names it binds itself, other methods, and local functions
+that capture nothing; a reference to any other name bound in an enclosing
+function body, or to a local function whose body reaches one (directly or
+through further local functions), is a capture. Enclosing type variables are
+not values: a method naming one is an unpromoted local procedure with no
+runtime captures. Ordinary local functions and closures may still capture.
+
+Checking enforces the rule once solving settles (`rejectCapturingMethods`,
+before promotion is decided): it walks each method's right-hand side, reports
+each captured name once at its first use (`capturing_method`), naming the value
+a local function reaches when the reference is to one, and replaces the
+method's right-hand side with a checked error. An associated binding whose
+right-hand side is a checked error is a rejected method: the method registry records it with
+no target, so a dispatch to it is a `checked_error` dispatch that evaluates its
+operands and then crashes; checking retires every lookup of its binding; and
+its declaration evaluates nothing, so `CheckedModule` construction omits it
+from its block. A rejected method is never promoted, and checking treats it as
+its own local procedure, so no dispatch selecting it is available at compile
+time.
+
+Every method is therefore promoted to a procedure, or is a local procedure
+whose only declaration context is type variables, or is rejected. No later
+stage meets a method that needs values of its declaration's frame: Boxy calls a
+local procedure a dispatch selects directly as its nested worker, and treats a
+method selection with runtime captures as an invariant failure.
 
 A local procedure candidate is not proof of compile-time availability before
 that greatest fixpoint settles. Conditional diagnostics retain any pending
@@ -5485,7 +5493,9 @@ nested evidence that selects a local procedure with a declaration context is
 kept resolved rather than left for the receiving body to synthesize from
 types: only the body that materialized it has that context. An iterator
 protocol dispatch that selects a local procedure carries its context exactly
-like any other dispatch.
+like any other dispatch. A literal whose conversion's resolution in a body selects a local
+procedure converts in place, at runtime, rather than through a compile-time
+literal root, which has no declaration context.
 
 Some method registry targets are generated structural targets rather than
 procedure bodies. A nominal or opaque type can opt in to a compiler-derived
@@ -8878,19 +8888,22 @@ Inspection (`Str.inspect`, `dbg`, and `expect` failure reports) renders every
 value. A nominal type's `to_inspect` method replaces the default rendering only
 when it is an eligible inspect override. A method named `to_inspect` is still an
 ordinary method: it may have any type, and explicit calls and `where` clauses
-dispatch to it like any other method. Inspection calls the method as a call
-site whose result is `Str` would: the instance of its type whose result is
-`Str`. The method is an inspect override exactly when it is a procedure, that
-instance exists, and it is `T -> Str`, where `T` is the owning nominal applied
-to distinct type variables that carry no `where` constraints. A method of a
-type declared in a function body that checking did not promote is a local
-procedure: it runs only where its declaration context exists, and inspection
-calls an override from rendering workers, specialized generic code, and erased
-descriptor slots, none of which hold that context. Such a method is not an
-inspect override even when its type is `T -> Str`. `Wrap(a) -> Str` qualifies,
-and so does an unannotated method whose result is a string literal: its
-declared result is a variable constrained by `from_quote` or
-`from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
+dispatch to it like any other method. Inspection calls the method at
+`T -> Str`, where `T` is the owning nominal applied to distinct type variables
+that carry no `where` constraints. The method is an inspect override exactly
+when it can be used there: its scheme, annotated or inferred and however
+general, has an instance at `T -> Str` whose requirements the owner's types
+satisfy. Whether the method is a lambda or a value alias (`to_inspect =
+render`), and whether it is annotated, makes no difference. A method of a type
+declared in a function body that checking did not promote is a local procedure
+whose declaration context is enclosing type variables: inspection calls an
+override from rendering workers, specialized generic code, and erased
+descriptor slots, none of which hold that context, so such a method is not an
+inspect override. `Wrap(a) -> Str` qualifies, and so do an unannotated method
+whose argument is a record its owner's backing matches (`|c| "N(${c.count.to_str()})"`
+for an owner backed by `{ count : U64 }`) and an unannotated method whose
+result is a string literal: its declared result is a variable constrained by
+`from_quote` or `from_interpolation`, which `Str` satisfies. `Wrap(I64) -> Str`,
 `Pair(a, a) -> Str`,
 `Wrap(a) -> Str where [a.to_inspect : a -> Str]`, an unconstrained `a -> Str`,
 extra arguments, effectful functions, results `Str` cannot be (a numeral, `I64`,
@@ -8901,14 +8914,16 @@ principle in Core Principles, this is never reported.
 
 Checking forms that instance once per `to_inspect` declaration
 (`recordInspectOverrideInstances`): it instantiates the method's scheme as a
-dispatch target, unifies the copy's result with `Str`, and satisfies the
-result's requirements with `Str` exactly as the dispatch pass does—a quote or
-interpolation conversion by `Str`, an interpolation's parts by becoming `Str`,
-any other method requirement by `Str`'s method. The method's own type is never
-changed. When the instance exists, is pure, and still takes one nominal over
-distinct type variables that carry no requirements, checking records it as
-inspection's use of the method (`ModuleEnv.inspect_override_instances`) with
-its scheme-use record,
+dispatch target, unifies the copy's argument with the owner applied to fresh
+type variables and its result with `Str`, and satisfies every requirement the
+copy carries exactly as the dispatch pass does, repeating as satisfying one
+binds further variables—a numeral by a builtin number type that fits it, a
+quote or interpolation conversion by `Str` (an interpolation's parts by
+becoming `Str`), any other requirement by its receiver's method. The method's
+own type is never changed. When the instance exists, is pure, and still takes
+the owner over distinct type variables that carry no requirements, checking
+records it as inspection's use of the method
+(`ModuleEnv.inspect_override_instances`) with its scheme-use record,
 so CheckedModule construction derives that use's evidence like a dispatch
 target's.
 
@@ -10522,11 +10537,12 @@ Other solved-graph mutations:
   omit it, after relating the occurrences through ordinary unification.
 - `recordInspectOverrideInstances`—policy: Inspect Overrides (above). One
   commit-probe per `to_inspect` declaration instantiates the method's scheme as
-  a dispatch target, unifies the copy's result with `Str`, and accepts the
-  result's requirements (and an interpolated result's parts) against `Str`;
-  it is committed only when the instance is pure and takes one nominal over
-  distinct unconstrained type variables, recording inspection's use of the
-  method.
+  a dispatch target, unifies the copy's argument with its owner over fresh
+  type variables and its result with `Str`, and accepts every requirement the
+  copy carries (and an interpolated result's parts) against the types those
+  unifications bind; it is committed only when the instance is pure and takes
+  its owner over distinct unconstrained type variables, recording inspection's
+  use of the method.
   The method's own solved type is never written. Accepted and rejected sides
   are pinned by test/cli/InspectUnannotatedOverride.roc and
   test/cli/InspectIneligibleOverride.roc.
@@ -10815,8 +10831,8 @@ explicit capture edges.
 Constructing a nested callable at a use reads its checked
 `NestedProcSite.runtime_captures`, not the closure's source captures alone.
 Canonicalization leaves local functions out of a closure's captures, so a
-closure that calls, looks up, or dispatches to a capturing local procedure
-declared outside it names only that procedure; constructing the procedure
+closure that calls or looks up a capturing local procedure declared outside it
+names only that procedure; constructing the procedure
 inside the closure needs the procedure's own captured values. The runtime
 captures list the closure's source captures followed by every binder of an
 enclosing frame that constructing the local procedures its body selects
@@ -10827,61 +10843,11 @@ own locals. `CheckedModule` output computes the inventory once, as the
 least fixpoint of that relation over the nested-site walk, so Boxy never scans
 bodies for free variables.
 
-A dispatch whose checked plan selects a local procedure with runtime captures
-uses that procedure exactly as a lookup of its binding would: the frame
-constructs the procedure's erased callable, at the instantiation the dispatch's
-evidence edge selected and with the edge's nested evidence supplying its hidden
-descriptors and dictionaries, and calls it with the dispatch operands. The
-escape rule for capturing local types guarantees the dispatch runs in a frame
-that holds those binders. A local procedure with no runtime captures is called
-directly as its nested worker.
-
-A method dictionary is an immortal table called from no frame of the declaring
-body, so a capturing local procedure never sits in one of its slots. Boxy
-specializes by local evidence instead, the counterpart of Monotype lowering a
-local procedure with its declaration context as an explicit input. A worker
-receiving such evidence gets a context-specialized copy (`WorkerPlan.context`,
-`context_base` naming the generic worker) whose `ContextInput`s carry what the
-evidence needs, and every edge reaching it (`DirectCallPlan`,
-`CallableUsePlan`, `NestedCallableUsePlan`, `DerivedComponentCallPlan`, and a
-dictionary method's own nested call) carries the `ContextArg`s supplying them:
-
-- A dictionary requirement whose checked method evidence selects a capturing
-  local procedure, or a worker specialized this way, is a `requirement` input:
-  the frame whose evidence selected the method constructs its erased callable
-  at the edge's instantiation (`ContextConstruct`) and the dictionary's slot for
-  it stays absent. The specialized worker's dispatches on that requirement call
-  the input, and its own calls forward it wherever they pass that dictionary
-  on, so forwarding through further generic procedures, closures inside them,
-  and closures that escape the block all reach the same callable.
-- A structural `is_eq` or `to_hash` of a closed representation whose derivation
-  reaches capturing local procedures (`ProgramPlan.frame_context_procs`,
-  recorded for each derived root) is a `structural` input with no value: the
-  dictionary slot stays absent, the specialized worker performs the derivation
-  itself, and the procedures it reaches arrive as `capture` inputs, one per
-  runtime capture, read from the declaring frame's own bindings.
-- A derived component call that reaches a capturing local procedure calls that
-  procedure's specialization receiving its own runtime captures as `capture`
-  inputs, so a derivation runs in whichever frame holds those values. An
-  iterator protocol call (`IteratorCallPlan`) whose direct target is a
-  capturing local procedure reaches it the same way, and a loop dispatching
-  through a dictionary requirement that is a `requirement` input calls the
-  input.
-
-Specialization is keyed by the generic worker and its exact inputs, so
-programs whose evidence selects no capturing local procedure plan exactly the
-workers and dictionaries they would otherwise. A generated codec or derived
-procedure never receives context inputs.
-
-A literal conversion that reaches a capturing local procedure has no frame to
-construct it from at compile time. A literal whose direct conversion selects
-one, as its target or in that target's nested evidence, and a literal site
-whose worker received its conversion method as a context input, are recorded in
-`ProgramPlan.in_place_conversions` instead of being planned as literal sites:
-lowering converts them in place, at runtime, through the dispatch that frame
-can make. Monotype lowers such a literal's conversion in place too instead of
-hoisting it as a literal root, when the conversion's resolution in that body
-selects a local procedure.
+Methods never capture (Methods Never Capture), so a local procedure a dispatch,
+a method dictionary slot, a derived method, an iterator protocol call, or a
+generated codec selects has no runtime captures and is called directly as its
+nested worker. Boxy planning treats a method selection with runtime captures as
+an invariant failure.
 
 A closure's captures are the values its captured binders hold at the closure's
 declaration. Constructing the callable at a later use reads the same values only
@@ -12139,8 +12105,7 @@ and nested sites propagate their required bindings to their lexical parents.
 The same walk records each site's runtime captures: the binders of enclosing
 frames whose values the site needs, which are its source captures plus the
 runtime captures of every local procedure its body selects (a lookup resolved
-to a local procedure, or a dispatch or iterator protocol plan whose direct
-target is one), less the
+to a local procedure; methods never capture, so a dispatch adds none), less the
 binders the site itself binds. A site's needs propagate to its lexical parent
 the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved

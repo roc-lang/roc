@@ -1,22 +1,20 @@
 # String and numeric literals converted through `from_quote` and
-# `from_numeral` methods of function-body types that capture a local: written
-# in the declaring body, and inside generic helpers whose literal conversion
-# the declaring body selects. Each conversion runs where the captured value
-# exists, so none is evaluated at compile time.
+# `from_numeral` methods of function-body types: written in the declaring
+# body, and inside generic helpers whose literal conversion the declaring body
+# selects.
 
 conv = |_u| "abc"
 
 num = |_u| 42
 
-main! = |args| {
-	extra = List.len(args) + 1
+main! = |_args| {
 	Name := { s : Str, n : U64 }.{
-		from_quote = |s| Ok(Name.{ s, n: extra })
+		from_quote = |s| Ok(Name.{ s, n: Str.count_utf8_bytes(s) })
 	}
 
 	Amount := { v : U64 }.{
 		from_numeral : Numeral -> Try(Amount, [InvalidNumeral(Str)])
-		from_numeral = |_| Ok(Amount.{ v: extra + 10 })
+		from_numeral = |_| Ok(Amount.{ v: 11 })
 	}
 
 	quoted : Name

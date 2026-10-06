@@ -1,6 +1,6 @@
-# A function-body type whose `is_eq` and `to_hash` capture a local, hashed by
-# builtin `Set` code: through a user-written generic helper, and as the
-# component of a generic nominal whose own `to_hash` dispatches to it.
+# A function-body type whose `is_eq` and `to_hash` read a top-level value,
+# hashed by builtin `Set` code: through a user-written generic helper, and as
+# the component of a generic nominal whose own `to_hash` dispatches to it.
 
 Wrap(a) := { inner : a }.{
 	is_eq = |x, y| x.inner == y.inner
@@ -9,8 +9,9 @@ Wrap(a) := { inner : a }.{
 
 count_distinct = |items| Set.from_list(items).len()
 
-main! = |args| {
-	modulus = List.len(args) + 3
+modulus = 3
+
+main! = |_args| {
 	Mod := { n : U64 }.{
 		is_eq = |a, b| a.n % modulus == b.n % modulus
 		to_hash = |m, hasher| hasher.write_u64(m.n % modulus)

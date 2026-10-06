@@ -12570,7 +12570,7 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
     try test_env.assertNoErrors();
 }
 
-test "check type - recursive equality captures local values" {
+test "check type - recursive equality method using an enclosing value is a capture" {
     var test_env = try TestEnv.init("Test",
         \\compare_with = |expected, value| {
         \\    Expr := [Leaf(Str), Next(Expr)].{
@@ -12587,10 +12587,10 @@ test "check type - recursive equality captures local values" {
         \\different = compare_with("b", "a")
     );
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
-test "check type - recursive method captures a local comparison" {
+test "check type - recursive method using an enclosing value is a capture" {
     var test_env = try TestEnv.init("Test",
         \\compare_with = |expected, value| {
         \\    Expr := [Leaf(Str), Next(Expr)].{
@@ -12606,7 +12606,7 @@ test "check type - recursive method captures a local comparison" {
         \\different = compare_with("b", "a")
     );
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "check type - recursive equality rejects an unsupported captured comparison" {

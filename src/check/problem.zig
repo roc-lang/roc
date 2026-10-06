@@ -93,7 +93,7 @@ pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 /// Public `AnnotationOnlyValueUse` re-export.
 pub const AnnotationOnlyValueUse = types.AnnotationOnlyValueUse;
 pub const DerivedMethodValueUse = types.DerivedMethodValueUse;
-pub const CapturingLocalTypeEscape = types.CapturingLocalTypeEscape;
+pub const CapturingMethod = types.CapturingMethod;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;

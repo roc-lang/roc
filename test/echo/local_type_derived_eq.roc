@@ -1,6 +1,6 @@
 # Derived `is_eq : _` and `to_hash : _` of generic nominals instantiated with
-# a function-body type whose `is_eq` and `to_hash` capture a local, and a
-# derived `is_eq : _` on types declared in the function body itself.
+# a function-body type with its own `is_eq` and `to_hash`, and a derived
+# `is_eq : _` on types declared in the function body itself.
 
 Pair(a) := { left : a, right : a }.{
 	is_eq : _
@@ -15,8 +15,9 @@ count_distinct = |items| Set.from_list(items).len()
 
 has_item = |items, item| items.contains(item)
 
-main! = |args| {
-	slack = List.len(args) + 1
+slack = 1
+
+main! = |_args| {
 	Approx := { n : U64 }.{
 		is_eq = |a, b| a.n / (slack * 4) == b.n / (slack * 4)
 		to_hash = |m, hasher| hasher.write_u64(m.n / (slack * 4))
