@@ -159,6 +159,24 @@ with_display_name = |person| {
 This restriction means that when you see `{ ..record, field: value }`, you always know
 the result has the same type as `record`.
 
+## Compared to Dictionaries
+
+Records and [dictionaries](dictionaries-and-sets) both associate names (or keys) with values, but
+they're for different situations:
+
+- A record's fields are decided at compile time. A dictionary can gain and lose entries at runtime.
+- A record's fields can each have a different type. All the values in a dictionary have the same type.
+- A record's field names are always lowercase names written in the source code. A dictionary's keys
+  are values, and they can be any type that supports [hashing](dictionaries-and-sets#keys-and-hashing).
+- Accessing a record's field always succeeds, because the compiler has already checked that the
+  field is there. Looking up a key in a dictionary returns a `Try`, because the key might not be
+  there.
+- Accessing a record's field is just reading memory at a known location. Looking up a key in a
+  dictionary means hashing the key and comparing it to the keys the dictionary has.
+
+So if you know in advance exactly which fields you'll have, and each one means something different,
+use a record. If the keys are only known at runtime, use a dictionary.
+
 ## Structural Records
 
 Records are _structural_ by default, which means:
