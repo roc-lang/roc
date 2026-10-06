@@ -13344,13 +13344,18 @@ Record fields evaluate in source order in every lowering mode. A record
 literal evaluates its supplied field values in the order they are written; a
 record update evaluates its base first and then its updated fields in the
 order written. A Monotype record constructor lists its fields in layout
-(label) order, so when the checked record literal's field order differs from
-that layout order, Monotype binds each supplied field value to a local in
-source order and the constructor reads those locals
-(`bindRecordFieldsInSourceOrder`). The decision reads only the checked
-literal's field order and the constructor's layout; when they agree, no
-binding is emitted. Boxy lowers record literals from their source field order
-directly.
+(label) order. Only a value whose evaluation is observable has an order to
+keep: a value built only from locals, literals, and closures cannot crash,
+call, print, or diverge, so its position is unobservable
+(`exprEvaluationIsUnobservable`). When the observable supplied values'
+source order differs from their layout order, Monotype binds each of them to
+a local in source order and the constructor reads those locals
+(`bindRecordFieldsInSourceOrder`); every other value stays in its
+constructor slot. When the orders agree, no binding is emitted, so a
+constructor operand moves into a local only when its evaluation order would
+otherwise change, and the producer-consumer shape that later passes see
+(a call whose result is directly a constructor field) is kept everywhere
+else. Boxy lowers record literals from their source field order directly.
 
 After total plan resolution, `CheckedBodyStore` computes and stores expression
 and statement divergence through its exact operand and body dependencies. When
