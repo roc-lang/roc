@@ -119,6 +119,20 @@ host-provided function).
 If you write an implementation instead, that's what gets used. So you can, for example, write your
 own `is_eq` while letting the compiler derive `to_hash` and `encoder_for`.
 
+A derived method has to cover _every_ field or tag a value could have, including the ones an
+[open type](types#structural-types) leaves unspecified. So if a function compares values whose type
+ends in `..others`, the other tags have to support equality too, and the function's annotation has
+to say so in a [`where` clause](#where-clauses):
+
+```roc
+is_nope : [Nope, ..others] -> Bool where [others.is_eq : others, others -> Bool]
+is_nope = |value| value == Nope
+```
+
+Without the `where` clause, someone could call `is_nope` with a value whose other tags have payloads
+that can't be compared (like functions), so leaving it out is a compile-time error. (If you leave
+off the annotation entirely, the compiler infers the `where` clause for you.)
+
 The derived `map` and `map!` methods work on tag unions that have one type parameter appearing
 directly in a payload. `map` takes a pure function, while `map!` takes an effectful one:
 

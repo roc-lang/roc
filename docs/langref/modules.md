@@ -543,6 +543,9 @@ targets: {
 
 - `inputs_dir` is the directory (inside the platform's bundle) that contains the files for each target.
 - Each target lists its `inputs`, which are the files that get linked together, and optionally an `output`.
+- These paths have to stay inside the platform's directory. An absolute path (like `/usr/lib/foo.a`
+  or `C:\foo.lib`), or a path with a `..` in it, gives an "Invalid Target Path" error. Otherwise,
+  a platform you downloaded could make `roc build` link in any file on your computer.
 - WebAssembly targets that get linked must list the functions the final module exports to the
   outside world, using `exports`. (`exports: []` exports none.)
 

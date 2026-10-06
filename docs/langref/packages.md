@@ -41,6 +41,19 @@ a bundle, Roc verifies that its contents match that hash, and refuses to use it 
 that a given URL always refers to exactly the same package contents, even if the server hosting it gets
 compromised.
 
+If the server responds with a redirect, Roc follows it (up to three redirects in a row), but each
+place it gets redirected to has to follow the same HTTPS-or-`localhost` rule as the original URL.
+
+To keep a malicious or broken package from filling up your disk, Roc also limits how big
+downloaded packages can be once they're decompressed:
+
+- Each package can be at most 10 megabytes. You can change this with `--max-package-mb`.
+- Everything a dependency brings in (the package itself plus all of its own dependencies,
+  recursively) can be at most 100 megabytes combined, or 512 megabytes for a platform. You can
+  change this with `--max-transitive-mb`.
+
+Passing `0` to either of these turns that limit off.
+
 The `roc bundle` command creates a bundle from a package's `.roc` files, and names the resulting file
 after its hash:
 
