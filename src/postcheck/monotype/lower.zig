@@ -17344,6 +17344,25 @@ const BodyDraftStore = struct {
         return id;
     }
 
+    /// A local holding a reassignable binder's value at a closure's
+    /// declaration, which the closure captures in place of the binder. It is
+    /// not a version of the binder, so it carries no binder and its own
+    /// generated capture identity: a later reassignment rebinds the binder
+    /// and leaves the snapshot as it was.
+    fn addCaptureSnapshotLocal(
+        self: *BodyDraftStore,
+        symbol: Common.Symbol,
+        ty: DraftTypeCell,
+    ) Allocator.Error!DraftLocalId {
+        const id = try self.addLocal(symbol, ty, null, null);
+        const index = @intFromEnum(id);
+        if (index > checked.CaptureId.max_generated_index) {
+            Common.invariant("Monotype body had too many locals for provisional capture identity");
+        }
+        self.locals.items[index].capture_id = checked.CaptureId.generatedLift(index);
+        return id;
+    }
+
     fn addExprSpan(self: *BodyDraftStore, ids: []const DraftExprId) Allocator.Error!DraftSpan(DraftExprId) {
         const start: u32 = @intCast(self.expr_ids.items.len);
         try self.expr_ids.appendSlice(self.allocator, ids);
@@ -22633,8 +22652,14 @@ const BodyContext = struct {
         ctx: *BodyContext,
         binders: []checked.PatternBinderId,
         binder_count: usize,
+        /// Binders whose declaration-context local replaced the requesting
+        /// body's local, with the local to restore.
+        replaced: []ReplacedBinder,
+        replaced_count: usize,
         typed_binders: []TypedBinder,
         typed_binder_count: usize,
+
+        const ReplacedBinder = struct { binder: checked.PatternBinderId, local: DraftLocalId };
 
         fn deinit(self: *InstalledLocalProcContext) void {
             for (self.binders[0..self.binder_count]) |binder| {
@@ -22642,6 +22667,11 @@ const BodyContext = struct {
                     Common.invariant("installed local procedure binder disappeared before context restoration");
                 }
             }
+            for (self.replaced[0..self.replaced_count]) |replaced| {
+                self.ctx.binders.put(replaced.binder, replaced.local) catch
+                    Common.invariant("restoring a replaced local procedure binder needed new capacity");
+            }
+            self.ctx.allocator.free(self.replaced);
             for (self.typed_binders[0..self.typed_binder_count]) |binder| {
                 if (!self.ctx.typed_binders.remove(binder)) {
                     Common.invariant("installed typed local procedure binder disappeared before context restoration");
@@ -22661,10 +22691,17 @@ const BodyContext = struct {
             self.allocator.free(binders);
             return err;
         };
+        const replaced = self.allocator.alloc(InstalledLocalProcContext.ReplacedBinder, context.entries.len) catch |err| {
+            self.allocator.free(typed_binders);
+            self.allocator.free(binders);
+            return err;
+        };
         var installed = InstalledLocalProcContext{
             .ctx = self,
             .binders = binders,
             .binder_count = 0,
+            .replaced = replaced,
+            .replaced_count = 0,
             .typed_binders = typed_binders,
             .typed_binder_count = 0,
         };
@@ -22678,7 +22715,18 @@ const BodyContext = struct {
             switch (entry.kind) {
                 0 => {
                     const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
-                    if (self.binders.contains(binder)) continue;
+                    if (self.binders.get(binder)) |requesting| {
+                        // A captured reassignable binder's value is its
+                        // snapshot at the declaration
+                        // (`snapshotReassignableCaptures`), which the
+                        // requesting body's current local no longer holds.
+                        if (requesting != local and self.localProcSnapshotsBinder(context.declaration.expr, binder)) {
+                            try self.binders.put(binder, local);
+                            installed.replaced[installed.replaced_count] = .{ .binder = binder, .local = requesting };
+                            installed.replaced_count += 1;
+                        }
+                        continue;
+                    }
                     try self.binders.put(binder, local);
                     installed.binders[installed.binder_count] = binder;
                     installed.binder_count += 1;
@@ -29817,14 +29865,7 @@ const BodyContext = struct {
             .runtime_error => return self.finishStatement(task, .{ .checked_error = try self.addStringLiteral("runtime error") }, .none),
             .decl => |decl| {
                 if (self.statementDeclIsLocalProc(decl.pattern, decl.expr)) {
-                    const binder = self.localProcBinder(decl.pattern);
-                    if (self.view.bodies.patternBinder(binder).is_scheme_alias) {
-                        self.restoreSourceLocation(&task.saved);
-                        return statementStep(.{ .stmt = null, .termination = .none });
-                    }
-                    try self.registerLocalProc(decl.pattern, decl.expr, task.statement);
-                    const unit_ty = try self.unitType();
-                    return self.finishStatement(task, .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) }, .none);
+                    Common.invariant("local procedure declaration reached statement lowering instead of its block");
                 }
                 return self.beginPatternStatementStep(task, decl.pattern, decl.expr);
             },
@@ -60574,7 +60615,10 @@ const BodyContext = struct {
         while (task.index < task.statements.len) {
             const statement = task.statements[task.index];
             task.index += 1;
-            try self.registerLocalAssociatedProcedures(statement);
+            var snapshots: std.ArrayList(DraftStmtId) = .empty;
+            defer snapshots.deinit(self.allocator);
+            try self.registerLocalAssociatedProcedures(statement, &snapshots);
+            for (snapshots.items) |stmt| try task.lowered.append(self.allocator, stmt);
             // Checking records divergence per statement, and marks a block
             // divergent when any statement in it diverges. That output
             // decides whether callers demand the block's own type from its
@@ -60585,6 +60629,16 @@ const BodyContext = struct {
             // the rest of the block unreachable.
             const statement_diverges = self.checkedStatementDivergesInLoweredRuntime(statement);
             if (!statement_diverges and !self.checkedStatementHasRuntimeEffect(statement)) continue;
+            if (self.blockStatementLocalProcDecl(statement)) |decl| {
+                // Declaring a local procedure runs nothing but the snapshots
+                // of its reassignable captures.
+                if (!self.view.bodies.patternBinder(self.localProcBinder(decl.pattern)).is_scheme_alias) {
+                    snapshots.clearRetainingCapacity();
+                    try self.registerLocalProc(decl.pattern, decl.expr, statement, &snapshots);
+                    for (snapshots.items) |stmt| try task.lowered.append(self.allocator, stmt);
+                }
+                continue;
+            }
             task.statement = statement;
             task.statement_start = task.lowered.len;
             task.statement_diverges = statement_diverges;
@@ -62244,18 +62298,20 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         expr: checked.CheckedExprId,
         context_anchor: checked.CheckedStatementId,
+        snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         try self.registerLocalProcDeclaration(.{
             .module = self.view.key.bytes,
             .binder = self.localProcBinder(pattern_id),
             .expr = expr,
             .context_anchor = context_anchor,
-        });
+        }, snapshots);
     }
 
     fn registerLocalAssociatedProcedures(
         self: *BodyContext,
         statement_id: checked.CheckedStatementId,
+        snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .local_proc_context);
         defer timing_scope.end();
@@ -62267,27 +62323,39 @@ const BodyContext = struct {
                         .binder = local.binder,
                         .expr = local.expr,
                         .context_anchor = local.context_anchor,
-                    });
+                    }, snapshots);
                 }
             },
             .procedure, .structural => {},
         };
     }
 
+    /// Register a local procedure's declaration context. A closure's
+    /// captures are the values its captured binders hold at its declaration,
+    /// while a reassignable binder keeps one local that each reassignment
+    /// rebinds. So each captured reassignable binder's current value is
+    /// bound to a snapshot local at the declaration (appended to
+    /// `snapshots`, to run where the declaration does), and the context
+    /// names the snapshot, which every construction of the procedure's
+    /// callable and its body read.
     fn registerLocalProcDeclaration(
         self: *BodyContext,
         declaration: DraftLocalProcDeclaration,
+        snapshots: *std.ArrayList(DraftStmtId),
     ) Allocator.Error!void {
         const address = declaration.address();
         const current = try self.captureLocalProcContext(declaration);
         defer self.releaseLocalProcContext(current);
-
-        if (self.local_proc_contexts.get(address)) |existing_id| {
+        const existing_context: ?LocalProcContext = if (self.local_proc_contexts.get(address)) |existing_id| blk: {
             const raw_existing = @intFromEnum(existing_id);
             if (raw_existing >= self.draft.local_proc_contexts.items.len) {
                 Common.invariant("local procedure binder referenced an unknown declaration context");
             }
-            const existing = self.draft.local_proc_contexts.items[raw_existing];
+            break :blk self.draft.local_proc_contexts.items[raw_existing];
+        } else null;
+        try self.snapshotReassignableCaptures(declaration.expr, current.entries, if (existing_context) |existing| existing.entries else null, snapshots);
+
+        if (existing_context) |existing| {
             if (!moduleBytesEqual(existing.declaration.module, declaration.module) or
                 existing.declaration.binder != declaration.binder or
                 existing.declaration.expr != declaration.expr)
@@ -62301,6 +62369,57 @@ const BodyContext = struct {
             const context_id: DraftLocalProcContextId = @enumFromInt(@as(u32, @intCast(self.draft.local_proc_contexts.items.len)));
             try self.draft.local_proc_contexts.append(self.allocator, try self.cloneLocalProcContext(current));
             try self.local_proc_contexts.putPermanent(address, context_id);
+        }
+    }
+
+    /// Whether the declared closure `expr` captures the reassignable
+    /// `binder`, whose declaration-time value it then reads from a snapshot.
+    fn localProcSnapshotsBinder(self: *BodyContext, expr: checked.CheckedExprId, binder: checked.PatternBinderId) bool {
+        if (!self.view.bodies.patternBinder(binder).reassignable) return false;
+        const captures = switch (self.view.bodies.expr(expr).data) {
+            .closure => |closure| closure.captures,
+            .lambda, .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return false,
+        };
+        for (captures) |capture| {
+            if (checkedCaptureBinder(self.view, capture.pattern) == binder) return true;
+        }
+        return false;
+    }
+
+    /// Point each of `entries` whose binder the declared closure `expr`
+    /// captures and that is reassignable at a snapshot local bound to the
+    /// binder's current value, appending that binding to `snapshots`. A
+    /// declaration lowered again reuses the snapshot locals its first
+    /// lowering recorded (`existing`).
+    fn snapshotReassignableCaptures(
+        self: *BodyContext,
+        expr: checked.CheckedExprId,
+        entries: []LexicalBinderEntry,
+        existing: ?[]const LexicalBinderEntry,
+        snapshots: *std.ArrayList(DraftStmtId),
+    ) Allocator.Error!void {
+        for (entries, 0..) |*entry, index| {
+            if (entry.kind != 0) continue;
+            const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
+            if (!self.localProcSnapshotsBinder(expr, binder)) continue;
+
+            const current: DraftLocalId = @enumFromInt(entry.local);
+            const cell = self.localTypeCell(current);
+            const snapshot: DraftLocalId = if (existing) |recorded| blk: {
+                if (recorded.len != entries.len or recorded[index].binder != entry.binder) {
+                    Common.invariant("local procedure declaration lowered again with a different lexical context");
+                }
+                break :blk @enumFromInt(recorded[index].local);
+            } else blk: {
+                const local = try self.draft.addCaptureSnapshotLocal(self.builder.symbols.fresh(), cell);
+                try self.bindLocalName(local, binder);
+                break :blk local;
+            };
+            try snapshots.append(self.allocator, try self.addStmt(.{ .let_ = .{
+                .pat = try self.addPatWithTypeCell(cell, .{ .bind = snapshot }),
+                .value = try self.addExprWithTypeCell(cell, .{ .local = current }),
+            } }));
+            entry.local = @intFromEnum(snapshot);
         }
     }
 
@@ -62399,6 +62518,16 @@ const BodyContext = struct {
             .assign => |binder| binder,
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => Common.invariant("local procedure declaration pattern was not a binder"),
         };
+    }
+
+    /// The declaration a block statement makes, when it declares a local
+    /// procedure.
+    fn blockStatementLocalProcDecl(self: *BodyContext, statement_id: checked.CheckedStatementId) ?@FieldType(checked.CheckedStatementData, "decl") {
+        const statement = self.view.bodies.statement(statement_id);
+        if (statement.data != .decl) return null;
+        const decl = statement.data.decl;
+        if (!self.statementDeclIsLocalProc(decl.pattern, decl.expr)) return null;
+        return decl;
     }
 
     fn statementDeclIsLocalProc(

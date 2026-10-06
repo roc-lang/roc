@@ -16479,7 +16479,13 @@ const Builder = struct {
             self.workerBindsDictionarySpan(caller_id.?, bound_dictionaries);
         const source_is_defaulted = evidence_source.rep == null and substituted_rep == null and
             self.defaultedDictionaryOwner(source_rep) != null;
-        if (!source_is_bound and !source_is_defaulted and substituted_rep == null and evidence_source.rep == null) {
+        // A variable no use pins seals to its recorded default. When that
+        // default is uninhabited, no value of the variable exists, so its
+        // dictionary is the static one the unpinned-dispatch rule selects
+        // (`beginStaticDictionaryMethodEvidence`).
+        const source_is_unpinned = evidence_source.rep == null and substituted_rep == null and
+            self.repSealsUninhabited(self.plan.representations.items[@intFromEnum(source_rep)]);
+        if (!source_is_bound and !source_is_defaulted and !source_is_unpinned and substituted_rep == null and evidence_source.rep == null) {
             boxyPlanInvariant("boxy callable body dictionary had neither a bound caller dictionary nor concrete checked use-site evidence");
         }
         if (source_is_bound) {
