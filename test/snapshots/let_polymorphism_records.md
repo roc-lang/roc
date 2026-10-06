@@ -409,7 +409,7 @@ NO CHANGE
 				(p-underscore))
 			(e-block
 				(s-runtime-error (tag "erroneous_value_expr"))
-				(e-dispatch-call (method "plus") (constraint-fn-var 497)
+				(e-dispatch-call (method "plus") (constraint-fn-var 499)
 					(receiver
 						(e-field-access
 							(receiver
