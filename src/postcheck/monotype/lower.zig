@@ -48011,7 +48011,10 @@ const BodyContext = struct {
                 .value = value,
             };
         }
+        const field_binds = try self.bindRecordFieldsInSourceOrder(labels.field_names, lowered);
+        defer self.allocator.free(field_binds);
         var record_expr = try self.addConstructorExpr(ty, .{ .record = try self.addFieldExprSpan(lowered) });
+        record_expr = try self.wrapRecordFieldBinds(field_binds, .{ .sealed = ty }, record_expr);
         var spread_index: usize = target_field_count;
         while (spread_index > 0) {
             spread_index -= 1;
@@ -48270,7 +48273,10 @@ const BodyContext = struct {
             const witness = try self.constructorWitnessWithStructuralNode(record_node, structural_node);
             break :blk try self.relateCheckedNodeToProducedValue(record_node, witness);
         } else record_node;
+        const field_binds = try self.bindRecordFieldsInSourceOrder(labels.field_names, lowered);
+        defer self.allocator.free(field_binds);
         var record_expr = try self.addConstructorExprAtNode(produced_node, .{ .record = try self.addFieldExprSpan(lowered) });
+        record_expr = try self.wrapRecordFieldBinds(field_binds, DraftTypeCell.fromGraphNode(produced_node), record_expr);
         var spread_index: usize = target_fields.len;
         while (spread_index > 0) {
             spread_index -= 1;
@@ -48290,6 +48296,72 @@ const BodyContext = struct {
             } });
         }
         return record_expr;
+    }
+
+    const RecordFieldBind = struct { local: DraftLocalId, cell: DraftTypeCell, value: DraftExprId };
+
+    /// Record field values evaluate in source order, while a record
+    /// constructor lists its fields in layout order. When the supplied
+    /// fields' source order (`source_names`, the checked record literal's
+    /// field order) differs from the layout order of `lowered`, each supplied
+    /// value is bound to a local and the constructor reads that local; the
+    /// returned bindings are in source order. When the orders agree, nothing
+    /// is bound and the returned slice is empty.
+    fn bindRecordFieldsInSourceOrder(
+        self: *BodyContext,
+        source_names: []const names.RecordFieldNameId,
+        lowered: []DraftFieldExpr,
+    ) Allocator.Error![]RecordFieldBind {
+        const source_index_of_slot = try self.allocator.alloc(?usize, lowered.len);
+        defer self.allocator.free(source_index_of_slot);
+        var in_source_order = true;
+        var previous: ?usize = null;
+        for (lowered, source_index_of_slot) |field, *source_index| {
+            source_index.* = for (source_names, 0..) |name, index| {
+                if (name == field.name) break index;
+            } else null;
+            const index = source_index.* orelse continue;
+            if (previous) |prev| {
+                if (index < prev) in_source_order = false;
+            }
+            previous = index;
+        }
+        if (in_source_order) return &.{};
+
+        const binds = try self.allocator.alloc(RecordFieldBind, source_names.len);
+        errdefer self.allocator.free(binds);
+        var bound: usize = 0;
+        for (lowered, source_index_of_slot) |*field, maybe_index| {
+            const index = maybe_index orelse continue;
+            const cell = self.exprTypeCell(field.value);
+            const local = try self.addLocalWithBinderCell(self.builder.symbols.fresh(), cell, null);
+            binds[index] = .{ .local = local, .cell = cell, .value = field.value };
+            field.value = try self.addExprWithTypeCell(cell, .{ .local = local });
+            bound += 1;
+        }
+        if (bound != source_names.len) Common.invariant("record constructor did not lay out every supplied field");
+        return binds;
+    }
+
+    /// Bind `binds`' values, first source field outermost, around `body`.
+    fn wrapRecordFieldBinds(
+        self: *BodyContext,
+        binds: []const RecordFieldBind,
+        record_cell: DraftTypeCell,
+        body: DraftExprId,
+    ) Allocator.Error!DraftExprId {
+        var result = body;
+        var index = binds.len;
+        while (index > 0) {
+            index -= 1;
+            const bind = binds[index];
+            result = try self.addExprWithTypeCell(record_cell, .{ .let_ = .{
+                .bind = try self.addPatWithTypeCell(bind.cell, .{ .bind = bind.local }),
+                .value = bind.value,
+                .rest = result,
+            } });
+        }
+        return result;
     }
 
     fn omittedRecordFieldDefault(
