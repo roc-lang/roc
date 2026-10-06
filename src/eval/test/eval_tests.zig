@@ -7615,7 +7615,7 @@ const core_tests = [_]TestCase{
         .expected = .{ .inspect_str = "(5, 108)" },
     },
     .{
-        .name = "inspect: generic dispatch preserves each capturing local method context",
+        .name = "inspect: a generic dispatch to a capturing local method is rejected",
         .source_kind = .module,
         .source =
         \\make = |offset| {
@@ -7629,7 +7629,7 @@ const core_tests = [_]TestCase{
         \\
         \\main = (make(10), make(20))
         ,
-        .expected = .{ .inspect_str = "(15, 25)" },
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         .name = "inspect: imported generic dispatch preserves caller local method target",

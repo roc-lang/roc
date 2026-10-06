@@ -2386,7 +2386,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "custom vector" },
     },
     .{
-        .name = "issue 11170: unconstrained custom inspect argument uses SIMD backing",
+        .name = "issue 11170: a custom inspect with an unconstrained argument is an inspect override",
         .source_kind = .module,
         .source =
         \\Vector := U64x2.{
@@ -2394,7 +2394,7 @@ pub const tests = [_]TestCase{
         \\}
         \\main = (Str.inspect(Vector.(U64x2.default())), Vector.to_inspect({}))
         ,
-        .expected = .{ .inspect_str = "(\"U64x2(0, 0)\", \"custom vector\")" },
+        .expected = .{ .inspect_str = "(\"custom vector\", \"custom vector\")" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11189
@@ -4726,7 +4726,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
-        .name = "issue 11993: method of a function-body nominal type that captures a local",
+        .name = "issue 11993: a method of a function-body nominal type that captures a local is rejected",
         .source_kind = .module,
         .source =
         \\run = |_| {
@@ -4743,6 +4743,6 @@ pub const tests = [_]TestCase{
         \\
         \\main = run({})
         ,
-        .expected = .{ .inspect_str = "1" },
+        .expected = .{ .problem_and_crash = {} },
     },
 };

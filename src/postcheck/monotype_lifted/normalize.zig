@@ -800,7 +800,10 @@ const Normalizer = struct {
             if (branch.guard) |guard| return .{ .request = .{ .expr = .{ .source = guard, .sink = bindings_sink } } };
             frame.cursor += 1;
         } else if (branch.guard != null) {
-            branch.guard = delivered.?;
+            // A guard whose evaluation transfers control ends the branch's
+            // bindings there, so it produces no value to test: reaching the
+            // branch runs its bindings up to that transfer.
+            branch.guard = if (self.sink(bindings_sink).terminated) null else delivered.?;
         }
         branch.bindings = try self.program.addStmtSpan(self.sink(bindings_sink).list.items);
         self.releaseSinksFrom(bindings_sink);

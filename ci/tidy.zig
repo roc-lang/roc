@@ -1368,6 +1368,11 @@ const DeadFilesDetector = struct {
             rest = rest[close + 1 ..];
             if (!std.mem.endsWith(u8, literal, ".zig")) continue;
             if (!std.mem.startsWith(u8, literal, "src/") and !std.mem.startsWith(u8, literal, "test/")) continue;
+            // A format string such as "src/fuzz-{s}.zig" names no single file.
+            const is_path = for (literal) |byte| {
+                if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-' and byte != '.' and byte != '/') break false;
+            } else true;
+            if (!is_path) continue;
             (try detector.fileState(gpa, literal)).import_count += 1;
         } else {
             std.debug.panic("file with too many string literals: {s}", .{file_path});

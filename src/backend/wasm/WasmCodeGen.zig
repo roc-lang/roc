@@ -1720,6 +1720,9 @@ pub fn generateModule(
     // address must carry the relocation edge that makes its segment live.
     self.configureStaticDataAddressTracking();
 
+    // Indirect calls (callbacks, erased callables, refcount helpers) share
+    // these types and need the table, registered before any function.
+    try self.registerIndirectCallTypes();
     try self.registerHostedSymbolTargets(self.store.getProcSpecs());
 
     if (wasm32_builtins_object.len == 0) {

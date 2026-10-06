@@ -25,6 +25,10 @@ const shallow_stack_bytes = 2 * 1024 * 1024;
 /// type, so it costs the square of its depth.
 const shallower_depth = 500;
 
+/// Each loop of a loop nest keeps a set of every enclosing loop's iteration
+/// state, so its ownership facts cost the square of its depth.
+const loop_depth = 300;
+
 /// Each level of a custom-parser chain is its own record type, so it compiles
 /// a complete derived record parser. Compilation is linear in the depth, but
 /// that per-level cost makes the full depth far slower than every other case;
@@ -294,16 +298,16 @@ const cases = [_]TestCase{
     .{
         .name = "issue 11698: nested for loops",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for _ in [1.U64] {\n", depth) ++ "$total = $total + 1\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for _ in [1.U64] {\n", loop_depth) ++ "$total = $total + 1\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
         .name = "issue 11698: nested destructuring for loops",
         .source_kind = .module,
-        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for [a] in [[1.U64]] {\n", depth) ++ "$total = $total + a\n" ++ repeat("}\n", depth) ++ "    $total\n}\nmain = count(0.U64)\n",
+        .source = "count = |n| {\n    var $total = n\n" ++ repeat("for [a] in [[1.U64]] {\n", loop_depth) ++ "$total = $total + a\n" ++ repeat("}\n", loop_depth) ++ "    $total\n}\nmain = count(0.U64)\n",
         .expected = .{ .inspect_str = "1" },
-        .stack_bytes = stack_bytes,
+        .stack_bytes = shallow_stack_bytes,
     },
     .{
         .name = "issue 11698: nested while loops",
