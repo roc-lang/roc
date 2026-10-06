@@ -3365,6 +3365,51 @@ fn storedConstFnEvidenceEql(left: StoredConstFnEvidence, right: StoredConstFnEvi
     return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
+/// `Builder.site_evidence_memo`'s key: the site's checked evidence and
+/// substitution spans, the scheme's requirement row, and the views and
+/// purpose the evidence is materialized for.
+const SiteEvidenceMemoKey = struct {
+    view: usize,
+    method_scope: usize,
+    refs: usize,
+    refs_len: usize,
+    subst: usize,
+    subst_len: usize,
+    params: usize,
+    params_len: usize,
+    purpose: EvidenceMaterializationPurpose,
+};
+
+const SiteEvidenceMemo = struct {
+    contract: []const SpecEvidence,
+    vector: []const SpecEvidence,
+};
+
+const CheckedSpanKey = struct {
+    view: usize,
+    span: usize,
+    len: usize,
+};
+
+/// Whether evidence names a local procedure context anywhere, which belongs
+/// to the context that selected it.
+fn evidenceVectorHasLocalProcContext(vector: []const SpecEvidence) bool {
+    for (vector) |entry| {
+        switch (entry) {
+            .target => |target| {
+                if (target.local_proc_context != null) return true;
+                switch (target.nested) {
+                    .resolved => |nested| if (evidenceVectorHasLocalProcContext(nested)) return true,
+                    .synthesize => {},
+                }
+            },
+            .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => {},
+        }
+        if (evidenceVectorHasLocalProcContext(evidenceCallableContracts(entry))) return true;
+    }
+    return false;
+}
+
 /// `Builder.const_evidence_memo`'s key: an evidence chain's innermost vector
 /// and its frame count.
 const ConstEvidenceMemoKey = struct {
@@ -4353,6 +4398,11 @@ const Builder = struct {
     /// Stored conversions by `Ast.fnEvidenceBucket`, each checked for exact
     /// equality before reuse.
     const_evidence_by_content: std.AutoHashMap(u64, StoredConstFnEvidence),
+    /// Site evidence derived where it cannot depend on the lowering context
+    /// (`BodyContext.deriveSiteEvidenceVector`).
+    site_evidence_memo: std.AutoHashMap(SiteEvidenceMemoKey, SiteEvidenceMemo),
+    /// Whether a checked substitution span holds only ground types.
+    checked_span_ground: std.AutoHashMap(CheckedSpanKey, bool),
 
     /// The store this scope emits restored const expressions into.
     fn constEmit(self: *Builder) *Ast.Program {
@@ -4488,6 +4538,8 @@ const Builder = struct {
             .evidence_arena = std.heap.ArenaAllocator.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
+            .site_evidence_memo = std.AutoHashMap(SiteEvidenceMemoKey, SiteEvidenceMemo).init(allocator),
+            .checked_span_ground = std.AutoHashMap(CheckedSpanKey, bool).init(allocator),
         };
     }
 
@@ -4721,6 +4773,8 @@ const Builder = struct {
         self.type_cache.deinit();
         self.const_evidence_memo.deinit();
         self.const_evidence_by_content.deinit();
+        self.site_evidence_memo.deinit();
+        self.checked_span_ground.deinit();
         self.evidence_arena.deinit();
         // Workers borrow these views, so they go last.
         self.allocator.free(self.module_views);
@@ -6099,6 +6153,49 @@ const Builder = struct {
             null,
             false,
         );
+    }
+
+    /// Whether every type of a checked span is ground: no variable of any
+    /// kind, error, or pending payload is reachable from it.
+    fn checkedTypesGround(self: *Builder, view: ModuleView, tys: []const checked.CheckedTypeId) Allocator.Error!bool {
+        if (tys.len == 0) return true;
+        const key: CheckedSpanKey = .{ .view = @intFromPtr(view), .span = @intFromPtr(tys.ptr), .len = tys.len };
+        if (self.checked_span_ground.get(key)) |ground| return ground;
+        var pending = std.ArrayList(checked.CheckedTypeId).empty;
+        defer pending.deinit(self.allocator);
+        var seen = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer seen.deinit();
+        try pending.appendSlice(self.allocator, tys);
+        const ground = walk: while (pending.pop()) |ty| {
+            if ((try seen.getOrPut(ty)).found_existing) continue;
+            switch (checkedPayload(view, ty)) {
+                .pending, .err, .flex, .rigid => break :walk false,
+                .empty_record, .empty_tag_union => {},
+                .alias => |alias| {
+                    try pending.append(self.allocator, alias.backing);
+                    try pending.appendSlice(self.allocator, alias.args);
+                },
+                .record => |record| {
+                    for (record.fields) |field| try pending.append(self.allocator, field.ty);
+                    try pending.append(self.allocator, record.ext);
+                },
+                .tuple => |elems| try pending.appendSlice(self.allocator, elems),
+                .nominal => |nominal| {
+                    try pending.appendSlice(self.allocator, nominal.args);
+                    try pending.appendSlice(self.allocator, nominal.padding_field_types);
+                },
+                .function => |function| {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                },
+                .tag_union => |tag_union| {
+                    for (tag_union.tags) |tag| try pending.appendSlice(self.allocator, tag.argsSlice(view.types));
+                    try pending.append(self.allocator, tag_union.ext);
+                },
+            }
+        } else true;
+        try self.checked_span_ground.put(key, ground);
+        return ground;
     }
 
     /// Retain the exact dispatch vector selected for a specialization so a
@@ -50347,8 +50444,71 @@ const BodyContext = struct {
         const refs = site_view.static_dispatch_plans.siteEvidence(expr);
         return .{
             .subst = subst,
-            .vector = try self.deriveEvidenceVector(schema, subst, site_view, refs, purpose),
+            .vector = if (refs) |site_refs|
+                try self.deriveSiteEvidenceVector(schema, subst, site_view, site_refs, tys, purpose)
+            else
+                try self.deriveEvidenceVector(schema, subst, site_view, refs, purpose),
         };
+    }
+
+    /// `deriveCheckedEvidenceVector` for a checked use site, shared between
+    /// lowering contexts when it cannot depend on one. Deriving a site's
+    /// evidence reads only checked data, the site's substitution cells, and
+    /// the enclosing evidence chain; with no parameter in that chain and a
+    /// substitution of ground checked types, whose cells hold exactly those
+    /// types in every context, the derived vector is the same wherever the
+    /// site is lowered. Uses that checking replayed from one source share
+    /// their evidence and substitution, so they derive it once. The
+    /// contracts are still related in each context, since relating them
+    /// binds that context's cells.
+    fn deriveSiteEvidenceVector(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        site_view: ModuleView,
+        refs: []const static_dispatch.CheckedEvidence,
+        checked_subst: []const checked.CheckedTypeId,
+        purpose: EvidenceMaterializationPurpose,
+    ) Allocator.Error![]const SpecEvidence {
+        if (schema.params.len == 0) return &.{};
+        const key: ?SiteEvidenceMemoKey = if (!self.evidenceChainHasEntries() and
+            try self.builder.checkedTypesGround(site_view, checked_subst))
+            .{
+                .view = @intFromPtr(site_view),
+                .method_scope = @intFromPtr(self.method_scope),
+                .refs = @intFromPtr(refs.ptr),
+                .refs_len = refs.len,
+                .subst = @intFromPtr(checked_subst.ptr),
+                .subst_len = checked_subst.len,
+                .params = @intFromPtr(schema.params.ptr),
+                .params_len = schema.params.len,
+                .purpose = purpose,
+            }
+        else
+            null;
+        if (key) |shared| if (self.builder.site_evidence_memo.get(shared)) |memo| {
+            if (purpose != .interface_summary_input) try self.relateEvidenceContracts(schema, subst, memo.contract);
+            return memo.vector;
+        };
+        var contract: []const SpecEvidence = &.{};
+        const vector = try self.deriveCheckedEvidenceVectorKeepingContract(schema, subst, site_view, refs, purpose, &contract);
+        if (key) |shared| {
+            if (!evidenceVectorHasLocalProcContext(contract) and !evidenceVectorHasLocalProcContext(vector)) {
+                try self.builder.site_evidence_memo.put(shared, .{ .contract = contract, .vector = vector });
+            }
+        }
+        return vector;
+    }
+
+    /// Whether any frame of this context's evidence chain carries evidence a
+    /// requirement could be forwarded to or resolved against.
+    fn evidenceChainHasEntries(self: *const BodyContext) bool {
+        var frame: ?*const EvidenceChain = &self.evidence;
+        while (frame) |current| : (frame = current.parent) {
+            if (current.vector.len != 0) return true;
+            if (current.schema) |schema| if (schema.params.len != 0) return true;
+        }
+        return false;
     }
 
     /// The substitution a scheme receives from a request its root is related
@@ -50997,6 +51157,22 @@ const BodyContext = struct {
         refs: []const static_dispatch.CheckedEvidence,
         purpose: EvidenceMaterializationPurpose,
     ) Allocator.Error![]const SpecEvidence {
+        var contract: []const SpecEvidence = &.{};
+        return self.deriveCheckedEvidenceVectorKeepingContract(schema, subst, site_view, refs, purpose, &contract);
+    }
+
+    /// `deriveCheckedEvidenceVector`, also returning in `contract_out` a copy
+    /// of the checked contracts as they were related, before substitution-
+    /// derived targets were merged into them.
+    fn deriveCheckedEvidenceVectorKeepingContract(
+        self: *BodyContext,
+        schema: SchemeRequirements,
+        subst: SpecSubstitution,
+        site_view: ModuleView,
+        refs: []const static_dispatch.CheckedEvidence,
+        purpose: EvidenceMaterializationPurpose,
+        contract_out: *[]const SpecEvidence,
+    ) Allocator.Error![]const SpecEvidence {
         if (refs.len != schema.params.len) Common.invariant("checked site evidence length differed from its scheme's requirements");
         const out = try self.builder.evidence_arena.allocator().alloc(SpecEvidence, schema.params.len);
         for (refs, schema.params, out, 0..) |ref, param, *entry, k| {
@@ -51024,7 +51200,8 @@ const BodyContext = struct {
         // Summary lookup describes the unrefined input. On a cache miss its
         // expansion applies these relations to detached substitution cells;
         // a hit replays the completed relation without repeating this work.
-        if (purpose != .interface_summary_input) try self.relateEvidenceContracts(schema, subst, out);
+        contract_out.* = try self.builder.evidence_arena.allocator().dupe(SpecEvidence, out);
+        if (purpose != .interface_summary_input) try self.relateEvidenceContracts(schema, subst, contract_out.*);
         for (schema.params, out) |param, *entry| {
             // Structural entries already carry the checked callable contracts
             // materialized above; only targets need receiver-based selection.

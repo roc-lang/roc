@@ -1079,6 +1079,12 @@ pub const Store = struct {
         /// label also occurs further along its extension chain denotes that
         /// extension once the repeated occurrences are related.
         row_union_normalization,
+        /// Mechanism, design.md "Deferred requirement callables": a use's
+        /// placeholder for a requirement callable its instantiation deferred
+        /// redirects to the callable's copy, which that instantiation would
+        /// have written in its place. The placeholder is related to nothing
+        /// before it is linked.
+        deferred_requirement_callable,
     };
 
     /// Set a type variable to redirect to the provided variables.

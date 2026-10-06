@@ -289,7 +289,8 @@ pub const Constants = struct {
     ///      of a boolean warning flag.
     /// 132: Scheme-use records of replayed uses name their source's
     ///      substitution.
-    pub const CACHE_VERSION = 132;
+    /// 133: Type descriptor flags mark deferred requirement callables.
+    pub const CACHE_VERSION = 133;
 };
 
 /// Configuration for the Roc cache system.

@@ -136,7 +136,11 @@ pub const DescriptorFlags = packed struct(u8) {
     /// describe the type the program wrote rather than the default owner.
     /// See design.md's "Diagnostics About Defaulted Types" section.
     default_decided: bool = false,
-    _unused: u1 = 0,
+    /// A placeholder for a requirement callable that a use's instantiation
+    /// deferred copying (design.md "Whole-use replay"). It stands only in
+    /// requirement records; the checker links it to the callable's copy
+    /// before anything reads it, and reading it unlinked is a compiler bug.
+    deferred_callable: bool = false,
 };
 
 /// A type descriptor
