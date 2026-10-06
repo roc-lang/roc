@@ -6408,6 +6408,9 @@ const Builder = struct {
                 if (view.checked_types.payload(expr.ty) != .err) {
                     try self.recordWorkerBodyType(worker, try self.analyzeType(view, expr.ty));
                 }
+                const earlier = try divergentEarlierOperands(view, self.allocator, expr_id, operand);
+                defer self.allocator.free(earlier);
+                for (earlier) |earlier_operand| try actions.append(self.allocator, exprAction(view, earlier_operand));
                 return try actions.append(self.allocator, exprAction(view, operand));
             },
         }
@@ -21821,6 +21824,66 @@ pub fn divergentStep(view: anytype, expr_id: checked.CheckedExprId) DivergentSte
         .hosted_lambda,
         => boxyPlanInvariant("non-divergent checked expression form was marked divergent"),
     };
+}
+
+/// The operands a divergent expression evaluates before `divergent`, the
+/// operand `divergentStep` selected, in evaluation order: every earlier
+/// operand runs, for its effects, before the expression diverges. Monotype
+/// evaluates the same operands in the same order. Owned by the caller.
+pub fn divergentEarlierOperands(
+    view: anytype,
+    allocator: Allocator,
+    expr_id: checked.CheckedExprId,
+    divergent: checked.CheckedExprId,
+) Allocator.Error![]checked.CheckedExprId {
+    const bodies = view.checked_bodies;
+    var operands = std.ArrayList(checked.CheckedExprId).empty;
+    defer operands.deinit(allocator);
+    const Append = struct {
+        fn interpolation(list: *std.ArrayList(checked.CheckedExprId), alloc: Allocator, value: checked.CheckedInterpolation) Allocator.Error!void {
+            try list.append(alloc, value.segments[0]);
+            for (value.values, value.segments[1..]) |part, segment| {
+                try list.append(alloc, part);
+                try list.append(alloc, segment);
+            }
+        }
+        fn dispatch(v: anytype, list: *std.ArrayList(checked.CheckedExprId), alloc: Allocator, maybe_plan: ?static_dispatch.StaticDispatchPlanId) Allocator.Error!void {
+            const plan_id = maybe_plan orelse return;
+            const plan = v.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            for (plan.argsSlice(v.static_dispatch_plans)) |operand| switch (operand) {
+                .checked_expr => |expr| try list.append(alloc, expr),
+                .generated_interpolation_segments => |expr| switch (v.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| try interpolation(list, alloc, value),
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyPlanInvariant("dispatch interpolation segments referenced a non-interpolation expression"),
+                },
+                .generated_numeral, .generated_quote => {},
+            };
+        }
+    };
+    switch (bodies.expr(expr_id).data) {
+        .str, .list, .tuple => |items| try operands.appendSlice(allocator, items),
+        .call => |call| {
+            try operands.append(allocator, call.func);
+            try operands.appendSlice(allocator, call.args);
+        },
+        .record => |record| {
+            if (record.ext) |ext| try operands.append(allocator, ext);
+            for (record.fields) |field| try operands.append(allocator, field.value);
+        },
+        .tag => |tag| try operands.appendSlice(allocator, tag.args),
+        .binop => |binop| try operands.appendSlice(allocator, &.{ binop.lhs, binop.rhs }),
+        .structural_eq => |eq| try operands.appendSlice(allocator, &.{ eq.lhs, eq.rhs }),
+        .structural_hash => |hash| try operands.appendSlice(allocator, &.{ hash.value, hash.hasher }),
+        .run_low_level => |low_level| try operands.appendSlice(allocator, low_level.args),
+        .interpolation => |interpolation| try Append.interpolation(&operands, allocator, interpolation),
+        .dispatch_call, .method_eq, .type_dispatch_call => |plan| try Append.dispatch(view, &operands, allocator, plan),
+        .numeral => |numeral| try Append.dispatch(view, &operands, allocator, numeral.plan),
+        .str_from_quote => |quote| try Append.dispatch(view, &operands, allocator, quote.plan),
+        // A single-operand form evaluates nothing before its operand.
+        .pending, .str_segment, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .empty_list, .match_, .if_, .empty_record, .block, .nominal, .zero_argument_tag, .closure, .lambda, .unary_minus, .unary_not, .field_access, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda => {},
+    }
+    const len = std.mem.findScalar(checked.CheckedExprId, operands.items, divergent) orelse 0;
+    return try allocator.dupe(checked.CheckedExprId, operands.items[0..len]);
 }
 
 fn divergentDispatchStep(view: anytype, maybe_plan: ?static_dispatch.StaticDispatchPlanId) DivergentStep {

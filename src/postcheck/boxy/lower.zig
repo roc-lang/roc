@@ -18129,7 +18129,7 @@ const ProcBodyBuilder = struct {
 
         switch (Plan.divergentStep(self.module, expr_id)) {
             .normal => {},
-            .operand => |operand| return try self.beginDivergentOperand(target, operand),
+            .operand => |operand| return try self.beginDivergentOperand(target, expr_id, operand),
         }
 
         return switch (expr.data) {
@@ -18247,11 +18247,14 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    /// Lower the operand that makes its enclosing expression diverge. Nothing
-    /// after it runs, so its value has no continuation.
+    /// Lower the operands of a divergent expression up to the one that makes
+    /// it diverge: each earlier operand runs for its effects into a discarded
+    /// local, then the divergent one. Nothing after it runs, so its value has
+    /// no continuation.
     fn beginDivergentOperand(
         self: *ProcBodyBuilder,
         enclosing_target: LIR.LocalId,
+        enclosing: checked.CheckedExprId,
         operand: checked.CheckedExprId,
     ) Allocator.Error!ExprStep {
         const unreachable_continuation = try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
@@ -18271,7 +18274,21 @@ const ProcBodyBuilder = struct {
                     })),
             },
         };
-        return .{ .tail = .{ .expr = .{ .target = operand_target, .expr_id = operand, .next = unreachable_continuation } } };
+        const earlier = try Plan.divergentEarlierOperands(self.module, self.parent.allocator, enclosing, operand);
+        defer self.parent.allocator.free(earlier);
+        if (earlier.len == 0) return .{ .tail = .{ .expr = .{ .target = operand_target, .expr_id = operand, .next = unreachable_continuation } } };
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, earlier.len + 1);
+        chain_items[0] = .{ .lower = .{ .expr = .{ .target = operand_target, .expr_id = operand, .next = undefined } } };
+        for (earlier, 0..) |earlier_operand, index| {
+            const expr = self.module.checked_bodies.expr(earlier_operand);
+            const discarded = if (expr.data == .runtime_error or self.module.checked_types.payload(expr.ty) == .err)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[earlier.len - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = earlier_operand, .next = undefined } } };
+        }
+        return exprChain(chain_items, unreachable_continuation);
     }
 
     /// Lower `expr_id` into `source`, then `boundary`, which converts
@@ -21485,7 +21502,8 @@ const ProcBodyBuilder = struct {
         if (try self.lowerPlannedLiteralInto(target, expr_id, checked_ty, next)) |body| return exprDone(body);
 
         switch (self.staticDispatchPlan(quote.plan).resolution) {
-            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
+            .evidence_dependent => return try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
+            .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(self.staticDispatchPlan(quote.plan)),
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }

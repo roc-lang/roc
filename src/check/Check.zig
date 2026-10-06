@@ -11937,10 +11937,8 @@ fn withdrawSupersededLiteralDefaultWarnings(self: *Self) Allocator.Error!void {
     const items = self.problems.problems.items;
     var kept: usize = 0;
     for (items) |item| {
-        const superseded = switch (item) {
-            .literal_defaulted => |warning| undetermined_roots.contains(self.types.resolveVar(warning.literal_var).var_),
-            else => false,
-        };
+        const superseded = item == .literal_defaulted and
+            undetermined_roots.contains(self.types.resolveVar(item.literal_defaulted.literal_var).var_);
         if (superseded) continue;
         items[kept] = item;
         kept += 1;
@@ -32475,10 +32473,9 @@ fn valueIsErroneous(self: *Self, value: CIR.Expr.Idx) Allocator.Error!bool {
     while (true) {
         guard.tick();
         if (self.erroneous_value_exprs.contains(current)) break;
-        const pattern = switch (self.cir.store.getExpr(current)) {
-            .e_lookup_local => |lookup| lookup.pattern_idx,
-            else => return false,
-        };
+        const expr = self.cir.store.getExpr(current);
+        if (expr != .e_lookup_local) return false;
+        const pattern = expr.e_lookup_local.pattern_idx;
         if (self.erroneous_value_patterns.contains(pattern)) break;
         const source = self.binder_source_exprs.get(pattern) orelse return false;
         try self.binder_source_path.append(self.gpa, pattern);
