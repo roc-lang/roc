@@ -51,4 +51,5 @@ test {
     std.testing.refAllDecls(@import("parity_test.zig"));
     std.testing.refAllDecls(@import("common_misspellings.zig"));
     std.testing.refAllDecls(@import("report_sexpr.zig"));
+    std.testing.refAllDecls(@import("severity.zig"));
 }

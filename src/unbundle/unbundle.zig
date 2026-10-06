@@ -6,6 +6,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const private_dir_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o700) else .default_dir;
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 const base58 = @import("base58");
 const zstd = std.compress.zstd;
 const format = @import("format.zig");
@@ -40,12 +42,6 @@ pub const UnbundleError = error{
     ReadFailed,
     EndOfStream,
 } || std.mem.Allocator.Error;
-
-/// Context for error reporting during unbundle operations
-pub const ErrorContext = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
 
 /// Specific reason why a path validation failed
 pub const PathValidationReason = union(enum) {
@@ -138,15 +134,84 @@ pub const DirExtractWriter = struct {
         .makeDir = makeDir,
     };
 
+    fn isWithinRoot(root: []const u8, resolved: []const u8) bool {
+        if (pathEqual(root, resolved)) return true;
+        if (resolved.len <= root.len) return false;
+        if (!pathEqual(root, resolved[0..root.len])) return false;
+        return std.fs.path.isSep(root[root.len - 1]) or std.fs.path.isSep(resolved[root.len]);
+    }
+
+    fn pathEqual(a: []const u8, b: []const u8) bool {
+        return if (builtin.os.tag == .windows)
+            std.ascii.eqlIgnoreCase(a, b)
+        else
+            std.mem.eql(u8, a, b);
+    }
+
+    /// Walk one component at a time from the extraction handle. Opening each
+    /// component without following links prevents an existing directory link
+    /// from redirecting a later create outside the extraction root.
+    fn openContainedDir(self: *DirExtractWriter, path: []const u8) (std.Io.Dir.RealPathError || std.Io.Dir.OpenError || std.Io.Dir.CreateDirPathOpenError || std.Io.Dir.StatError || error{ AccessDenied, NotDir })!std.Io.Dir {
+        var root_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const root_len = try self.dir.realPath(self.io, &root_buf);
+        const root = root_buf[0..root_len];
+
+        var current = try self.dir.openDir(self.io, ".", .{ .follow_symlinks = false });
+        errdefer current.close(self.io);
+
+        var iter = std.mem.tokenizeAny(u8, path, if (builtin.os.tag == .windows) "/\\" else "/");
+        while (iter.next()) |component| {
+            const next = try current.createDirPathOpen(self.io, component, .{
+                .open_options = .{ .follow_symlinks = false },
+                .permissions = private_dir_permissions,
+            });
+            current.close(self.io);
+            current = next;
+
+            var resolved_buf: [MAX_PATH_BYTES]u8 = undefined;
+            const resolved_len = try current.realPath(self.io, &resolved_buf);
+            if (!isWithinRoot(root, resolved_buf[0..resolved_len])) return error.AccessDenied;
+            const stat = try current.stat(self.io);
+            if (stat.kind != .directory) return error.NotDir;
+        }
+        return current;
+    }
+
     fn createFile(ptr: *anyopaque, path: []const u8) ExtractWriter.CreateFileError!*std.Io.Writer {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
 
-        // Ensure parent directories exist
-        if (std.fs.path.dirname(path)) |parent| {
-            self.dir.createDirPath(self.io, parent) catch return error.FileCreateFailed;
-        }
+        // Keep the filesystem writer safe even if a caller bypasses the tar
+        // entry validator.
+        if (pathHasUnbundleErr(path) != null) return error.FileCreateFailed;
 
-        const file = self.dir.createFile(self.io, path, .{}) catch return error.FileCreateFailed;
+        const parent_path = std.fs.path.dirname(path) orelse "";
+        const parent = self.openContainedDir(parent_path) catch return error.FileCreateFailed;
+        defer parent.close(self.io);
+
+        const name = std.fs.path.basename(path);
+        const file = parent.openFile(self.io, name, .{
+            .mode = .write_only,
+            .follow_symlinks = false,
+            .resolve_beneath = true,
+        }) catch |err| switch (err) {
+            error.FileNotFound => parent.createFile(self.io, name, .{
+                .exclusive = true,
+                .truncate = false,
+                .resolve_beneath = true,
+                .permissions = private_file_permissions,
+            }) catch return error.FileCreateFailed,
+            else => return error.FileCreateFailed,
+        };
+        errdefer file.close(self.io);
+
+        var root_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const root_len = self.dir.realPath(self.io, &root_buf) catch return error.FileCreateFailed;
+        var file_buf: [MAX_PATH_BYTES]u8 = undefined;
+        const file_len = file.realPath(self.io, &file_buf) catch return error.FileCreateFailed;
+        if (!isWithinRoot(root_buf[0..root_len], file_buf[0..file_len])) return error.FileCreateFailed;
+        const stat = file.stat(self.io) catch return error.FileCreateFailed;
+        if (stat.kind != .file) return error.FileCreateFailed;
+        file.setLength(self.io, 0) catch return error.FileCreateFailed;
 
         // Append entry first to get stable memory in the array list.
         // We must initialize the writer AFTER appending, because the writer
@@ -156,10 +221,7 @@ pub const DirExtractWriter = struct {
             .file = file,
             .buffer = undefined,
             .writer = undefined,
-        }) catch {
-            file.close(self.io);
-            return error.OutOfMemory;
-        };
+        }) catch return error.OutOfMemory;
 
         // Now initialize the writer with the buffer in the array (stable memory)
         const entry = &self.open_files.items[self.open_files.items.len - 1];
@@ -182,7 +244,9 @@ pub const DirExtractWriter = struct {
 
     fn makeDir(ptr: *anyopaque, path: []const u8) ExtractWriter.MakeDirError!void {
         const self: *DirExtractWriter = @ptrCast(@alignCast(ptr));
-        self.dir.createDirPath(self.io, path) catch return error.DirectoryCreateFailed;
+        if (pathHasUnbundleErr(path) != null) return error.DirectoryCreateFailed;
+        const dir = self.openContainedDir(path) catch return error.DirectoryCreateFailed;
+        dir.close(self.io);
     }
 };
 
@@ -245,16 +309,22 @@ pub const BufferExtractWriter = struct {
         const self: *BufferExtractWriter = @ptrCast(@alignCast(ptr));
         if (self.current_file_writer) |*writer| {
             if (self.current_file_path) |path| {
-                // Convert writer contents to Managed ArrayList
-                const unmanaged_list = writer.toArrayList();
-                var managed_list = std.array_list.Managed(u8).fromOwnedSlice(self.allocator, unmanaged_list.items);
+                var unmanaged = writer.toArrayList();
+                var contents = unmanaged.toManaged(self.allocator);
                 self.current_file_path = null;
                 self.current_file_writer = null;
-                self.files.put(path, managed_list) catch |err| {
-                    managed_list.deinit();
+                const slot = self.files.getOrPut(path) catch |err| {
+                    contents.deinit();
                     self.allocator.free(path);
                     return err;
                 };
+                if (slot.found_existing) {
+                    // A later entry for a path replaces the earlier contents;
+                    // the map keeps the key it already owns.
+                    self.allocator.free(path);
+                    slot.value_ptr.deinit();
+                }
+                slot.value_ptr.* = contents;
                 return;
             } else {
                 writer.deinit();
@@ -275,11 +345,15 @@ pub const BufferExtractWriter = struct {
     }
 };
 
-/// Result of path validation when an error is found
+/// An archive entry path the path rules refuse, with the reason.
 pub const PathValidationError = struct {
     path: []const u8,
     reason: PathValidationReason,
 };
+
+/// Where `bundle` and `unbundle` report the path that failed validation when
+/// they return `error.InvalidPath`.
+pub const ErrorContext = PathValidationError;
 
 /// File and directory base names Windows reserves for devices; creating them
 /// misbehaves on Windows, so portable name validation rejects them everywhere.
@@ -292,108 +366,81 @@ pub const WINDOWS_RESERVED_NAMES = [_][]const u8{
     "LPT8", "LPT9",
 };
 
-/// Check if a path has security or compatibility issues for unbundling
+/// The archive path rules: returns why `path` is unsafe or unportable to
+/// extract, or null when it is acceptable. `bundle` applies this same function
+/// to every path it writes, so it never produces an archive that extraction
+/// refuses.
 pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
-    if (path.len == 0) {
-        return PathValidationError{
-            .path = path,
-            .reason = .empty_path,
-        };
-    }
+    const reason = pathInvalidReason(path) orelse return null;
+    return .{ .path = path, .reason = reason };
+}
 
-    if (path.len > 255) {
-        return PathValidationError{
-            .path = path,
-            .reason = .path_too_long,
-        };
-    }
+fn pathInvalidReason(path: []const u8) ?PathValidationReason {
+    if (path.len == 0) return .empty_path;
+    if (path.len > format.TAR_PATH_MAX_LENGTH) return .path_too_long;
+    if (path[0] == '/' or path[0] == '\\') return .absolute_path;
+    if (path.len >= 2 and path[1] == ':') return .absolute_path;
 
-    if (path[0] == '/' or path[0] == '\\') {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
-
-    if (path.len >= 2 and path[1] == ':') {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
-
-    var iter = std.mem.tokenizeScalar(u8, path, '/');
+    // A backslash is accepted only where it is a path separator (see the
+    // character rules below), so components end at either separator: `..` and
+    // reserved names cannot hide behind a backslash.
+    var iter = std.mem.tokenizeAny(u8, path, "/\\");
     while (iter.next()) |component| {
-        if (std.mem.eql(u8, component, "..")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .path_traversal,
-            };
-        }
+        if (std.mem.eql(u8, component, "..")) return .path_traversal;
+        if (std.mem.eql(u8, component, ".")) return .current_directory_reference;
 
-        if (std.mem.eql(u8, component, ".")) {
-            return PathValidationError{
-                .path = path,
-                .reason = .current_directory_reference,
-            };
-        }
-
-        // The Windows reserved-name check is case-insensitive on the base name
-        // (the part before the first '.'). Compare without allocating so this
-        // validator cannot fail on OOM.
-        const base_name = if (std.mem.findScalar(u8, component, '.')) |dot_pos|
-            component[0..dot_pos]
-        else
-            component;
-
+        // Windows reserves a device name whatever its case and extension, so
+        // the comparison is on the part before the first '.'.
+        const base_name = component[0 .. std.mem.findScalar(u8, component, '.') orelse component.len];
         for (WINDOWS_RESERVED_NAMES) |reserved| {
-            if (std.ascii.eqlIgnoreCase(base_name, reserved)) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .windows_reserved_name,
-                };
-            }
+            if (std.ascii.eqlIgnoreCase(base_name, reserved)) return .windows_reserved_name;
         }
 
-        if (component.len > 0) {
-            if (component[component.len - 1] == ' ') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_space,
-                };
-            }
-            if (component[component.len - 1] == '.') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_period,
-                };
-            }
+        switch (component[component.len - 1]) {
+            ' ' => return .component_ends_with_space,
+            '.' => return .component_ends_with_period,
+            else => {},
         }
     }
 
     for (path) |char| {
         switch (char) {
-            0 => return PathValidationError{
-                .path = path,
-                .reason = .{ .windows_reserved_char = char },
-            },
-            '<', '>', ':', '"', '|', '?', '*' => return PathValidationError{
-                .path = path,
-                .reason = .{ .windows_reserved_char = char },
-            },
-            '\\' => {
-                if (builtin.os.tag != .windows) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .contained_backslash_on_unix,
-                    };
-                }
-            },
+            0, '<', '>', ':', '"', '|', '?', '*' => return .{ .windows_reserved_char = char },
+            '\\' => if (builtin.os.tag != .windows) return .contained_backslash_on_unix,
             else => {},
         }
     }
 
     return null;
+}
+
+fn linkTargetUnbundleErr(target: []const u8) ?PathValidationReason {
+    if (target.len > 0 and (target[0] == '/' or (builtin.os.tag == .windows and target[0] == '\\'))) {
+        return .absolute_path;
+    }
+    if (builtin.os.tag == .windows and target.len >= 2 and target[1] == ':') {
+        return .absolute_path;
+    }
+
+    var iter = std.mem.tokenizeAny(u8, target, if (builtin.os.tag == .windows) "/\\" else "/");
+    while (iter.next()) |component| {
+        if (std.mem.eql(u8, component, "..")) return .path_traversal;
+        if (std.mem.eql(u8, component, ".")) return .current_directory_reference;
+    }
+    return null;
+}
+
+test "symlink targets use native path separators" {
+    const testing = std.testing;
+    if (builtin.os.tag == .windows) {
+        try testing.expect(linkTargetUnbundleErr("a\\..\\x").? == .path_traversal);
+        try testing.expect(linkTargetUnbundleErr("a\\.\\x").? == .current_directory_reference);
+        try testing.expect(linkTargetUnbundleErr("\\outside").? == .absolute_path);
+        try testing.expect(linkTargetUnbundleErr("C:outside").? == .absolute_path);
+    } else {
+        try testing.expect(linkTargetUnbundleErr("a\\..\\x") == null);
+        try testing.expect(linkTargetUnbundleErr("a\\.\\x") == null);
+    }
 }
 
 /// A reader wrapper that hashes all data as it passes through
@@ -699,10 +746,7 @@ pub fn unbundleStream(
         const file_path = entry.name;
 
         if (pathHasUnbundleErr(file_path)) |validation_error| {
-            if (error_context) |ctx| {
-                ctx.path = validation_error.path;
-                ctx.reason = validation_error.reason;
-            }
+            if (error_context) |ctx| ctx.* = validation_error;
             return error.InvalidPath;
         }
 
@@ -730,31 +774,12 @@ pub fn unbundleStream(
             },
             .sym_link => {
                 const link_target = entry.link_name;
-
-                if (link_target.len > 0 and link_target[0] == '/') {
+                if (linkTargetUnbundleErr(link_target)) |reason| {
                     if (error_context) |ctx| {
                         ctx.path = file_path;
-                        ctx.reason = .absolute_path;
+                        ctx.reason = reason;
                     }
                     return error.InvalidPath;
-                }
-
-                var iter = std.mem.tokenizeScalar(u8, link_target, '/');
-                while (iter.next()) |component| {
-                    if (std.mem.eql(u8, component, "..")) {
-                        if (error_context) |ctx| {
-                            ctx.path = file_path;
-                            ctx.reason = .path_traversal;
-                        }
-                        return error.InvalidPath;
-                    }
-                    if (std.mem.eql(u8, component, ".")) {
-                        if (error_context) |ctx| {
-                            ctx.path = file_path;
-                            ctx.reason = .current_directory_reference;
-                        }
-                        return error.InvalidPath;
-                    }
                 }
 
                 // TODO: Add symlink support to ExtractWriter interface

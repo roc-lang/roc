@@ -5,41 +5,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
+const syntax = @import("../syntax.zig");
 
 /// Handler for `textDocument/documentSymbol` requests.
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "documentSymbol requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "documentSymbol params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "documentSymbol", maybe_params) orelse return;
+            const uri = document.uri;
 
             // Get the document text from the store (for source extraction)
             const doc = self.doc_store.get(uri);
@@ -49,44 +23,10 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Use the syntax checker to get the canonicalized module
-            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.BuiltinArtifactVersionMismatch,
-                error.Canceled,
-                error.CorruptArtifact,
-                error.CorruptBuiltinArtifact,
-                error.CorruptEmbeddedBuiltins,
-                error.DeviceBusy,
-                error.FileBusy,
-                error.FileNotFound,
-                error.FileSystem,
-                error.FileTooBig,
-                error.InputOutput,
-                error.IsDir,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.OperationUnsupported,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.StaleEmbeddedBuiltins,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.Unexpected,
-                error.UnrecognizedVolume,
-                error.WriteFailed,
-                => {
-                    try self.sendResponse(id, &[_]SymbolInformation{});
-                    return;
-                },
+            const symbols = self.syntax_checker.getDocumentSymbols(self.allocator, uri, source) catch |err| {
+                _ = try syntax.queryFailureName(err);
+                try self.sendResponse(id, &[_]SymbolInformation{});
+                return;
             };
             defer {
                 for (symbols) |*sym| {

@@ -14,7 +14,7 @@
 //! the application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
-//! mirrors `Check.checkDef`'s `generalizes_regardless` together with
+//! mirrors `Check.bindingRhsGeneralizes` together with
 //! `Check.collectHostBoundaryAnnotations`.
 //!
 //! The checker reads resolved names; the parse AST has only spellings. So every
@@ -223,10 +223,10 @@ pub const OpenRows = struct {
     }
 
     /// Whether the definition this annotation belongs to generalizes whatever
-    /// its annotation writes (`Check.checkDef`'s `generalizes_regardless`) and
+    /// its annotation writes (`Check.bindingRhsGeneralizes`) and
     /// is not a host boundary (`Check.collectHostBoundaryAnnotations`). A
-    /// value binding does not: on a value, `..` is the opt-in to a quantified
-    /// row.
+    /// value binding does not: on a weak value the checker rejects `..`
+    /// rather than reporting it redundant.
     fn annotationGeneralizesRegardless(self: *OpenRows, name_tok: Token.Idx, next: ?AST.Statement.Idx, scope: StatementScope) Allocator.Error!bool {
         const name = self.tokenName(name_tok);
         // A platform's provided definitions are host-boundary annotations.

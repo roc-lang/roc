@@ -178,6 +178,19 @@ pub const Env = struct {
     /// construction that omitted it, so absorbing a defaulted row into an empty
     /// one is only meaningful when such a construction owns the omission.
     construction_probe: ?ConstructionProbe = null,
+    /// Links a deferred requirement callable to its copy before the unifier
+    /// relates it (design.md "Whole-use replay").
+    deferred_callables: ?DeferredCallableHook = null,
+};
+
+/// Lets the unifier have the checker link a `deferred_callable`
+/// placeholder to the callable it stands for before relating it.
+pub const DeferredCallableHook = struct {
+    ctx: *anyopaque,
+    link: *const fn (ctx: *anyopaque, placeholder: Var) std.mem.Allocator.Error!void,
+    /// Links every deferred callable not yet linked, before an error report
+    /// snapshots types that may reach them.
+    link_all: *const fn (ctx: *anyopaque) std.mem.Allocator.Error!void,
 };
 
 /// Lets the unifier ask the checker whether a var belongs to a record
@@ -332,6 +345,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         opts.record_construction_var,
     );
     unifier.root_operands = .{ a, b };
+    unifier.deferred_callables = env.deferred_callables;
     unifier.scheduleRootPair(a, b, opts.root_relation, .propagate) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
     };
@@ -346,6 +360,7 @@ pub fn unify(env: *const Env, a: Var, b: Var, opts: Options) std.mem.Allocator.E
         // poison the top-level operands. The caller owns the mismatch.
         if (opts.on_mismatch == .write_no_report) return Result.mismatch;
 
+        if (env.deferred_callables) |hook| try hook.link_all(hook.ctx);
         const expected_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, a);
         const actual_snapshot = try env.snapshots.snapshotVarForError(env.types, env.type_writer, b);
         const evidence = try snapshotMismatchEvidence(env);
@@ -381,6 +396,7 @@ fn snapshotRawRecordEvidence(env: *const Env, raw: RawTypePair) std.mem.Allocato
 /// vars point at the already-instantiated structures the unifier compared, so
 /// reporting never has to reopen a nominal declaration.
 pub fn snapshotMismatchEvidence(env: *const Env) std.mem.Allocator.Error!TypeMismatchEvidence {
+    if (env.deferred_callables) |hook| try hook.link_all(hook.ctx);
     const raw = env.unify_scratch.mismatch_evidence;
     return if (raw.record) |record|
         try snapshotRawRecordEvidence(env, record)
@@ -429,6 +445,7 @@ const Unifier = struct {
     enclosing_records: ?[2]Var,
     construction_probe: ?ConstructionProbe,
     record_construction_var: ?Var,
+    deferred_callables: ?DeferredCallableHook = null,
     /// The operands this unification started from. They are the outermost
     /// candidates for owning an absorbed omission, and keep the absorption gate
     /// in step with how the checker later attributes it.
@@ -769,6 +786,13 @@ const Unifier = struct {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => return,
             .not_equiv => |vars| {
+                // A deferred requirement callable is linked to its copy
+                // before anything relates it.
+                if (vars.a.desc.flags.deferred_callable or vars.b.desc.flags.deferred_callable) {
+                    try self.linkDeferredCallable(vars.a);
+                    try self.linkDeferredCallable(vars.b);
+                    return self.processGuardedPair(a_var, b_var);
+                }
                 if (try self.isPairVisited(a_var, b_var)) {
                     return;
                 }
@@ -846,7 +870,7 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return false,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// The first tag a row carries anywhere along its extension chain.
@@ -866,7 +890,7 @@ const Unifier = struct {
                 .flex, .rigid, .field_presence, .err => return null,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     /// A bounded extension may close or stay open, never gain a tag. Joining
@@ -896,7 +920,7 @@ const Unifier = struct {
                 .rigid, .field_presence, .err => return null,
             }
         }
-        std.debug.panic("checker invariant violated: a tag row's extension chain is cyclic", .{});
+        base.invariant("checker invariant violated: a tag row's extension chain is cyclic", .{});
     }
 
     fn refuseBoundedRowTag(self: *Self, tag: Ident.Idx) Error!void {
@@ -1561,7 +1585,7 @@ const Unifier = struct {
                 // Invariant: every keyed nominal application in a store can
                 // resolve its declaration in that store.
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
+                    base.invariant("unify invariant violated: nominal application has a source declaration but no declaration table entry", .{});
                 }
                 unreachable;
             }
@@ -2031,7 +2055,7 @@ const Unifier = struct {
 
         for (self.scratch.in_both_fields.sliceRange(post.shared_fields_range)) |shared| {
             const next_presence = shared.next_presence orelse
-                std.debug.panic("type unifier invariant violated: shared record field had no merged presence", .{});
+                base.invariant("type unifier invariant violated: shared record field had no merged presence", .{});
 
             _ = try self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
@@ -2874,17 +2898,9 @@ const Unifier = struct {
     ) std.mem.Allocator.Error!PartitionedRecordFields {
         // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, self, struct {
-            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(RecordField, a_fields, self.ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, self, struct {
-            fn less(unifier: *const Self, a: RecordField, b: RecordField) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(RecordField, b_fields, self.ident_store, comptime RecordField.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
@@ -2897,7 +2913,7 @@ const Unifier = struct {
         while (a_i < a_fields.len and b_i < b_fields.len) {
             const a_next = a_fields[a_i];
             const b_next = b_fields[b_i];
-            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
+            const ord = RecordField.orderByName(self.ident_store, a_next, b_next);
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
@@ -3439,10 +3455,7 @@ const Unifier = struct {
         while (true) {
             guard.tick();
             switch (self.types_store.resolveVar(ext_var).desc.content) {
-                .flex => {
-                    return .{ .ext = ext_var, .range = range };
-                },
-                .rigid => {
+                .flex, .rigid => {
                     return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |alias| {
@@ -3525,7 +3538,7 @@ const Unifier = struct {
         while (a_i < a_tags.len and b_i < b_tags.len) {
             const a_next = a_tags[a_i];
             const b_next = b_tags[b_i];
-            const ord = std.mem.order(u8, self.getTypeIdentText(a_next.name), self.getTypeIdentText(b_next.name));
+            const ord = Tag.orderByName(self.ident_store, a_next, b_next);
             switch (ord) {
                 .eq => {
                     _ = try scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
@@ -3572,17 +3585,13 @@ const Unifier = struct {
         var ordered = true;
         var index: usize = 1;
         while (index < tags.len) : (index += 1) {
-            if (std.mem.order(u8, self.getTypeIdentText(tags[index - 1].name), self.getTypeIdentText(tags[index].name)) == .gt) {
+            if (Tag.orderByName(self.ident_store, tags[index - 1], tags[index]) == .gt) {
                 ordered = false;
                 break;
             }
         }
         if (ordered) return;
-        std.mem.sort(Tag, tags, self, struct {
-            fn less(unifier: *const Self, a: Tag, b: Tag) bool {
-                return std.mem.order(u8, unifier.getTypeIdentText(a.name), unifier.getTypeIdentText(b.name)) == .lt;
-            }
-        }.less);
+        std.mem.sort(Tag, tags, self.ident_store, comptime Tag.sortByNameAsc);
     }
 
     /// Given a list of shared tags & a list of extended tags, unify the shared tags.
@@ -3711,6 +3720,12 @@ const Unifier = struct {
 
         // Unify the constraint function types
         try self.unifyGuarded(a_constraint.fn_var, b_constraint.fn_var);
+    }
+
+    fn linkDeferredCallable(self: *Self, resolved: ResolvedVarDesc) std.mem.Allocator.Error!void {
+        if (!resolved.desc.flags.deferred_callable) return;
+        const hook = self.deferred_callables orelse base.invariant("a deferred requirement callable reached a unification with no checker to link it", .{});
+        try hook.link(hook.ctx, resolved.var_);
     }
 
     const PartitionedStaticDispatchConstraints = struct {
@@ -4111,6 +4126,9 @@ pub const DeferredConstraintCheck = struct {
     /// leave the obligation waiting (Invariant D). The checker stamps this
     /// where an obligation enters the deferred queue.
     owner_group_index: ?u32 = null,
+    /// The creating scheme, or null outside a scheme. Component derivations
+    /// inherit this identity instead of borrowing the draining frame's scheme.
+    owner_scheme_root: ?Var = null,
     /// For an obligation waiting on its target, the checker's waiting-context
     /// epoch when it was last re-deferred; while the epoch is unchanged the
     /// obligation would be re-deferred exactly as before.
@@ -4118,6 +4136,9 @@ pub const DeferredConstraintCheck = struct {
     /// Set on the copy a drain retains because the obligation still waits
     /// exactly as on its last pass.
     retained_unchanged: bool = false,
+    /// The checker relation that queued this obligation; the problems its
+    /// resolution records belong to that relation (`problem.RelationOwner`).
+    relation_owner: problem_mod.RelationOwner = .none,
 
     pub const SafeList = MkSafeList(@This());
 };

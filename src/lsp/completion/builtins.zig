@@ -1,42 +1,33 @@
 //! Roc builtin types for the completion system.
 //!
-//! This module provides constants and utilities for working with
-//! Roc's builtin types (Str, List, Bool, numeric types, etc.).
+//! The names user code can write without importing anything: the builtin
+//! types the compiler auto-imports, and the builtin namespaces that hold them.
 
 const std = @import("std");
+const CIR = @import("can").CIR;
 
-/// Known builtin type names that are part of the Builtin module.
-/// These are the core types provided by the Roc language runtime.
-pub const BUILTIN_TYPES = [_][]const u8{
-    // Collection types
-    "Str",
-    "List",
-    "Dict",
-    "Set",
-    "Box",
-    "Crypto",
-    // Boolean and control flow
-    "Bool",
-    "Try",
-    // Unsigned integers
-    "U8",
-    "U16",
-    "U32",
-    "U64",
-    "U128",
-    // Signed integers
-    "I8",
-    "I16",
-    "I32",
-    "I64",
-    "I128",
-    // Floating point
-    "F32",
-    "F64",
-    // Fixed-point decimal
-    "Dec",
-    // Generic numeric
-    "Num",
+/// The names of the builtin types and namespaces every module has in scope,
+/// read from the compiler's builtin type registry: each auto-imported type's
+/// name, then each namespace declared directly inside `Builtin` (such as
+/// `Num`).
+pub const BUILTIN_TYPES = blk: {
+    const module_prefix = "Builtin.";
+    var names: [CIR.builtin_type_specs.len + CIR.builtin_type_container_names.len][]const u8 = undefined;
+    var count: usize = 0;
+    for (CIR.builtin_type_specs) |spec| {
+        if (!spec.auto_import) continue;
+        names[count] = spec.display_name;
+        count += 1;
+    }
+    for (CIR.builtin_type_container_names) |container| {
+        if (!std.mem.startsWith(u8, container, module_prefix)) continue;
+        const name = container[module_prefix.len..];
+        if (std.mem.findScalar(u8, name, '.') != null) continue;
+        names[count] = name;
+        count += 1;
+    }
+    const roster = names[0..count].*;
+    break :blk roster;
 };
 
 /// Compile-time hash map for O(1) builtin type lookups.
@@ -108,7 +99,14 @@ test "isBuiltinType rejects non-builtin types" {
     try std.testing.expect(!isBuiltinType("u8")); // Case sensitive (lowercase)
 }
 
-test "BUILTIN_TYPES has expected count" {
-    // 6 collection/namespace types + 2 bool/control + 5 unsigned + 5 signed + 2 float + 2 decimal/num = 22
-    try std.testing.expectEqual(@as(usize, 22), BUILTIN_TYPES.len);
+test "every auto-imported builtin type is a completion namespace" {
+    inline for (CIR.builtin_type_specs) |spec| {
+        if (spec.auto_import) try std.testing.expect(isBuiltinType(spec.display_name));
+    }
+}
+
+test "builtin types the compiler does not auto-import are not completion namespaces" {
+    try std.testing.expect(!isBuiltinType("JsonState"));
+    try std.testing.expect(!isBuiltinType("Builtin"));
+    try std.testing.expect(!isBuiltinType("SHA256"));
 }

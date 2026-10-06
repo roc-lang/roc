@@ -1209,7 +1209,7 @@ fn checkedU32(value: usize, comptime message: []const u8) u32 {
 
 fn writerInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("ConstStore writer invariant violated: {s}", .{message});
+        base.invariant("ConstStore writer invariant violated: {s}", .{message});
     }
     unreachable;
 }

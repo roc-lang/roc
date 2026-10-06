@@ -193,7 +193,7 @@ const CheckOccurs = struct {
                                                     try self.pushVarToProcess(decl.backing, Edge.nominal);
                                                 } else if (nominal_type.sourceDecl().present) {
                                                     if (builtin.mode == .Debug) {
-                                                        std.debug.panic(
+                                                        base.invariant(
                                                             "occurs invariant violated: nominal application with source declaration has no declaration table entry",
                                                             .{},
                                                         );

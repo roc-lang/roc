@@ -57,8 +57,7 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
 }
 
 /// Binary Dec arithmetic. `dec_mul` crashes on
-/// overflow like the interpreter's Dec multiply; the saturating
-/// `dec_mul_saturated` wrapper is not the lowering of any current op.
+/// overflow like the interpreter's Dec multiply.
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
         .{ LowLevel.dec_mul, BuiltinFn.dec_mul },

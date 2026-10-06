@@ -141,11 +141,6 @@ pub const CaptureId = enum(u32) {
         return (@intFromEnum(self) & generated_bit) == 0;
     }
 
-    /// Whether this id names a compiler-synthesized capturable local.
-    pub fn isGenerated(self: CaptureId) bool {
-        return !self.isCanonical();
-    }
-
     /// Whether this id was minted by Monotype publication, closure lifting,
     /// or a later post-check transform.
     pub fn isLiftGenerated(self: CaptureId) bool {
@@ -163,13 +158,6 @@ pub const CaptureId = enum(u32) {
     pub fn binder(self: CaptureId) PatternBinderId {
         std.debug.assert(self.isCanonical());
         return @enumFromInt(@intFromEnum(self));
-    }
-
-    /// The opaque low-31-bit index of a generated id, unique within its
-    /// generated sub-range. Asserts the id is generated.
-    pub fn generatedIndex(self: CaptureId) u32 {
-        std.debug.assert(self.isGenerated());
-        return @intFromEnum(self) & ~generated_bit;
     }
 
     /// Direct-column index for this namespaced identity.

@@ -190,7 +190,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
             if (stmt == .assign_packed_erased_fn) {
                 if (stmt.assign_packed_erased_fn.reuse == reuse_arg) matching_repack_count += 1;
             }
-            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
     }
 
@@ -237,7 +237,7 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
             if (stmt == .assign_packed_erased_fn and stmt.assign_packed_erased_fn.reuse == reuse_arg) {
                 matching_repack_count += 1;
             }
-            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
     }
 

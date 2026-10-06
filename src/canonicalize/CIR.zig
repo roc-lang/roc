@@ -150,17 +150,6 @@ pub const BuiltinIndices = struct {
     // Tag idents for Try type
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
-
-    /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
-    /// This allows direct ident comparison instead of string comparison for type identification.
-    pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        inline for (builtin_type_specs) |spec| {
-            if (spec.num_kind) |num_kind| {
-                if (ident.eql(@field(self, spec.ident_field))) return num_kind;
-            }
-        }
-        return null;
-    }
 };
 
 /// How the builtin compiler should locate a type declaration in Builtin.roc.
@@ -307,6 +296,15 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.BLAKE3.Digest", .type_field = "crypto_blake3_digest_type", .ident_field = "crypto_blake3_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Digest" }, .auto_import = false },
     .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.BLAKE3.Hasher", .type_field = "crypto_blake3_hasher_type", .ident_field = "crypto_blake3_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Hasher" }, .auto_import = false },
 };
+
+/// The registry entry for the builtin type whose `BuiltinIndices` statement
+/// field is `type_field`. Its `display_name` and `qualified_name` are the only
+/// spellings of the type's name the compiler interns.
+pub fn builtinTypeSpec(comptime type_field: []const u8) BuiltinTypeSpec {
+    return comptime for (builtin_type_specs) |spec| {
+        if (std.mem.eql(u8, spec.type_field, type_field)) break spec;
+    } else @compileError("no builtin type spec has the type field '" ++ type_field ++ "'");
+}
 
 /// Nominal declarations that only group nested builtin types rather than representing builtin types.
 pub const builtin_type_container_names = [_][]const u8{
@@ -477,8 +475,7 @@ pub const TypeHeader = struct {
     args: TypeAnno.Span,
 
     pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("ty-header");
+        const begin = try tree.beginNamedNode("ty-header");
 
         // Get the region for this TypeHeader
         const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -491,8 +488,7 @@ pub const TypeHeader = struct {
         const attrs = tree.beginNode();
 
         if (self.args.span.len > 0) {
-            const args_begin = tree.beginNode();
-            try tree.pushStaticAtom("ty-args");
+            const args_begin = try tree.beginNamedNode("ty-args");
             const args_attrs = tree.beginNode();
             for (cir.store.sliceTypeAnnos(self.args)) |anno_idx| {
                 try cir.store.getTypeAnno(anno_idx).pushToSExprTree(cir, tree, anno_idx);
@@ -548,8 +544,7 @@ pub const WhereClause = union(enum) {
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) Allocator.Error!void {
         switch (self.*) {
             .w_method => |method| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
+                const begin = try tree.beginNamedNode("method");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -566,8 +561,7 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_alias => |alias| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("alias");
+                const begin = try tree.beginNamedNode("alias");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
@@ -580,16 +574,14 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed");
+                const begin = try tree.beginNamedNode("malformed");
 
                 // Get the region for this WhereClause
                 const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -632,8 +624,7 @@ pub const Annotation = struct {
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
 
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("annotation");
+        const begin = try tree.beginNamedNode("annotation");
         const attrs = tree.beginNode();
 
         // Get the region for this Annotation
@@ -645,8 +636,7 @@ pub const Annotation = struct {
 
         // Append where clause
         if (annotation.where) |where_span| {
-            const where_begin = tree.beginNode();
-            try tree.pushStaticAtom("where");
+            const where_begin = try tree.beginNamedNode("where");
             const where_attrs = tree.beginNode();
             const where_clauses = env.store.sliceWhereClauses(where_span);
             for (where_clauses) |clause_idx| {
@@ -673,8 +663,7 @@ pub const ExposedItem = struct {
     kind: Kind,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("exposed");
+        const begin = try tree.beginNamedNode("exposed");
 
         const name_str = cir.getIdent(self.name);
         try tree.pushStringPair("name", name_str);
@@ -686,8 +675,7 @@ pub const ExposedItem = struct {
 
         try tree.pushBoolPair("wildcard", self.is_wildcard);
 
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -815,49 +803,6 @@ pub const NumKind = enum {
     f32,
     f64,
     dec,
-};
-
-/// Base-256 digit storage for Numeral values.
-/// Used to construct Roc Numeral values during compile-time evaluation.
-///
-/// Numeral in Roc stores:
-/// - is_negative: Bool (whether there was a minus sign)
-/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
-/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
-/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
-///
-/// Example: "356.5170" becomes:
-/// - is_negative = false
-/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
-/// - digits_after_pt_count = 4
-pub const NumeralDigits = struct {
-    /// Index into the shared digit byte array in ModuleEnv
-    digits_start: u32,
-    /// Number of bytes for digits_before_pt
-    before_pt_len: u16,
-    /// Number of bytes for digits_after_pt
-    after_pt_len: u16,
-    /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u64,
-    /// Whether the literal had a minus sign
-    is_negative: bool,
-
-    /// Get the total length of stored digits
-    pub fn totalLen(self: NumeralDigits) u32 {
-        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
-    }
-
-    /// Extract digits_before_pt from the shared byte array
-    pub fn getDigitsBeforePt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        return digit_bytes[self.digits_start..][0..self.before_pt_len];
-    }
-
-    /// Extract digits_after_pt from the shared byte array
-    pub fn getDigitsAfterPt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        const after_start = self.digits_start + self.before_pt_len;
-        return digit_bytes[after_start..][0..self.after_pt_len];
-    }
 };
 
 // Re-export of the canonical Dec type so CIR consumers can name it locally.
@@ -1025,15 +970,6 @@ pub const Import = struct {
             }
         }
 
-        /// Mark one import as intentionally unavailable because an earlier stage
-        /// already owns the user-facing diagnostic.
-        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
-            const idx = @intFromEnum(import_idx);
-            if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = .failed_before_checking;
-            }
-        }
-
         /// Diagnostics-only tooling can continue type inspection after unresolved
         /// imports have been reported. This makes that state explicit instead of
         /// leaving imports in the pre-resolution state.
@@ -1104,36 +1040,6 @@ pub const Import = struct {
             }
         }
 
-        /// Serialize this Store to the given CompactWriter. The resulting Store
-        /// in the writer's buffer will have offsets instead of pointers. Calling any
-        /// methods on it or dereferencing its internal "pointers" (which are now
-        /// offsets) is illegal behavior!
-        pub fn serialize(
-            self: *const Store,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!*const Store {
-            // First, write the Store struct itself
-            const offset_self = try writer.appendAlloc(allocator, Store);
-
-            // Then serialize the sub-structures and update the struct
-            offset_self.* = .{
-                .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
-                .imports = (try self.imports.serialize(allocator, writer)).*,
-                .import_idents = (try self.import_idents.serialize(allocator, writer)).*,
-                .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
-            };
-
-            return @constCast(offset_self);
-        }
-
-        /// Add the given offset to the memory addresses of all pointers in `self`.
-        pub fn relocate(self: *Store, offset: isize) void {
-            self.imports.relocate(offset);
-            self.import_idents.relocate(offset);
-            self.resolved_modules.relocate(offset);
-        }
-
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
         pub const Serialized = extern struct {
             // Placeholder to match Store size - not serialized
@@ -1200,8 +1106,7 @@ pub const RecordField = struct {
     value: Expr.Idx,
 
     pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("field");
+        const begin = try tree.beginNamedNode("field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
         const attrs = tree.beginNode();
         try cir.store.getExpr(self.value).pushToSExprTree(cir, tree, self.value);
@@ -1220,11 +1125,9 @@ pub const UnsetField = struct {
     name: base.Ident.Idx,
 
     pub fn pushToSExprTree(self: *const UnsetField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("unset-field");
+        const begin = try tree.beginNamedNode("unset-field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -1249,8 +1152,7 @@ pub const ExternalDecl = struct {
     pub const SafeList = collections.SafeList(ExternalDecl);
 
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
+        const node = try tree.beginNamedNode("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
 
         // Add fully qualified name
@@ -1262,26 +1164,7 @@ pub const ExternalDecl = struct {
             .type => try tree.pushStringPair("kind", "type"),
         }
 
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
-    }
-
-    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-        // Add fully qualified name
-        try tree.pushStringPair("ident", cir.getIdent(self.qualified_name));
-
-        // Add kind
-        switch (self.kind) {
-            .value => try tree.pushStringPair("kind", "value"),
-            .type => try tree.pushStringPair("kind", "type"),
-        }
-
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
+        try tree.endNodeWithoutChildren(node);
     }
 };
 

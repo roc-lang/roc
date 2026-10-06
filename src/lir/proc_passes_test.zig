@@ -879,23 +879,20 @@ test "LIR proc pass keeps join parameters that are read or are procedure argumen
     try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
 }
 
-test "LIR proc pass range admits a procedure whose only provable check is a literal comparison" {
+test "LIR proc pass range phase admits a body whose only provable statement is an unsigned comparison" {
     const LIR = core.LIR;
     var store = core.LirStore.init(testing.allocator);
     defer store.deinit();
     var layouts = try layout.Store.init(testing.allocator, .u64);
     defer layouts.deinit();
+
+    // `10 == 10` with no switch and no arithmetic: the comparison alone is
+    // what the range prover decides.
     const lhs = try store.addLocal(.{ .layout_idx = .u64 });
     const rhs = try store.addLocal(.{ .layout_idx = .u64 });
-    const result = try store.addLocal(.{ .layout_idx = .bool });
-    const done = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
-    const compare = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = result,
-        .op = .num_is_eq,
-        .rc_effect = .none(),
-        .args = try store.addLocalSpan(&.{ lhs, rhs }),
-        .next = done,
-    } }, .test_fixture);
+    const equal = try store.addLocal(.{ .layout_idx = .bool });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = equal } }, .test_fixture);
+    const compare = try store.addLowLevelStmt(equal, .num_is_eq, &.{ lhs, rhs }, ret, .test_fixture);
     const right = try store.addCFStmt(.{ .assign_literal = .{
         .target = rhs,
         .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
@@ -906,17 +903,88 @@ test "LIR proc pass range admits a procedure whose only provable check is a lite
         .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
         .next = right,
     } }, .test_fixture);
-    _ = try store.addProcSpec(.{
-        .identity = LIR.ProcIdentity.forTest(@intCast(store.procSpecCount())),
+    const proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
         .args = .empty(),
+        .frame_locals = try store.addLocalSpan(&.{ lhs, rhs, equal }),
         .body = body,
         .ret_layout = .bool,
     }, .none);
 
+    const shapes = store.getProcSpec(proc).shapes;
+    try testing.expect(shapes.unsigned_compare);
+    try testing.expect(!shapes.switch_stmt);
+    try testing.expect(!shapes.checked_arithmetic);
+
     try passes.run(testing.allocator, &store, &layouts, .range, null, null);
 
-    const folded = store.getCFStmt(compare).assign_tag;
-    try testing.expectEqual(@as(u16, 1), folded.discriminant);
-    try testing.expectEqual(result, folded.target);
+    const folded = store.getCFStmt(compare);
+    try testing.expect(folded == .assign_tag);
+    try testing.expectEqual(equal, folded.assign_tag.target);
+    try testing.expectEqual(@as(u16, 1), folded.assign_tag.discriminant);
+}
+
+test "LIR proc pass range phase admits a body whose only provable statement is a SIMD concat-shift" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const lo = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const hi = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const count = try store.addLocal(.{ .layout_idx = .u8 });
+    const shifted = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = shifted } }, .test_fixture);
+    const shift = try store.addLowLevelStmt(shifted, .simd_concat_shift_bytes, &.{ lo, hi, count }, ret, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = count,
+        .value = .{ .i64_literal = .{ .value = 3, .layout_idx = .u8 } },
+        .next = shift,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{ lo, hi }),
+        .frame_locals = try store.addLocalSpan(&.{ lo, hi, count, shifted }),
+        .body = body,
+        .ret_layout = .u8x16,
+    }, .none);
+
+    const shapes = store.getProcSpec(proc).shapes;
+    try testing.expect(shapes.simd_concat_shift);
+    try testing.expect(!shapes.switch_stmt);
+    try testing.expect(!shapes.checked_arithmetic);
+    try testing.expect(!shapes.unsigned_compare);
+
+    try passes.run(testing.allocator, &store, &layouts, .range, null, null);
+
+    try testing.expectEqual(@as(?u5, 3), store.getCFStmt(shift).assign_low_level.simd_concat_count);
+}
+
+test "LIR store records an unsigned comparison shape only for range-tracked operand layouts" {
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+
+    inline for (.{
+        .{ layout.Idx.u8, true },
+        .{ layout.Idx.u16, true },
+        .{ layout.Idx.u32, true },
+        .{ layout.Idx.u64, true },
+        .{ layout.Idx.u128, false },
+        .{ layout.Idx.i64, false },
+        .{ layout.Idx.f64, false },
+        .{ layout.Idx.dec, false },
+    }) |case| {
+        inline for (.{ .num_is_eq, .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte }) |op| {
+            store.shapes = .{};
+            const lhs = try store.addLocal(.{ .layout_idx = case[0] });
+            const rhs = try store.addLocal(.{ .layout_idx = case[0] });
+            const result = try store.addLocal(.{ .layout_idx = .bool });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            _ = try store.addLowLevelStmt(result, op, &.{ lhs, rhs }, ret, .test_fixture);
+            try testing.expectEqual(case[1], store.shapes.unsigned_compare);
+        }
+    }
 }

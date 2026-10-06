@@ -1,6 +1,6 @@
 MyType(val) := [A(val), B].{
-    from_interpolation : Str, Iter((val, Str)) -> MyType(val)
-    from_interpolation = |_, _| B
+    from_interpolation : List(Str) -> Try((List(val) -> MyType(val)), [InvalidInterpolation(Str)])
+    from_interpolation = |_| Ok(|_| B)
 }
 
 g = |x, y| {

@@ -791,6 +791,9 @@ const CheckTypeCheckerPatternsStep = struct {
 
     const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
     const excluded_ranges = [_]ExcludedRange{
+        // Runtime equality compares Roc value bytes, never compiler identifiers.
+        .{ .file = "boxy_runtime.zig", .start = 5614, .end = 5614 },
+        .{ .file = "boxy_runtime.zig", .start = 5624, .end = 5624 },
         // Cross-module name matching in Check.zig requires string comparison (lines 5530-5547)
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings
@@ -1313,47 +1316,6 @@ const CheckPostcheckArchitectureStep = struct {
             .signal, .stopped, .unknown => {
                 return step.fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
-        }
-    }
-};
-
-const CheckWasmBuiltinRoutingStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *CheckWasmBuiltinRoutingStep {
-        const self = b.allocator.create(CheckWasmBuiltinRoutingStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "check-wasm-builtin-routing",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping WASM builtin routing check on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        const io = b.graph.io;
-        var child = try std.process.spawn(io, .{
-            .argv = &.{ "perl", "ci/check_wasm_builtin_routing.pl" },
-            .environ_map = &b.graph.environ_map,
-        });
-        const term = try child.wait(io);
-        switch (term) {
-            .exited => |code| if (code != 0) {
-                return step.fail(
-                    "WASM builtin routing check failed. Run 'perl ci/check_wasm_builtin_routing.pl' to see details.",
-                    .{},
-                );
-            },
-            .signal, .stopped, .unknown => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
         }
     }
 };
@@ -2868,6 +2830,64 @@ fn createClearCacheStep(b: *std.Build) *Step {
     return &clear_cache.step;
 }
 
+/// Host outputs available before copying platform-local fixture inputs.
+const TestPlatformSteps = struct {
+    wasm: *Step,
+    hosts: *Step,
+};
+
+/// Copy shared test hosts into each fixture platform's own target directory.
+/// Platforms declare only relative inputs within their own directory.
+const CopyFixtureTargetInputsStep = struct {
+    step: Step,
+    platform_filter: ?[]const u8,
+
+    fn create(b: *std.Build, platform_filter: ?[]const u8) *CopyFixtureTargetInputsStep {
+        const self = b.allocator.create(CopyFixtureTargetInputsStep) catch @panic("OOM");
+        self.* = .{ .platform_filter = platform_filter, .step = Step.init(.{
+            .id = .custom,
+            .name = "copy-fixture-target-inputs",
+            .owner = b,
+            .makeFn = make,
+        }) };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CopyFixtureTargetInputsStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const root = b.build_root.handle;
+        const fixtures = [_]struct { source: []const u8, destination: []const u8 }{
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
+            .{ .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11693_nominal_boxing/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11220_required_main_host_entry/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9731_nominal_for_clause/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_10379_custom_encoder_field_state/platform/targets" },
+        };
+        for (fixtures) |fixture| {
+            if (self.platform_filter) |filter| {
+                if (!std.mem.eql(u8, fixture.source, "test/wasm/platform/targets") and
+                    !std.mem.eql(u8, fixture.source, b.fmt("test/{s}/platform/targets", .{filter}))) continue;
+            }
+            var source = try root.openDir(io, fixture.source, .{ .iterate = true });
+            defer source.close(io);
+            var walker = try source.walk(b.allocator);
+            defer walker.deinit();
+            while (try walker.next(io)) |entry| {
+                if (entry.kind != .file) continue;
+                const destination = try std.fs.path.join(b.allocator, &.{ fixture.destination, entry.path });
+                defer b.allocator.free(destination);
+                try source.copyFile(entry.path, root, destination, io, .{ .make_path = true, .replace = true });
+            }
+        }
+    }
+};
+
 fn setupTestPlatforms(
     b: *std.Build,
     target: ResolvedTarget,
@@ -2877,7 +2897,7 @@ fn setupTestPlatforms(
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
-) *Step {
+) TestPlatformSteps {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
@@ -2943,6 +2963,9 @@ fn setupTestPlatforms(
     // Cross-compile for glibc targets declared by test platform manifests.
     for (glibc_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+        if (generateGlibcStub(b, cross_resolved_target, cross_target.name)) |stub| {
+            clear_cache_step.dependOn(&stub.step);
+        }
 
         for (glibc_test_platform_dirs) |platform_dir| {
             if (platform_filter) |filter| {
@@ -3033,7 +3056,7 @@ fn setupTestPlatforms(
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
 
-    return wasm_host_step;
+    return .{ .wasm = wasm_host_step, .hosts = clear_cache_step };
 }
 
 const WasmStaticLibAppBuild = struct {
@@ -3142,7 +3165,6 @@ pub fn build(b: *std.Build) void {
     const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
-    const run_check_wasm_builtin_routing_step = b.step("run-check-wasm-builtin-routing", "Check that WASM builtin calls use explicit host/relocation routing");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
@@ -3720,7 +3742,12 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
 
     // Setup test platform host libraries
-    const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const test_platform_steps = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const wasm_host_step = test_platform_steps.wasm;
+    const fixture_target_inputs = CopyFixtureTargetInputsStep.create(b, platform_filter);
+    fixture_target_inputs.step.dependOn(test_platform_steps.hosts);
+    b.getInstallStep().dependOn(&fixture_target_inputs.step);
+    build_test_hosts_step.dependOn(&fixture_target_inputs.step);
     const wasm_host_fixture_files = b.addWriteFiles();
     _ = wasm_host_fixture_files.addCopyFile(
         b.path("test/wasm/platform/targets/wasm32/host.wasm"),
@@ -4065,7 +4092,7 @@ pub fn build(b: *std.Build) void {
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
-        run_cli.addArg("zig-out/bin/roc");
+        run_cli.addArg(b.getInstallPath(.bin, "roc"));
         if (cli_test_llvm) {
             run_cli.addArg("--include-llvm");
         }
@@ -4127,216 +4154,16 @@ pub fn build(b: *std.Build) void {
         },
     });
     const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
-    const builtins64_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_bc_obj.root_module.stack_check = false;
-    builtins64_bc_obj.root_module.link_libc = false;
-    builtins64_bc_obj.use_llvm = true;
-    builtins64_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_bc_obj.getEmittedBin();
-    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_bc_obj.root_module.stack_check = false;
-    builtins64_core_bc_obj.root_module.link_libc = false;
-    builtins64_core_bc_obj.use_llvm = true;
-    builtins64_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_bc_obj.getEmittedBin();
-    const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
+    const builtins64_bc_file = addBuiltinsBitcode(b, roc_modules, "64_bc", "src/builtins/static_lib.zig", builtins64_target, false);
+    const builtins64_core_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_bc", "src/builtins/static_lib_core.zig", builtins64_target, false);
 
     const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const builtins32_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_bc_obj.root_module.stack_check = false;
-    builtins32_bc_obj.use_llvm = true;
-    builtins32_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_bc_obj.getEmittedBin();
-    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_bc_obj.root_module.stack_check = false;
-    builtins32_core_bc_obj.use_llvm = true;
-    builtins32_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_bc_obj.getEmittedBin();
-    const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_extern_bc_obj.root_module.stack_check = false;
-    builtins64_extern_bc_obj.use_llvm = true;
-    builtins64_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_extern_bc_obj.getEmittedBin();
-    const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_extern_bc_obj.root_module.stack_check = false;
-    builtins64_core_extern_bc_obj.use_llvm = true;
-    builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_extern_bc_obj.getEmittedBin();
-    const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_extern_bc_obj.root_module.stack_check = false;
-    builtins32_extern_bc_obj.use_llvm = true;
-    builtins32_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_extern_bc_obj.getEmittedBin();
-    const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_extern_bc_obj.root_module.stack_check = false;
-    builtins32_core_extern_bc_obj.use_llvm = true;
-    builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_extern_bc_obj.getEmittedBin();
-    const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
+    const builtins32_bc_file = addBuiltinsBitcode(b, roc_modules, "32_bc", "src/builtins/static_lib.zig", builtins32_target, null);
+    const builtins32_core_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_bc", "src/builtins/static_lib_core.zig", builtins32_target, null);
+    const builtins64_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_extern_bc", "src/builtins/extern_static_lib.zig", builtins64_target, null);
+    const builtins64_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins64_target, null);
+    const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/extern_static_lib.zig", builtins32_target, null);
+    const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins32_target, null);
 
     // The 64-bit builtins bitcode references its SHA-256 compression by name
     // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
@@ -4794,6 +4621,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "base", .module = roc_modules.base },
             .{ .name = "can", .module = roc_modules.can },
+            .{ .name = "check", .module = roc_modules.check },
             .{ .name = "compile", .module = roc_modules.compile },
             .{ .name = "ctx", .module = roc_modules.ctx },
             .{ .name = "eval", .module = roc_modules.eval },
@@ -5113,6 +4941,12 @@ pub fn build(b: *std.Build) void {
         });
         _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
         _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
+        for ([_][]const u8{ "wasm32", "wasm32v1" }) |wasm_target_name| {
+            _ = wasm_app_sources.addCopyFile(
+                b.path(b.fmt("test/wasm/platform/targets/{s}/host.wasm", .{wasm_target_name})),
+                b.fmt("static-lib-platform/targets/{s}/host.wasm", .{wasm_target_name}),
+            );
+        }
         wasm_app_sources.step.dependOn(wasm_host_step);
 
         const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm");
@@ -5283,18 +5117,13 @@ pub fn build(b: *std.Build) void {
         } else {
             run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
 
-            const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_provided_callable_test.addArg("--wasm-path");
-            run_wasm_provided_callable_test.addFileArg(build_wasm_provided_callable_app.wasm);
-            run_wasm_provided_callable_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_provided_callable_app.wasm, &.{
                 "--expected",
                 "42",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_provided_callable_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             const run_wasm_v1_builtin_routing_test = b.addRunArtifact(wasm_test_exe);
             run_wasm_v1_builtin_routing_test.addArg("--wasm-path");
@@ -5303,62 +5132,34 @@ pub fn build(b: *std.Build) void {
             run_wasm_v1_builtin_routing_test.step.dependOn(build_test_wasm_static_lib_runner_step);
             run_test_wasm_static_lib_step.dependOn(&run_wasm_v1_builtin_routing_test.step);
 
-            const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_list_builtin_test.addArg("--wasm-path");
-            run_wasm_list_builtin_test.addFileArg(build_wasm_list_builtin_app.wasm);
-            run_wasm_list_builtin_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_list_builtin_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_list_builtin_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_single_variant_hosted_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_single_variant_hosted_test.addArg("--wasm-path");
-            run_wasm_single_variant_hosted_test.addFileArg(build_wasm_single_variant_hosted_app.wasm);
-            run_wasm_single_variant_hosted_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_single_variant_hosted_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_hosted_try_widen_test.addArg("--wasm-path");
-            run_wasm_hosted_try_widen_test.addFileArg(build_wasm_hosted_try_widen_app.wasm);
-            run_wasm_hosted_try_widen_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_hosted_try_widen_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_join_test.addArg("--wasm-path");
-            run_wasm_str_concat_join_test.addFileArg(build_wasm_str_concat_join_app.wasm);
-            run_wasm_str_concat_join_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_join_app.wasm, &.{
                 "--expected",
                 "X:1Y:2",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10957_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10957_test.addArg("--wasm-path");
-            run_wasm_issue_10957_test.addFileArg(build_wasm_issue_10957_app.wasm);
-            run_wasm_issue_10957_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10957_app.wasm, &.{
                 "--expected",
                 "14",
-            });
-            run_wasm_issue_10957_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10957_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_interp_leading_literal_test.addArg("--wasm-path");
-            run_wasm_str_interp_leading_literal_test.addFileArg(build_wasm_str_interp_leading_literal_app.wasm);
-            run_wasm_str_interp_leading_literal_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_interp_leading_literal_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5366,14 +5167,9 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "2",
-            });
-            run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_unique_reuse_test.addArg("--wasm-path");
-            run_wasm_str_concat_unique_reuse_test.addFileArg(build_wasm_str_concat_unique_reuse_app.wasm);
-            run_wasm_str_concat_unique_reuse_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_unique_reuse_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5381,19 +5177,14 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "1",
-            });
-            run_wasm_str_concat_unique_reuse_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_unique_reuse_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
             // inlined `for` over append/map/concat/chained minted chains ran to
             // completion with correct sums (i.e. the drive advanced its inner
             // iterators and terminated). `--assert-alloc-balanced` also catches a
             // per-step allocate/free leak in the drive.
-            const run_wasm_iter_for_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_test.addArg("--wasm-path");
-            run_wasm_iter_for_test.addFileArg(build_wasm_iter_for_app.wasm);
-            run_wasm_iter_for_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5403,14 +5194,9 @@ pub fn build(b: *std.Build) void {
                 // sizes and is the fusion pass's target, not a hard gate pre-fusion.
                 "--max-bytes",
                 "65536",
-            });
-            run_wasm_iter_for_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_recursive_concat_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_recursive_concat_test.addArg("--wasm-path");
-            run_wasm_iter_recursive_concat_test.addFileArg(build_wasm_iter_recursive_concat_app.wasm);
-            run_wasm_iter_recursive_concat_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_recursive_concat_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5419,154 +5205,87 @@ pub fn build(b: *std.Build) void {
                 // callable expansion exceeded 815 KB before failing to lower.
                 "--max-bytes",
                 "750000",
-            });
-            run_wasm_iter_recursive_concat_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_recursive_concat_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Static-data hoisting: the constant list literal is materialized as
             // static data, so the whole chain allocates nothing. `--max-allocs 0`
             // is a strictly stronger assertion than `--assert-alloc-balanced`.
-            const run_wasm_iter_list_hoist_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_list_hoist_test.addArg("--wasm-path");
-            run_wasm_iter_list_hoist_test.addFileArg(build_wasm_iter_list_hoist_app.wasm);
-            run_wasm_iter_list_hoist_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_list_hoist_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_iter_list_hoist_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_list_hoist_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_for_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_dev_test.addArg("--wasm-path");
-            run_wasm_iter_for_dev_test.addFileArg(build_wasm_iter_for_dev_app.wasm);
-            run_wasm_iter_for_dev_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_dev_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_iter_for_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Noiter twin—asserts correctness and prints its size so CI logs
             // carry both numbers for premium tracking.
-            const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_noiter_test.addArg("--wasm-path");
-            run_wasm_iter_noiter_test.addFileArg(build_wasm_iter_noiter_app.wasm);
-            run_wasm_iter_noiter_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_noiter_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_iter_noiter_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_noiter_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_test.addArg("--wasm-path");
-            run_wasm_rc_cleanup_test.addFileArg(build_wasm_rc_cleanup_app.wasm);
-            run_wasm_rc_cleanup_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_model_list_test.addArg("--wasm-path");
-            run_wasm_rc_cleanup_model_list_test.addFileArg(build_wasm_rc_cleanup_model_list_app.wasm);
-            run_wasm_rc_cleanup_model_list_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_model_list_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "2",
-            });
-            run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_box_zst_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_box_zst_test.addArg("--wasm-path");
-            run_wasm_box_zst_test.addFileArg(build_wasm_box_zst_app.wasm);
-            run_wasm_box_zst_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_box_zst_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_box_zst_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_box_zst_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_boxed_model_update_test.addArg("--wasm-path");
-            run_wasm_boxed_model_update_test.addFileArg(build_wasm_boxed_model_update_app.wasm);
-            run_wasm_boxed_model_update_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_boxed_model_update_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10836_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10836_test.addArg("--wasm-path");
-            run_wasm_issue_10836_test.addFileArg(build_wasm_issue_10836_app.wasm);
-            run_wasm_issue_10836_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10836_app.wasm, &.{
                 "--expected",
                 "7,9;11,13;Inc(42)",
-            });
-            run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11419_test.addArg("--wasm-path");
-            run_wasm_issue_11419_test.addFileArg(build_wasm_issue_11419_app.wasm);
-            run_wasm_issue_11419_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11419_app.wasm, &.{
                 "--expected",
                 "id=txt",
-            });
-            run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11454_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11454_test.addArg("--wasm-path");
-            run_wasm_issue_11454_test.addFileArg(build_wasm_issue_11454_app.wasm);
-            run_wasm_issue_11454_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11454_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} a, {\"favoritesCount\":14} b, {\"favoritesCount\":14} c, {\"favoritesCount\":14} d",
-            });
-            run_wasm_issue_11454_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11454_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_test.addArg("--wasm-path");
-            run_wasm_on_drop_test.addFileArg(build_wasm_on_drop_app.wasm);
-            run_wasm_on_drop_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_dev_test.addArg("--wasm-path");
-            run_wasm_on_drop_dev_test.addFileArg(build_wasm_on_drop_dev_app.wasm);
-            run_wasm_on_drop_dev_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_dev_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11455_test.addArg("--wasm-path");
-            run_wasm_issue_11455_test.addFileArg(build_wasm_issue_11455_app.wasm);
-            run_wasm_issue_11455_test.addArgs(&.{
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11455_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14}",
-            });
-            run_wasm_issue_11455_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11455_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -6536,9 +6255,6 @@ pub fn build(b: *std.Build) void {
     // Add check that deleted post-check output/remapping APIs do not reappear
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
-
-    const check_wasm_builtin_routing = CheckWasmBuiltinRoutingStep.create(b);
-    run_check_wasm_builtin_routing_step.dependOn(&check_wasm_builtin_routing.step);
 
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
@@ -7709,6 +7425,61 @@ fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query
     return obj.getEmittedLlvmBc();
 }
 
+/// Run the wasm static-lib test runner on one built app as part of `step`.
+fn addWasmStaticLibRun(
+    b: *std.Build,
+    wasm_test_exe: *Step.Compile,
+    wasm: std.Build.LazyPath,
+    args: []const []const u8,
+    runner_step: *Step,
+    step: *Step,
+) void {
+    const run = b.addRunArtifact(wasm_test_exe);
+    run.addArg("--wasm-path");
+    run.addFileArg(wasm);
+    run.addArgs(args);
+    run.step.dependOn(runner_step);
+    step.dependOn(&run.step);
+}
+
+/// Compile one builtins bitcode payload for the LLVM backend to link.
+/// `link_libc` is left at the build system's default when null.
+fn addBuiltinsBitcode(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    comptime suffix: []const u8,
+    root_source_file: []const u8,
+    target: ResolvedTarget,
+    link_libc: ?bool,
+) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_builtins" ++ suffix,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(root_source_file),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.addImport("tracy", b.addModule("tracy_stub" ++ suffix, .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    obj.root_module.addImport("shim_io", b.addModule("shim_io" ++ suffix, .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    if (link_libc) |link| obj.root_module.link_libc = link;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -7786,14 +7557,6 @@ fn addMainExe(
                 omit_frame_pointer,
             );
             b.getInstallStep().dependOn(copy_step);
-        }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-            }
         }
     }
 
@@ -8198,8 +7961,11 @@ fn addMainExe(
         // (gets compiler-rt via the dedicated merged object below) and macOS
         // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
         // crashes the Zig compiler for macOS targets under --listen). BSD is
-        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
-        // for x86_64-*-bsd-none targets.
+        // also excluded because Zig 0.16.0 segfaults when bundling compiler-rt
+        // (`-fcompiler-rt`) for x86_64-*-bsd-none targets; there the calls
+        // resolve against the platform's C library, or against the default
+        // platform's compiler-rt carrier below when that platform is
+        // freestanding.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
         const cross_os = roc_target.classifyOs(cross_target.query.os_tag orelse .freestanding);
@@ -8307,6 +8073,12 @@ fn addMainExe(
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
         cross_builtins_extern_obj.bundle_compiler_rt = cross_bundle_compiler_rt;
+        // This object links into -nostdlib executables, and a freestanding
+        // default-platform program has no libc at all, so nothing in the link
+        // defines the stack protector's `__stack_chk_fail` and
+        // `__stack_chk_guard`. Zig turns the protector on in safe build modes
+        // for the targets it assumes always link libc, the BSDs among them.
+        cross_builtins_extern_obj.root_module.stack_protector = false;
         configureBackend(cross_builtins_extern_obj, cross_resolved_target);
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
@@ -8366,6 +8138,7 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
@@ -8385,11 +8158,20 @@ fn addMainExe(
             embedded_digests.addArg(b.fmt("default_runtime_{s}", .{cross_target.name}));
             embedded_digests.addFileArg(default_platform_runtime_obj.getEmittedBin());
 
-            // A shared-memory run of the synthetic Linux default platform has
-            // no external platform host to provide compiler-rt. Keep that
-            // carrier explicit and default-platform-owned instead of hiding it
-            // in the machine-code shim, which is also linked with user hosts.
-            if (default_platform_os == .linux) {
+            // The synthetic default platform is freestanding on Linux, FreeBSD
+            // and NetBSD: it links no libc and has no external platform host,
+            // so nothing else in its links is certain to provide compiler-rt
+            // or the C math and memory routines code generation calls. Keep
+            // that carrier explicit and default-platform-owned instead of
+            // hiding it in the machine-code shim, which is also linked with
+            // user hosts. A shared-memory run and every standalone
+            // default-platform link consume it. Each routine gets its own
+            // section so a link keeps only the ones it references, and the
+            // object carries no debug info: a linker keeps an input's debug
+            // sections even when it discards all of that input's code, so
+            // they would be copied into every executable whether or not it
+            // calls anything here.
+            if (default_platform_os == .linux or default_platform_os == .freebsd or default_platform_os == .netbsd) {
                 const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
                 const default_platform_compiler_rt_obj = b.addObject(.{
                     .name = b.fmt("roc_default_compiler_rt_{s}", .{cross_target.name}),
@@ -8397,12 +8179,14 @@ fn addMainExe(
                         .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
                         .target = cross_resolved_target,
                         .optimize = .ReleaseFast,
-                        .strip = strip,
+                        .strip = true,
                         .omit_frame_pointer = false,
                         .pic = true,
                     }),
                 });
                 default_platform_compiler_rt_obj.bundle_compiler_rt = false;
+                default_platform_compiler_rt_obj.link_function_sections = true;
+                default_platform_compiler_rt_obj.link_data_sections = true;
                 configureBackend(default_platform_compiler_rt_obj, cross_resolved_target);
 
                 const copy_default_platform_compiler_rt = b.addUpdateSourceFiles();
@@ -8430,6 +8214,7 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
@@ -9118,7 +8903,8 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// switches, or serialization format identity.
 fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc-checked-artifact-v1");
+    // Unconditional implementations must not reuse experimental flag namespaces.
+    hasher.update("roc-checked-artifact-v2");
     hasher.update(compiler_version);
 
     // Resolve against the build root rather than cwd so the hash works both for
@@ -9160,9 +8946,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
         // Fall back to minimal ELF
         const arch = target.result.cpu.arch;
         const stub_content = if (arch == .aarch64)
-            createMinimalElfArm64()
+            createMinimalElf(0xB7)
         else if (arch == .x86_64)
-            createMinimalElfX64()
+            createMinimalElf(0x3E)
         else
             return null;
 
@@ -9206,9 +8992,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     return copy_stubs;
 }
 
-/// Create a minimal ELF shared object for ARM64
-fn createMinimalElfArm64() []const u8 {
-    // ARM64 minimal ELF shared object
+/// Create a minimal ELF shared object for the machine with ELF id `e_machine`
+/// (`EM_AARCH64` or `EM_X86_64`).
+fn createMinimalElf(comptime e_machine: u8) []const u8 {
     return &[_]u8{
         // ELF Header (64 bytes)
         0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
@@ -9219,45 +9005,7 @@ fn createMinimalElfArm64() []const u8 {
         0, // e_ident[EI_ABIVERSION]
         0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
         0x03, 0x00, // e_type - ET_DYN (shared object)
-        0xB7, 0x00, // e_machine - EM_AARCH64
-        0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
-        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff - section header offset
-        0x00, 0x00, 0x00, 0x00, // e_flags
-        0x40, 0x00, // e_ehsize - ELF header size
-        0x38, 0x00, // e_phentsize - program header entry size
-        0x01, 0x00, // e_phnum - number of program headers
-        0x40, 0x00, // e_shentsize - section header entry size
-        0x00, 0x00, // e_shnum - number of section headers
-        0x00, 0x00, // e_shstrndx - section header string table index
-
-        // Program Header (56 bytes) - PT_LOAD
-        0x01, 0x00, 0x00, 0x00, // p_type - PT_LOAD
-        0x05, 0x00, 0x00, 0x00, // p_flags - PF_R | PF_X
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_vaddr
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_paddr
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz
-        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
-    };
-}
-
-/// Create a minimal ELF shared object for x86-64
-fn createMinimalElfX64() []const u8 {
-    // x86-64 minimal ELF shared object
-    return &[_]u8{
-        // ELF Header (64 bytes)
-        0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
-        2, // e_ident[EI_CLASS] - ELFCLASS64
-        1, // e_ident[EI_DATA] - ELFDATA2LSB (little endian)
-        1, // e_ident[EI_VERSION] - EV_CURRENT
-        0, // e_ident[EI_OSABI] - ELFOSABI_NONE
-        0, // e_ident[EI_ABIVERSION]
-        0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
-        0x03, 0x00, // e_type - ET_DYN (shared object)
-        0x3E, 0x00, // e_machine - EM_X86_64
+        e_machine, 0x00, // e_machine
         0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
         0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
