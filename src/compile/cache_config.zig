@@ -286,7 +286,8 @@ pub const Constants = struct {
     /// 133: Type descriptor flags mark deferred requirement callables.
     /// 134: Hoisted roots record an unannotated top-level value that always
     ///      crashes as a valueless binding.
-    pub const CACHE_VERSION = 134;
+    /// 135: Module environments persist diagnostic host-return provenance.
+    pub const CACHE_VERSION = 135;
 };
 
 /// Configuration for the Roc cache system.

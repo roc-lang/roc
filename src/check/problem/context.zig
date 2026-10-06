@@ -254,6 +254,9 @@ pub const Context = union(enum) {
 
     /// Context for a `?` early return that does not match the function body
     pub const TryReturnContext = struct {
+        /// Host declaration reached through the operand's unchanged forwarding
+        /// path, interned in the reporting module. Diagnostic-only provenance.
+        hosted_origin: ?Ident.Idx = null,
         /// A `?` that produces the function body's own value, when there is
         /// one. It unwraps the `Try` the body would otherwise return, so it is
         /// the likely cause of the mismatch being reported.

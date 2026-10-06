@@ -24,6 +24,7 @@ test "ModuleEnv.Serialized roundtrip" {
 
     const hello_idx = try original.insertIdent(Ident.for_text("hello"));
     const world_idx = try original.insertIdent(Ident.for_text("world"));
+    try original.setDiagnosticHostedReturn(@enumFromInt(42), hello_idx);
     _ = try original.insertString("test string");
 
     try original.addExposedById(hello_idx);
@@ -97,6 +98,9 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("world", original.getIdent(world_idx));
     try std.testing.expectEqualStrings("hello", env.getIdent(hello_idx));
     try std.testing.expectEqualStrings("world", env.getIdent(world_idx));
+    try std.testing.expectEqual(hello_idx, env.diagnosticHostedReturn(@enumFromInt(42)).?);
+    try std.testing.expect(env.diagnosticHostedReturn(@enumFromInt(41)) == null);
+    try std.testing.expect(env.diagnosticHostedReturn(@enumFromInt(43)) == null);
 
     try std.testing.expectEqual(@as(usize, 1), env.common.exposed_items.count());
     try std.testing.expectEqual(@as(?u32, 42), env.common.exposed_items.getValueNodeIndexById(gpa, @as(u32, @bitCast(hello_idx))));

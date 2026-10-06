@@ -171,6 +171,11 @@ generalizer: Generalizer,
 constraints: Constraint.SafeList,
 /// Return-flow constraints (`return` and `?`) owned by the lambda that produced them.
 return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
+/// Diagnostic provenance: a generated `Err` return's original `?` operand.
+/// Keep occurrence identities, not solved roots, which unification can merge.
+try_return_conditions: collections.DenseMap(Var, CIR.Expr.Idx),
+/// Host origins of unchanged error returns produced by a lambda's plain `?`.
+try_lambda_host_origins: collections.DenseMap(CIR.Expr.Idx, Ident.Idx),
 /// Operands of every early return, owned by the lambda that produced them. A
 /// lambda's result is its body tail *or* one of these, so the constructed-tag
 /// facts a payload closing rests on must see them too.
@@ -3596,6 +3601,8 @@ fn initAssumePrepared(
         .method_mint_names = canonical_names.CanonicalNameStore.init(gpa),
         .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
+        .try_return_conditions = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
+        .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
         .return_value_exprs = .empty,
         .return_constraint_frames = .empty,
         .try_return_rows = TryReturnRows.init(gpa),
@@ -3894,6 +3901,8 @@ pub fn deinit(self: *Self) void {
     self.snapshot_ground_copies.deinit(self.gpa);
     self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
+    self.try_return_conditions.deinit();
+    self.try_lambda_host_origins.deinit();
     self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.try_return_rows.deinit(self.gpa);
@@ -6970,6 +6979,12 @@ fn appendTypeMismatch(
     actual: Var,
     ctx: problem.Context,
 ) std.mem.Allocator.Error!problem.Problem.Idx {
+    var diagnostic_ctx = ctx;
+    if (diagnostic_ctx == .try_operator) {
+        if (self.try_return_conditions.get(actual)) |condition| {
+            diagnostic_ctx.try_operator.hosted_origin = try self.tryHostedErrorOrigin(condition, false);
+        }
+    }
     const expected_snapshot = try self.snapshotVarForError(expected);
     const actual_snapshot = try self.snapshotVarForError(actual);
     const unify_env = self.unifyEnv();
@@ -6981,7 +6996,7 @@ fn appendTypeMismatch(
             .actual_var = actual,
             .actual_snapshot = actual_snapshot,
         },
-        .context = ctx,
+        .context = diagnostic_ctx,
         .evidence = evidence,
     } });
 }
@@ -11847,6 +11862,14 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
+    // Publish diagnostic origins while the producer still owns its private
+    // imports. Consumers use these summaries, never transitively reopen them.
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        const def = self.cir.store.getDef(def_idx);
+        if (try self.tryHostedErrorOrigin(def.expr, true)) |origin| {
+            try self.cir.setDiagnosticHostedReturn(def_idx, origin);
+        }
+    }
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
@@ -29074,6 +29097,11 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
             // unifies with Try type FIRST. If it doesn't, report the specific
             // error and skip pattern checking to avoid confusing errors.
             if (match.is_try_suffix) {
+                // Canonicalization explicitly identifies the generated Err
+                // branch. Preserve its operand before checking can retire it.
+                if (unchangedTryErrorReturn(self.cir, match)) |err_return| {
+                    try self.try_return_conditions.put(ModuleEnv.varFrom(err_return), match.cond);
+                }
                 // Get the actual Try type from builtins and instantiate it with fresh type vars
                 const try_type_var = ModuleEnv.varFrom(self.builtin_ctx.try_stmt);
                 const copied_try_var = if (self.builtin_ctx.builtin_module) |builtin_env|
@@ -30791,6 +30819,117 @@ fn tryConditionIsDirectHostedCall(self: *Self, cond_idx: CIR.Expr.Idx) bool {
     const callable_def = self.hoistedCallableDefForExpr(self.cir, call.func) orelse return false;
     const def = callable_def.module.store.getDef(callable_def.def);
     return callable_def.module.store.getExpr(def.expr) == .e_hosted_lambda;
+}
+
+/// Both forms of `?` are marked is_try_suffix. Only the plain form returns
+/// the matched error binder unchanged; `lhs ? handler` constructs/calls a
+/// conversion. Compare explicit binder identities rather than source syntax.
+fn unchangedTryErrorReturn(module: *const ModuleEnv, match: CIR.Expr.Match) ?CIR.Expr.Idx {
+    const branches = module.store.sliceMatchBranches(match.branches);
+    const branch = module.store.getMatchBranch(branches[1]);
+    const ret = module.store.getExpr(branch.value);
+    if (ret != .e_return) return null;
+    const result = module.store.getExpr(ret.e_return.expr);
+    const backing = switch (result) {
+        .e_nominal => |nominal| nominal.backing_expr,
+        .e_nominal_external => |nominal| nominal.backing_expr,
+        else => return null,
+    };
+    const tag = module.store.getExpr(backing);
+    if (tag != .e_tag) return null;
+    const args = module.store.sliceExpr(tag.e_tag.args);
+    if (args.len != 1) return null;
+    const payload = module.store.getExpr(args[0]);
+    if (payload != .e_lookup_local) return null;
+
+    const patterns = module.store.sliceMatchBranchPatterns(branch.patterns);
+    if (patterns.len != 1) return null;
+    const pattern = module.store.getPattern(module.store.getMatchBranchPattern(patterns[0]).pattern);
+    const pattern_backing = switch (pattern) {
+        .nominal => |nominal| nominal.backing_pattern,
+        .nominal_external => |nominal| nominal.backing_pattern,
+        else => return null,
+    };
+    const tag_pattern = module.store.getPattern(pattern_backing);
+    if (tag_pattern != .applied_tag) return null;
+    const tag_args = module.store.slicePatterns(tag_pattern.applied_tag.args);
+    if (tag_args.len != 1 or tag_args[0] != payload.e_lookup_local.pattern_idx) return null;
+    return ret.e_return.expr;
+}
+
+/// Diagnostic-only origin of an unchanged forwarded result. Follow explicit
+/// CIR reference and result edges, including imported aliases; never infer a
+/// host from a type's shape or reuse this walk to admit a widening relation.
+/// Constructors, dispatch, and value-carried callables end the known path.
+fn tryHostedErrorOrigin(self: *Self, condition: CIR.Expr.Idx, called: bool) Allocator.Error!?Ident.Idx {
+    const Position = struct {
+        expr: CIR.Expr.Idx,
+        called: bool,
+    };
+    var position = Position{ .expr = condition, .called = called };
+    var visited = collections.DenseMap(CIR.Expr.Idx, u2).init(self.gpa);
+    defer visited.deinit();
+    var local_bindings = collections.DenseMap(CIR.Pattern.Idx, CIR.Expr.Idx).init(self.gpa);
+    defer local_bindings.deinit();
+    while (true) {
+        const bit: u2 = if (position.called) 2 else 1;
+        const seen = visited.get(position.expr) orelse 0;
+        if (seen & bit != 0) return null;
+        try visited.put(position.expr, seen | bit);
+        const expr = self.cir.store.getExpr(position.expr);
+        switch (expr) {
+            .e_call => |call| {
+                if (position.called) return null;
+                position.expr = call.func;
+                position.called = true;
+            },
+            .e_lookup_local, .e_lookup_external, .e_lookup_associated_resolved => {
+                if (expr == .e_lookup_local) {
+                    if (local_bindings.get(expr.e_lookup_local.pattern_idx)) |value| {
+                        position.expr = value;
+                        continue;
+                    }
+                }
+                const target = self.hoistedCallableDefForExpr(self.cir, position.expr) orelse return null;
+                if (target.module != self.cir) {
+                    const origin = target.module.diagnosticHostedReturn(target.def) orelse return null;
+                    if (!position.called) return null;
+                    return try self.cir.insertIdent(Ident.for_text(target.module.getIdent(origin)));
+                }
+                position.expr = target.module.store.getDef(target.def).expr;
+            },
+            .e_lambda => |lambda| {
+                if (!position.called) return null;
+                if (self.try_lambda_host_origins.get(position.expr)) |origin| return origin;
+                position.expr = lambda.body;
+                position.called = false;
+            },
+            .e_closure => |closure| {
+                if (!position.called) return null;
+                position.expr = closure.lambda_idx;
+            },
+            .e_block => |block| {
+                for (self.cir.store.sliceStatements(block.stmts)) |stmt_idx| {
+                    const stmt = self.cir.store.getStatement(stmt_idx);
+                    if (stmt == .s_decl and self.cir.store.getPattern(stmt.s_decl.pattern) == .assign) {
+                        try local_bindings.put(stmt.s_decl.pattern, stmt.s_decl.expr);
+                    }
+                }
+                position.expr = block.final_expr;
+            },
+            .e_return => |ret| position.expr = ret.expr,
+            .e_hosted_lambda => |hosted| {
+                if (!position.called) return null;
+                const name = try std.fmt.allocPrint(self.gpa, "{s}.{s}", .{
+                    self.cir.module_name,
+                    self.cir.getIdent(hosted.symbol_name),
+                });
+                defer self.gpa.free(name);
+                return try self.cir.insertIdent(Ident.for_text(name));
+            },
+            else => return null,
+        }
+    }
 }
 
 /// The hosted-try-question-widening rule (design.md "Hosted Try Question
@@ -39687,6 +39826,9 @@ fn tryReturnErrorTail(self: *Self, error_var: Var) Var {
 fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan, row: Var, env: *Env, ctx: problem.Context) Allocator.Error!void {
     const region = self.cir.store.getExprRegion(plan.expr);
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
+    if (self.try_return_conditions.get(ModuleEnv.varFrom(plan.expr))) |condition| {
+        try self.try_return_conditions.put(actual, condition);
+    }
     const result = try self.unifyReturnContribution(expected, actual, env, ctx);
     if (result.isProblem()) {
         self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
@@ -39862,6 +40004,13 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
     }
 
     const constraints = self.return_constraints.items[frame.start..];
+    for (constraints) |constraint| {
+        const condition = self.try_return_conditions.get(ModuleEnv.varFrom(constraint.actual_expr)) orelse continue;
+        if (try self.tryHostedErrorOrigin(condition, false)) |origin| {
+            try self.try_lambda_host_origins.put(lambda_idx, origin);
+            break;
+        }
+    }
     const lambda_body = self.cir.store.getExpr(lambda_idx).e_lambda.body;
     const body_tail_try = try self.tailTrySuffixExpr(lambda_body);
 

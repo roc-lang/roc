@@ -8707,6 +8707,20 @@ into the enclosing row through ordinary unification, and the enclosing
 annotation's audit rejects an error it does not list (pinned by the
 "polarity - try" tests in src/check/test/type_checking_integration.zig).
 
+### Hosted Error Diagnostics
+
+Hosted error provenance in a `?` mismatch is diagnostic-only. Checking records
+the original condition for each generated `Err` return occurrence, including
+projected return contributions. On a mismatch, reporting context follows exact
+CIR references through function aliases and unchanged result forwarding to a
+hosted declaration. Plain `?` contributes its unchanged error origin to the
+owning lambda; an error handler does not. Each module publishes definition-indexed
+origin names in its serialized diagnostic column, so imported aliases consume
+producer-authored origins without accessing private transitive imports.
+Constructing a new error ends that path. A known host origin adds its name and fixed-ABI explanation to the closed-row widening hint;
+ordinary closed rows keep that same hint without host attribution. This evidence
+never controls unification or eligibility for Hosted Try Question Widening.
+
 ### Try Return-Row Composition
 
 A lambda checks its compiler-generated `?` returns only after its body has
