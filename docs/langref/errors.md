@@ -41,7 +41,7 @@ describe = |list|
 
 Notice that the error type above is `[ListWasEmpty]`: a [structural tag union](tag-unions#structural-tag-unions)
 with one tag. That's the usual way to write error types in Roc, and it works especially well with
-the [`?` operator](#returning-errors-early-with), because structural tag unions can be combined:
+the [`?` operator](#returning-errors-early), because structural tag unions can be combined:
 
 ```roc
 parse_and_double : Str -> Try(U64, [BadNumStr, Overflow])
@@ -66,7 +66,7 @@ you forget one.
 
 There are several ways to handle a `Try`, depending on what you want to do with the error.
 
-### Returning Errors Early (with `?`)
+### Returning Errors Early (with `?`) {#returning-errors-early}
 
 Writing [`?`](operators#-unwrap-if-ok-early-return-if-err) after an expression that evaluates to a
 `Try` gives you the `Ok` payload if it's `Ok`. If it's `Err`, the function immediately returns that
@@ -88,7 +88,7 @@ x = U64.from_str(a) ? |_| InvalidFirst # returns Err(InvalidFirst)
 y = U64.from_str(b) ? InvalidSecond    # returns Err(InvalidSecond(BadNumStr))
 ```
 
-### Using a Default Value (with `??`)
+### Using a Default Value (with `??`) {#using-a-default-value}
 
 [`??`](operators#-default-value-on-err) gives you the `Ok` payload, or a default value if it's `Err`:
 
