@@ -113,7 +113,9 @@ NO CHANGE
 		(e-runtime-error (tag "file_import_not_found")))
 	(d-let
 		(p-assign (ident "foo"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-runtime-error (tag "erroneous_value_expr"))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "Json")
 		(exposes)))
 ~~~

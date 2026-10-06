@@ -5279,6 +5279,32 @@ constraints, marks both callable classes rejected, and records the required
 plan. CheckedModule construction consumes those rejection markers to seal
 both calls with explicit `checked_error` resolutions.
 
+A retired expression still evaluates strictly. When an expression is retired
+because an operand is erroneous (here or by the error-typed-value rule), the
+checker records, in `retired_operand_sequences`, its operands in evaluation
+order up to and including the first erroneous one: a call's callee then its
+arguments, a method call's receiver then its arguments, a binary operator's
+two operands, an interpolation's parts, a tuple's, list's, or tag's items, a
+record's update base then its fields in source order, and a `for` loop's
+iterable. The erroneous-value sweep publishes that sequence as the runtime
+error's `evaluated` operands (`CIR.Expr.e_runtime_error.evaluated`, checked
+`CheckedRuntimeError.evaluated`) and keeps those operands' subtrees live;
+only the operands after the erroneous one are invalidated. An operand whose
+solved type contains an error by sweep time is itself erroneous, so the
+published sequence ends before it. A statement retired for such a value
+expression publishes as an expression statement of that runtime error, so
+the value is still evaluated where the statement runs. A record update with
+an erroneous field value does not relate that value into its base's row and
+is retired the same way. Monotype lowers a runtime error with `evaluated`
+operands as those operands, each evaluated for its effect, followed by the
+checked-error crash (`OperandSequenceTask` with a `runtime_error` tail); Boxy
+plans each operand as an ordinary expression and lowers them into discarded
+locals before the same crash (`beginRuntimeError`). Nested retirements compose:
+the erroneous operand may itself be a runtime error with `evaluated`
+operands, which run before it crashes. The result is that earlier operands
+run, with their `dbg`, effects, and crashes, and the program crashes where
+the erroneous operand is evaluated, in every lowering mode.
+
 Retirement is atomic with dispatch introduction. A retired expression emits no
 constraint and no live plan; a required iterator recovery plan carries rejected
 callables but still emits no constraints. Independently valid sibling

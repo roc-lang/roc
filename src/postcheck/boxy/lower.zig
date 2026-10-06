@@ -18061,7 +18061,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
+            .runtime_error => |runtime_error| try self.beginRuntimeError(runtime_error.evaluated),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -19426,8 +19426,9 @@ const ProcBodyBuilder = struct {
             .runtime_error,
             => null,
         };
-        if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return exprDone(try self.lowerCheckedRuntimeError());
+        if (rhs) |expr| switch (self.module.checked_bodies.expr(expr).data) {
+            .runtime_error => |runtime_error| return try self.beginRuntimeError(runtime_error.evaluated),
+            else => {},
         };
         return switch (statement.data) {
             // A dangling annotation, such as a derived method marker of a
@@ -19448,7 +19449,12 @@ const ProcBodyBuilder = struct {
             },
             .expr => |expr_id| blk: {
                 const expr = self.module.checked_bodies.expr(expr_id);
-                const temp = try self.addFrameLocalForType(expr.ty);
+                // A runtime error produces no value, so its discarded local
+                // is zero-sized.
+                const temp = if (expr.data == .runtime_error)
+                    try self.addFrameLocal(.zst)
+                else
+                    try self.addFrameLocalForType(expr.ty);
                 break :blk .{ .tail = .{ .expr = .{ .target = temp, .expr_id = expr_id, .next = next } } };
             },
             .expect => |expr_id| try self.beginExpectStmt(expr_id, next),
@@ -19672,7 +19678,7 @@ const ProcBodyBuilder = struct {
         const expr = self.module.checked_bodies.expr(expr_id);
         // A checked runtime error produces no value, so returning it is the
         // crash itself; its own checked type has no representation.
-        if (expr.data == .runtime_error) return exprDone(try self.lowerCheckedRuntimeError());
+        if (expr.data == .runtime_error) return try self.beginRuntimeError(expr.data.runtime_error.evaluated);
         const expr_rep = self.repForType(expr.ty);
         const expr_layout = self.workerRuntimeLayoutForRep(expr_rep).layoutIdx();
         const worker = self.parent.plan.workers.items[@intFromEnum(self.worker_layout.worker)];
@@ -25563,6 +25569,26 @@ const ProcBodyBuilder = struct {
     /// reported; reaching it crashes with the checked-error message.
     fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
         return try self.lowerCheckedErrorDispatchInto("runtime error");
+    }
+
+    /// A runtime error first evaluates its `evaluated` operands, in order,
+    /// each into a discarded local. The last of them is the erroneous operand
+    /// whose own evaluation crashes; the checked-error crash after it is the
+    /// continuation no evaluation reaches.
+    fn beginRuntimeError(self: *ProcBodyBuilder, evaluated: []const checked.CheckedExprId) Allocator.Error!ExprStep {
+        const crash = try self.lowerCheckedRuntimeError();
+        if (evaluated.len == 0) return exprDone(crash);
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, evaluated.len);
+        for (evaluated, 0..) |expr_id, index| {
+            const expr = self.module.checked_bodies.expr(expr_id);
+            const discarded = if (expr.data == .runtime_error)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[evaluated.len - 1 - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = expr_id, .next = undefined } } };
+        }
+        return exprChain(chain_items, crash);
     }
 
     /// A dispatch that cannot run (`checked_error` or `unreachable`) uses
@@ -47036,7 +47062,7 @@ test "boxy lowerer emits checked runtime error expressions as checked-error cras
         .id = @enumFromInt(1),
         .ty = @enumFromInt(fixtureTableIndex(0)),
         .source_region = base.Region.zero(),
-        .data = .runtime_error,
+        .data = .{ .runtime_error = .{} },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @enumFromInt(fixtureTableIndex(0)),

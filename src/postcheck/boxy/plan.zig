@@ -6274,7 +6274,15 @@ const Builder = struct {
 
         const bodies = view.checked_bodies;
         const expr = bodies.expr(expr_id);
-        if (expr.data == .runtime_error) return;
+        // A runtime error has no value, so its own type is never analyzed;
+        // the operands it evaluates before it crashes are ordinary
+        // expressions.
+        if (expr.data == .runtime_error) {
+            const start = beginPlanSequence(actions);
+            defer finishPlanSequence(actions, start);
+            for (expr.data.runtime_error.evaluated) |operand| try actions.append(self.allocator, exprAction(view, operand));
+            return;
+        }
         const expr_rep = try self.analyzeType(view, expr.ty);
         // A nested callable's own type belongs to that callable's worker.
         if (expr.data != .lambda and expr.data != .closure) try self.recordWorkerBodyType(worker, expr_rep);
@@ -7120,7 +7128,7 @@ const Builder = struct {
             // A promoted procedure is planned as its own template.
             .promoted_proc => {},
             .decl => |decl| {
-                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
+                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return try actions.append(self.allocator, exprAction(view, decl.expr));
                 // A declaration that binds no runtime value is never lowered:
                 // each typed use instantiates its target instead.
                 if (try declarationOmitsRuntimeBinding(self.allocator, view, decl.pattern, decl.expr)) return;
@@ -7128,13 +7136,13 @@ const Builder = struct {
                 try actions.append(self.allocator, exprAction(view, decl.expr));
             },
             .var_ => |decl| {
-                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return;
+                if (view.checked_bodies.expr(decl.expr).data == .runtime_error) return try actions.append(self.allocator, exprAction(view, decl.expr));
                 try actions.append(self.allocator, patternAction(view, decl.pattern));
                 try actions.append(self.allocator, exprAction(view, decl.expr));
             },
             .var_uninitialized => |decl| try actions.append(self.allocator, patternAction(view, decl.pattern)),
             .reassign => |reassign| {
-                if (view.checked_bodies.expr(reassign.expr).data == .runtime_error) return;
+                if (view.checked_bodies.expr(reassign.expr).data == .runtime_error) return try actions.append(self.allocator, exprAction(view, reassign.expr));
                 try actions.append(self.allocator, patternAction(view, reassign.pattern));
                 try actions.append(self.allocator, exprAction(view, reassign.expr));
             },

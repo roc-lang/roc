@@ -385,13 +385,22 @@ main = |_| {
 				(e-dec-small (numerator "33") (denominator-power-of-ten "1") (value "3.3")))))
 	(d-let
 		(p-assign (ident "all_int_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "int_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "all_str_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "str_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "all_float_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "float_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "get_empty"))
 		(e-lambda
@@ -419,14 +428,24 @@ main = |_| {
 			(e-block
 				(s-let
 					(p-assign (ident "len1"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "len2"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "len3"))
-					(e-runtime-error (tag "erroneous_value_expr")))
-				(e-runtime-error (tag "erroneous_value_expr"))))))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure

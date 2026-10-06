@@ -266,7 +266,11 @@ NO CHANGE
 									(p-runtime-error (tag "var_reassigned_in_expect"))
 									(p-assign (ident "extra"))))
 							(e-runtime-error (tag "erroneous_value_expr")))
-						(e-runtime-error (tag "erroneous_value_expr"))))
+						(e-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")
+								(e-lookup-local
+									(p-var-assign (ident "$count")))
+								(e-runtime-error (tag "erroneous_value_expr"))))))
 				(s-expect
 					(e-block
 						(s-var

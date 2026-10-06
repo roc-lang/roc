@@ -28788,11 +28788,12 @@ const BodyContext = struct {
         return switch (context) {
             .uncontextual => blk: {
                 const expr = self.view.bodies.expr(expr_id);
-                // A root runtime error has no checked result type. Every other
-                // divergent expression retains its checked result variable as
-                // an unobservable continuation cell; asking for expression
-                // value evidence here would instantiate a rejected dispatch.
-                if (self.view.types.payload(expr.ty) == .err) {
+                // A runtime error produces no value, and its checked type can
+                // contain the error it was retired for. Every other divergent
+                // expression retains its checked result variable as an
+                // unobservable continuation cell; asking for expression value
+                // evidence here would instantiate a rejected dispatch.
+                if (expr.data == .runtime_error or self.view.types.payload(expr.ty) == .err) {
                     break :blk divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 }
                 break :blk divergentStep(self, expr_id, .{ .at_cell = DraftTypeCell.fromGraphNode(try self.instNode(expr.ty)) });
@@ -30301,6 +30302,9 @@ const BodyContext = struct {
         diverges,
         /// The dispatch crashes once every operand has evaluated.
         dispatch_crash: DispatchCrashReason,
+        /// A retired expression crashes with the checked runtime error once
+        /// every operand it still evaluates has evaluated.
+        runtime_error,
     };
 
     fn releaseOperandSequenceTask(self: *BodyContext, task: *OperandSequenceTask) void {
@@ -30381,6 +30385,10 @@ const BodyContext = struct {
                 .ty = task.ty,
                 .data = try self.dispatchCrashData(reason),
             })),
+            .runtime_error => try self.finishOperandSequence(task, try self.addExpr(.{
+                .ty = task.ty,
+                .data = .{ .checked_error = try self.addStringLiteral("runtime error") },
+            })),
         };
     }
 
@@ -30399,7 +30407,17 @@ const BodyContext = struct {
         const expr_id = task.expr;
         const data: BodyExprData = switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
-            .runtime_error => .{ .checked_error = try self.addStringLiteral("runtime error") },
+            .runtime_error => |runtime_error| if (runtime_error.evaluated.len != 0)
+                // A call-like expression retired for an erroneous operand
+                // evaluates its earlier operands, then that operand, whose
+                // evaluation crashes.
+                return requestLowerTask(self, .{ .operand_sequence = .{
+                    .operands = try self.allocator.dupe(checked.CheckedExprId, runtime_error.evaluated),
+                    .ty = ty,
+                    .tail = .runtime_error,
+                } })
+            else
+                .{ .checked_error = try self.addStringLiteral("runtime error") },
             .ellipsis => .{ .crash = try self.addStringLiteral("not implemented") },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
@@ -31823,7 +31841,10 @@ const BodyContext = struct {
             } }),
             .match_ => |match| return requestLowerTask(self, .{ .match_task = .{ .expr_id = checked_expr, .match = match, .result_cell = cell } }),
             .if_ => |if_| return requestLowerTask(self, .{ .if_task = .{ .expr_id = checked_expr, .if_ = if_, .result_cell = cell } }),
-            .runtime_error => return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") })),
+            .runtime_error => |runtime_error| {
+                if (runtime_error.evaluated.len != 0) return divergentStep(self, checked_expr, .{ .at_cell = cell });
+                return loweredExprStep(try self.addExprWithTypeCell(cell, .{ .checked_error = try self.addStringLiteral("runtime error") }));
+            },
             .anno_only => Common.invariant("non-runtime checked expression reached Monotype lowering"),
             .pending, .str_segment, .str, .bytes_literal, .binop, .unary_minus, .unary_not, .structural_eq, .structural_hash, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
         }
@@ -31916,8 +31937,9 @@ const BodyContext = struct {
         }
         if (try self.restoredHoistedExprAtType(checked_expr, ty)) |restored| return loweredExprStep(restored);
         switch (expr.data) {
-            .runtime_error => {
+            .runtime_error => |runtime_error| {
                 frame.cursor = 3;
+                if (runtime_error.evaluated.len != 0) return divergentStep(self, checked_expr, .{ .at_type = ty });
                 return requestLowerTask(self, .{ .with_type = .{ .expr = checked_expr, .ty = ty } });
             },
             .call => |call| {
@@ -32011,8 +32033,9 @@ const BodyContext = struct {
                     return step;
                 },
             },
-            .runtime_error => {
+            .runtime_error => |runtime_error| {
                 frame.cursor = 1;
+                if (runtime_error.evaluated.len != 0) return divergentStep(self, expr_id, .{ .at_type = try self.unitType() });
                 return requestLowerTask(self, .{ .with_type = .{ .expr = expr_id, .ty = try self.unitType() } });
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => {},
@@ -32234,8 +32257,8 @@ const BodyContext = struct {
                     .final_expr = try self.addExpr(.{ .ty = ty, .data = .unit }),
                 } }),
                 .run_low_level => |low_level| try self.withTypeData(task, .{ .low_level = .{ .op = low_level.op, .args = child.spanValue() } }),
-                .match_, .if_, .block, .closure, .lambda, .record, .lookup_local, .lookup_external, .lookup_required => self.withTypeDone(task, child.exprValue()),
-                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .runtime_error, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
+                .match_, .if_, .block, .closure, .lambda, .record, .lookup_local, .lookup_external, .lookup_required, .runtime_error => self.withTypeDone(task, child.exprValue()),
+                .pending, .numeral, .str_from_quote, .str_segment, .bytes_literal, .empty_list, .call, .empty_record, .zero_argument_tag, .binop, .unary_minus, .unary_not, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .crash, .ellipsis, .anno_only, .break_, .hosted_lambda => unreachable,
             };
         }
         task.saved = try self.saveSourceLocation(expr);
@@ -32244,7 +32267,10 @@ const BodyContext = struct {
             .pending,
             .anno_only,
             => Common.invariant("non-runtime checked expression reached Monotype lowering"),
-            .runtime_error => return self.withTypeDone(task, try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("runtime error") } })),
+            .runtime_error => |runtime_error| {
+                if (runtime_error.evaluated.len != 0) return divergentStep(self, expr_id, .{ .at_type = ty });
+                return self.withTypeDone(task, try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("runtime error") } }));
+            },
             .numeral => |numeral| {
                 if (numeral.conversion_root) |root_id| return self.withTypeDone(task, try self.lowerLiteralConversionAtNode(expr_id, root_id, try self.graph.importMono(ty)));
                 return self.withTypeDone(task, try self.lowerNumeralExpr(expr_id, numeral, ty));

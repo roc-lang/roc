@@ -516,6 +516,12 @@ pub const Expr = union(enum) {
     /// ```
     e_runtime_error: struct {
         diagnostic: CIR.Diagnostic.Idx,
+        /// The operands a call-like expression retired by an erroneous operand
+        /// still evaluates, in evaluation order, before it crashes: every
+        /// operand before the first erroneous one, then that erroneous
+        /// operand, whose own evaluation crashes. Empty for every other
+        /// runtime error.
+        evaluated: CIR.Expr.Span = .{ .span = .{ .start = 0, .len = 0 } },
     },
     /// A crash expression that terminates execution with a message.
     /// This expression never returns and causes the program to crash at runtime.
@@ -1671,6 +1677,9 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("tag", msg);
 
                 const attrs = tree.beginNode();
+                for (ir.store.sliceExpr(e.evaluated)) |evaluated| {
+                    try ir.store.getExpr(evaluated).pushToSExprTree(ir, tree, evaluated);
+                }
                 try tree.endNode(begin, attrs);
             },
             .e_ellipsis => {

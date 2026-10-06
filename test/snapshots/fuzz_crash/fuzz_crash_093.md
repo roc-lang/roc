@@ -79,7 +79,9 @@ d = (0, || ())
 (can-ir
 	(d-let
 		(p-assign (ident "d"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-num (value "0"))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure

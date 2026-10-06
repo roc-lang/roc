@@ -242,6 +242,11 @@ pub const Statement = union(enum) {
 
     s_runtime_error: struct {
         diagnostic: CIR.Diagnostic.Idx,
+        /// The value a statement retired for its erroneous value expression
+        /// still evaluates before it crashes: that expression, when it is a
+        /// retired expression that evaluates operands of its own. Empty for
+        /// every other runtime error.
+        evaluated: CIR.Expr.Span = .{ .span = .{ .start = 0, .len = 0 } },
     },
 
     pub const Idx = enum(u32) { _ };
@@ -528,6 +533,9 @@ pub const Statement = union(enum) {
                 try tree.pushStringPair("tag", msg);
 
                 const attrs = tree.beginNode();
+                for (env.store.sliceExpr(s.evaluated)) |evaluated| {
+                    try env.store.getExpr(evaluated).pushToSExprTree(env, tree, evaluated);
+                }
                 try tree.endNode(begin, attrs);
             },
         }

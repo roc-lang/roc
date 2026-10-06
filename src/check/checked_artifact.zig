@@ -10935,6 +10935,12 @@ fn zeroPayloadTagIdent(module: TypedCIR.Module, expr_idx: CIR.Expr.Idx) ?Ident.I
 }
 
 /// Public `CheckedExprData` declaration.
+/// The operands a runtime error evaluates before it crashes
+/// (`CheckedExprData.runtime_error`).
+pub const CheckedRuntimeError = struct {
+    evaluated: []const CheckedExprId = &.{},
+};
+
 pub const CheckedExprData = union(enum) {
     pending,
     /// Any numeric literal: exact digit facts plus an optional dispatch plan.
@@ -11040,7 +11046,11 @@ pub const CheckedExprData = union(enum) {
         tuple: CheckedExprId,
         elem_index: u32,
     },
-    runtime_error,
+    /// A runtime error. `evaluated` lists the operands a call-like expression
+    /// retired for an erroneous operand still evaluates, in order, before it
+    /// crashes; the last of them is that erroneous operand. Empty for every
+    /// other runtime error.
+    runtime_error: CheckedRuntimeError,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
     expect_err: struct {
@@ -11204,7 +11214,7 @@ pub const StoredCheckedExprData = union(enum) {
         tuple: CheckedExprId,
         elem_index: u32,
     },
-    runtime_error,
+    runtime_error: CheckedBodyRange,
     crash: CheckedStringLiteralId,
     dbg: CheckedExprId,
     expect_err: struct {
@@ -11366,7 +11376,7 @@ fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData
         .pending => .pending,
         .empty_list => .empty_list,
         .empty_record => .empty_record,
-        .runtime_error => .runtime_error,
+        .runtime_error => |r| .{ .runtime_error = .{ .evaluated = pool_owner.exprIdPool()[r.start .. r.start + r.len] } },
         .ellipsis => .ellipsis,
         .anno_only => .anno_only,
         .numeral => |v| .{ .numeral = v },
@@ -12166,13 +12176,13 @@ const CheckedSourceNodes = struct {
             .e_empty_list,
             .e_empty_record,
             .e_zero_argument_tag,
-            .e_runtime_error,
             .e_crash,
             .e_ellipsis,
             .e_anno_only,
             .e_derived_method,
             .e_break,
             => {},
+            .e_runtime_error => |runtime_error| try self.markExprSpan(module, runtime_error.evaluated, work),
             .e_lookup_associated_local, .e_lookup_associated => checkedArtifactInvariant("unresolved associated lookup reached checked source traversal", .{}),
             .e_deferred_import_ref => checkedArtifactInvariant("deferred import reference reached checked artifact publication", .{}),
         }
@@ -12280,8 +12290,8 @@ const CheckedSourceNodes = struct {
             .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
-            .s_runtime_error,
             => {},
+            .s_runtime_error => |runtime_error| try self.markExprSpan(module, runtime_error.evaluated, work),
         }
     }
 
@@ -13039,7 +13049,7 @@ pub const CheckedBodyStore = struct {
             for (dependents[@intFromEnum(failed)].items) |dependent| {
                 const stored = &self.stored_exprs.items[@intFromEnum(dependent)];
                 if (stored.data == .runtime_error) continue;
-                stored.data = .runtime_error;
+                stored.data = .{ .runtime_error = .{} };
                 try work.append(allocator, dependent);
             }
         }
@@ -13219,7 +13229,7 @@ pub const CheckedBodyStore = struct {
             .pending => .pending,
             .empty_list => .empty_list,
             .empty_record => .empty_record,
-            .runtime_error => .runtime_error,
+            .runtime_error => |r| .{ .runtime_error = try self.appendExprIds(allocator, r.evaluated) },
             .ellipsis => .ellipsis,
             .anno_only => .anno_only,
             .numeral => |v| .{ .numeral = v },
@@ -13703,7 +13713,7 @@ pub const CheckedBodyStore = struct {
             std.debug.assert(ref_id == indexed);
             const data = &self.stored_exprs.items[@intFromEnum(record.expr)].data;
             if (record.ref == .platform_required_checked_error) {
-                data.* = .runtime_error;
+                data.* = .{ .runtime_error = .{} };
                 rejected_binding = true;
                 continue;
             }
@@ -13728,7 +13738,7 @@ pub const CheckedBodyStore = struct {
                 if (procedureUseKind(proc, local_module, local_procedure_bindings, imports, available_modules, relation_modules) == .checked_error) {
                     // The type remains available for diagnostics. Evaluating this
                     // exact value use has no callable target or type relation.
-                    data.* = .runtime_error;
+                    data.* = .{ .runtime_error = .{} };
                     rejected_binding = true;
                     continue;
                 }
@@ -13760,7 +13770,7 @@ pub const CheckedBodyStore = struct {
                 // Evaluating the callee happens before any argument. A checked
                 // error produces neither a callable nor a result type relation.
                 if (self.stored_exprs.items[@intFromEnum(checked_expr.data.call.func)].data == .runtime_error) {
-                    checked_expr.data = .runtime_error;
+                    checked_expr.data = .{ .runtime_error = .{} };
                     rejected_binding = true;
                     continue;
                 }
@@ -15466,7 +15476,7 @@ const CheckedBodyPayloadCopier = struct {
                 .tuple = self.checkedExpr(access.tuple),
                 .elem_index = access.elem_index,
             } },
-            .e_runtime_error => .runtime_error,
+            .e_runtime_error => |runtime_error| .{ .runtime_error = .{ .evaluated = try self.copyExprSpan(runtime_error.evaluated) } },
             .e_crash => |crash| .{ .crash = try self.string_builder.intern(crash.msg) },
             .e_dbg => |dbg| .{ .dbg = self.checkedExpr(dbg.expr) },
             .e_expect_err => |expect_err| .{ .expect_err = .{
@@ -15858,7 +15868,13 @@ const CheckedBodyPayloadCopier = struct {
             .s_nominal_decl => .nominal_decl,
             .s_type_anno => .type_anno,
             .s_type_var_alias => .type_var_alias,
-            .s_runtime_error => .runtime_error,
+            // A statement that still evaluates its retired value expression
+            // runs that expression, whose evaluation crashes.
+            .s_runtime_error => |runtime_error| switch (runtime_error.evaluated.span.len) {
+                0 => .runtime_error,
+                1 => .{ .expr = self.checkedExpr(self.module.sliceExpr(runtime_error.evaluated)[0]) },
+                else => checkedArtifactInvariant("a retired statement evaluated more than its value expression", .{}),
+            },
         };
     }
 
@@ -27605,7 +27621,7 @@ pub fn pairCheckedPlatform(
                 if (result.resolved_value_refs.records[@intFromEnum(ref_id)].ref == .platform_required_checked_error) {
                     // A rejected requirement produces no value. Publish that
                     // fact before any lowering asks for its argument type.
-                    expr.data = .runtime_error;
+                    expr.data = .{ .runtime_error = .{} };
                 }
             },
             .pending,
@@ -29960,7 +29976,7 @@ fn checkedBodyForSelectedHoistedRoot(
             const pattern = selected.pattern orelse unreachable;
             const checked_type = try checkedTypeIdForVar(allocator, module, checked_types, ModuleEnv.varFrom(pattern));
             break :blk .{
-                .expr = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_error = selected_index }, checked_type, module.regionAt(ModuleEnv.nodeIdxFrom(pattern)), .runtime_error),
+                .expr = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_error = selected_index }, checked_type, module.regionAt(ModuleEnv.nodeIdxFrom(pattern)), .{ .runtime_error = .{} }),
                 .pattern = checkedPatternIdForSource(checked_bodies, pattern),
                 .checked_type = checked_type,
             };
@@ -40640,7 +40656,7 @@ test "checked diagnostic-error fact propagates through body dependencies and typ
     const dispatch_operand = [_]CheckedExprId{e0};
     const block_statements = [_]CheckedStatementId{s0};
     const exprs = [_]CheckedExpr{
-        .{ .id = e0, .ty = ty_ok, .source_region = region, .data = .runtime_error },
+        .{ .id = e0, .ty = ty_ok, .source_region = region, .data = .{ .runtime_error = .{} } },
         .{ .id = e1, .ty = ty_ok, .source_region = region, .data = .{ .list = &list_items } },
         .{ .id = e2, .ty = ty_err, .source_region = region, .data = .empty_record },
         .{ .id = e3, .ty = ty_ok, .source_region = region, .data = .{ .lambda = .{ .args = &lambda_args, .body = e4 } } },
@@ -40702,8 +40718,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0xE1, 0xFB, 0xED, 0x06, 0xEB, 0x50, 0x0E, 0xF7, 0xE2, 0xFB, 0xA5, 0x1E, 0xC6, 0x64, 0x2A, 0xCD,
-        0x6F, 0x32, 0x6D, 0x31, 0xA3, 0xAA, 0xB9, 0x88, 0xAB, 0x7D, 0xD5, 0x6F, 0xB3, 0x43, 0x74, 0xB5,
+        0x86, 0xCA, 0x6D, 0x2F, 0xE3, 0x52, 0x41, 0x57, 0x73, 0x7E, 0x11, 0x5D, 0x00, 0x89, 0xD8, 0x90,
+        0x33, 0xB8, 0xA1, 0x74, 0x28, 0x69, 0x05, 0xD0, 0x55, 0x7A, 0x04, 0xFD, 0x88, 0xBC, 0xC8, 0x86,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

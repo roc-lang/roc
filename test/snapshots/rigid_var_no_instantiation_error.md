@@ -261,7 +261,10 @@ main! = |_| {
 									(e-literal (string "hello")))))))
 				(s-let
 					(p-assign (ident "result2"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-local
+							(p-assign (ident "swap")))
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "result3"))
 					(e-call (constraint-fn-var 362)

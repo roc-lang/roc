@@ -660,6 +660,13 @@ rejected_destructure_defs: std.AutoHashMapUnmanaged(CIR.Def.Idx, void),
 /// Tracks unannotated expression identities whose checked value type contains
 /// an error and therefore cannot be used to introduce a parent call relation.
 call_operand_type_error_exprs: std.ArrayListUnmanaged(bool),
+/// For each expression retired because one of its operands is an erroneous
+/// value, the operands it still evaluates before it crashes, as a range of
+/// `retired_operand_pool`: every operand before the first erroneous one, in
+/// evaluation order, then that erroneous operand. The erroneous-value sweep
+/// publishes them as the runtime error's `evaluated` operands.
+retired_operand_sequences: std.AutoHashMapUnmanaged(CIR.Expr.Idx, RetiredOperandSequence),
+retired_operand_pool: std.ArrayListUnmanaged(CIR.Expr.Idx),
 /// Annotations that describe host-boundary values (hosted lambdas and
 /// `provides` defs). Their rows are generated as written—implicit polarity
 /// opening does not apply across the host boundary. Populated once per check
@@ -3328,6 +3335,8 @@ fn initAssumePrepared(
         .erroneous_statements = .empty,
         .rejected_destructure_defs = .empty,
         .call_operand_type_error_exprs = try initNodeSlots(bool, gpa, node_count, false),
+        .retired_operand_sequences = .empty,
+        .retired_operand_pool = .empty,
         .host_boundary_annotations = .empty,
         .implicit_open_exts = .empty,
         .annotation_implicit_open_exts = .empty,
@@ -3479,6 +3488,8 @@ pub fn deinit(self: *Self) void {
     self.erroneous_statements.deinit(self.gpa);
     self.rejected_destructure_defs.deinit(self.gpa);
     self.call_operand_type_error_exprs.deinit(self.gpa);
+    self.retired_operand_sequences.deinit(self.gpa);
+    self.retired_operand_pool.deinit(self.gpa);
     self.host_boundary_annotations.deinit(self.gpa);
     var position_values = self.nominal_positions.valueIterator();
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
@@ -5601,14 +5612,6 @@ const HoistInvalidationVisitor = struct {
     }
 };
 
-fn markHoistInvalidatedStatementExprs(
-    self: *Self,
-    statement: CIR.Statement.Idx,
-    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
-) Allocator.Error!void {
-    try self.visitStatementChildren(statement, HoistInvalidationVisitor{ .checker = self, .work = work });
-}
-
 fn markHoistInvalidatedExprChildren(
     self: *Self,
     expr: CIR.Expr.Idx,
@@ -5667,8 +5670,8 @@ fn visitStatementChildren(self: *const Self, statement: CIR.Statement.Idx, visit
         .s_where_alias_decl,
         .s_type_anno,
         .s_type_var_alias,
-        .s_runtime_error,
         => {},
+        .s_runtime_error => |runtime_error| for (self.cir.store.sliceExpr(runtime_error.evaluated)) |child| try visitor.expr(child),
     }
 }
 
@@ -5766,6 +5769,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
             try visitor.expr(for_.body);
         },
         .e_run_low_level => |run| for (self.cir.store.sliceExpr(run.args)) |child| try visitor.expr(child),
+        .e_runtime_error => |runtime_error| for (self.cir.store.sliceExpr(runtime_error.evaluated)) |child| try visitor.expr(child),
         .e_num,
         .e_frac_f32,
         .e_frac_f64,
@@ -5786,7 +5790,6 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
         .e_empty_list,
         .e_empty_record,
         .e_zero_argument_tag,
-        .e_runtime_error,
         .e_crash,
         .e_ellipsis,
         .e_anno_only,
@@ -13376,20 +13379,98 @@ fn rejectTopLevelDestructure(self: *Self, def: CIR.Def, diagnostic: CIR.Diagnost
 /// Replace a rejected statement with an explicit runtime error. A binding
 /// statement's binders must already be poisoned, so later lookups of them
 /// become runtime errors rather than reading a binder with no value.
+/// Replace a rejected statement with a runtime error. A statement that still
+/// evaluates its value expression before it crashes (`evaluated`) keeps that
+/// expression's subtree live.
 fn replaceRejectedStatement(
     self: *Self,
     stmt_idx: CIR.Statement.Idx,
     diagnostic: CIR.Diagnostic.Idx,
+    evaluated: ?CIR.Expr.Idx,
 ) Allocator.Error!void {
     var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer work.deinit(self.gpa);
-    try self.markHoistInvalidatedStatementExprs(stmt_idx, &work);
+    const kept: []const CIR.Expr.Idx = if (evaluated) |*expr| expr[0..1] else &.{};
+    try self.visitStatementChildren(stmt_idx, KeptOperandInvalidationVisitor{ .checker = self, .work = &work, .kept = kept });
     var next: usize = 0;
     while (next < work.items.len) : (next += 1) {
         try self.markHoistInvalidatedExprChildren(work.items[next], &work);
     }
     self.retireInvalidatedRecordDefaults(null);
-    try self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic);
+    const evaluated_span = if (evaluated) |expr| try self.cir.store.appendExprSpan(&.{expr}) else CIR.Expr.Span{ .span = .{ .start = 0, .len = 0 } };
+    try self.cir.store.replaceStatementWithRuntimeError(stmt_idx, diagnostic, evaluated_span);
+}
+
+/// Invalidates a retired node's children except the operands it still
+/// evaluates, whose subtrees stay live.
+const KeptOperandInvalidationVisitor = struct {
+    checker: *Self,
+    work: *std.ArrayListUnmanaged(CIR.Expr.Idx),
+    kept: []const CIR.Expr.Idx,
+
+    fn expr(self: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+        for (self.kept) |kept| {
+            if (kept == child) return;
+        }
+        try self.checker.markHoistInvalidatedExpr(child, self.work);
+    }
+
+    fn boundPattern(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retirePatternSubtreeMetadata(pattern);
+    }
+
+    fn reassignTarget(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retirePatternSubtreeMetadata(pattern);
+    }
+
+    fn returnTarget(self: @This(), lambda: CIR.Expr.Idx) Allocator.Error!void {
+        try self.checker.markHoistInvalidatedExpr(lambda, self.work);
+    }
+};
+
+/// Replace an expression retired for an erroneous operand with a runtime
+/// error that evaluates `sequence` (`retired_operand_sequences`) before it
+/// crashes. Only the subtrees of the operands it no longer evaluates are
+/// invalidated.
+///
+/// An operand whose solved type contains an error is itself erroneous, so the
+/// crash happens where it would be evaluated: the evaluated operands end
+/// before it. Each evaluated operand is either an ordinary value of an
+/// error-free type or a runtime error of its own.
+fn replaceExprWithRuntimeErrorAfterOperands(
+    self: *Self,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+    sequence: RetiredOperandSequence,
+) Allocator.Error!void {
+    const recorded = self.retired_operand_pool.items[sequence.start..][0..sequence.len];
+    var kept_len: usize = 0;
+    for (recorded) |operand| {
+        const retired = self.cir.store.getExpr(operand) == .e_runtime_error or self.erroneous_value_exprs.contains(operand);
+        if (!retired) {
+            self.var_set.clearRetainingCapacity();
+            if (try self.varContainsError(ModuleEnv.varFrom(operand), &self.var_set)) break;
+        }
+        kept_len += 1;
+    }
+    // Evaluating only an erroneous operand that evaluates nothing itself is
+    // the crash alone.
+    const evaluates_nothing = kept_len == 0 or (kept_len == 1 and
+        (self.cir.store.getExpr(recorded[0]) == .e_runtime_error or self.erroneous_value_exprs.contains(recorded[0])) and
+        !self.retired_operand_sequences.contains(recorded[0]));
+    if (evaluates_nothing) return try self.replaceExprWithRuntimeError(expr_idx, diagnostic_idx);
+    const kept = try self.gpa.dupe(CIR.Expr.Idx, recorded[0..kept_len]);
+    defer self.gpa.free(kept);
+    var work: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
+    defer work.deinit(self.gpa);
+    try self.visitExprChildren(expr_idx, KeptOperandInvalidationVisitor{ .checker = self, .work = &work, .kept = kept });
+    var next: usize = 0;
+    while (next < work.items.len) : (next += 1) {
+        try self.markHoistInvalidatedExprChildren(work.items[next], &work);
+    }
+    self.retireInvalidatedRecordDefaults(expr_idx);
+    const evaluated = try self.cir.store.appendExprSpan(kept);
+    try self.cir.store.replaceExprWithRuntimeErrorAfter(expr_idx, diagnostic_idx, evaluated);
 }
 
 fn literalDispatchPlanMatchesConstraint(
@@ -23594,6 +23675,7 @@ const ExprCheckFrame = struct {
             if (try checker.varContainsError(self.expr_var, &checker.var_set)) {
                 try checker.erroneous_value_exprs.put(checker.gpa, self.expr_idx, {});
                 checker.call_operand_type_error_exprs.items[nodeSlot(self.expr_idx)] = true;
+                try checker.recordRetiredOperandSequence(self.expr_idx);
             }
         }
 
@@ -23714,6 +23796,7 @@ fn beginExprCheckFrame(
     // dense slot always describes this check, so a prior error cannot retire a
     // parent after the expression has checked successfully.
     self.call_operand_type_error_exprs.items[nodeSlot(expr_idx)] = false;
+    _ = self.retired_operand_sequences.remove(expr_idx);
 
     // Consume the call-position flags. Value-producing wrappers explicitly
     // forward them only to the child that supplies their result.
@@ -25165,8 +25248,15 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
             state.record_being_updated_name = self.getExprPatternIdent(record_being_updated_expr);
             state.phase = .field;
         },
-        .field => {
+        .field => field_relation: {
             const field = self.cir.store.getRecordField(fields[state.field_index]);
+            // An erroneous field value has no value to write into the base
+            // row; relating it would write its error into the base's type.
+            // The update is retired below.
+            if (try self.operandIsErroneousValue(field.value)) {
+                state.field_index += 1;
+                break :field_relation;
+            }
             const update_context = recordUpdateFieldContext(field, record_being_updated_var, state.record_being_updated_name);
             const field_value_var = try self.storedValueVar(field.value, env);
 
@@ -25264,6 +25354,15 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
             .record_name = state.record_being_updated_name,
         } });
     }
+
+    // An update with an erroneous base or field value is retired: it
+    // evaluates its base and its fields in order up to the first erroneous
+    // one, then crashes there.
+    var update_operands = try std.ArrayList(CIR.Expr.Idx).initCapacity(self.gpa, fields.len + 1);
+    defer update_operands.deinit(self.gpa);
+    update_operands.appendAssumeCapacity(record_being_updated_expr);
+    for (fields) |field_idx| update_operands.appendAssumeCapacity(self.cir.store.getRecordField(field_idx).value);
+    if (try self.retireCallLikeExprWithErroneousOperands(frame.expr_idx, expr_var, update_operands.items)) return .done;
 
     // Then unify with the actual expression
     _ = try self.unify(record_being_updated_var, expr_var, env);
@@ -28656,7 +28755,89 @@ fn retireCallLikeExprWithErroneousOperands(
     if (!try self.callLikeOperandsContainErroneousValue(operand_exprs)) return false;
 
     try self.retireCallLikeExpr(expr_idx, expr_var);
+    try self.recordRetiredOperandSequence(expr_idx);
     return true;
+}
+
+const RetiredOperandSequence = struct { start: u32, len: u32 };
+
+/// Record the operands an expression retired for an erroneous operand still
+/// evaluates (`retired_operand_sequences`): its operands in evaluation order
+/// up to and including the first erroneous one. Evaluation is strict, so
+/// every operand before that one runs, with its effects, and the erroneous
+/// operand's own evaluation is where the program crashes. An expression with
+/// no erroneous operand records nothing.
+fn recordRetiredOperandSequence(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+    const start: u32 = @intCast(self.retired_operand_pool.items.len);
+    try self.appendEvaluationOperands(expr_idx);
+    const operands = self.retired_operand_pool.items[start..];
+    const erroneous_index = for (operands, 0..) |operand, index| {
+        if (try self.operandIsErroneousValue(operand)) break index;
+    } else null;
+    const index = erroneous_index orelse {
+        self.retired_operand_pool.shrinkRetainingCapacity(start);
+        _ = self.retired_operand_sequences.remove(expr_idx);
+        return;
+    };
+    self.retired_operand_pool.shrinkRetainingCapacity(start + index + 1);
+    try self.retired_operand_sequences.put(self.gpa, expr_idx, .{ .start = start, .len = @intCast(index + 1) });
+}
+
+/// Whether an operand is an erroneous value, by the rule call-operand
+/// retirement uses (`callLikeOperandsContainErroneousValue`).
+fn operandIsErroneousValue(self: *Self, operand: CIR.Expr.Idx) Allocator.Error!bool {
+    if (self.call_operand_type_error_exprs.items[nodeSlot(operand)]) return true;
+    return self.cir.store.getExpr(operand) == .e_lookup_local and try self.valueIsErroneous(operand);
+}
+
+/// Append an expression's operands to `retired_operand_pool` in the order
+/// evaluation runs them. Only expressions that evaluate all of their operands
+/// before using any of them have operands here.
+fn appendEvaluationOperands(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
+    const store = &self.cir.store;
+    const pool = &self.retired_operand_pool;
+    switch (store.getExpr(expr_idx)) {
+        .e_call => |call| {
+            try pool.append(self.gpa, call.func);
+            try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
+        },
+        .e_method_call => |call| {
+            try pool.append(self.gpa, call.receiver);
+            try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
+        },
+        .e_dispatch_call => |call| {
+            try pool.append(self.gpa, call.receiver);
+            try pool.appendSlice(self.gpa, store.sliceExpr(call.args));
+        },
+        .e_type_method_call => |call| try pool.appendSlice(self.gpa, store.sliceExpr(call.args)),
+        .e_type_dispatch_call => |call| try pool.appendSlice(self.gpa, store.sliceExpr(call.args)),
+        .e_run_low_level => |run| try pool.appendSlice(self.gpa, store.sliceExpr(run.args)),
+        .e_interpolation => |interpolation| {
+            try pool.append(self.gpa, interpolation.first);
+            try pool.appendSlice(self.gpa, store.sliceExpr(interpolation.parts));
+        },
+        .e_binop => |binop| try pool.appendSlice(self.gpa, &.{ binop.lhs, binop.rhs }),
+        .e_unary_minus => |unary| try pool.append(self.gpa, unary.expr),
+        .e_structural_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
+        .e_method_eq => |eq| try pool.appendSlice(self.gpa, &.{ eq.lhs, eq.rhs }),
+        .e_structural_hash => |hash| try pool.appendSlice(self.gpa, &.{ hash.value, hash.hasher }),
+        .e_str => |str| try pool.appendSlice(self.gpa, store.sliceExpr(str.span)),
+        .e_list => |list| try pool.appendSlice(self.gpa, store.sliceExpr(list.elems)),
+        .e_tuple => |tuple| try pool.appendSlice(self.gpa, store.sliceExpr(tuple.elems)),
+        .e_tag => |tag| try pool.appendSlice(self.gpa, store.sliceExpr(tag.args)),
+        .e_nominal => |nominal| try pool.append(self.gpa, nominal.backing_expr),
+        .e_nominal_external => |nominal| try pool.append(self.gpa, nominal.backing_expr),
+        .e_record => |record| {
+            if (record.ext) |ext| try pool.append(self.gpa, ext);
+            for (store.sliceRecordFields(record.fields)) |field_idx| {
+                try pool.append(self.gpa, store.getRecordField(field_idx).value);
+            }
+        },
+        .e_field_access => |field| try pool.append(self.gpa, field.receiver),
+        .e_tuple_access => |access| try pool.append(self.gpa, access.tuple),
+        .e_for => |for_| try pool.append(self.gpa, for_.expr),
+        else => {},
+    }
 }
 
 fn retireCallLikeExpr(self: *Self, expr_idx: CIR.Expr.Idx, expr_var: Var) Allocator.Error!void {
@@ -32170,7 +32351,11 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(expr_idx.*),
         } });
-        try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
+        if (self.retired_operand_sequences.get(expr_idx.*)) |sequence| {
+            try self.replaceExprWithRuntimeErrorAfterOperands(expr_idx.*, diagnostic_idx, sequence);
+        } else {
+            try self.replaceExprWithRuntimeError(expr_idx.*, diagnostic_idx);
+        }
     }
 
     var rejected_statements = self.erroneous_statements.iterator();
@@ -32178,6 +32363,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const stmt_idx = entry.key_ptr.*;
         // A statement already replaced by an earlier sweep has nothing left to poison.
         if (self.cir.store.nodes.get(ModuleEnv.nodeIdxFrom(stmt_idx)).tag == .malformed) continue;
+        var evaluated: ?CIR.Expr.Idx = null;
         const diagnostic = if (entry.value_ptr.*) |value_expr| blk: {
             const poisoned_expr = self.cir.store.getExpr(value_expr);
             if (poisoned_expr != .e_runtime_error) {
@@ -32186,11 +32372,14 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
                 }
                 unreachable;
             }
+            // A value that evaluates operands before it crashes is still
+            // evaluated where the statement runs.
+            if (poisoned_expr.e_runtime_error.evaluated.span.len != 0) evaluated = value_expr;
             break :blk poisoned_expr.e_runtime_error.diagnostic;
         } else try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getStatementRegion(stmt_idx),
         } });
-        try self.replaceRejectedStatement(stmt_idx, diagnostic);
+        try self.replaceRejectedStatement(stmt_idx, diagnostic, evaluated);
     }
 }
 
