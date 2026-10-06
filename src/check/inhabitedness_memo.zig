@@ -26,7 +26,7 @@ pub const Memo = struct {
         }
 
         pub fn eql(_: Context, a: Key, b: Key) bool {
-            return a.root == b.root and std.mem.eql(Var, a.known_empty, b.known_empty);
+            return a.root == b.root and varsEqual(a.known_empty, b.known_empty);
         }
     };
 
@@ -122,4 +122,13 @@ fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || err
 
 test "inhabitedness memo owns keys and handles allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, allocationFailureCase, .{});
+}
+
+/// Whether two type-variable lists name the same variables in the same order.
+fn varsEqual(a: []const Var, b: []const Var) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

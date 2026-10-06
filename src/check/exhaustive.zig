@@ -4506,6 +4506,11 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
     }
 }
 
+/// The module every type in these type-store fixtures is declared in. The
+/// fixtures have no module environment; the type store only compares module
+/// identities, so any one identity serves.
+const fixture_module: base.ModuleIdentity.Idx = @enumFromInt(1);
+
 test "nominal views all inhabitedness modes solve recursive diamonds in graph-linear work" {
     try inhabitedGraphDiamondCase(std.testing.allocator, 128, false);
     try inhabitedGraphDiamondCase(std.testing.allocator, 128, true);
@@ -4547,7 +4552,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
         .ident = .{ .ident_idx = other },
         .vars = .{ .nonempty = try store.appendVars(&.{witnesses[0]}) },
         .source_arg_count = 0,
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
     } });
     const prefix = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
         .tags = try store.appendTags(&.{.{ .name = other, .args = try store.appendVars(&.{recursive}) }}),
@@ -4658,7 +4663,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
         .ident = .{ .ident_idx = named },
         .vars = .{ .nonempty = try store.appendVars(&.{rigid}) },
         .source_arg_count = 0,
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
     } });
     const aliased_row = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = alias } } });
     const record_name = try idents.insert(gpa, try Ident.from_bytes("RecordWrapper"));
@@ -4666,7 +4671,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     const no_args = try store.appendVars(&.{});
     _ = try store.registerNominalDecl(.{
         .ident = .{ .ident_idx = record_name },
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
         .source = source,
         .formals = no_args,
         .backing = unit,
@@ -4674,7 +4679,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     });
     const record_nominal = try store.freshFromContent(.{ .structure = .{ .nominal_type = .{
         .ident = .{ .ident_idx = record_name },
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
         .source = source,
         .args = no_args,
     } } });
@@ -4786,7 +4791,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
         .ident = .{ .ident_idx = field },
         .vars = .{ .nonempty = try store.appendVars(&.{impossible}) },
         .source_arg_count = 0,
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
     } });
     const cycle_a = try store.fresh();
     const cycle_b = try store.fresh();
@@ -4795,7 +4800,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
         .ident = .{ .ident_idx = field },
         .vars = .{ .nonempty = try store.appendVars(&.{cycle_a}) },
         .source_arg_count = 0,
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
     } });
     const false_cycle = try store.fresh();
     const false_cycle_tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = false_cycle } } });
@@ -4893,7 +4898,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
             .ident = .{ .ident_idx = field },
             .vars = .{ .nonempty = try store.appendVars(&.{tail}) },
             .source_arg_count = 0,
-            .origin_module = @enumFromInt(0),
+            .origin_module = fixture_module,
         } });
         tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
     }

@@ -222,7 +222,7 @@ run = |{}| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 396)
+								(e-call (constraint-fn-var 389)
 									(e-lookup-local
 										(p-assign (ident "find")))
 									(e-lookup-local
@@ -254,7 +254,7 @@ run = |{}| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 448)
+								(e-call (constraint-fn-var 434)
 									(e-lookup-local
 										(p-assign (ident "find")))
 									(e-lookup-local
@@ -285,7 +285,7 @@ run = |{}| {
 																	(p-assign (ident "#err")))))))))))))))
 				(e-tag (name "Ok")
 					(args
-						(e-dispatch-call (method "plus") (constraint-fn-var 488)
+						(e-dispatch-call (method "plus") (constraint-fn-var 464)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "listing"))))
@@ -301,7 +301,7 @@ run = |{}| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 537)
+					(e-call (constraint-fn-var 513)
 						(e-lookup-local
 							(p-assign (ident "show")))
 						(e-lambda

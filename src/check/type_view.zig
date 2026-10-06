@@ -63,7 +63,7 @@ const EnvironmentContext = struct {
         return h.final();
     }
     pub fn eql(_: @This(), a: Environment, b: Environment) bool {
-        return a.declaration == b.declaration and std.mem.eql(Var, a.args, b.args);
+        return a.declaration == b.declaration and varsEqual(a.args, b.args);
     }
 };
 pub const Resolved = struct { var_: Var, desc: types.Descriptor };
@@ -71,7 +71,7 @@ pub const Resolved = struct { var_: Var, desc: types.Descriptor };
 /// Exact substitution and unknown-owner dependencies, propagated backwards
 /// through template edges.
 /// Masking irrelevant arguments is essential for finite closed-argument resets
-/// in otherwise recursive declarations; it is not an arity/groundness heuristic.
+/// in otherwise recursive declarations; it is not decided by guessing from arity or groundness.
 const Dependencies = struct {
     indices: std.AutoHashMapUnmanaged(Var, u32) = .empty,
     nodes: std.ArrayList(DependencyNode) = .empty,
@@ -441,4 +441,13 @@ pub fn getRecordFieldsSlice(self: *const Self, range: types.RecordField.SafeMult
 pub fn getRecordFieldAt(self: *const Self, range: types.RecordField.SafeMultiList.Range, offset: u32) types.RecordField {
     const slice = self.getRecordFieldsSlice(range);
     return .{ .name = slice.items(.name)[offset], .presence = slice.items(.presence)[offset] };
+}
+
+/// Whether two type-variable lists name the same variables in the same order.
+fn varsEqual(a: []const Var, b: []const Var) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |left, right| {
+        if (left != right) return false;
+    }
+    return true;
 }

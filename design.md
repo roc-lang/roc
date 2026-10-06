@@ -593,10 +593,10 @@ unions, and memo keys use the reader's stable identity namespace.
 
 An inhabitedness memo stores complete query answers, not provisional answers
 obtained by cutting an active recursive path. Its key includes the resolved
-root and the exact canonical known-empty assumptions; its lifetime is one
+root and the exact sorted, deduplicated known-empty assumptions; its lifetime is one
 mutation-free analysis. Shared DAG nodes are not recursive cycles. A cyclic
 query implementation must distinguish those states and establish its fixed-point
-or traversal semantics before publishing a reusable result. The same restriction
+or traversal rule before producing a reusable result. The same restriction
 applies to completion-relation memoization in Monotype: no result outlives the
 graph state and assumptions that established it.
 
@@ -3172,25 +3172,25 @@ extension: neither may already represent a shared structural value. The
 nominal declaration, application arguments, tag identity, and payload arity
 are explicit inputs. Checking validates membership and arity, instantiates
 only the selected payload with the application's substitutions and full
-obligations, and relates its components ordinarily.
+requirements, and relates its components ordinarily.
 
-The published result is the nominal application. The producer-owned child tag
+The checked result is the nominal application. The producer-owned child tag
 retains its actual sparse structural shape; the nominal declaration remains the
 authority for the complete representation and constructor universe. Checked
-publication, evidence, diagnostics, and lowering consume that construction edge
+output, evidence, diagnostics, and lowering consume that construction edge
 explicitly, rather than reconstructing discarded variants from values.
 Declaration-template cells are never exposed to mutation.
 
 Boxy consumes an explicit nominal-to-tag construction edge using the
 declaration's tag schema and the application's descriptor identity in its
 formal scope. The sparse child's descriptor is not the nominal descriptor,
-and an intermediate template-owned descriptor environment cannot be published
+and an intermediate template-owned descriptor environment cannot be output
 as the application's environment. Pattern miss analysis and pattern lowering
 must consume the same representation authority, including builtin Bool;
 a projected backing pattern does not define the nominal's constructor universe.
 
-Constructor projection cannot introduce a different equal-layout tag universe.
-The checked producer owns a syntactic single tag and publishes a selected
+Constructor slot copying cannot introduce a different equal-layout tag universe.
+The checked producer owns a syntactic single tag and outputs a selected
 template with exactly that tag and a closed empty tail. Planning preserves a
 closed root row even when its payloads need dynamic or recursive storage.
 Layout identity includes the ordered variant payload layouts, variant count,
@@ -3199,14 +3199,14 @@ row still needs a discriminant. A projected singleton therefore cannot share
 its layout identity with a multi-variant declaration. When the declaration is
 itself singleton, checked membership supplies the same tag and implicit
 discriminant, and layout identity supplies the same payload placement.
-This proof is specific to the closed-singleton projection state; it does
+This proof is specific to the closed-singleton constructor state; it does
 not assert general descriptor-environment or contextual payload equivalence
 from equal byte sizes. Existing contextual payload adaptation is unchanged.
 
 This rule does not change general structural-row unification. A shared row or
 an independently produced backing must still preserve its exact complement
 row when related to a nominal. Contextual scheme guidance alone is not authority
-to publish a nominal result; an implicit constructor needs a real expected
+to output a nominal result; an implicit constructor needs a real expected
 nominal relation. Unknown tags, wrong arity, opacity violations, payload
 mismatches, and inverse rewrapping retain the constructor's ordinary diagnostics.
 Every consumer of a sparse child type must preserve this representation authority.
@@ -8010,11 +8010,11 @@ opacity and substitution capability as ordinary tag unification. Selected
 slots are copied together with one substitution map, preserving repeated-variable
 equalities. Omitted variants remain authoritative in the enclosing full
 relation, and no declaration-template cell is exposed to mutation. Missing
-tags, arity disagreement, or erroneous context establish no projection. The
+tags, arity disagreement, or erroneous context establish no slot copy. The
 selected copy and projected relations share one commit-probe; rejection leaves
 diagnostic ownership with the full enclosing relation. This is expected-shape
-guidance, not permission to discard a structural row's complement or its source
-dispatch obligations.
+guidance, not permission to discard a structural row's complement or the
+dispatch requirements it came with.
 
 The accepted and rejected sides are pinned in `issue_11229_test.zig`: let-bound
 arithmetic remains polymorphic, including heterogeneous user arithmetic;
@@ -16230,6 +16230,12 @@ own position at the call. The call's literal demand edge binds the derived
 pairs as well. A target reached through an evidence edge whose nested evidence
 is `from_callable` relates its type to the edge's callable type for its hidden
 descriptors, as its dictionaries do.
+
+A descriptor's method slot calls its worker from no frame at the described
+representation, so each slot with planned argument types (every inspect
+override, and an equality or hash method at a representation naming no type
+variable) is a literal demand edge from a root: the worker's literal
+parameters are closed there and the slot passes their static accessors.
 
 Dictionary planning replans every call's dictionaries on each pass until it
 reaches a fixpoint, so method records a later pass replaced stay in the

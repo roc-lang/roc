@@ -1227,30 +1227,35 @@ pub const Program = struct {
     /// the app, which only a requirement can, or it references a function
     /// that reaches one. A function of the app itself does not, since its
     /// source identity already names the app.
-    pub fn fnReachesPlatformRequirement(self: *Program, fn_id: FnId) bool {
-        const filling = self.platform_requirement_filling orelse return false;
-        if (self.requirement_reaching_fns) |*reaching| {
-            // Functions added since the last computation have no bit yet.
-            if (reaching.bit_length != self.fnCount()) {
-                reaching.deinit(self.allocator);
-                self.requirement_reaching_fns = null;
-            }
-        }
-        if (self.requirement_reaching_fns == null) {
-            self.requirement_reaching_fns = self.computeRequirementReachingFns(filling) catch
-                Common.compilerBug("platform requirement reachability allocation failed");
-        }
-        return self.requirement_reaching_fns.?.isSet(@intFromEnum(fn_id));
+    pub fn fnReachesPlatformRequirement(self: *const Program, fn_id: FnId) bool {
+        if (self.platform_requirement_filling == null) return false;
+        const reaching = self.requirement_reaching_fns orelse
+            Common.invariant("platform requirement reachability was read before it was prepared");
+        if (reaching.bit_length != self.fnCount())
+            Common.invariant("platform requirement reachability was read after functions were added");
+        return reaching.isSet(@intFromEnum(fn_id));
     }
 
-    /// The frozen dependency fact exported to cache-writing consumers.
+    /// Compute which functions reach a value filling a platform requirement
+    /// (`fnReachesPlatformRequirement`) over the final function table, before
+    /// any function's source digest or dependency relation is read.
+    pub fn preparePlatformRequirementReachability(self: *Program) std.mem.Allocator.Error!void {
+        const filling = self.platform_requirement_filling orelse return;
+        if (self.requirement_reaching_fns) |*reaching| {
+            reaching.deinit(self.allocator);
+            self.requirement_reaching_fns = null;
+        }
+        self.requirement_reaching_fns = try self.computeRequirementReachingFns(filling);
+    }
+
+    /// The frozen dependency record exported to cache-writing consumers.
     /// Preparation computes reachability before any consumer borrows it.
     pub fn fnPlatformRequirementRelation(self: *const Program, fn_id: FnId) ?[32]u8 {
         const filling = self.platform_requirement_filling orelse return null;
         const reaching = self.requirement_reaching_fns orelse
             Common.invariant("consumer read platform dependencies before producer preparation");
         if (reaching.bit_length != self.fnCount())
-            Common.invariant("consumer read stale platform dependency facts");
+            Common.invariant("consumer read a stale platform dependency record");
         return if (reaching.isSet(@intFromEnum(fn_id))) filling.relation else null;
     }
 
@@ -1313,7 +1318,7 @@ pub const Program = struct {
                     if (!std.mem.eql(u8, &relation, &filling.relation)) {
                         Common.invariant("cached requirement dependency disagrees with the producer's app filling");
                     }
-                    // The cache producer already proved the transitive fact.
+                    // The cache producer already proved the transitive dependency.
                     // Its skipped body has no edges to rediscover it from.
                     reaching.set(raw);
                     continue;
@@ -2258,7 +2263,7 @@ test "cached requirement summaries preserve source identity and transitive calle
     app_template.artifact.bytes = app_identity;
     const app_source: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = app_template },
-        .source_fn_ty = @enumFromInt(0),
+        .source_fn_ty = @enumFromInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2266,7 +2271,7 @@ test "cached requirement summaries preserve source identity and transitive calle
     const template = try testSourceDigestTemplate(&program.names, 2);
     const ordinary: Mono.FnTemplate = .{
         .fn_def = .{ .local_template = template },
-        .source_fn_ty = @enumFromInt(0),
+        .source_fn_ty = @enumFromInt(7),
         .source_fn_key = .{},
         .mono_fn_ty = fn_ty,
     };
@@ -2308,6 +2313,7 @@ test "cached requirement summaries preserve source identity and transitive calle
         .ret = ret_ty,
     });
     const independent = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
+    try program.preparePlatformRequirementReachability();
     try std.testing.expect(program.fnReachesPlatformRequirement(cold_fn));
     try std.testing.expect(program.fnReachesPlatformRequirement(cached_fn));
     try std.testing.expect(program.fnReachesPlatformRequirement(caller));

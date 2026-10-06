@@ -1422,11 +1422,11 @@ test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
     const policies = [_]checked.ExhaustivenessResolutionPolicy{
         .not_pending,
         .runtime_reachable,
-        .{ .compile_time_replaced_by_root = @enumFromInt(0) },
+        .{ .compile_time_replaced_by_root = @enumFromInt(3) },
         .compile_time_only,
     };
     var sites = [_]checked.CheckedExhaustivenessSite{.{
-        .id = @enumFromInt(0),
+        .id = @enumFromInt(5),
         .kind = .match,
         .region = std.mem.zeroes(base.Region),
         .policy = .not_pending,

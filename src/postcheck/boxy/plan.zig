@@ -166,6 +166,7 @@ pub const LiteralCallEdge = union(enum) {
     dictionary_method: struct { caller: ?WorkerPlanId, method: u32 },
     literal_initializer: u32,
     generated_callable: GeneratedCallableKey,
+    descriptor_method: u32,
 };
 
 const CheckedPatternIdentity = struct {
@@ -1078,6 +1079,17 @@ pub const DescriptorMethodPlan = struct {
     /// checked substitution.
     relation: ?Span = null,
 };
+
+/// Whether a descriptor method slot calls its worker at planned argument
+/// types: an inspect override always does, and an equality or hash method
+/// does when its described representation names no type variable
+/// (`DescriptorMethodPlan.static_hidden_dicts`).
+fn descriptorMethodSlotHasPlannedCall(method: DescriptorMethodPlan) bool {
+    return switch (method.kind) {
+        .inspect => true,
+        .equality, .hash => method.static_hidden_dicts,
+    };
+}
 
 /// A derived method: compiler-derived `is_eq` or `to_hash`.
 pub const DerivedMethod = enum { equality, hash };
@@ -3301,6 +3313,10 @@ const LiteralPlanner = struct {
             }
         }
         for (plan.derived_component_calls.items, 0..) |*call, index| call.hidden_dict_args = try self.expandArguments(call.frame, call.hidden_dict_args, self.call_edges.get(.{ .derived = @intCast(index) }).?);
+        for (plan.descriptor_methods.items, 0..) |*method, index| {
+            const edge = self.call_edges.get(.{ .descriptor_method = @intCast(index) }) orelse continue;
+            method.hidden_dict_args = try self.expandArguments(null, method.hidden_dict_args, edge);
+        }
         inline for (.{ .{ "roots", "root" }, .{ "const_eval_calls", "const_eval" } }) |channel| {
             for (@field(plan, channel[0]).items, 0..) |*call, index| call.hidden_dict_args = try self.expandArguments(null, call.hidden_dict_args, self.call_edges.get(@unionInit(LiteralCallEdge, channel[1], @intCast(index))).?);
         }
@@ -3505,6 +3521,15 @@ const LiteralPlanner = struct {
         for (plan.derived_component_calls.items, 0..) |call, index| {
             try self.addCall(.{ .derived = @intCast(index) }, call.frame, call.worker, call.hidden_desc_args, call.hidden_dict_args, .{});
             try self.addDictionaries(call.frame, call.hidden_dict_args);
+        }
+        // A descriptor's method slot calls its worker from no frame, at the
+        // described representation, so the slot supplies the worker's
+        // literal parameters.
+        for (plan.descriptor_methods.items, 0..) |method, index| {
+            if (!descriptorMethodSlotHasPlannedCall(method)) continue;
+            const scheme = try self.builder.descriptorMethodCallSchemeRepSubstitutions(method);
+            try self.addCall(.{ .descriptor_method = @intCast(index) }, null, method.worker, method.hidden_desc_args, method.hidden_dict_args, scheme);
+            try self.addDictionaries(null, method.hidden_dict_args);
         }
         inline for (.{ .{ "roots", "root" }, .{ "const_eval_calls", "const_eval" } }) |channel| {
             for (@field(plan, channel[0]).items, 0..) |call, index| {
@@ -14709,6 +14734,70 @@ const Builder = struct {
             .resolved => view.static_dispatch_plans.nestedEvidence(node),
             .from_callable => null,
         };
+    }
+
+    /// The scheme representation pairs a descriptor method slot's call binds
+    /// on its worker: an inspect override's checked use substitution or, for
+    /// one reached through a procedure alias, its relation; for an equality or
+    /// hash method, the worker's types related to the slot's argument and
+    /// result types. The pairs its dictionaries derived for variables only
+    /// the worker's requirements name follow.
+    fn descriptorMethodCallSchemeRepSubstitutions(self: *Builder, method: DescriptorMethodPlan) Allocator.Error!Span {
+        const call = switch (method.kind) {
+            .inspect => if (method.relation) |relation| relation else blk: {
+                var bindings = std.ArrayList(SiteRepBinding).empty;
+                defer bindings.deinit(self.allocator);
+                break :blk try self.appendSchemeRepSubstitutions(try self.inspectUseSchemeSubstitution(method, &bindings));
+            },
+            .equality, .hash => blk: {
+                const source_type = self.plan.representations.items[@intFromEnum(method.source_rep)].source_type;
+                const second_type = method.second_type orelse source_type;
+                const ret_type = method.ret_type orelse boxyPlanInvariant("derived descriptor method had no result type");
+                break :blk try self.descriptorMethodCallRelation(method.worker, &.{
+                    method.source_rep,
+                    self.plan.repForSourceType(second_type) orelse boxyPlanInvariant("descriptor method second argument type was not analyzed"),
+                }, self.plan.repForSourceType(ret_type) orelse boxyPlanInvariant("descriptor method result type was not analyzed"));
+            },
+        };
+        const derived = for (self.plan.directCallHiddenDictionaryArgSlice(method.hidden_dict_args)) |arg| {
+            if (arg.derived_substitution.len != 0) break arg.derived_substitution;
+        } else return call;
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        try self.plan.scheme_rep_substitutions.ensureUnusedCapacity(self.allocator, call.len + derived.len);
+        for (call.start..call.start + call.len) |index| {
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(self.plan.scheme_rep_substitutions.items[index]);
+        }
+        derived: for (derived.start..derived.start + derived.len) |index| {
+            const pair = self.plan.scheme_rep_substitutions.items[index];
+            for (self.plan.scheme_rep_substitutions.items[start..]) |bound| {
+                if (bound.scheme_rep == pair.scheme_rep) continue :derived;
+            }
+            self.plan.scheme_rep_substitutions.appendAssumeCapacity(pair);
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
+    }
+
+    /// A worker's definition type related to a call of it at `arg_reps`
+    /// returning `ret_rep`.
+    fn descriptorMethodCallRelation(self: *Builder, worker_id: WorkerPlanId, arg_reps: []const TypeRepId, ret_rep: TypeRepId) Allocator.Error!Span {
+        const worker = self.plan.workers.items[@intFromEnum(worker_id)];
+        const definition_rep = self.plan.repForSourceType(self.workerCheckedTypeForSource(worker.source, worker.checked_type)) orelse
+            boxyPlanInvariant("boxy descriptor method worker definition type was not analyzed");
+        const function = (self.repQuery().functionChildren(definition_rep)) orelse
+            boxyPlanInvariant("boxy descriptor method worker was not callable");
+        if (function.arg_count != arg_reps.len) boxyPlanInvariant("boxy descriptor method worker had unexpected arity");
+        const children = self.plan.childSlice(self.plan.representations.items[@intFromEnum(function.rep)].children)[function.args_start..][0..function.arg_count];
+        var position_pairs = std.ArrayList(Span).empty;
+        defer position_pairs.deinit(self.allocator);
+        for (children, arg_reps) |child, arg_rep| try position_pairs.append(self.allocator, try self.storedUseSchemeRepSubstitutions(child.rep, arg_rep));
+        try position_pairs.append(self.allocator, try self.storedUseSchemeRepSubstitutions(function.ret, ret_rep));
+        const start: u32 = @intCast(self.plan.scheme_rep_substitutions.items.len);
+        for (position_pairs.items) |pairs| {
+            for (0..pairs.len) |index| {
+                try self.plan.scheme_rep_substitutions.append(self.allocator, self.plan.scheme_rep_substitutions.items[pairs.start + index]);
+            }
+        }
+        return .{ .start = start, .len = @as(u32, @intCast(self.plan.scheme_rep_substitutions.items.len)) - start };
     }
 
     /// The worker's types related to inspection's call of it: its argument to

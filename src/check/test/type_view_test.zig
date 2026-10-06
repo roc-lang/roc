@@ -9,6 +9,11 @@ const TestEnv = @import("TestEnv.zig");
 const Var = types.Var;
 const testing = std.testing;
 
+/// The module every type in these type-store fixtures is declared in. The
+/// fixtures have no module environment; the type store only compares module
+/// identities, so any one identity serves.
+const fixture_module: base.ModuleIdentity.Idx = @enumFromInt(1);
+
 const Fixture = struct {
     store: types.Store,
     idents: base.Ident.Store,
@@ -41,13 +46,13 @@ const Fixture = struct {
         const args = try self.store.appendVars(formals);
         _ = try self.store.registerNominalDecl(.{
             .ident = name,
-            .origin_module = @enumFromInt(0),
+            .origin_module = fixture_module,
             .source = source,
             .formals = args,
             .backing = backing,
             .flags = .{ .valid = true },
         });
-        return .{ .ident = name, .origin_module = @enumFromInt(0), .source = source, .args = args };
+        return .{ .ident = name, .origin_module = fixture_module, .source = source, .args = args };
     }
     fn application(self: *Fixture, nominal: types.NominalType, args: []const Var) std.mem.Allocator.Error!types.NominalType {
         var result = nominal;
@@ -257,7 +262,7 @@ test "nominal views preserve scoped actuals aliases and owned unknowns without s
         .ident = .{ .ident_idx = try f.ident("Alias") },
         .vars = .{ .nonempty = try f.store.appendVars(&.{ alias_backing, outer_a, unknown }) },
         .source_arg_count = 1,
-        .origin_module = @enumFromInt(0),
+        .origin_module = fixture_module,
     } });
     const outer = try f.declaration("Outer", &.{outer_a}, try f.tuple(&.{ inner_var, outer_a, unknown, alias }));
     const app = try f.application(outer, &.{actual_a});
@@ -332,7 +337,7 @@ fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || bas
     const a = try f.rigid("a");
     const empty = try f.store.freshFromContent(.{ .structure = .empty_tag_union });
     const optional = try f.store.freshFromContent(.{ .field_presence = .optional });
-    const defaulted = try f.store.freshFromContent(.{ .field_presence = .{ .defaulted = .{ .origin_module = @enumFromInt(0), .expr_node = 42 } } });
+    const defaulted = try f.store.freshFromContent(.{ .field_presence = .{ .defaulted = .{ .origin_module = fixture_module, .expr_node = 42 } } });
     const ext = try f.store.freshFromContent(.{ .structure = .empty_record });
     const fields = try f.store.appendRecordFields(&.{
         .{ .name = try f.ident("optional"), .presence = .unknown(optional, a) },

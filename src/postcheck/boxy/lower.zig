@@ -2996,12 +2996,20 @@ const ProcedureBuilder = struct {
         const inspect = frame.inspect.?;
         const worker = self.plan.workers.items[@intFromEnum(inspect.worker)];
         const hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg = if (frame.kind == .inspect) self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args) else &.{};
-        if (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
+        while (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
             const arg = hidden_dict_args[frame.nested_dict_refs.items.len];
             const source_rep = switch (arg.source) {
                 .static_rep => |source_rep| source_rep,
                 .bound_dictionaries => boxyLowerInvariant("boxy inspect slot received a caller-bound dictionary source"),
-                .literal => boxyLowerInvariant("boxy inspect slot received a literal dictionary source"),
+                // A slot is called from no frame, so each literal the worker
+                // converts is closed at the described representation.
+                .literal => |literal| switch (literal) {
+                    .result => |index| {
+                        try frame.nested_dict_refs.append(self.allocator, .{ .static = try self.emitLiteralAccessor(index) });
+                        continue;
+                    },
+                    .parameter => boxyLowerInvariant("boxy inspect slot received an open literal argument"),
+                },
             };
             return .{ .request = .{ .dict = .{
                 .rep = source_rep,
@@ -3960,11 +3968,20 @@ const ProcedureBuilder = struct {
             if (frame.args.len != params.len) boxyLowerInvariant("descriptor method dictionaries disagreed with its worker parameters");
         }
         const args = self.plan.directCallHiddenDictionaryArgSlice(frame.args);
-        if (frame.refs.items.len < args.len) {
+        while (frame.refs.items.len < args.len) {
             const arg = args[frame.refs.items.len];
             const source_rep = switch (arg.source) {
                 .static_rep => |rep| rep,
-                .bound_dictionaries, .literal => boxyLowerInvariant("descriptor method at a concrete representation took a non-static dictionary"),
+                // A slot is called from no frame, so each literal the worker
+                // converts is closed at the described representation.
+                .literal => |literal| switch (literal) {
+                    .result => |index| {
+                        try frame.refs.append(self.allocator, .{ .static = try self.emitLiteralAccessor(index) });
+                        continue;
+                    },
+                    .parameter => boxyLowerInvariant("descriptor method at a concrete representation took an open literal"),
+                },
+                .bound_dictionaries => boxyLowerInvariant("descriptor method at a concrete representation took a non-static dictionary"),
             };
             return .{ .request = .{ .dict = .{ .rep = source_rep, .worker_dictionaries = arg.worker_dictionaries, .method_evidence = arg.method_evidence, .template = null, .env = arg.env } } };
         }
@@ -30031,8 +30048,7 @@ const ProcBodyBuilder = struct {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const pattern_rep = self.repForType(pattern.ty);
         if (pattern_rep == source_rep or
-            (pattern.data != .applied_tag and
-                self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
+            (self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
         {
             try state.actions.append(allocator, .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = context } } });
             return;
