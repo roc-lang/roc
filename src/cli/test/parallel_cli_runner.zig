@@ -7578,6 +7578,42 @@ fn customSharedEarlyObjectCache(
             .stdout = stdout,
         })) |failure| return failure;
 
+        // CTFE's normal store is warm, but the runtime declares a different
+        // valid provider. A host-native domain alone cannot erase its bodies.
+        const empty_dir = std.fmt.allocPrint(allocator, "{s}/{s}_empty_packs", .{ env.dirs.work_dir, prefix }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate empty provider path: {}", .{err});
+        std.Io.Dir.cwd().createDirPath(io, empty_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to create empty provider: {}", .{err});
+        var separate = CaseEnv{
+            .dirs = env.dirs,
+            .env_map = env.env_map.clone(allocator) catch |err|
+                return customInfraFailure(allocator, timer, "failed to clone separate-provider environment: {}", .{err}),
+        };
+        defer separate.env_map.deinit();
+        separate.env_map.put("ROC_DEV_PACK_HITS", empty_dir) catch |err|
+            return customInfraFailure(allocator, timer, "failed to declare separate provider: {}", .{err});
+        separate.env_map.put("ROC_SPEC_CENSUS", "1") catch |err|
+            return customInfraFailure(allocator, timer, "failed to enable separate-provider census: {}", .{err});
+        const separate_exe = std.fmt.allocPrint(allocator, "{s}/{s}_separate", .{ env.dirs.work_dir, prefix }) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate separate-provider executable: {}", .{err});
+        const separate_out = outputArg(allocator, separate_exe) catch |err|
+            return customInfraFailure(allocator, timer, "failed to allocate separate-provider output argument: {}", .{err});
+        const separate_build = switch (captureRocRun(io, allocator, &separate, timer, timeout_ms, .{
+            .args = &.{ "build", "--opt=dev", "--specialize=yes", separate_out },
+            .roc_file = app,
+        })) {
+            .result => |run| run,
+            .failure => |failure| return failure,
+        };
+        if (namedProcBody(separate_build.stderr, "Closed.total") != true or namedProcBody(separate_build.stderr, "main_for_host!") != true) {
+            return failureFromRun(allocator, timer, separate_build, "separate runtime provider lost shared source bodies");
+        }
+        if (runRawAndCheck(io, allocator, env, timer, timeout_ms, &.{separate_exe}, env.dirs.work_dir, .{
+            .args = &.{},
+            .stdout_exact = stdout,
+            .stderr_exact = "",
+        })) |failure| return failure;
+
         // Force finalization again rather than merely replaying stored CTFE
         // values. The dev-seeded cache must not remove LLVM's source bodies.
         const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
