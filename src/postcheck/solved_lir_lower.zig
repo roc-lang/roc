@@ -265,10 +265,9 @@ pub fn runBorrowed(
     defer allocator.free(source_digests);
     const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(layout_keyed_source_digests);
-    try solved.lifted.preparePlatformRequirementReachability();
     for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
         const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
-        digest.* = solved.lifted.fnSourceDigest(fn_id);
+        digest.* = try solved.lifted.fnSourceDigest(fn_id);
         layout_keyed.* = solved.lifted.fnLayoutKeyedSourceDigest(fn_id);
     }
 

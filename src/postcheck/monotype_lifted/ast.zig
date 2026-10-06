@@ -1181,7 +1181,7 @@ pub const Program = struct {
     /// while `Mono.specIdentityKey` gave it one object-cache key, and an
     /// entry written under that key would then disagree with the identity the
     /// reading program lowered for it.
-    pub fn fnSourceDigest(self: *Program, fn_id: FnId) ?[TypeDigestHasher.digest_length]u8 {
+    pub fn fnSourceDigest(self: *Program, fn_id: FnId) std.mem.Allocator.Error!?[TypeDigestHasher.digest_length]u8 {
         const fn_ = self.getFn(fn_id);
         var hasher = TypeDigestHasher.init();
         writeIdentityBytes(&hasher, "roc.lifted.fn-source.v2");
@@ -1215,7 +1215,7 @@ pub const Program = struct {
         writeIdentityBytes(&hasher, if (fn_.iterator_fusion_scope) "iterator-fusion" else "plain");
         // The app procedure a platform requirement resolves to is chosen by
         // the app, not by this function's source or types.
-        if (self.fnReachesPlatformRequirement(fn_id)) {
+        if (try self.fnReachesPlatformRequirement(fn_id)) {
             writeIdentityBytes(&hasher, "platform-requirement");
             hasher.update(&self.platform_requirement_filling.?.relation);
         }
@@ -1227,25 +1227,19 @@ pub const Program = struct {
     /// the app, which only a requirement can, or it references a function
     /// that reaches one. A function of the app itself does not, since its
     /// source identity already names the app.
-    pub fn fnReachesPlatformRequirement(self: *const Program, fn_id: FnId) bool {
-        if (self.platform_requirement_filling == null) return false;
-        const reaching = self.requirement_reaching_fns orelse
-            Common.invariant("platform requirement reachability was read before it was prepared");
-        if (reaching.bit_length != self.fnCount())
-            Common.invariant("platform requirement reachability was read after functions were added");
-        return reaching.isSet(@intFromEnum(fn_id));
-    }
-
-    /// Compute which functions reach a value filling a platform requirement
-    /// (`fnReachesPlatformRequirement`) over the final function table, before
-    /// any function's source digest or dependency relation is read.
-    pub fn preparePlatformRequirementReachability(self: *Program) std.mem.Allocator.Error!void {
-        const filling = self.platform_requirement_filling orelse return;
+    pub fn fnReachesPlatformRequirement(self: *Program, fn_id: FnId) std.mem.Allocator.Error!bool {
+        const filling = self.platform_requirement_filling orelse return false;
         if (self.requirement_reaching_fns) |*reaching| {
-            reaching.deinit(self.allocator);
-            self.requirement_reaching_fns = null;
+            // Functions added since the last computation have no bit yet.
+            if (reaching.bit_length != self.fnCount()) {
+                reaching.deinit(self.allocator);
+                self.requirement_reaching_fns = null;
+            }
         }
-        self.requirement_reaching_fns = try self.computeRequirementReachingFns(filling);
+        if (self.requirement_reaching_fns == null) {
+            self.requirement_reaching_fns = try self.computeRequirementReachingFns(filling);
+        }
+        return self.requirement_reaching_fns.?.isSet(@intFromEnum(fn_id));
     }
 
     /// The frozen dependency record exported to cache-writing consumers.
@@ -2185,8 +2179,8 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
 
     const ordinary_fn = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
     const other_requester_fn = try addSourceDigestFn(&program, &symbols, other_requester, ret_ty);
-    const ordinary_digest = program.fnSourceDigest(ordinary_fn) orelse return error.TestUnexpectedResult;
-    const other_requester_digest = program.fnSourceDigest(other_requester_fn) orelse return error.TestUnexpectedResult;
+    const ordinary_digest = (try program.fnSourceDigest(ordinary_fn)) orelse return error.TestUnexpectedResult;
+    const other_requester_digest = (try program.fnSourceDigest(other_requester_fn)) orelse return error.TestUnexpectedResult;
     try std.testing.expectEqualSlices(u8, ordinary_digest[0..], other_requester_digest[0..]);
 
     // A generated body has no checked declaration to name, so its producer
@@ -2202,8 +2196,8 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     second_step.source_fn_key = testSourceDigestKey(2);
     const first_step_fn = try addSourceDigestFn(&program, &symbols, first_step, ret_ty);
     const second_step_fn = try addSourceDigestFn(&program, &symbols, second_step, ret_ty);
-    const first_step_digest = program.fnSourceDigest(first_step_fn) orelse return error.TestUnexpectedResult;
-    const second_step_digest = program.fnSourceDigest(second_step_fn) orelse return error.TestUnexpectedResult;
+    const first_step_digest = (try program.fnSourceDigest(first_step_fn)) orelse return error.TestUnexpectedResult;
+    const second_step_digest = (try program.fnSourceDigest(second_step_fn)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, first_step_digest[0..], second_step_digest[0..]));
 
     // Generated runtime callbacks of one encoder carry the key the same way.
@@ -2217,8 +2211,8 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     second_callback.source_fn_key = testSourceDigestKey(2);
     const first_callback_fn = try addSourceDigestFn(&program, &symbols, first_callback, ret_ty);
     const second_callback_fn = try addSourceDigestFn(&program, &symbols, second_callback, ret_ty);
-    const first_callback_digest = program.fnSourceDigest(first_callback_fn) orelse return error.TestUnexpectedResult;
-    const second_callback_digest = program.fnSourceDigest(second_callback_fn) orelse return error.TestUnexpectedResult;
+    const first_callback_digest = (try program.fnSourceDigest(first_callback_fn)) orelse return error.TestUnexpectedResult;
+    const second_callback_digest = (try program.fnSourceDigest(second_callback_fn)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, first_callback_digest[0..], second_callback_digest[0..]));
 
     // What the digest does name still separates procedures.
@@ -2230,7 +2224,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     other_type.mono_fn_ty = try program.types.add(.{ .primitive = .str });
     for ([_]Mono.FnTemplate{ other_callable, other_evidence, other_type }) |distinct| {
         const distinct_fn = try addSourceDigestFn(&program, &symbols, distinct, ret_ty);
-        const distinct_digest = program.fnSourceDigest(distinct_fn) orelse return error.TestUnexpectedResult;
+        const distinct_digest = (try program.fnSourceDigest(distinct_fn)) orelse return error.TestUnexpectedResult;
         try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], distinct_digest[0..]));
     }
 
@@ -2246,7 +2240,7 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
         .ret = ret_ty,
     });
     program.next_symbol = symbols.next;
-    const clone_digest = program.fnSourceDigest(clone_fn) orelse return error.TestUnexpectedResult;
+    const clone_digest = (try program.fnSourceDigest(clone_fn)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], clone_digest[0..]));
 }
 
@@ -2313,16 +2307,15 @@ test "cached requirement summaries preserve source identity and transitive calle
         .ret = ret_ty,
     });
     const independent = try addSourceDigestFn(&program, &symbols, ordinary, ret_ty);
-    try program.preparePlatformRequirementReachability();
-    try std.testing.expect(program.fnReachesPlatformRequirement(cold_fn));
-    try std.testing.expect(program.fnReachesPlatformRequirement(cached_fn));
-    try std.testing.expect(program.fnReachesPlatformRequirement(caller));
-    try std.testing.expect(!program.fnReachesPlatformRequirement(app_fn));
-    try std.testing.expect(!program.fnReachesPlatformRequirement(independent));
-    const cold_digest = program.fnSourceDigest(cold_fn).?;
-    const cached_digest = program.fnSourceDigest(cached_fn).?;
+    try std.testing.expect(try program.fnReachesPlatformRequirement(cold_fn));
+    try std.testing.expect(try program.fnReachesPlatformRequirement(cached_fn));
+    try std.testing.expect(try program.fnReachesPlatformRequirement(caller));
+    try std.testing.expect(!(try program.fnReachesPlatformRequirement(app_fn)));
+    try std.testing.expect(!(try program.fnReachesPlatformRequirement(independent)));
+    const cold_digest = (try program.fnSourceDigest(cold_fn)).?;
+    const cached_digest = (try program.fnSourceDigest(cached_fn)).?;
     try std.testing.expectEqualSlices(u8, &cold_digest, &cached_digest);
-    const independent_digest = program.fnSourceDigest(independent).?;
+    const independent_digest = (try program.fnSourceDigest(independent)).?;
     try std.testing.expect(!std.mem.eql(u8, &cold_digest, &independent_digest));
 }
 

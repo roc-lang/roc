@@ -4667,7 +4667,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     } });
     const aliased_row = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = alias } } });
     const record_name = try idents.insert(gpa, try Ident.from_bytes("RecordWrapper"));
-    const source = types.NominalType.Source.init(types.SourceDecl.fromStatement(0), false, false);
+    const source = types.NominalType.Source.init(try types.SourceDecl.fromStatementChecked(0), false, false);
     const no_args = try store.appendVars(&.{});
     _ = try store.registerNominalDecl(.{
         .ident = .{ .ident_idx = record_name },
@@ -4866,7 +4866,7 @@ test "nominal views record rows clean up every graph allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
 }
 
-fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{TestExpectedEqual})!void {
+fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
     var store = try types.Store.initCapacity(gpa, 8, 0);
     defer store.deinit();

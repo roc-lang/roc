@@ -15573,7 +15573,7 @@ fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, root: Shap
             },
             .callable => |callable| {
                 writePatternType(program, hasher, callable.ty);
-                const target = program.fnSourceDigest(callable.fn_id) orelse
+                const target = (try program.fnSourceDigest(callable.fn_id)) orelse
                     Common.invariant("call-pattern callable target has no checked source identity");
                 hasher.update(&target);
                 writePatternU32(hasher, @intCast(callable.captures.len));
