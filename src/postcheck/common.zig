@@ -354,6 +354,9 @@ test "test metadata uses explicit union request positions across equal root orde
 /// entry adopts as fixed.
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    /// Producer-owned reachability summary: null means independent of app
+    /// filling; otherwise the code requires this exact platform/app relation.
+    platform_requirement_relation: ?[32]u8 = null,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -369,9 +372,9 @@ pub const SpecCacheHit = struct {
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8) ?SpecCacheHit,
+    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8) ?SpecCacheHit {
-        return self.find(self.context, key);
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
+        return self.find(self.context, key, current_relation);
     }
 };

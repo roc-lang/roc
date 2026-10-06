@@ -125,6 +125,7 @@ pub fn root(self: *const Self, view_id: Var) Var {
     return view_id;
 }
 
+/// Resolve a descriptor without mutating the source solver graph.
 pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
     if (@intFromEnum(view_id) < self.source_len) {
         const resolved = self.source.resolveVar(view_id);
@@ -382,13 +383,14 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
                     .fn_pure => .{ .fn_pure = projected },
                     .fn_effectful => .{ .fn_effectful = projected },
                     .fn_unbound => .{ .fn_unbound = projected },
-                    else => unreachable,
+                    .record, .tuple, .nominal_type, .empty_record, .tag_union, .empty_tag_union => unreachable,
                 };
             },
         } },
     };
 }
 
+/// Read source or projected variable spans through the same view boundary.
 pub fn sliceVars(self: *const Self, range: Var.SafeList.Range) []const Var {
     if (range.count == 0) return &.{};
     if (@intFromEnum(range.start) < self.vars_base) return self.source.sliceVars(range);
@@ -396,15 +398,19 @@ pub fn sliceVars(self: *const Self, range: Var.SafeList.Range) []const Var {
     std.debug.assert(span.len == range.count);
     return span;
 }
+/// Read a variable without exposing which store owns the span.
 pub fn getVarAt(self: *const Self, range: Var.SafeList.Range, offset: u32) Var {
     return self.sliceVars(range)[offset];
 }
+/// Read nominal arguments with their projected substitution identities.
 pub fn sliceNominalArgs(self: *const Self, nominal: types.NominalType) []const Var {
     return self.sliceVars(nominal.args);
 }
+/// Preserve view identity when following an alias backing.
 pub fn getAliasBackingVar(self: *const Self, alias: types.Alias) Var {
     return self.sliceVars(alias.vars.nonempty)[0];
 }
+/// Read tag rows without exposing source versus projected ownership.
 pub fn getTagsSlice(self: *const Self, range: types.Tag.SafeMultiList.Range) TagSlice {
     if (range.count == 0) return .{ .name = &.{}, .args = &.{} };
     if (@intFromEnum(range.start) < self.tags_base) {
@@ -415,10 +421,12 @@ pub fn getTagsSlice(self: *const Self, range: types.Tag.SafeMultiList.Range) Tag
     std.debug.assert(span.name.len == range.count);
     return span;
 }
+/// Read one tag while preserving its projected payload span.
 pub fn getTagAt(self: *const Self, range: types.Tag.SafeMultiList.Range, offset: u32) types.Tag {
     const slice = self.getTagsSlice(range);
     return .{ .name = slice.items(.name)[offset], .args = slice.items(.args)[offset] };
 }
+/// Read fields with presence evidence retained by the view.
 pub fn getRecordFieldsSlice(self: *const Self, range: types.RecordField.SafeMultiList.Range) FieldSlice {
     if (range.count == 0) return .{ .name = &.{}, .presence = &.{} };
     if (@intFromEnum(range.start) < self.fields_base) {
@@ -429,6 +437,7 @@ pub fn getRecordFieldsSlice(self: *const Self, range: types.RecordField.SafeMult
     std.debug.assert(span.name.len == range.count);
     return span;
 }
+/// Read one field without discarding projected presence evidence.
 pub fn getRecordFieldAt(self: *const Self, range: types.RecordField.SafeMultiList.Range, offset: u32) types.RecordField {
     const slice = self.getRecordFieldsSlice(range);
     return .{ .name = slice.items(.name)[offset], .presence = slice.items(.presence)[offset] };

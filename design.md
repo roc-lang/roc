@@ -616,6 +616,23 @@ graph-proportional work, not path-count work.
 
 ### Early Compile-Time Object Reuse
 
+Body elision is a shared producer decision, not an evaluator-local cache hit.
+Every declared consumer must have a compatible native code provision before
+Monotype may replace a source body with a cached procedure. LLVM and interpreter
+consumers require the shared body; it is lowered once, while CTFE may still
+splice native code in its own LIR consumer. A target-specific native provision
+does not authorize host-native CTFE body elision.
+
+An early cache offer carries the full-body producer's platform-requirement
+dependency summary. An independent entry is reusable across app fillings;
+a dependent entry names its exact relation and is admitted only for that
+relation. Cached functions seed the same transitive reachability computation
+as full bodies, so erasing a body cannot erase a code-identity input. Offer
+selection retains distinct relations rather than letting an incompatible
+first entry hide a compatible entry. Final procedure identity validation is
+unchanged. Old contracts use a different format and storage namespace and are
+declined before any body is skipped.
+
 Monotype reservation may consume an offered
 closed object specialization during checking finalization under the same proof
 that permits Direct LIR to splice it: no checked module or relation in the

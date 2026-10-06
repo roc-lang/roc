@@ -726,7 +726,7 @@ fn fileWriteRequestLimit(comptime os_tag: std.Target.Os.Tag, page_size: usize) u
         .wasi => if (builtin.link_libc) @min(std.math.maxInt(u32), std.math.maxInt(isize)) else std.math.maxInt(u32),
         // POSIX writev limits the total iovec length to SSIZE_MAX.
         .freebsd, .openbsd, .netbsd, .dragonfly, .illumos, .haiku, .hurd => std.math.maxInt(isize),
-        else => @compileError("file-write request limit is not defined for this OS"),
+        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .plan9, .rtems, .serenity, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => @compileError("file-write request limit is not defined for this OS"),
     };
 }
 
@@ -1485,10 +1485,7 @@ test "default() returns an Io" {
 
 test "OS filesystem mutations preserve NotDir" {
     // Windows reports different errors for non-directory path components.
-    switch (builtin.os.tag) {
-        .linux, .macos => {},
-        else => return error.SkipZigTest,
-    }
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const fs = os(allocator, allocator, io);
@@ -1510,10 +1507,7 @@ test "OS filesystem mutations preserve NotDir" {
 
 test "OS writeFile preserves IsDir" {
     // Opening a directory for writing has platform-specific error semantics.
-    switch (builtin.os.tag) {
-        .linux, .macos => {},
-        else => return error.SkipZigTest,
-    }
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const io = std.testing.io;
     const fs = os(allocator, allocator, io);
@@ -1551,7 +1545,7 @@ const BoundedWriteTestIo = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         const request = switch (operation) {
             .file_write_streaming => |request| request,
-            else => unreachable,
+            .file_read_streaming, .device_io_control, .net_receive => unreachable,
         };
         std.debug.assert(request.header.len == 0 and request.data.len == 1 and request.splat == 1);
         const bytes = request.data[0];

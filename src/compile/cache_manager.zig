@@ -213,8 +213,9 @@ pub const CacheManager = struct {
     }
 
     fn removeFailedTempFile(self: *Self, allocator: Allocator, path: []const u8) void {
-        self.roc_ctx.deleteFile(path) catch |err| {
-            if (err != error.FileNotFound) self.verboseLog(allocator, "Failed to remove cache temp file {s}: {}\n", .{ path, err });
+        self.roc_ctx.deleteFile(path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            error.AccessDenied, error.IoError => self.verboseLog(allocator, "Failed to remove cache temp file {s}: {}\n", .{ path, err }),
         };
     }
 

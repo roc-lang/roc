@@ -667,7 +667,9 @@ const Pass = struct {
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const new_proc = self.old_to_new[@intFromEnum(spec_proc.proc)] orelse continue;
-            self.result.spec_procs.items[kept] = .{ .key = spec_proc.key, .proc = new_proc };
+            var remapped = spec_proc;
+            remapped.proc = new_proc;
+            self.result.spec_procs.items[kept] = remapped;
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);

@@ -10531,7 +10531,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
     for ([_]usize{ 1, 4 }) |jobs| {
         for ([_]lir.CheckedPipeline.TargetConfig{
             .{ .target_usize = .native, .inline_expects = .run },
+            .{ .target_usize = .native, .inline_expects = .run, .code_provision = .host_dev_objects },
             .{ .target_usize = other_width, .inline_expects = .run },
+            .{ .target_usize = other_width, .inline_expects = .run, .code_provision = .target_dev_objects },
             .{ .target_usize = .native, .inline_expects = .omit },
         }) |consumer| {
             const width = consumer.target_usize;
@@ -10564,6 +10566,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
+                .code_provision = consumer.code_provision,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };

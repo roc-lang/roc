@@ -125,6 +125,8 @@ pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     specialization_strategy: SpecializationStrategy = .lss,
+    /// The consumer's actual code provider, declared before producer lowering.
+    code_provision: CodeProvision = .source_bodies,
     /// Reuse checking workers for generic post-check tasks when available.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
@@ -909,6 +911,31 @@ pub const Observers = struct {
 /// Serves closed specializations from the object cache.
 pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
 
+/// Native provision is an explicit backend/target/splice contract, not an
+/// optimization policy. Only host dev objects share CTFE's artifact domain.
+pub const CodeProvision = enum {
+    /// LLVM, interpreter, images, or an emitter without an object splice source.
+    source_bodies,
+    /// Native dev emission with a splice source for CTFE's exact host domain.
+    host_dev_objects,
+    /// Native dev emission with its own target-specific splice source.
+    target_dev_objects,
+
+    pub fn permitsNativeObjects(self: CodeProvision) bool {
+        return self != .source_bodies;
+    }
+
+    /// A shared producer may erase bodies only when every consumer can use
+    /// the same objects. Other native targets keep source bodies in CTFE's
+    /// producer and may splice their own objects during their continuation.
+    pub fn sharedProducer(self: CodeProvision, other: CodeProvision) CodeProvision {
+        return if (self == .host_dev_objects and other == .host_dev_objects)
+            .host_dev_objects
+        else
+            .source_bodies;
+    }
+};
+
 /// The settings a program's Solved stage is prepared under: the inlining
 /// and SpecConstr decisions made before any consumer lowers LIR. Consumers
 /// share one Solved program only when they share these.
@@ -939,6 +966,7 @@ pub const LirPolicy = struct {
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: CodeProvision,
     comptime_closure_hits: bool,
     keep_specialization_procs: bool,
     promote_loop_appends: bool,
@@ -1313,6 +1341,7 @@ pub fn prepareCheckedModulesMonotype(
                 .spec_cache = if (monotypeCacheHitsAllowed(
                     target.checked_module_state,
                     prepared_target.comptime_closure_hits,
+                    target.code_provision,
                 )) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
@@ -1338,16 +1367,28 @@ pub fn prepareCheckedModulesMonotype(
     };
 }
 
-/// Complete runtime programs retain their existing early lookup. During
-/// checking, the same whole-program proof also authorizes Direct LIR's CTFE hits.
-fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool) bool {
-    return state == .complete or comptime_closure_hits;
+/// Early hits erase producer bodies, so both native provision and the
+/// compile-time observation proof must authorize them before lowering.
+fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool, provision: CodeProvision) bool {
+    return provision.permitsNativeObjects() and (state == .complete or comptime_closure_hits);
 }
 
-test "early CTFE cache requires the Direct LIR proof" {
-    for ([_]bool{ false, true }) |proof| {
-        try std.testing.expect(monotypeCacheHitsAllowed(.complete, proof));
-        try std.testing.expectEqual(proof, monotypeCacheHitsAllowed(.checking_finalization, proof));
+test "early cache requires declared native provision and the CTFE observation proof" {
+    for (std.enums.values(CodeProvision)) |provision| {
+        for ([_]bool{ false, true }) |proof| {
+            try std.testing.expectEqual(provision.permitsNativeObjects(), monotypeCacheHitsAllowed(.complete, proof, provision));
+            try std.testing.expectEqual(provision.permitsNativeObjects() and proof, monotypeCacheHitsAllowed(.checking_finalization, proof, provision));
+        }
+    }
+}
+
+test "shared producer native provision requires every consumer in the host dev domain" {
+    for (std.enums.values(CodeProvision)) |host| {
+        for (std.enums.values(CodeProvision)) |runtime| {
+            const expected: CodeProvision = if (host == .host_dev_objects and runtime == .host_dev_objects) .host_dev_objects else .source_bodies;
+            try std.testing.expectEqual(expected, host.sharedProducer(runtime));
+            try std.testing.expectEqual(expected, runtime.sharedProducer(host));
+        }
     }
 }
 
@@ -1604,7 +1645,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
     const lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
-        .spec_cache = target.spec_cache,
+        .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,

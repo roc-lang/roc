@@ -565,11 +565,45 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
         // program; a runtime consumer's diagnostics read them.
         .proc_debug_names = true,
         .spec_cache = if (options.object_cache) |cache| cache.spec_cache else null,
+        .code_provision = if (!compilerHostMustUseInterpreterForCtfe() and backend.host_lir_codegen_available and options.object_cache != null)
+            .host_dev_objects
+        else
+            .source_bodies,
         .post_check_executor = options.post_check_executor,
         .timing = if (options.timing) |timing| &timing.lowering else null,
     };
     solved_policy.applyTo(&target);
     return target;
+}
+
+/// Name every reader before a shared Monotype producer can erase bodies.
+/// Boxy runtime lowering has its own producer and does not read this one.
+fn sharedProducerProvision(
+    host: lir.CheckedPipeline.CodeProvision,
+    runtime: ?lir.CheckedPipeline.TargetConfig,
+) lir.CheckedPipeline.CodeProvision {
+    const consumer = runtime orelse return host;
+    return if (consumer.specialization_strategy == .lss)
+        host.sharedProducer(consumer.code_provision)
+    else
+        host;
+}
+
+test "declared consumers choose shared producer provision before discovery" {
+    const Provision = lir.CheckedPipeline.CodeProvision;
+    for (std.enums.values(Provision)) |host| {
+        try std.testing.expectEqual(host, sharedProducerProvision(host, null));
+        for (std.enums.values(Provision)) |runtime| {
+            try std.testing.expectEqual(host.sharedProducer(runtime), sharedProducerProvision(host, .{
+                .specialization_strategy = .lss,
+                .code_provision = runtime,
+            }));
+            try std.testing.expectEqual(host, sharedProducerProvision(host, .{
+                .specialization_strategy = .boxy,
+                .code_provision = runtime,
+            }));
+        }
+    }
 }
 
 /// Complete checked values in the caller's dependency order, using the
@@ -642,6 +676,10 @@ pub fn finalizeProgram(
         // made under the runtime's Solved policy.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
         var host_target = compileTimeTarget(options, solved_policy);
+        var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
+        // All readers of this producer are declared before any cache hit can
+        // erase a source body. CTFE still owns its native late-splice policy.
+        host_target.code_provision = sharedProducerProvision(host_target.code_provision, runtime_target);
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -656,6 +694,7 @@ pub fn finalizeProgram(
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
         errdefer if (prepared_owned) prepared.deinit();
+        host_lir_policy.comptime_closure_hits = prepared.target.comptime_closure_hits;
 
         if (compile_time_root_count != 0 or prepared.literalRootCount() != 0) {
             // The compile-time roots are published first, so compile-time
@@ -683,6 +722,7 @@ pub fn finalizeProgram(
                 .target_usize = host_target.target_usize,
                 .inline_expects = host_target.inline_expects,
                 .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
+                .lir_policy = host_lir_policy,
             };
             if (!shares_solved) prepared_owned = false;
             host = (if (shares_solved)

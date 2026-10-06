@@ -265,6 +265,9 @@ pub fn runBorrowed(
     defer allocator.free(source_digests);
     const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(layout_keyed_source_digests);
+    if (solved.lifted.fnCount() != 0) {
+        _ = solved.lifted.fnReachesPlatformRequirement(@enumFromInt(0));
+    }
     for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
         const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
         digest.* = solved.lifted.fnSourceDigest(fn_id);
@@ -2864,6 +2867,8 @@ const Lowerer = struct {
 
         const identity = try self.procIdentity(spec, entry);
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
+        const relation = if (self.solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
+        const dependency_relation = self.solved.lifted.fnPlatformRequirementRelation(spec.source);
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
@@ -2893,7 +2898,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes)) |hit| {
+                        if (cache.lookup(key.bytes, relation)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
@@ -2912,7 +2917,11 @@ const Lowerer = struct {
             // The shared procedure is this specialization's procedure too, so
             // the object cache may serve it under this specialization's key.
             if (plain_spec) if (source_fn.source) |template| if (template.spec_key) |key| {
-                try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = existing });
+                try self.result.spec_procs.append(self.allocator, .{
+                    .key = key.bytes,
+                    .proc = existing,
+                    .platform_requirement_relation = dependency_relation,
+                });
             };
             entry.proc = existing;
             entry.proc_owner = owner;
@@ -3005,7 +3014,11 @@ const Lowerer = struct {
                 // which a program linking the pack would inline too.
                 const kept = self.keep_specialization_procs and self.inline_plan.kind(spec.source) == .none;
                 if (plain_spec and (kept or !self.keep_specialization_procs)) {
-                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                    try self.result.spec_procs.append(self.allocator, .{
+                        .key = key.bytes,
+                        .proc = proc,
+                        .platform_requirement_relation = dependency_relation,
+                    });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
