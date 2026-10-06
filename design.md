@@ -3630,6 +3630,41 @@ strictly stack-shaped: unification only ever runs while the frame owning its
 vars is active, and `addVarToRank`'s debug guard is a regression tripwire
 rather than a reachable condition.
 
+### Predeclared Scheme Uses
+
+A use that instantiates a predeclared scheme is typed before the binding's
+own scheme is final, and the two need not agree: the body may solve a slot
+of its own copy of the annotation that the predeclared scheme leaves free.
+Rigids cannot be solved, but an implicitly opened output row (Polarity) is
+an ordinary bounded extension, so a body that returns a value from a closed
+source closes it, and one that forwards another row joins it with that row.
+A recursive call to `f : [A] -> [A]` whose body returns its parameter is
+typed against `[A] -> [A, ..r]` and may widen its result to `[A, B]`, while
+the scheme `f` publishes is the closed `[A] -> [A]` that rejects the same
+widening from every other caller. Accepting it would hand Monotype a
+recursive request that the in-progress specialization cannot join.
+
+Every such use is therefore related to the scheme its binding publishes.
+The relation runs in the boundary that publishes the scheme (a group or
+RHS generalization boundary, after its final dispatch and replay round and
+before it generalizes) for uses made while the body was in flight, and at
+once for a use made after publication. The two generations of the
+annotation enumerate the same identity slots (`PredeclaredSlots`), so the
+relation is slot-wise and needs no structural matching: each body slot the
+scheme will quantify stands for the use's copy of the first slot that
+reaches it, a slot the scheme will not quantify is shared, and a slot the
+body closed must be closed in the use's copy too. Each copy is unified
+with that image. A relation can pin a receiver, so the boundary runs
+another round after relating any use.
+
+A rejected relation is a Type Mismatch at the use, naming the use's type
+and the definition's published one; the use becomes a runtime error and the
+definition keeps its scheme, as for any other rejected use. A body slot
+solved to anything other than a variable, a closed row, or a row's
+extension is an invariant violation, since the annotation's rigids and
+bounded rows admit nothing else, and a use still unrelated when the module
+finishes checking is one too.
+
 ## Checked Boundary
 
 Checked CIR is the last source-level representation. It owns:

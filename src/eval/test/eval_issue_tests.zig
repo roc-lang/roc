@@ -4540,4 +4540,42 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "1" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12095
+        // `f`'s body returns its closed parameter, which closes the result row,
+        // so its own recursive call cannot be used at a wider union. The use is
+        // reported and retired; reaching it at runtime crashes.
+        .name = "issue 12095: recursive call result used at a wider tag union than the body leaves open",
+        .source_kind = .module,
+        .source =
+        \\f : [A, C] -> [A, C]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(A), B]
+        \\    a
+        \\}
+        \\
+        \\main = f(C)
+        ,
+        .expected = .problem_and_crash,
+    },
+    .{
+        // https://github.com/roc-lang/roc/issues/12095
+        // `f`'s body constructs its results, so the result row stays open and
+        // its recursive call may be used at a wider union.
+        .name = "issue 12095: recursive call result used at a wider tag union the body leaves open",
+        .source_kind = .module,
+        .source =
+        \\f : U8 -> [A, C]
+        \\f = |n| if n == 0 A else {
+        \\    xs = [f(n - 1), B]
+        \\    match xs {
+        \\        [A, ..] => C
+        \\        _ => A
+        \\    }
+        \\}
+        \\
+        \\main = f(2)
+        ,
+        .expected = .{ .inspect_str = "A" },
+    },
 };
