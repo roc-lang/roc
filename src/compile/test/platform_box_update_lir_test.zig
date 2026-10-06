@@ -160,14 +160,16 @@ fn expectWrapperInlineOwnership(store: *const lir.LirStore, layouts: *const layo
     // Exact single-use inlining may move every platform update into the host
     // root, so procedure names are not part of this ownership invariant. The
     // complete reachable graph must still contain all six unbox/release pairs
-    // and every checked list mutation without adding a defensive retain.
+    // and every checked list mutation without adding a defensive retain. The
+    // appends are the two updates' own and the one in `List.repeat`, which
+    // both init procedures call.
     try std.testing.expectEqual(@as(usize, 0), total.prepare_update);
     try std.testing.expectEqual(@as(usize, 0), total.owned_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.borrowed_unbox);
     try std.testing.expectEqual(@as(usize, 6), total.box_release);
     try std.testing.expectEqual(@as(usize, 5), total.list_set);
     try std.testing.expectEqual(@as(usize, 2), total.list_replace);
-    try std.testing.expectEqual(@as(usize, 4), total.list_append);
+    try std.testing.expectEqual(@as(usize, 3), total.list_append);
     try std.testing.expectEqual(@as(usize, 0), total.box_retain);
     try std.testing.expectEqual(@as(usize, 0), total.list_retain);
 }

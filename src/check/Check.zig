@@ -814,6 +814,11 @@ hoist_selected_pattern_validations: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, u3
 /// errors after hoist selection had already seen them. Selected roots and
 /// dependencies inside these subtrees must be pruned before publication.
 hoist_invalidated_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
+/// Binder patterns of statements replaced with explicit runtime errors after
+/// hoist selection had already seen them. Publication has no checked pattern
+/// for these binders, so a selected root that names one must be pruned even
+/// when its expression stays evaluated.
+hoist_retired_binders: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void),
 /// Top-level-equivalent expressions checked in a guarded hoist position. A
 /// root whose expression is in this set is published as a guarded root.
 hoist_guarded_exprs: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void),
@@ -3648,6 +3653,7 @@ fn initAssumePrepared(
         .hoist_selected_exprs = .{},
         .hoist_selected_pattern_validations = .{},
         .hoist_invalidated_exprs = .{},
+        .hoist_retired_binders = .{},
         .hoist_guarded_exprs = .{},
         .selected_hoisted_roots = .empty,
         .local_procedure_candidates = .{},
@@ -3823,6 +3829,7 @@ pub fn deinit(self: *Self) void {
     self.hoist_selected_exprs.deinit(self.gpa);
     self.hoist_selected_pattern_validations.deinit(self.gpa);
     self.hoist_invalidated_exprs.deinit(self.gpa);
+    self.hoist_retired_binders.deinit(self.gpa);
     self.hoist_guarded_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
@@ -5850,6 +5857,30 @@ fn hoistExprInvalidated(self: *const Self, expr: CIR.Expr.Idx) bool {
     return self.hoist_invalidated_exprs.contains(expr);
 }
 
+/// Record every pattern of a retired statement's binder tree.
+fn retireHoistBinders(self: *Self, root: CIR.Pattern.Idx) Allocator.Error!void {
+    var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
+    defer pending.deinit(self.gpa);
+    try pending.append(self.gpa, root);
+    while (pending.pop()) |pattern_idx| {
+        try self.hoist_retired_binders.put(self.gpa, pattern_idx, {});
+        try self.pushCirSubpatterns(&pending, pattern_idx);
+    }
+}
+
+/// Whether a selected root names a pattern of a retired statement's binder.
+fn selectedHoistedRootNamesRetiredBinder(self: *const Self, root: hoist_roots.SelectedHoistedRoot) bool {
+    if (root.pattern) |pattern| {
+        if (self.hoist_retired_binders.contains(pattern)) return true;
+    }
+    return switch (root.body) {
+        .expr, .pattern_error => false,
+        .pattern_extraction => |extraction| self.hoist_retired_binders.contains(extraction.scrutinee_pattern) or
+            self.hoist_retired_binders.contains(extraction.result_pattern),
+        .pattern_validation => |validation| self.hoist_retired_binders.contains(validation.scrutinee_pattern),
+    };
+}
+
 fn moduleHoistExprInvalidated(self: *const Self, module: *const ModuleEnv, expr: CIR.Expr.Idx) bool {
     return module == self.cir and self.hoistExprInvalidated(expr);
 }
@@ -6214,6 +6245,7 @@ const HoistSelectionTestState = struct {
         checker.hoist_selected_exprs = .{};
         checker.hoist_selected_pattern_validations = .{};
         checker.hoist_invalidated_exprs = .{};
+        checker.hoist_retired_binders = .{};
         checker.hoist_guarded_exprs = .{};
         checker.selected_hoisted_roots = .empty;
         checker.last_hoist_result = null;
@@ -6245,6 +6277,7 @@ const HoistSelectionTestState = struct {
         self.checker.hoist_selected_exprs.deinit(self.allocator);
         self.checker.hoist_selected_pattern_validations.deinit(self.allocator);
         self.checker.hoist_invalidated_exprs.deinit(self.allocator);
+        self.checker.hoist_retired_binders.deinit(self.allocator);
         self.checker.hoist_guarded_exprs.deinit(self.allocator);
         for (self.checker.selected_hoisted_roots.items) |*root| {
             hoist_roots.deinitSelectedRoot(self.allocator, root);
@@ -12342,7 +12375,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var kept_validation_count: u32 = 0;
     for (self.selected_hoisted_roots.items, 0..) |*root, i| {
         keep_oracle.current_root_index = i;
-        const intrinsic = (root.body == .pattern_error or !self.hoistExprInvalidated(root.expr)) and try self.hoistedRootIsIntrinsicallyKept(root);
+        const intrinsic = !self.selectedHoistedRootNamesRetiredBinder(root.*) and
+            (root.body == .pattern_error or !self.hoistExprInvalidated(root.expr)) and
+            try self.hoistedRootIsIntrinsicallyKept(root);
         // Top-level extractions define names; they are not optional hoists.
         // Like ordinary top-level constants, their complete checked bodies
         // enter constant/callable publication even when runtime-body hoisting
@@ -13933,10 +13968,12 @@ const KeptOperandInvalidationVisitor = struct {
     }
 
     fn boundPattern(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retireHoistBinders(pattern);
         try self.checker.retirePatternSubtreeMetadata(pattern);
     }
 
     fn reassignTarget(self: @This(), pattern: CIR.Pattern.Idx) Allocator.Error!void {
+        try self.checker.retireHoistBinders(pattern);
         try self.checker.retirePatternSubtreeMetadata(pattern);
     }
 
