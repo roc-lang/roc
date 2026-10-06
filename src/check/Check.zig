@@ -3940,40 +3940,41 @@ fn dispatchDerivationParent(self: *const Self, fn_var: Var) ?Var {
 
 /// The right-hand side and name of a method of a type declared in a function
 /// body, keyed by the method binding's pattern.
-const LocalMethod = struct {
+const AssociatedBinding = struct {
     expr: CIR.Expr.Idx,
     name: Ident.Idx,
+    /// A local procedure, as opposed to an associated value.
+    is_method: bool,
 };
 
-/// POLICY: methods never capture (design.md "Methods Never Capture"). A
-/// method of a type declared in a function body may not refer to a value
-/// bound in an enclosing function body, directly or through a local function
-/// whose body does. Each such reference is reported, and the method's
-/// right-hand side becomes a checked error: the method's declaration binds a
-/// rejected method, so a dispatch to it evaluates its operands and then
-/// crashes. A reference to another method relies on that method alone, which
-/// this check judges on its own. A method is an associated binding that is a
-/// local procedure; any other associated binding is a value of its body. Every
-/// associated binding whose right-hand side is a checked error binds a
-/// rejected method, so its name binds nothing either.
-fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
-    if (!try self.moduleDeclaresLocalMethods()) return;
+/// POLICY: associated bindings never capture (design.md "Associated Bindings
+/// Never Capture"). A method or associated value of a type declared in a
+/// function body may not refer to a value bound in an enclosing function
+/// body, directly or through a local function whose body does. Each such
+/// reference is reported, and the binding's right-hand side becomes a checked
+/// error: the declaration binds a rejected method, so a dispatch to it or a
+/// lookup of it evaluates its operands and then crashes. A reference to
+/// another associated binding relies on that binding alone, which this check
+/// judges on its own. Every associated binding whose right-hand side is a
+/// checked error binds a rejected method, so its name binds nothing either.
+fn rejectCapturingAssociatedBindings(self: *Self) Allocator.Error!void {
+    if (!try self.moduleDeclaresAssociatedBindings()) return;
 
-    var methods: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod) = .empty;
+    var methods: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, AssociatedBinding) = .empty;
     defer methods.deinit(self.gpa);
     for (self.cir.method_defs.entries.items) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
         const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(entry.value.type_node_idx))).s_decl;
-        // An associated value that is not a local procedure is no method:
-        // nothing dispatches to it, and it is a value of the body declaring
-        // its type like any other local binding.
-        if ((try self.localProcedureTargetPattern(self.cir, entry.value)) == null) continue;
-        try methods.put(self.gpa, decl.pattern, .{ .expr = decl.expr, .name = entry.key.methodIdent() });
+        try methods.put(self.gpa, decl.pattern, .{
+            .expr = decl.expr,
+            .name = entry.key.methodIdent(),
+            .is_method = (try self.localProcedureTargetPattern(self.cir, entry.value)) != null,
+        });
     }
     // Reports follow source order.
     const SourceOrder = struct {
         checker: *Self,
-        values: []const LocalMethod,
+        values: []const AssociatedBinding,
         pub fn lessThan(ctx: @This(), a: usize, b: usize) bool {
             const store = &ctx.checker.cir.store;
             return store.getExprRegion(ctx.values[a].expr).start.offset < store.getExprRegion(ctx.values[b].expr).start.offset;
@@ -4006,8 +4007,9 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
             if (!captures.isOuterRef(&scope, referenced)) continue;
             const captured = captures.valueReachedBy(referenced) orelse continue;
             if ((try reported.getOrPut(self.gpa, referenced)).found_existing) continue;
-            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_method = .{
-                .method_name = method.name,
+            _ = try self.problems.appendProblem(self.gpa, .{ .capturing_associated_binding = .{
+                .binding_name = method.name,
+                .is_method = method.is_method,
                 .referenced_name = self.getPatternIdent(referenced) orelse method.name,
                 .captured_name = self.getPatternIdent(captured) orelse method.name,
                 .region = self.cir.store.getExprRegion(expr),
@@ -4036,7 +4038,7 @@ fn localLookupPattern(self: *const Self, expr: CIR.Expr.Idx) ?CIR.Pattern.Idx {
 /// pattern binder, is a value. Top-level names and methods reach nothing.
 const LocalFunctionCaptures = struct {
     checker: *Self,
-    methods: *const std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, LocalMethod),
+    methods: *const std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, AssociatedBinding),
     /// Outer references of each function-like binding the methods reach.
     refs: std.AutoArrayHashMapUnmanaged(CIR.Pattern.Idx, std.ArrayListUnmanaged(CIR.Pattern.Idx)) = .empty,
     /// Bindings whose outer references are not collected yet.
@@ -4498,7 +4500,7 @@ fn noteHoistDispatchDependency(self: *Self, receiver_var: Var, method_name: Iden
     try self.recordDispatchCandidateFrames(constraint_fn_var);
     if (self.hoist_frames.items.len == 0) return;
     if (!self.hoist_frames.items[self.hoist_frames.items.len - 1].eligible()) return;
-    if (!try self.moduleDeclaresLocalMethods()) return;
+    if (!try self.moduleDeclaresAssociatedBindings()) return;
     if (try self.receiverLocalProcedureMethod(receiver_var, method_name)) |pattern| {
         if (self.local_procedure_candidates.getPtr(pattern)) |candidate| {
             if (!candidate.contextual) {
@@ -4520,7 +4522,7 @@ fn noteHoistDispatchDependency(self: *Self, receiver_var: Var, method_name: Iden
 /// local procedure only when this module declares a conversion method of that
 /// name in a function body, so only then is it recorded.
 fn noteLiteralDispatchSite(self: *Self, receiver_var: Var, method_name: Ident.Idx, constraint_fn_var: Var) Allocator.Error!void {
-    if (!try self.moduleDeclaresLocalMethodNamed(method_name)) return;
+    if (!try self.moduleDeclaresAssociatedBindingNamed(method_name)) return;
     try self.noteHoistDispatchDependency(receiver_var, method_name, constraint_fn_var);
 }
 
@@ -4530,7 +4532,7 @@ fn noteLiteralDispatchSite(self: *Self, receiver_var: Var, method_name: Ident.Id
 fn recordDispatchCandidateFrames(self: *Self, constraint_fn_var: Var) Allocator.Error!void {
     const stack = self.local_procedure_candidate_stack.items;
     if (stack.len == 0) return;
-    if (!try self.moduleDeclaresLocalMethods()) return;
+    if (!try self.moduleDeclaresAssociatedBindings()) return;
     // A recorded site names a callable that only a committed relation keeps.
     std.debug.assert(self.probe_depth == 0);
     const start: u32 = @intCast(self.dispatch_candidate_frame_patterns.items.len);
@@ -4570,7 +4572,7 @@ fn receiverLocalProcedureMethod(self: *Self, receiver_var: Var, method_name: Ide
     return try self.localProcedureTargetPattern(method.env, method.binding);
 }
 
-fn moduleDeclaresLocalMethods(self: *Self) Allocator.Error!bool {
+fn moduleDeclaresAssociatedBindings(self: *Self) Allocator.Error!bool {
     if (self.module_declares_local_methods) |declares| return declares;
     for (self.cir.method_defs.entries.items) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
@@ -4584,8 +4586,8 @@ fn moduleDeclaresLocalMethods(self: *Self) Allocator.Error!bool {
     return declares;
 }
 
-fn moduleDeclaresLocalMethodNamed(self: *Self, name: Ident.Idx) Allocator.Error!bool {
-    if (!try self.moduleDeclaresLocalMethods()) return false;
+fn moduleDeclaresAssociatedBindingNamed(self: *Self, name: Ident.Idx) Allocator.Error!bool {
+    if (!try self.moduleDeclaresAssociatedBindings()) return false;
     for (self.local_method_names.items) |existing| {
         if (existing.eql(name)) return true;
     }
@@ -11447,7 +11449,7 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
 }
 
 fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
-    try self.rejectCapturingMethods();
+    try self.rejectCapturingAssociatedBindings();
     try self.finalizePromotedLocalProcedures();
 
     const root_count = self.selected_hoisted_roots.items.len;

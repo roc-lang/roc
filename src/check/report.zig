@@ -89,7 +89,7 @@ const HostBoundaryOptionalField = problem_mod.HostBoundaryOptionalField;
 const AnnotationOnlyValue = problem_mod.AnnotationOnlyValue;
 const AnnotationOnlyValueUse = problem_mod.AnnotationOnlyValueUse;
 const DerivedMethodValueUse = problem_mod.DerivedMethodValueUse;
-const CapturingMethod = problem_mod.CapturingMethod;
+const CapturingAssociatedBinding = problem_mod.CapturingAssociatedBinding;
 const UnsupportedGeneratedMethod = problem_mod.UnsupportedGeneratedMethod;
 const AssociatedItemNotFound = problem_mod.AssociatedItemNotFound;
 const PolymorphicVarAnnotation = problem_mod.PolymorphicVarAnnotation;
@@ -1129,8 +1129,8 @@ pub const ReportBuilder = struct {
             .derived_method_value_use => |data| {
                 return self.buildDerivedMethodValueUseReport(data);
             },
-            .capturing_method => |data| {
-                return self.buildCapturingMethodReport(data);
+            .capturing_associated_binding => |data| {
+                return self.buildCapturingAssociatedBindingReport(data);
             },
             .unsupported_generated_method => |data| {
                 return self.buildUnsupportedGeneratedMethodReport(data);
@@ -5391,30 +5391,33 @@ pub const ReportBuilder = struct {
         return report;
     }
 
-    fn buildCapturingMethodReport(self: *Self, data: CapturingMethod) Allocator.Error!Report {
-        var report = try Report.init(self.gpa, "Method Captures a Local Value", "", .runtime_error);
+    fn buildCapturingAssociatedBindingReport(self: *Self, data: CapturingAssociatedBinding) Allocator.Error!Report {
+        const title = if (data.is_method) "Method Captures a Local Value" else "Associated Value Captures a Local Value";
+        var report = try Report.init(self.gpa, title, "", .runtime_error);
         errdefer report.deinit();
 
+        const kind = if (data.is_method) "method uses" else "associated value uses";
+        const owner = if (data.is_method) "which is defined in the function body around this method's type:" else "which is defined in the function body around this value's type:";
         if (data.referenced_name.eql(data.captured_name)) {
             try D.renderSliceInto(&.{
                 D.bytes("The"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method uses"),
+                D.ident(data.binding_name).withAnnotation(.inline_code),
+                D.bytes(kind),
                 D.ident(data.captured_name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
-                D.bytes("which is defined in the function body around this method's type:"),
+                D.bytes(owner),
             }, self, &report, &report.headline);
         } else {
             try D.renderSliceInto(&.{
                 D.bytes("The"),
-                D.ident(data.method_name).withAnnotation(.inline_code),
-                D.bytes("method uses"),
+                D.ident(data.binding_name).withAnnotation(.inline_code),
+                D.bytes(kind),
                 D.ident(data.referenced_name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
                 D.bytes("which uses"),
                 D.ident(data.captured_name).withAnnotation(.inline_code),
                 D.bytes(",").withNoPrecedingSpace(),
-                D.bytes("which is defined in the function body around this method's type:"),
+                D.bytes(owner),
             }, self, &report, &report.headline);
         }
 
@@ -5422,11 +5425,21 @@ pub const ReportBuilder = struct {
 
         try report.document.addLineBreak();
         try report.document.addLineBreak();
-        try D.renderSlice(&.{
-            D.bytes("Methods can't capture values from the function body around them. Pass"),
-            D.ident(data.captured_name).withAnnotation(.inline_code),
-            D.bytes("to the method as an argument instead."),
-        }, self, &report);
+        if (data.is_method) {
+            try D.renderSlice(&.{
+                D.bytes("Methods can't capture values from the function body around them. Pass"),
+                D.ident(data.captured_name).withAnnotation(.inline_code),
+                D.bytes("to the method as an argument instead."),
+            }, self, &report);
+        } else {
+            try D.renderSlice(&.{
+                D.bytes("Associated values can't capture values from the function body around them. Move"),
+                D.ident(data.binding_name).withAnnotation(.inline_code),
+                D.bytes("out of the type, or compute it from"),
+                D.ident(data.captured_name).withAnnotation(.inline_code),
+                D.bytes("where it is used instead."),
+            }, self, &report);
+        }
         return report;
     }
 

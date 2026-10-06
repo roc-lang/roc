@@ -98,7 +98,7 @@ pub const Problem = union(enum) {
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
     derived_method_value_use: DerivedMethodValueUse,
-    capturing_method: CapturingMethod,
+    capturing_associated_binding: CapturingAssociatedBinding,
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -229,12 +229,16 @@ pub const DerivedMethodValueUse = struct {
     region: base.Region,
 };
 
-/// A method of a type declared in a function body refers to a value bound in
-/// that function body, directly or through a local function that does.
-/// Methods never capture values.
-pub const CapturingMethod = struct {
-    method_name: Ident.Idx,
-    /// The name the method refers to at `region`.
+/// An associated binding (a method or an associated value) of a type declared
+/// in a function body refers to a value bound in that function body, directly
+/// or through a local function that does. Associated bindings never capture
+/// values.
+pub const CapturingAssociatedBinding = struct {
+    binding_name: Ident.Idx,
+    /// Whether the binding is a method (a local procedure) rather than an
+    /// associated value.
+    is_method: bool,
+    /// The name the binding refers to at `region`.
     referenced_name: Ident.Idx,
     /// The value of the enclosing function body that the reference reaches:
     /// `referenced_name` itself, or a value a local function it names uses.

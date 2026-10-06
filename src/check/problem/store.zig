@@ -260,7 +260,7 @@ pub const Store = struct {
                     .annotation_only_value,
                     .annotation_only_value_use,
                     .derived_method_value_use,
-                    .capturing_method,
+                    .capturing_associated_binding,
                     .unsupported_generated_method,
                     .hosted_unboxed_function,
                     .hosted_function_not_effectful,

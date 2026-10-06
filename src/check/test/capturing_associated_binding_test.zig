@@ -1,24 +1,30 @@
-//! Tests for the rule that a method of a type declared in a function body
-//! never captures a value of that function body.
+//! Tests for the rule that an associated binding (a method or an associated
+//! value) of a type declared in a function body never captures a value of that
+//! function body.
 
 const std = @import("std");
 const TestEnv = @import("./TestEnv.zig");
 
 const capture_title = "Method Captures a Local Value";
+const value_capture_title = "Associated Value Captures a Local Value";
 
 /// Expect one capture report per entry of `references`, in order, each
 /// highlighting that source text and naming the value it reaches.
 fn expectCapturesAt(source: []const u8, references: []const []const u8, captured: []const []const u8) TestEnv.TestEnvError!void {
+    try expectCapturesWithTitle(source, capture_title, references, captured);
+}
+
+fn expectCapturesWithTitle(source: []const u8, title: []const u8, references: []const []const u8, captured: []const []const u8) TestEnv.TestEnvError!void {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
     const titles = try std.testing.allocator.alloc([]const u8, references.len);
     defer std.testing.allocator.free(titles);
-    @memset(titles, capture_title);
+    @memset(titles, title);
     try test_env.assertTypeErrorTitles(titles);
     const idents = test_env.module_env.getIdentStoreConst();
     for (test_env.checker.problems.problems.items, references, captured) |problem, reference, value| {
-        const capture = problem.capturing_method;
+        const capture = problem.capturing_associated_binding;
         try std.testing.expectEqualStrings(reference, source[capture.region.start.offset..capture.region.end.offset]);
         try std.testing.expectEqualStrings(value, idents.getText(capture.captured_name));
     }
@@ -117,13 +123,54 @@ test "method bound to a capturing local function is reported at the binding" {
     , &.{"alias"}, &.{"offset"});
 }
 
-test "associated value that is no local procedure may use an enclosing value" {
-    try expectNoErrors(
+test "associated value using an enclosing value is reported" {
+    try expectCapturesWithTitle(
         \\make = |offset| {
         \\    Counter := { count : U64 }.{
         \\        start = Counter.{ count: offset }
         \\    }
         \\    Counter.start.count
+        \\}
+    , value_capture_title, &.{"offset"}, &.{"offset"});
+}
+
+test "associated value using a value of an enclosing block is reported" {
+    try expectCapturesWithTitle(
+        \\Test := [].{
+        \\    value = {
+        \\        n = 41
+        \\        T := [Local].{
+        \\            marker = n
+        \\        }
+        \\        T.marker
+        \\    }
+        \\}
+    , value_capture_title, &.{"n"}, &.{"n"});
+}
+
+test "associated value calling a capturing local function is reported at the call" {
+    try expectCapturesWithTitle(
+        \\make = |offset| {
+        \\    shift = |x| x + offset
+        \\    Counter := { count : U64 }.{
+        \\        start = Counter.{ count: shift(1) }
+        \\    }
+        \\    Counter.start.count
+        \\}
+    , value_capture_title, &.{"shift"}, &.{"offset"});
+}
+
+test "associated values may use top-level values, siblings, and local functions that capture nothing" {
+    try expectNoErrors(
+        \\base = 3
+        \\
+        \\make = |n| {
+        \\    double = |x| x * 2
+        \\    Counter := { count : U64 }.{
+        \\        start = Counter.{ count: double(base) }
+        \\        next = Counter.{ count: Counter.start.count + 1 }
+        \\    }
+        \\    Counter.next.count + n
         \\}
     );
 }

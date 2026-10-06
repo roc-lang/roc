@@ -4687,31 +4687,33 @@ follows each selected target's parent, recorded derivation edges, and the
 component edges that link each component dispatch of a structural
 comparison or hash to that operation's constraint callable.
 
-### Methods Never Capture
+### Associated Bindings Never Capture
 
-A method of a type declared in a function body never captures a value of that
-function body. A method is an associated binding that is a local procedure (a
-lambda or closure, or a chain of local bindings reaching one); any other
-associated binding is a value of the function body like any other local
-binding, and may refer to its values. A method's right-hand side may refer to
-top-level names, its own
-parameters and the names it binds itself, other methods, and local functions
-that capture nothing; a reference to any other name bound in an enclosing
-function body, or to a local function whose body reaches one (directly or
-through further local functions), is a capture. Enclosing type variables are
-not values: a method naming one is an unpromoted local procedure with no
-runtime captures. Ordinary local functions and closures may still capture.
+An associated binding of a type declared in a function body—a method or an
+associated value—never captures a value of that function body. A method is an
+associated binding that is a local procedure (a lambda or closure, or a chain of
+local bindings reaching one); any other associated binding is an associated
+value. An associated binding's right-hand side may refer to top-level names, its
+own parameters and the names it binds itself, other associated bindings, and
+local functions that capture nothing; a reference to any other name bound in an
+enclosing function body, or to a local function whose body reaches one
+(directly or through further local functions), is a capture. A reference to
+another associated binding relies on that binding alone, which the rule judges
+on its own. Enclosing type variables are not values: a method naming one is an
+unpromoted local procedure with no runtime captures. Ordinary local functions
+and closures may still capture.
 
-Checking enforces the rule once solving settles (`rejectCapturingMethods`,
-before promotion is decided): it walks each method's right-hand side, reports
-each captured name once at its first use (`capturing_method`), naming the value
-a local function reaches when the reference is to one, and replaces the
-method's right-hand side with a checked error. An associated binding whose
-right-hand side is a checked error is a rejected method: the method registry records it with
-no target, so a dispatch to it is a `checked_error` dispatch that evaluates its
-operands and then crashes; checking retires every lookup of its binding; and
-its declaration evaluates nothing, so `CheckedModule` construction omits it
-from its block. A rejected method is never promoted, and checking treats it as
+Checking enforces the rule once solving settles
+(`rejectCapturingAssociatedBindings`, before promotion is decided): it walks
+each associated binding's right-hand side, reports each captured name once at
+its first use (`capturing_associated_binding`), naming the value a local
+function reaches when the reference is to one, and replaces the right-hand side
+with a checked error. An associated binding whose right-hand side is a checked
+error is rejected: the method registry records it with no target, so a dispatch
+to it is a `checked_error` dispatch that evaluates its operands and then
+crashes; a lookup of it crashes; checking retires every lookup of its binding;
+and its declaration evaluates nothing, so `CheckedModule` construction omits it
+from its block. A rejected binding is never promoted, and checking treats it as
 its own local procedure, so no dispatch selecting it is available at compile
 time.
 
@@ -10942,7 +10944,7 @@ own locals. `CheckedModule` output computes the inventory once, as the
 least fixpoint of that relation over the nested-site walk, so Boxy never scans
 bodies for free variables.
 
-Methods never capture (Methods Never Capture), so a local procedure a dispatch,
+Methods never capture (Associated Bindings Never Capture), so a local procedure a dispatch,
 a method dictionary slot, a derived method, an iterator protocol call, or a
 generated codec selects has no runtime captures and is called directly as its
 nested worker. Boxy planning treats a method selection with runtime captures as
