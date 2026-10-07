@@ -10,6 +10,7 @@
 //! depth, not per call.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -187,15 +188,27 @@ pub fn run(result: *LirProgram.Result) ResourceError!void {
 const ReturnRewriter = struct {
     target: LIR.LocalId,
     next: LIR.CFStmtId,
+    /// Origin of the inlined call statement; the result assignment replaces
+    /// that call's binding of `target`.
+    call_origin: LIR.StmtOrigin,
 
-    pub fn cloneRet(self: *ReturnRewriter, cloner: anytype, value: LIR.LocalId) ResourceError!LIR.CFStmtId {
+    pub fn cloneRet(self: *ReturnRewriter, cloner: anytype, value: LIR.LocalId, origin: LIR.StmtOrigin) ResourceError!LIR.CFStmtId {
         const source = try cloner.mapLocal(value);
         if (source == self.target) return self.next;
+        // When the call site only returns the call's result, a return in the
+        // callee is a return in the caller: a tail call in the inlined body
+        // stays directly in front of its return.
+        const continuation = cloner.store.getCFStmt(self.next);
+        if (continuation == .ret and continuation.ret.value == self.target and
+            cloner.store.getLocal(source).layout_idx == cloner.store.getLocal(self.target).layout_idx)
+        {
+            return try cloner.store.addCFStmt(.{ .ret = .{ .value = source } }, origin);
+        }
         return try cloner.store.addCFStmt(.{ .assign_ref = .{
             .target = self.target,
             .op = .{ .local = source },
             .next = self.next,
-        } });
+        } }, self.call_origin);
     }
 };
 
@@ -211,7 +224,7 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
     defer store.allocator.free(call_args);
     const source_frame = try GuardedList.dupe(store.allocator, LIR.LocalId, store.getLocalSpan(callee.frame_locals));
     defer store.allocator.free(source_frame);
-    if (source_args.len != call_args.len) @panic("single-use inline call arity differed from callee");
+    if (source_args.len != call_args.len) invariant("{s}", .{"single-use inline call arity differed from callee"});
 
     const inline_scope = try store.addInlineScope(.{
         .source_symbol = callee.name,
@@ -220,9 +233,14 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         .call_site = store.stmtLoc(site.stmt),
         .parent = store.stmtInlineScope(site.stmt),
     });
+    // Every statement appended from here on joins the caller's body, so the
+    // shapes the store records for them are the caller's.
+    const outer_shapes = store.shapes;
+    store.shapes = .{};
+    defer store.shapes = outer_shapes.merged(store.shapes);
     var cloner = try body_clone.BodyCloner(ReturnRewriter).initWithInlineScopeOuter(
         store,
-        .{ .target = call.target, .next = call.next },
+        .{ .target = call.target, .next = call.next, .call_origin = store.stmtOrigin(site.stmt) },
         inline_scope,
         store.getProcSpec(site.caller).body.?,
     );
@@ -240,17 +258,10 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
         _ = try cloner.mapLocal(source_frame[index]);
     }
     var cloned_body = try cloner.cloneStmt(source_body);
-    const saved_loc = store.current_loc;
-    const saved_region = store.current_region;
-    const saved_inline_scope = store.current_inline_scope;
-    defer {
-        store.current_loc = saved_loc;
-        store.current_region = saved_region;
-        store.current_inline_scope = saved_inline_scope;
-    }
-    store.current_loc = store.stmtLoc(site.stmt);
-    store.current_region = store.stmtRegion(site.stmt);
-    store.current_inline_scope = inline_scope;
+    // The call-boundary argument aliases belong to the call statement, inside
+    // the new inline frame.
+    var boundary_origin = store.stmtOrigin(site.stmt);
+    boundary_origin.inline_scope = inline_scope;
     var arg_index = source_args.len;
     while (arg_index > 0) {
         arg_index -= 1;
@@ -258,11 +269,14 @@ fn inlineAt(store: *LirStore, layouts: *layout_mod.Store, site: CallSite) Resour
             .target = cloner.local_map.get(source_args[arg_index]).?,
             .op = .{ .local = call_args[arg_index] },
             .next = cloned_body,
-        } });
+        } }, boundary_origin);
     }
-    store.getCFStmtPtr(site.stmt).* = store.getCFStmt(cloned_body);
+    try store.replaceCFStmt(site.stmt, store.getCFStmt(cloned_body), store.stmtOrigin(cloned_body));
 
     const caller = store.getProcSpecPtr(site.caller);
+    // A body-level shape such as a loop is recorded on the callee rather than
+    // by any one statement, so it arrives with the callee's own record.
+    caller.shapes = caller.shapes.merged(callee.shapes).merged(store.shapes);
     const caller_frame = store.getLocalSpan(caller.frame_locals);
     var merged = try std.ArrayList(LIR.LocalId).initCapacity(store.allocator, caller_frame.len + cloner.new_locals.items.len);
     defer merged.deinit(store.allocator);
@@ -286,18 +300,18 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
 
     const callee_arg = try store.addLocal(.{ .layout_idx = .u64 });
     const two = try store.addLocal(.{ .layout_idx = .u64 });
-    const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
+    const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } }, .test_fixture);
     const callee_set = try store.addCFStmt(.{ .set_local = .{
         .target = callee_arg,
         .value = two,
         .mode = .replace_existing,
         .next = callee_ret,
-    } });
+    } }, .test_fixture);
     const callee_body = try store.addCFStmt(.{ .assign_literal = .{
         .target = two,
         .value = .{ .i64_literal = .{ .value = 2, .layout_idx = .u64 } },
         .next = callee_set,
-    } });
+    } }, .test_fixture);
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -305,17 +319,17 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
         .body = callee_body,
         .frame_locals = try store.addLocalSpan(&.{ callee_arg, two }),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     const caller_arg = try store.addLocal(.{ .layout_idx = .u64 });
     const result_local = try store.addLocal(.{ .layout_idx = .u64 });
-    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
         .target = result_local,
         .proc = callee,
         .args = try store.addLocalSpan(&.{caller_arg}),
         .next = caller_ret,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -324,7 +338,7 @@ test "single-use inline keeps writable callee arguments distinct from caller ope
         .body = caller_body,
         .frame_locals = try store.addLocalSpan(&.{ caller_arg, result_local }),
         .ret_layout = .u64,
-    });
+    }, .none);
     try result.root_procs.append(testing.allocator, caller);
 
     try run(&result);
@@ -354,7 +368,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
     const store = &result.store;
 
     const callee_arg = try store.addLocal(.{ .layout_idx = .str });
-    const callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } });
+    const callee_body = try store.addCFStmt(.{ .ret = .{ .value = callee_arg } }, .test_fixture);
     const callee = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -362,17 +376,17 @@ test "single-use inline preserves calls with refcounted callee frames" {
         .body = callee_body,
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .str,
-    });
+    }, .none);
 
     const caller_arg = try store.addLocal(.{ .layout_idx = .str });
     const result_local = try store.addLocal(.{ .layout_idx = .str });
-    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const caller_body = try store.addCFStmt(.{ .assign_call = .{
         .target = result_local,
         .proc = callee,
         .args = try store.addLocalSpan(&.{caller_arg}),
         .next = caller_ret,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(2),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -381,7 +395,7 @@ test "single-use inline preserves calls with refcounted callee frames" {
         .body = caller_body,
         .frame_locals = try store.addLocalSpan(&.{ caller_arg, result_local }),
         .ret_layout = .str,
-    });
+    }, .none);
     try result.root_procs.append(testing.allocator, caller);
 
     try run(&result);
@@ -389,4 +403,81 @@ test "single-use inline preserves calls with refcounted callee frames" {
     const preserved = store.getCFStmt(store.getProcSpec(caller).body.?);
     try testing.expect(preserved == .assign_call);
     try testing.expectEqual(callee, preserved.assign_call.proc);
+}
+
+test "single-use inline gives the caller the shapes of the body it receives" {
+    const testing = std.testing;
+    var result = try LirProgram.Result.init(testing.allocator, .u64);
+    defer result.deinit();
+    const store = &result.store;
+
+    // The callee compares two constants, which is the only statement the
+    // range prover can decide, and its producer recorded a loop.
+    const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const equal = try store.addLocal(.{ .layout_idx = .bool });
+    const callee_ret = try store.addCFStmt(.{ .ret = .{ .value = equal } }, .test_fixture);
+    const compare = try store.addLowLevelStmt(equal, .num_is_eq, &.{ lhs, rhs }, callee_ret, .test_fixture);
+    const right = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = compare,
+    } }, .test_fixture);
+    const callee_body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = right,
+    } }, .test_fixture);
+    const callee = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(1),
+        .identity = LIR.ProcIdentity.forTest(1),
+        .args = .empty(),
+        .body = callee_body,
+        .frame_locals = try store.addLocalSpan(&.{ lhs, rhs, equal }),
+        .ret_layout = .bool,
+        .shapes = .{ .loop = true },
+    }, .none);
+    try testing.expect(store.getProcSpec(callee).shapes.unsigned_compare);
+
+    // The caller's own body is a call and a return.
+    store.shapes = .{};
+    const result_local = try store.addLocal(.{ .layout_idx = .bool });
+    const caller_ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
+    const caller_body = try store.addCFStmt(.{ .assign_call = .{
+        .target = result_local,
+        .proc = callee,
+        .args = .empty(),
+        .next = caller_ret,
+    } }, .test_fixture);
+    const caller = try store.addProcSpec(.{
+        .name = LIR.Symbol.fromRaw(2),
+        .identity = LIR.ProcIdentity.forTest(2),
+        .args = .empty(),
+        .iterator_fusion_scope = true,
+        .body = caller_body,
+        .frame_locals = try store.addLocalSpan(&.{result_local}),
+        .ret_layout = .bool,
+    }, .none);
+    try result.root_procs.append(testing.allocator, caller);
+    try testing.expect(!store.getProcSpec(caller).shapes.unsigned_compare);
+    try testing.expect(!store.getProcSpec(caller).shapes.loop);
+
+    try run(&result);
+
+    const inlined = store.getProcSpec(caller).shapes;
+    try testing.expect(inlined.unsigned_compare);
+    try testing.expect(inlined.loop);
+
+    // The range phase selects by those shapes, and decides the comparison the
+    // caller now holds.
+    try @import("proc_passes.zig").run(testing.allocator, store, &result.layouts, .range, null, null);
+    var folded: usize = 0;
+    var walk = try body_clone.ReachableStmts.init(store, store.getProcSpec(caller).body.?);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .assign_low_level) return error.TestUnexpectedResult;
+        if (stmt == .assign_tag) folded += 1;
+    }
+    try testing.expectEqual(@as(usize, 1), folded);
 }

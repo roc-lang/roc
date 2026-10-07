@@ -9,7 +9,6 @@ const std = @import("std");
 const ctx_mod = @import("ctx");
 const threading = @import("threading.zig");
 
-const CacheReporting = @import("cache_reporting.zig").CacheReporting;
 pub const CacheModule = @import("cache_module.zig").CacheModule;
 const Allocator = std.mem.Allocator;
 const CoreCtx = ctx_mod.CoreCtx;
@@ -34,10 +33,10 @@ pub const CacheManager = struct {
     /// Which cache an operation belongs to; each has its own counters.
     pub const Kind = CacheStats.Kind;
 
-    fn verboseLog(self: *Self, comptime fmt: []const u8, args: anytype) void {
+    fn verboseLog(self: *Self, allocator: Allocator, comptime fmt: []const u8, args: anytype) void {
         if (!self.config.verbose) return;
-        var buf: [1024]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+        const msg = std.fmt.allocPrint(allocator, fmt, args) catch return;
+        defer allocator.free(msg);
         self.stats_mutex.lockUncancelable(self.roc_ctx.std_io);
         defer self.stats_mutex.unlock(self.roc_ctx.std_io);
         self.roc_ctx.writeStderr(msg) catch {};
@@ -106,12 +105,6 @@ pub const CacheManager = struct {
         self.stats.recordStoreFor(kind, bytes_written);
     }
 
-    pub fn getCacheFilePath(self: *Self, cache_key: [32]u8) (Allocator.Error || error{NoHomeDirectory})![]u8 {
-        const entries_dir = try self.config.getCheckedArtifactCacheDir(self.allocator);
-        defer self.allocator.free(entries_dir);
-        return self.computeCacheFilePath(cache_key, entries_dir);
-    }
-
     pub fn computeCacheFilePath(self: *Self, cache_key: [32]u8, entries_dir: []const u8) Allocator.Error![]u8 {
         return computeCacheFilePathIn(self.allocator, cache_key, entries_dir);
     }
@@ -133,17 +126,13 @@ pub const CacheManager = struct {
         return std.fs.path.join(allocator, &.{ cache_subdir, filename });
     }
 
-    pub fn ensureCacheSubdirIn(self: *Self, cache_key: [32]u8, entries_dir: []const u8) (Allocator.Error || error{ AccessDenied, IoError })!void {
-        return self.ensureCacheSubdirWith(self.allocator, cache_key, entries_dir);
-    }
-
     /// Create a cache entry's subdirectory using a caller-supplied allocator.
     pub fn ensureCacheSubdirWith(
         self: *Self,
         allocator: Allocator,
         cache_key: [32]u8,
         entries_dir: []const u8,
-    ) (Allocator.Error || error{ AccessDenied, IoError })!void {
+    ) (Allocator.Error || CoreCtx.MakePathError)!void {
         var subdir_buf: [2]u8 = undefined;
         _ = std.fmt.bufPrint(&subdir_buf, "{x}", .{cache_key[0..1]}) catch unreachable;
         const subdir = subdir_buf[0..];
@@ -153,12 +142,13 @@ pub const CacheManager = struct {
         try self.roc_ctx.makePath(full_subdir);
     }
 
-    pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8) void {
-        self.storeRawBytesIn(self.allocator, .checked, cache_key, data, entries_dir);
+    pub fn storeRawBytes(self: *Self, cache_key: [32]u8, data: []const u8, entries_dir: []const u8, source_name: []const u8) void {
+        self.storeRawBytesIn(self.allocator, .checked, cache_key, data, entries_dir, source_name);
     }
 
     /// Store one cache entry, allocating path scratch from `allocator` and
-    /// counting the operation against `kind`'s counters.
+    /// counting the operation against `kind`'s counters. The source name is
+    /// diagnostic context only; it does not contribute to the cache key.
     pub fn storeRawBytesIn(
         self: *Self,
         allocator: Allocator,
@@ -166,40 +156,56 @@ pub const CacheManager = struct {
         cache_key: [32]u8,
         data: []const u8,
         entries_dir: []const u8,
+        source_name: []const u8,
     ) void {
         if (!self.config.enabled) return;
 
         self.ensureCacheSubdirWith(allocator, cache_key, entries_dir) catch |err| {
-            self.verboseLog("Failed to create cache subdirectory: {}\n", .{err});
+            self.verboseLog(allocator, "Failed to create {s} cache subdirectory in {s} for {s} (key {x}): {}\n", .{ @tagName(kind), entries_dir, source_name, cache_key, err });
             self.recordStoreFailureFor(kind);
             return;
         };
 
-        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch {
+        const cache_path = computeCacheFilePathIn(allocator, cache_key, entries_dir) catch |err| {
+            self.verboseLog(allocator, "Failed to allocate cache path for {s}: {}\n", .{ source_name, err });
             self.recordStoreFailureFor(kind);
             return;
         };
         defer allocator.free(cache_path);
 
-        const temp_path = std.fmt.allocPrint(allocator, "{s}.tmp", .{cache_path}) catch {
+        // Concurrent compilers can publish the same key. Each writer needs its
+        // own staging file so one rename cannot remove another writer's input.
+        var suffix: [16]u8 = undefined;
+        self.roc_ctx.std_io.random(&suffix);
+        const temp_path = std.fmt.allocPrint(allocator, "{s}.{s}.tmp", .{ cache_path, std.fmt.bytesToHex(suffix, .lower) }) catch |err| {
+            self.verboseLog(allocator, "Failed to allocate cache staging path for {s}: {}\n", .{ source_name, err });
             self.recordStoreFailureFor(kind);
             return;
         };
         defer allocator.free(temp_path);
 
         self.roc_ctx.writeFile(temp_path, data) catch |err| {
-            self.verboseLog("Failed to write cache temp file {s}: {}\n", .{ temp_path, err });
+            self.verboseLog(allocator, "Failed to write {s} cache temp file {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, source_name, data.len, err });
+            self.removeFailedTempFile(allocator, temp_path);
             self.recordStoreFailureFor(kind);
             return;
         };
 
         self.roc_ctx.rename(temp_path, cache_path) catch |err| {
-            self.verboseLog("Failed to rename cache file {s} -> {s}: {}\n", .{ temp_path, cache_path, err });
+            self.verboseLog(allocator, "Failed to rename {s} cache file {s} -> {s} for {s} ({d} bytes): {}\n", .{ @tagName(kind), temp_path, cache_path, source_name, data.len, err });
+            self.removeFailedTempFile(allocator, temp_path);
             self.recordStoreFailureFor(kind);
             return;
         };
 
         self.recordStoreFor(kind, data.len);
+    }
+
+    fn removeFailedTempFile(self: *Self, allocator: Allocator, path: []const u8) void {
+        self.roc_ctx.deleteFile(path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            error.AccessDenied, error.IoError => self.verboseLog(allocator, "Failed to remove cache temp file {s}: {}\n", .{ path, err }),
+        };
     }
 
     pub fn loadRawBytes(self: *Self, cache_key: [32]u8, entries_dir: []const u8) ?[]const u8 {
@@ -217,7 +223,7 @@ pub const CacheManager = struct {
         }
 
         const data = self.roc_ctx.readFile(cache_path, self.allocator) catch |err| {
-            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
+            self.verboseLog(self.allocator, "Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.recordMissFor(.checked);
             return null;
         };
@@ -267,7 +273,7 @@ pub const CacheManager = struct {
         }
 
         const data = self.roc_ctx.readFile(cache_path, allocator) catch |err| {
-            self.verboseLog("Failed to read cache file {s}: {}\n", .{ cache_path, err });
+            self.verboseLog(allocator, "Failed to read cache file {s}: {}\n", .{ cache_path, err });
             self.recordMissFor(kind);
             return null;
         };
@@ -285,14 +291,5 @@ pub const CacheManager = struct {
 
     pub fn getStats(self: *const Self) CacheStats {
         return self.stats;
-    }
-
-    pub fn printStats(self: *const Self, allocator: Allocator) void {
-        if (!self.config.verbose) return;
-
-        var buf: [8192]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
-        CacheReporting.renderCacheStatsToTerminal(allocator, self.stats, fbs.writer()) catch return;
-        self.roc_ctx.writeStderr(fbs.getWritten()) catch {};
     }
 };

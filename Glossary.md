@@ -455,8 +455,6 @@ The caller retains ownership and can continue using the value after the call.
 
 Example builtins that borrow: `strEqual`, `listLen`, `strContains`
 
-See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
-
 ## Consume
 
 A **consuming** function takes ownership of its argument. The caller transfers
@@ -464,8 +462,6 @@ ownership to the callee and must not use the argument after the call. The functi
 is responsible for cleanup (decref when done).
 
 Example builtins that consume: `strConcat`, `listConcat`, `strJoinWith`
-
-See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
 
 ## Copy-on-Write
 
@@ -489,8 +485,6 @@ There are two variants:
 2. **Consuming seamless slice**: The builtin consumes the input and the slice
    inherits the reference (no incref). The interpreter should NOT decref.
    Example: `strTrim` (when it creates an offset slice)
-
-See [src/builtins/OWNERSHIP.md](src/builtins/OWNERSHIP.md) for detailed ownership semantics.
 
 ## Mutate in place
 

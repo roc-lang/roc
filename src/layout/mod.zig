@@ -19,6 +19,7 @@ const std = @import("std");
 pub const Layout = @import("layout.zig").Layout;
 pub const rc_helper = @import("rc_helper.zig");
 pub const Digests = @import("digest.zig").Digests;
+pub const DigestCache = @import("digest.zig").DigestCache;
 pub const LayoutDigest = @import("digest.zig").Digest;
 pub const digestSymbolHex = @import("digest.zig").symbolHex;
 pub const LayoutTag = @import("layout.zig").LayoutTag;
@@ -78,10 +79,11 @@ pub const Store = @import("store.zig").Store;
 pub const Graph = @import("graph.zig").Graph;
 pub const GraphNode = @import("graph.zig").Node;
 pub const GraphNodeId = @import("graph.zig").NodeId;
+/// Recursive-graph digest settled for a committed layout graph node.
+pub const GraphDigest = @import("graph.zig").Digest;
 pub const GraphRef = @import("graph.zig").Ref;
 /// Input edge into a layout graph node.
 pub const GraphInput = GraphRef;
-pub const graphRefKey = @import("graph.zig").refKey;
 pub const GraphField = @import("graph.zig").Field;
 pub const GraphFieldSpan = @import("graph.zig").FieldSpan;
 pub const GraphRefSpan = @import("graph.zig").RefSpan;

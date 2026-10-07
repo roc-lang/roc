@@ -28,119 +28,38 @@ use_it = {
 }
 ~~~
 # EXPECTED
-TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
-TYPE MISMATCH - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
+TYPE NOT DETERMINED - static_dispatch_where_forced_numeric_issue_9657.md:19:17:19:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
+		(title "Type Not Determined")
 		(region (start 19 17) (end 19 25))
 		(headline
-			(reflow "The")
-			(reflow " ")
-			(annotated code "decode")
-			(reflow " ")
-			(reflow "method on")
-			(reflow " ")
-			(annotated code "Dec")
-			(reflow " ")
-			(reflow "has an incompatible type."))
+			(reflow "Nothing in this program determines a type this needs:"))
 		(document
 			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
 			(line-break)
-			(reflow "The method")
+			(reflow "Its type needs all of these:")
+			(line-break)
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, c -> b]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
 			(reflow " ")
 			(annotated code "decode")
 			(reflow " ")
-			(reflow "has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "src, fmt -> (Try(Dec, err), src)")
-			(line-break)
-			(indent 1)
-			(text "  where [fmt.decode_dec : fmt, src -> (Try(Dec, err), src)]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But I need it to have the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "I64 -> b where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
-			(annotation-end)
+			(reflow "method to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "This function expects")
-			(reflow " ")
-			(reflow "1")
-			(reflow " ")
-			(reflow "argument")
-			(reflow " ")
-			(reflow "but got")
-			(reflow " ")
-			(reflow "2")
-			(reflow ".")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 19 17) (end 19 25))
-		(headline
-			(reflow "The")
-			(reflow " ")
-			(annotated code "encode")
-			(reflow " ")
-			(reflow "method on")
-			(reflow " ")
-			(annotated code "Dec")
-			(reflow " ")
-			(reflow "has an incompatible type."))
-		(document
-			(source-region (file "static_dispatch_where_forced_numeric_issue_9657.md") (start 19 17) (end 19 25) (annotation error) (line-text "    transform = make_map(|n| n + 1)"))
-			(line-break)
-			(reflow "The method")
-			(reflow " ")
-			(annotated code "encode")
-			(reflow " ")
-			(reflow "has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec, fmt -> Try(encoded, err)")
-			(line-break)
-			(indent 1)
-			(text "  where [fmt.encode_dec : fmt, Dec -> Try(encoded, err)]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But I need it to have the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "b -> I64 where [b.decode : I64 -> b, b.encode : b -> I64, b.plus : b, Dec -> b]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "This function expects")
-			(reflow " ")
-			(reflow "1")
-			(reflow " ")
-			(reflow "argument")
-			(reflow " ")
-			(reflow "but got")
-			(reflow " ")
-			(reflow "2")
-			(reflow "."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -290,18 +209,18 @@ use_it = {
 									(ty-rigid-var (name "a")))
 								(s-let
 									(p-assign (ident "value"))
-									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 302)
+									(e-type-dispatch-call (method "decode") (type-dispatch-stmt 30) (constraint-fn-var 307)
 										(args
 											(e-lookup-local
 												(p-assign (ident "input"))))))
 								(s-let
 									(p-assign (ident "output"))
-									(e-call (constraint-fn-var 310)
+									(e-call (constraint-fn-var 315)
 										(e-lookup-local
 											(p-assign (ident "f")))
 										(e-lookup-local
 											(p-assign (ident "value")))))
-								(e-dispatch-call (method "encode") (constraint-fn-var 311)
+								(e-dispatch-call (method "encode") (constraint-fn-var 316)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "output"))))
@@ -332,18 +251,18 @@ use_it = {
 		(e-block
 			(s-let
 				(p-assign (ident "transform"))
-				(e-call (constraint-fn-var 332)
+				(e-call (constraint-fn-var 337)
 					(e-runtime-error (tag "erroneous_value_expr"))
 					(e-lambda
 						(args
 							(p-assign (ident "n")))
-						(e-dispatch-call (method "plus") (constraint-fn-var 330)
+						(e-dispatch-call (method "plus") (constraint-fn-var 335)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "n"))))
 							(args
 								(e-num (value "1")))))))
-			(e-call (constraint-fn-var 340)
+			(e-call (constraint-fn-var 345)
 				(e-lookup-local
 					(p-assign (ident "transform")))
 				(e-num (value "41"))))))

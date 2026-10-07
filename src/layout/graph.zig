@@ -21,17 +21,9 @@ pub const Ref = union(enum) {
     local: NodeId,
 };
 
-/// Public function `refKey`.
-pub fn refKey(ref: Ref) u64 {
-    return switch (ref) {
-        .canonical => |idx| 0x8000_0000_0000_0000 | @as(u64, @intFromEnum(idx)),
-        .local => |node_id| @intFromEnum(node_id),
-    };
-}
-
 /// Struct field edge in a temporary layout graph.
 pub const Field = struct {
-    index: u16,
+    index: u32,
     child: Ref,
     /// True for unnamed nominal-record padding spacers: the field's layout
     /// supplies only its size; it occupies bytes (forced to alignment 1) but is
@@ -44,7 +36,7 @@ pub const Field = struct {
 /// store uses when committing those fields.
 pub const FieldSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
     order: FieldOrder = .structural,
 
     pub const FieldOrder = enum(u8) {
@@ -60,16 +52,31 @@ pub const FieldSpan = extern struct {
 /// Span into a graph's contiguous ref storage.
 pub const RefSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() RefSpan {
         return .{ .start = 0, .len = 0 };
     }
 };
 
+/// Structural identity of a graph node as computed by the store's recursive
+/// graph analysis. Equal digests describe the same (possibly infinite) runtime
+/// representation.
+pub const Digest = [32]u8;
+
+/// An already committed layout together with the digest its node carried when
+/// it was committed. Unlike a bare canonical ref, this leaf stays transparent
+/// to recursion analysis: an unrolled copy of a recursive node that points at
+/// it digests exactly as if the committed subgraph had been expanded again.
+pub const Committed = struct {
+    idx: Idx,
+    digest: u32,
+};
+
 /// Temporary node shape used before interning into the canonical layout store.
 pub const Node = union(enum) {
     pending: void,
+    committed: Committed,
     nominal: Ref,
     box: Ref,
     list: Ref,
@@ -84,9 +91,11 @@ pub const Graph = struct {
     nodes: std.ArrayListUnmanaged(Node) = .empty,
     fields: std.ArrayListUnmanaged(Field) = .empty,
     refs: std.ArrayListUnmanaged(Ref) = .empty,
+    digests: std.ArrayListUnmanaged(Digest) = .empty,
 
     /// Release all graph storage.
     pub fn deinit(self: *Graph, allocator: std.mem.Allocator) void {
+        self.digests.deinit(allocator);
         self.nodes.deinit(allocator);
         self.fields.deinit(allocator);
         self.refs.deinit(allocator);
@@ -112,6 +121,21 @@ pub const Graph = struct {
         return id;
     }
 
+    /// Add a leaf node for an already committed layout whose graph digest was
+    /// recorded by the commit that produced it.
+    pub fn addCommitted(self: *Graph, allocator: std.mem.Allocator, idx: Idx, digest: Digest) Allocator.Error!NodeId {
+        const digest_index: u32 = @intCast(self.digests.items.len);
+        try self.digests.append(allocator, digest);
+        const id: NodeId = @enumFromInt(self.nodes.items.len);
+        try self.nodes.append(allocator, .{ .committed = .{ .idx = idx, .digest = digest_index } });
+        return id;
+    }
+
+    /// Digest recorded for a committed leaf node.
+    pub fn committedDigest(self: *const Graph, committed: Committed) Digest {
+        return self.digests.items[committed.digest];
+    }
+
     /// Fill in a previously reserved node.
     pub fn setNode(self: *Graph, id: NodeId, node: Node) void {
         self.nodes.items[@intFromEnum(id)] = node;
@@ -121,11 +145,15 @@ pub const Graph = struct {
     pub fn appendFields(self: *Graph, allocator: std.mem.Allocator, fields: []const Field) Allocator.Error!FieldSpan {
         if (fields.len == 0) return .empty();
 
-        const start: u32 = @intCast(self.fields.items.len);
+        // Spans hold 32-bit positions, so a graph past that range has
+        // exhausted the representable memory.
+        const start = std.math.cast(u32, self.fields.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, fields.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         try self.fields.appendSlice(allocator, fields);
         return .{
             .start = start,
-            .len = @intCast(fields.len),
+            .len = len,
             .order = .structural,
         };
     }
@@ -134,11 +162,13 @@ pub const Graph = struct {
     pub fn appendRefs(self: *Graph, allocator: std.mem.Allocator, refs: []const Ref) Allocator.Error!RefSpan {
         if (refs.len == 0) return .empty();
 
-        const start: u32 = @intCast(self.refs.items.len);
+        const start = std.math.cast(u32, self.refs.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, refs.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         try self.refs.appendSlice(allocator, refs);
         return .{
             .start = start,
-            .len = @intCast(refs.len),
+            .len = len,
         };
     }
 

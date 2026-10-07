@@ -39,6 +39,73 @@ scratch_nodes: std.ArrayList(Node.Idx),
 diagnostics: std.ArrayList(AST.Diagnostic),
 cached_malformed_node: ?Node.Idx,
 expr_kernel_scratch: ParserKernelScratch,
+bracket_matches: BracketMatches,
+
+const no_bracket_match = std.math.maxInt(u32);
+
+/// For each opening bracket token, the token that closes it, found in one pass
+/// over the tokens. Lookaheads that skip a bracketed group jump to its close
+/// instead of walking it, so nested groups cost linear time in total. Each
+/// table follows the depth counting of the lookaheads that read it.
+const BracketMatches = struct {
+    /// Every bracket kind counts toward one depth.
+    any: []u32,
+    /// Only curly braces count.
+    curly: []u32,
+    /// Only round parentheses count.
+    round: []u32,
+
+    fn init(gpa: std.mem.Allocator, tags: []const Token.Tag) std.mem.Allocator.Error!BracketMatches {
+        const any = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(any);
+        const curly = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(curly);
+        const round = try gpa.alloc(u32, tags.len);
+        errdefer gpa.free(round);
+        @memset(any, no_bracket_match);
+        @memset(curly, no_bracket_match);
+        @memset(round, no_bracket_match);
+        var any_open: std.ArrayList(u32) = .empty;
+        defer any_open.deinit(gpa);
+        var curly_open: std.ArrayList(u32) = .empty;
+        defer curly_open.deinit(gpa);
+        var round_open: std.ArrayList(u32) = .empty;
+        defer round_open.deinit(gpa);
+        for (tags, 0..) |tag, raw_index| {
+            const index: u32 = @intCast(raw_index);
+            switch (tag) {
+                .OpenRound, .NoSpaceOpenRound => {
+                    try any_open.append(gpa, index);
+                    try round_open.append(gpa, index);
+                },
+                .OpenSquare => try any_open.append(gpa, index),
+                .OpenCurly => {
+                    try any_open.append(gpa, index);
+                    try curly_open.append(gpa, index);
+                },
+                .CloseRound => {
+                    if (any_open.pop()) |open| any[open] = index;
+                    if (round_open.pop()) |open| round[open] = index;
+                },
+                .CloseSquare => {
+                    if (any_open.pop()) |open| any[open] = index;
+                },
+                .CloseCurly => {
+                    if (any_open.pop()) |open| any[open] = index;
+                    if (curly_open.pop()) |open| curly[open] = index;
+                },
+                .EndOfFile, .Float, .StringStart, .StringEnd, .MultilineStringStart, .StringPart, .MalformedStringPart, .SingleQuote, .MalformedSingleQuote, .Int, .MalformedNumberBadSuffix, .MalformedNumberUnicodeSuffix, .MalformedNumberNoDigits, .MalformedNumberNoExponentDigits, .MalformedInvalidUnicodeEscapeSequence, .MalformedInvalidEscapeSequence, .UpperIdent, .LowerIdent, .MalformedUnicodeIdent, .Underscore, .DotInt, .NoSpaceDotInt, .DotLowerIdent, .NoSpaceDotLowerIdent, .DotQuestionLowerIdent, .NoSpaceDotQuestionLowerIdent, .DotUpperIdent, .NoSpaceDotUpperIdent, .MalformedDotUnicodeIdent, .MalformedNoSpaceDotUnicodeIdent, .MalformedDotQuestionUnicodeIdent, .MalformedNoSpaceDotQuestionUnicodeIdent, .NamedUnderscore, .MalformedNamedUnderscoreUnicode, .OpaqueName, .MalformedOpaqueNameUnicode, .MalformedOpaqueNameWithoutName, .OpenStringInterpolation, .CloseStringInterpolation, .OpPlus, .OpStar, .OpPizza, .OpAssign, .OpBinaryMinus, .OpUnaryMinus, .OpNotEquals, .OpBang, .OpAnd, .OpAmpersand, .OpQuestion, .OpDoubleQuestion, .OpOr, .OpBar, .OpDoubleSlash, .OpSlash, .OpPercent, .OpCaret, .OpGreaterThanOrEq, .OpGreaterThan, .OpLessThanOrEq, .OpBackArrow, .OpLessThan, .OpDoubleDotLessThan, .OpDoubleDotEquals, .OpEquals, .OpColonEqual, .OpDoubleColon, .NoSpaceOpQuestion, .Comma, .Dot, .DoubleDot, .TripleDot, .DotStar, .OpColon, .OpArrow, .OpFatArrow, .OpBackslash, .KwApp, .KwAs, .KwCrash, .KwDbg, .KwElse, .KwExpect, .KwExposes, .KwExposing, .KwFor, .KwForBang, .KwGenerates, .KwHas, .KwHosted, .KwIf, .KwImplements, .KwImport, .KwImports, .KwIn, .KwInterface, .KwMatch, .KwModule, .KwPackage, .KwPackages, .KwPlatform, .KwProvides, .KwRequires, .KwReturn, .KwTargets, .KwVar, .KwWhere, .KwWhile, .KwWith, .KwBreak, .MalformedUnknownToken => {},
+            }
+        }
+        return .{ .any = any, .curly = curly, .round = round };
+    }
+
+    fn deinit(self: *BracketMatches, gpa: std.mem.Allocator) void {
+        gpa.free(self.any);
+        gpa.free(self.curly);
+        gpa.free(self.round);
+    }
+};
 
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.Error!Parser {
@@ -48,6 +115,9 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
 
     var scratch_idents = try base.Scratch(base.Ident.Idx).init(gpa);
     errdefer scratch_idents.deinit();
+
+    var bracket_matches = try BracketMatches.init(gpa, tokens.tokens.items(.tag));
+    errdefer bracket_matches.deinit(gpa);
 
     return Parser{
         .gpa = gpa,
@@ -64,6 +134,7 @@ pub fn init(tokens: TokenizedBuffer, gpa: std.mem.Allocator) std.mem.Allocator.E
         .diagnostics = .empty,
         .cached_malformed_node = null,
         .expr_kernel_scratch = .{},
+        .bracket_matches = bracket_matches,
     };
 }
 
@@ -74,6 +145,7 @@ pub fn deinit(parser: *Parser) void {
     parser.scope_pending_annos.deinit(parser.gpa);
     parser.type_path_stack.deinit(parser.gpa);
     parser.expr_kernel_scratch.deinit(parser.gpa);
+    parser.bracket_matches.deinit(parser.gpa);
 
     // diagnostics will be kept and passed to the following compiler stage
     // to be deinitialized by the caller when no longer required
@@ -162,18 +234,10 @@ fn looksLikeTypeDecl(self: *Parser) bool {
 
     // Check for parenthesized type params: Name(a, b) :
     if (next_tok == .OpenRound or next_tok == .NoSpaceOpenRound) {
-        // Skip to matching close paren, counting nesting
-        lookahead += 1;
-        var depth: u32 = 1;
-        while (depth > 0) {
-            const tok = self.peekN(lookahead);
-            if (tok == .OpenRound or tok == .NoSpaceOpenRound) {
-                depth += 1;
-            } else if (tok == .CloseRound) {
-                depth -= 1;
-            } else if (tok == .EndOfFile) return false;
-            lookahead += 1;
-        }
+        // Skip to the matching close paren.
+        const close = self.bracket_matches.round[self.pos + lookahead];
+        if (close == no_bracket_match) return false;
+        lookahead = close - self.pos + 1;
     }
     // Note: We do NOT support the old `Name a b :` syntax with space-separated type params.
     // Only `Name(a, b) :` with parenthesized type params is supported.
@@ -220,18 +284,10 @@ fn looksLikeTagOrNominalDestructure(self: *Parser) bool {
         return false;
     }
 
-    var depth: u32 = 1;
-    var closing_tok = Token.Tag.EndOfFile;
-    while (depth > 0) {
-        const tok = self.peekN(lookahead);
-        if (tok == .OpenRound or tok == .NoSpaceOpenRound or tok == .OpenSquare or tok == .OpenCurly) {
-            depth += 1;
-        } else if (tok == .CloseRound or tok == .CloseSquare or tok == .CloseCurly) {
-            closing_tok = tok;
-            depth -= 1;
-        } else if (tok == .EndOfFile) return false;
-        lookahead += 1;
-    }
+    const close = self.bracket_matches.any[self.pos + lookahead - 1];
+    if (close == no_bracket_match) return false;
+    const closing_tok = self.tok_buf.tokens.items(.tag)[close];
+    lookahead = close - self.pos + 1;
 
     if (closing_tok != expected_close) {
         return false;
@@ -659,10 +715,7 @@ fn recordDestructuredValueNames(
             .tag => |p| {
                 for (self.store.patternSlice(p.args)) |arg| try pending.append(self.gpa, arg);
             },
-            .list => |p| {
-                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
-            },
-            .tuple => |p| {
+            inline .list, .tuple => |p| {
                 for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
             },
             // A `var` binder is rejected outside a block, where names are not
@@ -1673,6 +1726,7 @@ const RequiresEntriesResult = union(enum) {
 };
 
 fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEntriesResult {
+    const start = self.pos;
     self.expect(.OpenCurly) catch {
         return .{ .malformed = .expected_requires_rigids_open_curly };
     };
@@ -1772,7 +1826,9 @@ fn parseRequiresEntriesTokens(self: *Parser) std.mem.Allocator.Error!RequiresEnt
             return .{ .malformed = .expected_requires_signatures_close_curly };
         };
     }
-    return .{ .span = try self.store.requiresEntrySpanFrom(requires_entries_top) };
+    var entries = try self.store.requiresEntrySpanFrom(requires_entries_top);
+    entries.region = .{ .start = start, .end = self.pos };
+    return .{ .span = entries };
 }
 
 fn parsePatternString(self: *Parser) std.mem.Allocator.Error!AST.Pattern.Idx {
@@ -1901,7 +1957,30 @@ fn parseTargetFileList(self: *Parser) (std.mem.Allocator.Error || error{Expected
     return try self.store.targetFileSpanFrom(files_top);
 }
 
+/// A list value whose elements are still being parsed.
+const OpenTargetConfigList = struct {
+    start: Token.Idx,
+    values_top: u32,
+};
+
 fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    // Nested lists keep their open brackets on an explicit stack; each
+    // finished value becomes the next element of the innermost open list.
+    var open: std.ArrayList(OpenTargetConfigList) = .empty;
+    defer open.deinit(self.gpa);
+    while (true) {
+        var value = try self.parseTargetConfigLeafOrOpen(&open) orelse continue;
+        while (open.items.len > 0) {
+            try self.store.addScratchTargetConfigValue(value);
+            if (self.consumeComma() and self.peek() != .CloseSquare and self.peek() != .EndOfFile) break;
+            value = try self.closeTargetConfigList(open.pop().?);
+        } else return value;
+    }
+}
+
+/// Parses a value that is not a list, or opens a list: an empty list closes
+/// at once, and a nonempty list is pushed so its elements parse next (null).
+fn parseTargetConfigLeafOrOpen(self: *Parser, open: *std.ArrayList(OpenTargetConfigList)) std.mem.Allocator.Error!?AST.TargetConfigValue.Idx {
     const start = self.pos;
     const tag = self.peek();
     if (tag == .Int) {
@@ -1934,29 +2013,29 @@ fn parseTargetConfigValueTokens(self: *Parser) std.mem.Allocator.Error!AST.Targe
         return try self.store.addTargetConfigValue(.{ .ident = start });
     } else if (tag == .OpenSquare) {
         self.advance();
-        const values_top = self.store.scratchTargetConfigValueTop();
-        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
-            try self.store.addScratchTargetConfigValue(try self.parseTargetConfigValueTokens());
-            if (!self.consumeComma()) {
-                break;
-            }
-        }
-        if (self.peek() != .CloseSquare) {
-            self.store.clearScratchTargetConfigValuesFrom(values_top);
-            return try self.store.addTargetConfigValue(.{ .malformed = .{
-                .reason = .expected_target_files_close_square,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        self.advance();
-        const values_span = try self.store.targetConfigValueSpanFrom(values_top);
-        return try self.store.addTargetConfigValue(.{ .list = values_span });
+        const list: OpenTargetConfigList = .{ .start = start, .values_top = self.store.scratchTargetConfigValueTop() };
+        if (self.peek() == .CloseSquare or self.peek() == .EndOfFile) return try self.closeTargetConfigList(list);
+        try open.append(self.gpa, list);
+        return null;
     } else {
         return try self.store.addTargetConfigValue(.{ .malformed = .{
             .reason = .expected_target_file,
             .region = .{ .start = start, .end = self.pos },
         } });
     }
+}
+
+fn closeTargetConfigList(self: *Parser, list: OpenTargetConfigList) std.mem.Allocator.Error!AST.TargetConfigValue.Idx {
+    if (self.peek() != .CloseSquare) {
+        self.store.clearScratchTargetConfigValuesFrom(list.values_top);
+        return try self.store.addTargetConfigValue(.{ .malformed = .{
+            .reason = .expected_target_files_close_square,
+            .region = .{ .start = list.start, .end = self.pos },
+        } });
+    }
+    self.advance();
+    const values_span = try self.store.targetConfigValueSpanFrom(list.values_top);
+    return try self.store.addTargetConfigValue(.{ .list = values_span });
 }
 
 fn parseTargetConfigEntryTokens(self: *Parser) std.mem.Allocator.Error!AST.TargetConfigEntry.Idx {
@@ -2284,14 +2363,6 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-/// Run the token parser kernel with a pattern goal and return the completed pattern.
-pub fn runPattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.runPatternRoot(alternatives);
-}
-
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2308,7 +2379,7 @@ fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Er
     const p = try self.store.addPattern(.{ .as = .{
         .name = self.pos,
         .pattern = pattern,
-        .region = .{ .start = parent_region.start, .end = self.pos },
+        .region = .{ .start = parent_region.start, .end = self.pos + 1 },
     } });
     self.advance(); // Advance past LowerIdent;
     return p;
@@ -2418,13 +2489,20 @@ const PatternTupleState = struct {
     scratch_top: u32,
 };
 
+const StatementForPatternState = struct {
+    start: Token.Idx,
+    kind: AST.ForKind,
+};
+
 const StatementForExprState = struct {
     start: Token.Idx,
+    kind: AST.ForKind,
     patt: AST.Pattern.Idx,
 };
 
 const StatementForBodyState = struct {
     start: Token.Idx,
+    kind: AST.ForKind,
     patt: AST.Pattern.Idx,
     expr: AST.Expr.Idx,
 };
@@ -2728,15 +2806,23 @@ const ExprMatchBranchAfterBodyState = struct {
     guard: ?AST.Expr.Idx,
 };
 
+const ExprForPatternState = struct {
+    start: Token.Idx,
+    min_bp: u8,
+    kind: AST.ForKind,
+};
+
 const ExprForAfterListState = struct {
     start: Token.Idx,
     min_bp: u8,
+    kind: AST.ForKind,
     pattern: AST.Pattern.Idx,
 };
 
 const ExprForAfterBodyState = struct {
     start: Token.Idx,
     min_bp: u8,
+    kind: AST.ForKind,
     pattern: AST.Pattern.Idx,
     list_expr: AST.Expr.Idx,
 };
@@ -2769,12 +2855,14 @@ const OpenSyntaxStack = struct {
     expr_match_after_pattern: std.ArrayList(ExprMatchBranchAfterPatternState) = .empty,
     expr_match_after_guard: std.ArrayList(ExprMatchBranchAfterGuardState) = .empty,
     expr_match_after_body: std.ArrayList(ExprMatchBranchAfterBodyState) = .empty,
+    expr_for_pattern: std.ArrayList(ExprForPatternState) = .empty,
     expr_for_after_list: std.ArrayList(ExprForAfterListState) = .empty,
     expr_for_after_body: std.ArrayList(ExprForAfterBodyState) = .empty,
     expr_lambda_args: std.ArrayList(ExprLambdaArgsState) = .empty,
     statement_token: std.ArrayList(Token.Idx) = .empty,
     statement_decl_body: std.ArrayList(StatementDeclBodyState) = .empty,
     statement_var_body: std.ArrayList(StatementVarBodyState) = .empty,
+    statement_for_pattern: std.ArrayList(StatementForPatternState) = .empty,
     statement_for_expr: std.ArrayList(StatementForExprState) = .empty,
     statement_for_body: std.ArrayList(StatementForBodyState) = .empty,
     statement_while_body: std.ArrayList(StatementWhileBodyState) = .empty,
@@ -3246,16 +3334,46 @@ fn runStatementRoot(self: *Parser, statement_type: StatementType) std.mem.Alloca
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
-}
-
-fn runPatternRoot(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
-}
-
 fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
+}
+
+/// A top-level comma distinguishes a mistaken record separator from a block
+/// assignment. Delimited expressions and lambda parameters own their commas,
+/// and so does a function type's argument list, which an arrow at this level
+/// follows: a record field's value has none.
+fn braceHasFieldComma(self: *const Parser) bool {
+    var token = self.pos + 2;
+    var depth: u32 = 0;
+    var lambda_params = false;
+    var record_comma = false;
+    const tags = self.tok_buf.tokens.items(.tag);
+    while (token < tags.len) : (token += 1) {
+        const tag = tags[token];
+        if (tag == .OpenRound or tag == .NoSpaceOpenRound or tag == .OpenSquare or
+            tag == .OpenCurly or tag == .OpenStringInterpolation or tag == .StringStart)
+        {
+            depth += 1;
+        } else if (tag == .CloseRound or tag == .CloseSquare or tag == .CloseCurly or
+            tag == .CloseStringInterpolation or tag == .StringEnd)
+        {
+            if (depth == 0) return record_comma;
+            depth -= 1;
+        } else if (depth == 0 and tag == .OpBar) {
+            lambda_params = !lambda_params;
+        } else if (depth == 0 and !lambda_params and tag == .Comma) {
+            record_comma = true;
+        } else if (depth == 0 and (tag == .OpArrow or tag == .OpFatArrow)) {
+            record_comma = false;
+        } else if (depth == 0 and record_comma and tag == .LowerIdent and
+            token + 1 < tags.len and tags[token + 1] == .OpAssign)
+        {
+            return true;
+        } else if (tag == .EndOfFile) {
+            return record_comma;
+        }
+    }
+    return record_comma;
 }
 
 fn runExprStatementKernel(
@@ -3343,9 +3461,7 @@ fn runExprStatementKernel(
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = switch (root) {
         .statement, .associated_block => root_statement_type,
-        .expr => StatementType.in_body,
-        .pattern => StatementType.in_body,
-        .type_anno => StatementType.in_body,
+        .expr, .pattern, .type_anno => StatementType.in_body,
     };
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;
@@ -3583,6 +3699,7 @@ fn runExprStatementKernel(
                     } else if (self.peek() == .LowerIdent and
                         (self.peekNext() == .Comma or
                             self.peekNext() == .OpColon or
+                            (self.peekNext() == .OpAssign and self.braceHasFieldComma()) or
                             (self.peekNext() == .CloseCurly and open_syntax.peekExpr() == .expr_record_field)))
                     {
                         // A punned single-field record is otherwise ambiguous
@@ -3591,18 +3708,31 @@ fn runExprStatementKernel(
                         // the same unambiguous nesting as `{ { field } }`.
                         var is_block = false;
                         if (self.peekNext() == .OpColon) {
+                            // Scan this brace's own level, jumping over each
+                            // nested group, for a `name =` statement.
                             var lookahead_pos = self.pos + 2;
-                            var depth: u32 = 0;
-                            while (lookahead_pos < self.tok_buf.tokens.len) {
-                                const lookahead_tag = self.tok_buf.tokens.items(.tag)[lookahead_pos];
+                            const tags = self.tok_buf.tokens.items(.tag);
+                            // A comma separates record fields unless an arrow
+                            // follows it at this level: a record field's value
+                            // has none, but a function type's argument list
+                            // does, so that comma belongs to a type annotation.
+                            var record_comma = false;
+                            while (lookahead_pos < tags.len) {
+                                const lookahead_tag = tags[lookahead_pos];
                                 if (lookahead_tag == .OpenRound or lookahead_tag == .NoSpaceOpenRound or lookahead_tag == .OpenSquare or lookahead_tag == .OpenCurly) {
-                                    depth += 1;
+                                    const close = self.bracket_matches.any[lookahead_pos];
+                                    if (close == no_bracket_match) break;
+                                    lookahead_pos = close + 1;
+                                    continue;
                                 } else if (lookahead_tag == .CloseRound or lookahead_tag == .CloseSquare or lookahead_tag == .CloseCurly) {
-                                    if (depth == 0) break;
-                                    depth -= 1;
+                                    break;
+                                } else if (lookahead_tag == .Comma) {
+                                    record_comma = true;
+                                } else if (lookahead_tag == .OpArrow or lookahead_tag == .OpFatArrow) {
+                                    record_comma = false;
                                 } else if (lookahead_tag == .LowerIdent) {
-                                    if (depth == 0 and lookahead_pos + 1 < self.tok_buf.tokens.len and self.tok_buf.tokens.items(.tag)[lookahead_pos + 1] == .OpAssign) {
-                                        is_block = true;
+                                    if (lookahead_pos + 1 < tags.len and tags[lookahead_pos + 1] == .OpAssign) {
+                                        is_block = !record_comma;
                                         break;
                                     }
                                 } else if (lookahead_tag == .EndOfFile) {
@@ -3723,12 +3853,13 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
-                if (tok == .KwFor) {
+                if (tok == .KwFor or tok == .KwForBang) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprAfterExprState, .{
+                    try open_syntax.pushPattern(open_allocator, .expr_for_pattern, ExprForPatternState, .{
                         .start = start,
                         .min_bp = expr_state.min_bp,
+                        .kind = if (tok == .KwForBang) .stream else .iter,
                     });
                     pattern_root_state = .{
                         .outer_start = self.pos,
@@ -4473,6 +4604,7 @@ fn runExprStatementKernel(
                         try open_syntax.pushExpr(open_allocator, .expr_for_body, ExprForAfterBodyState, .{
                             .start = state.start,
                             .min_bp = state.min_bp,
+                            .kind = state.kind,
                             .pattern = state.pattern,
                             .list_expr = completed,
                         });
@@ -4483,6 +4615,7 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.expr_for_body, ExprForAfterBodyState);
                         last_expr = null;
                         const expr = try self.store.addExpr(.{ .for_expr = .{
+                            .kind = state.kind,
                             .region = .{ .start = state.start, .end = self.pos },
                             .patt = state.pattern,
                             .expr = state.list_expr,
@@ -4543,6 +4676,7 @@ fn runExprStatementKernel(
                         last_expr = null;
                         try open_syntax.pushExpr(open_allocator, .statement_for_body, StatementForBodyState, .{
                             .start = state.start,
+                            .kind = state.kind,
                             .patt = state.patt,
                             .expr = completed,
                         });
@@ -4553,6 +4687,7 @@ fn runExprStatementKernel(
                         const state = open_syntax.popExprPayload(.statement_for_body, StatementForBodyState);
                         last_expr = null;
                         last_statement = try self.addStatement(.{ .@"for" = .{
+                            .kind = state.kind,
                             .region = .{ .start = state.start, .end = self.pos },
                             .patt = state.patt,
                             .expr = state.expr,
@@ -4853,7 +4988,10 @@ fn runExprStatementKernel(
                 const field_start = self.pos;
                 self.advance();
                 const name = field_start;
-                if (self.peek() == .OpColon) {
+                if (self.peek() == .OpColon or self.peek() == .OpAssign) {
+                    if (self.peek() == .OpAssign) {
+                        try self.pushDiagnostic(.record_field_assignment, .{ .start = self.pos, .end = self.pos + 1 });
+                    }
                     self.advance();
                     // A bare `_` as the entire field value marks the field
                     // unset. Only `Underscore` directly followed by `,` or
@@ -6131,21 +6269,9 @@ fn runExprStatementKernel(
                 const isCurly = self.peek() == .OpenCurly;
                 const start = self.pos;
                 var is_destructure = false;
-                var lookahead_pos = self.pos + 1;
-                var depth: u32 = 0;
-                while (lookahead_pos < self.tok_buf.tokens.len) {
-                    const lookahead_tok = self.tok_buf.tokens.items(.tag)[lookahead_pos];
-                    if ((isCurly and lookahead_tok == .OpenCurly) or (!isCurly and (lookahead_tok == .OpenRound or lookahead_tok == .NoSpaceOpenRound))) {
-                        depth += 1;
-                    } else if ((isCurly and lookahead_tok == .CloseCurly) or (!isCurly and lookahead_tok == .CloseRound)) {
-                        if (depth == 0) {
-                            const token_after_close = self.tok_buf.tokens.items(.tag)[lookahead_pos + 1];
-                            if (token_after_close == .OpAssign) is_destructure = true;
-                            break;
-                        }
-                        depth -= 1;
-                    } else if (lookahead_tok == .EndOfFile) break;
-                    lookahead_pos += 1;
+                const close = if (isCurly) self.bracket_matches.curly[self.pos] else self.bracket_matches.round[self.pos];
+                if (close != no_bracket_match) {
+                    is_destructure = self.tok_buf.tokens.items(.tag)[close + 1] == .OpAssign;
                 }
                 if (is_destructure) {
                     try open_syntax.pushPattern(open_allocator, .statement_destructure_pattern, Token.Idx, start);
@@ -6236,10 +6362,13 @@ fn runExprStatementKernel(
                     expr_state = .{ .start = self.pos, .min_bp = 0 };
                     continue :expr_kernel .prefix;
                 }
-                if (tok == .KwFor) {
+                if (tok == .KwFor or tok == .KwForBang) {
                     const start = self.pos;
                     self.advance();
-                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, Token.Idx, start);
+                    try open_syntax.pushPattern(open_allocator, .statement_for_pattern, StatementForPatternState, .{
+                        .start = start,
+                        .kind = if (tok == .KwForBang) .stream else .iter,
+                    });
                     pattern_root_state = .{
                         .outer_start = self.pos,
                         .scratch_top = self.store.scratchPatternTop(),
@@ -6634,13 +6763,14 @@ fn runExprStatementKernel(
             if (open_syntax.peekPattern()) |kind| {
                 switch (kind) {
                     .expr_for_pattern => {
-                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprAfterExprState);
+                        const state = open_syntax.popPatternPayload(.expr_for_pattern, ExprForPatternState);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
                             try open_syntax.pushExpr(open_allocator, .expr_for_list, ExprForAfterListState, .{
                                 .start = state.start,
                                 .min_bp = state.min_bp,
+                                .kind = state.kind,
                                 .pattern = completed,
                             });
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -6722,12 +6852,13 @@ fn runExprStatementKernel(
                         continue :expr_kernel .prefix;
                     },
                     .statement_for_pattern => {
-                        const start = open_syntax.popPatternPayload(.statement_for_pattern, Token.Idx);
+                        const state = open_syntax.popPatternPayload(.statement_for_pattern, StatementForPatternState);
                         last_pattern = null;
                         if (self.peek() == .KwIn) {
                             self.advance();
                             try open_syntax.pushExpr(open_allocator, .statement_for_expr, StatementForExprState, .{
-                                .start = start,
+                                .start = state.start,
+                                .kind = state.kind,
                                 .patt = completed,
                             });
                             expr_state = .{ .start = self.pos, .min_bp = 0 };
@@ -7205,17 +7336,6 @@ fn recordTypeDependencyFromQualifiedTokens(
     try self.scratch_idents.append(final_ident);
 
     try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
-}
-
-/// Parse a block that contains only statements, no ending expression.
-/// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
-/// {
-///     <stmt1>
-///     ...
-///     <stmtN>
-/// }
-pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
 fn finishRecordExpr(

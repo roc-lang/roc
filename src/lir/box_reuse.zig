@@ -206,36 +206,24 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } });
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } });
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(unbox_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
             .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(box_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
 
         return true;
     }
@@ -310,36 +298,24 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } });
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } });
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(unbox_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
             .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(box_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
 
         return true;
     }
@@ -416,36 +392,24 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } });
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } });
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(unbox_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
             .op = .box_prepare_update,
             .rc_effect = LowLevelOp.box_prepare_update.rcEffect(),
             .args = try self.store.addLocalSpan(&.{boxed}),
             .next = cast_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
-        self.store.getCFStmtPtr(box_stmt_id).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(box_stmt_id, .{ .assign_low_level = .{
             .target = store_unit,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = try self.store.addLocalSpan(&.{ payload_ptr, payload_value }),
             .next = ret_stmt_id,
-        } };
+        } }, reuseOrigin(self.store.stmtOrigin(box_stmt_id)));
 
         self.store.getCFStmtPtr(join_stmt_id).* = .{ .join = .{
             .id = join_stmt.id,
@@ -613,7 +577,7 @@ const Transform = struct {
             if (stmt == .jump) {
                 if (stmt.jump.target == join_id) count += 1;
             } else {
-                try body_clone.appendSuccessorsWithAllocator(self.store, &work, stmt_id, self.scratch_allocator);
+                try body_clone.appendSuccessors(self.store, &work, stmt_id, self.scratch_allocator);
             }
         }
 
@@ -649,11 +613,13 @@ const Transform = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -672,6 +638,13 @@ const Transform = struct {
         };
     }
 };
+
+/// Origin of a statement this pass produces in place of `rewritten`'s.
+fn reuseOrigin(rewritten: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = rewritten;
+    origin.kind = .box_reuse;
+    return origin;
+}
 
 fn payloadNeedsOwnedUnbox(layouts: *const layout_mod.Store, payload_layout: layout_mod.Idx) bool {
     const payload = layouts.getLayout(payload_layout);
@@ -700,7 +673,7 @@ fn testLowLevel(store: *LirStore, target: LocalId, op: LowLevelOp, args: []const
         .rc_effect = op.rcEffect(),
         .args = try store.addLocalSpan(args),
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 fn testLocalRef(store: *LirStore, target: LocalId, source: LocalId, next: CFStmtId) ResourceError!CFStmtId {
@@ -708,7 +681,7 @@ fn testLocalRef(store: *LirStore, target: LocalId, source: LocalId, next: CFStmt
         .target = target,
         .op = .{ .local = source },
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 fn testZst(store: *LirStore, target: LocalId, next: CFStmtId) ResourceError!CFStmtId {
@@ -716,7 +689,7 @@ fn testZst(store: *LirStore, target: LocalId, next: CFStmtId) ResourceError!CFSt
         .target = target,
         .fields = try store.addLocalSpan(&.{}),
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
@@ -740,7 +713,7 @@ fn testPackedErased(
         .capture_layout = capture_layout,
         .on_drop = .none,
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 test "box reuse rewrites the direct unbox call rebox return chain" {
@@ -764,21 +737,21 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     const boxed_arg = try testLocal(&store, box_u64);
     const old_payload = try testLocal(&store, .u64);
     const new_payload = try testLocal(&store, .u64);
     const result_box = try testLocal(&store, box_u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } }, .test_fixture);
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{new_payload}, ret);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = new_payload,
         .proc = callee,
         .args = try store.addLocalSpan(&.{old_payload}),
         .next = rebox,
-    } });
+    } }, .test_fixture);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, call);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -787,7 +760,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, new_payload, result_box }),
         .body = unbox,
         .ret_layout = box_u64,
-    });
+    }, .none);
 
     if (per_proc) {
         try prepareLayouts(&store, &layouts);
@@ -843,14 +816,14 @@ test "box reuse rewrites an inlined straight-line payload producer" {
     const new_payload = try testLocal(&store, .u64);
     const result_box = try testLocal(&store, box_u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } }, .test_fixture);
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{new_payload}, ret);
     const add = try testLowLevel(&store, new_payload, .num_int_add_wrap, &.{ old_payload, one }, rebox);
     const literal = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = add,
-    } });
+    } }, .test_fixture);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, literal);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -859,7 +832,7 @@ test "box reuse rewrites an inlined straight-line payload producer" {
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, old_payload, one, new_payload, result_box }),
         .body = unbox,
         .ret_layout = box_u64,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -898,7 +871,7 @@ fn testRejectedBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedE
     const old_payload = try testLocal(&store, .u64);
     const result_box = try testLocal(&store, box_u64);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } }, .test_fixture);
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{old_payload}, ret);
     const extra_consumer = try testLocalRef(&store, boxed_copy, boxed_arg, rebox);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, extra_consumer);
@@ -909,7 +882,7 @@ fn testRejectedBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedE
         .frame_locals = try store.addLocalSpan(&.{ boxed_arg, boxed_copy, old_payload, result_box }),
         .body = unbox,
         .ret_layout = box_u64,
-    });
+    }, .none);
 
     if (per_proc) {
         try prepareLayouts(&store, &layouts);
@@ -941,7 +914,7 @@ test "box reuse rewrites joined update wrappers" {
         .args = try store.addLocalSpan(&.{ callee_old, callee_delta }),
         .frame_locals = try store.addLocalSpan(&.{ callee_old, callee_delta }),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     const boxed_arg = try testLocal(&store, box_u64);
     const delta_arg = try testLocal(&store, .u64);
@@ -958,17 +931,17 @@ test "box reuse rewrites joined update wrappers" {
     var next_join_point: u32 = 0;
     const join_id = testFreshJoinPointId(&next_join_point);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } }, .test_fixture);
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{body_payload_alias}, ret);
     const body_alias = try testLocalRef(&store, body_payload_alias, join_payload, rebox);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = join_payload,
         .proc = callee,
         .args = try store.addLocalSpan(&.{ call_payload_alias, delta_alias }),
         .next = jump,
-    } });
+    } }, .test_fixture);
     const delta_ref = try testLocalRef(&store, delta_alias, delta_arg, call);
     const call_payload_ref = try testLocalRef(&store, call_payload_alias, old_payload_alias, delta_ref);
     const remainder_zst_stmt = try testZst(&store, remainder_zst, call_payload_ref);
@@ -978,7 +951,7 @@ test "box reuse rewrites joined update wrappers" {
         .params = try store.addLocalSpan(&.{join_payload}),
         .body = body_alias,
         .remainder = remainder_zst_stmt,
-    } });
+    } }, .test_fixture);
     const prelude_zst_stmt = try testZst(&store, prelude_zst, join);
     const old_payload_ref = try testLocalRef(&store, old_payload_alias, old_payload, prelude_zst_stmt);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_arg}, old_payload_ref);
@@ -1001,7 +974,7 @@ test "box reuse rewrites joined update wrappers" {
         }),
         .body = unbox,
         .ret_layout = box_u64,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -1048,7 +1021,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
         .args = try store.addLocalSpan(&.{callee_old}),
         .frame_locals = try store.addLocalSpan(&.{callee_old}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     const boxed_arg = try testLocal(&store, box_u64);
     const boxed_alias_a = try testLocal(&store, box_u64);
@@ -1063,17 +1036,17 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
     var next_join_point: u32 = 0;
     const join_id = testFreshJoinPointId(&next_join_point);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_box } }, .test_fixture);
     const rebox = try testLowLevel(&store, result_box, .box_box, &.{body_payload_alias}, ret);
     const body_alias = try testLocalRef(&store, body_payload_alias, join_payload, rebox);
 
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = join_payload,
         .proc = callee,
         .args = try store.addLocalSpan(&.{old_payload}),
         .next = jump,
-    } });
+    } }, .test_fixture);
     const unbox = try testLowLevel(&store, old_payload, .box_unbox, &.{boxed_alias_b}, call);
     const boxed_ref_b = try testLocalRef(&store, boxed_alias_b, boxed_alias_a, unbox);
     const boxed_ref_a = try testLocalRef(&store, boxed_alias_a, boxed_arg, boxed_ref_b);
@@ -1084,7 +1057,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
         .params = try store.addLocalSpan(&.{join_payload}),
         .body = body_alias,
         .remainder = remainder_zst_stmt,
-    } });
+    } }, .test_fixture);
     const proc_zst_stmt = try testZst(&store, proc_zst, join);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -1103,7 +1076,7 @@ test "box reuse rewrites platform-style join remainder update wrappers" {
         }),
         .body = proc_zst_stmt,
         .ret_layout = box_u64,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -1161,16 +1134,16 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(10),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } }, .test_fixture);
     const new_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = new_callable,
         .proc = new_proc,
@@ -1178,7 +1151,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .capture_layout = .u64,
         .on_drop = .none,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const old_pack = try store.addCFStmt(.{ .assign_packed_erased_fn = .{
         .target = old_callable,
         .proc = old_proc,
@@ -1186,7 +1159,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .capture_layout = .u64,
         .on_drop = .none,
         .next = new_pack,
-    } });
+    } }, .test_fixture);
     const caller = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(11),
@@ -1194,7 +1167,7 @@ test "erased callable reuse rewrites adjacent same-shape repack" {
         .frame_locals = try store.addLocalSpan(&.{ old_capture, new_capture, old_callable, new_callable }),
         .body = old_pack,
         .ret_layout = erased_callable,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -1229,16 +1202,16 @@ test "erased callable reuse forwards through aliases between the packs" {
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(13),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } }, .test_fixture);
     const new_pack = try testPackedErased(&store, new_callable, new_proc, capture_alias_c, .u64, ret);
     // Three `assign_ref .local` aliases (of the second pack's capture, not of
     // the discarded first pack) sit between the two packs.
@@ -1261,7 +1234,7 @@ test "erased callable reuse forwards through aliases between the packs" {
         }),
         .body = old_pack,
         .ret_layout = erased_callable,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -1292,16 +1265,16 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(16),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = new_callable } }, .test_fixture);
     const new_pack = try testPackedErased(&store, new_callable, new_proc, new_capture, .u64, ret);
     // The discarded first pack is aliased, and that alias is itself read again,
     // so the first pack's allocation still has a live consumer and reuse is
@@ -1323,7 +1296,7 @@ test "erased callable reuse declines when an alias of the old pack is read elsew
         }),
         .body = old_pack,
         .ret_layout = erased_callable,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -1353,16 +1326,16 @@ test "erased callable reuse forwards through the aliased return path" {
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
     const new_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(19),
         .args = try store.addLocalSpan(&.{callee_arg}),
         .frame_locals = try store.addLocalSpan(&.{callee_arg}),
         .ret_layout = .u64,
-    });
+    }, .none);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = return_alias_b } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = return_alias_b } }, .test_fixture);
     const alias_b = try testLocalRef(&store, return_alias_b, return_alias_a, ret);
     const alias_a = try testLocalRef(&store, return_alias_a, new_callable, alias_b);
     const new_pack = try testPackedErased(&store, new_callable, new_proc, new_capture, .u64, alias_a);
@@ -1381,7 +1354,7 @@ test "erased callable reuse forwards through the aliased return path" {
         }),
         .body = old_pack,
         .ret_layout = erased_callable,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 

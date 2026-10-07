@@ -1,0 +1,422 @@
+//! A compile-time value must reach the runtime program the same way on every
+//! path that produces one: the program a build continues from compile-time
+//! evaluation (its runtime consumer reads the completed frozen image) and the
+//! program lowered from checked modules whose values the constant store
+//! restores. Each test drives the first path through `ProgramSession`, as
+//! `roc build` does, and the second through `lowerCheckedModulesToLir`, so a
+//! divergence between them fails here instead of in a binary's size.
+
+const std = @import("std");
+const base = @import("base");
+const build_options = @import("build_options");
+const check = @import("check");
+const eval = @import("eval");
+const layout = @import("layout");
+const lir = @import("lir");
+const roc_target = @import("roc_target");
+const CoreCtx = @import("ctx").CoreCtx;
+const Coordinator = @import("../coordinator.zig").Coordinator;
+const is_freestanding = @import("../threading.zig").is_freestanding;
+
+const platform_files = [_]struct { path: []const u8, source: []const u8 }{
+    .{ .path = ".roc_echo_platform/main.roc", .source =
+    \\platform ""
+    \\    requires {} { main! : List(Str) => Try({}, [Exit(I8), ..]) }
+    \\    exposes [Echo]
+    \\    packages {}
+    \\    provides { "roc_main": main_for_host! }
+    \\    hosted { "roc_echo_line": Echo.line! }
+    \\import Echo
+    \\main_for_host! : List(Str) => I8
+    \\main_for_host! = |args|
+    \\    match main!(args) {
+    \\        Ok({}) => 0
+    \\        Err(Exit(code)) => code
+    \\        Err(other) => {
+    \\            Echo.line!("Program exited with error: ${Str.inspect(other)}")
+    \\            1
+    \\        }
+    \\    }
+    },
+    .{ .path = ".roc_echo_platform/Echo.roc", .source =
+    \\Echo := [].{
+    \\    line! : Str => {}
+    \\}
+    },
+};
+
+/// The runtime target of an optimized build: expects omitted, so the runtime
+/// program is a separate consumer of the evaluation's specialization, and
+/// builtin wrappers inlined, so a list operation's runtime uniqueness check
+/// sits in the procedure that calls the builtin.
+fn optimizedTarget(inline_mode: lir.CheckedPipeline.InlineMode) lir.CheckedPipeline.TargetConfig {
+    return .{ .inline_expects = .omit, .inline_mode = inline_mode };
+}
+
+/// Both runtime programs of one app.
+const Lowered = struct {
+    coord: Coordinator,
+    continued: lir.CheckedPipeline.LoweredProgram,
+    restored: lir.CheckedPipeline.LoweredProgram,
+
+    fn deinit(self: *Lowered) void {
+        self.restored.deinit();
+        self.continued.deinit();
+        self.coord.deinit();
+    }
+};
+
+const LowerBothPathsError = std.mem.Allocator.Error ||
+    std.Io.Dir.CreateDirPathError ||
+    std.Io.Dir.WriteFileError ||
+    std.Io.Dir.RealPathFileAllocError ||
+    eval.BuiltinModules.InitError ||
+    std.Thread.SpawnError ||
+    Coordinator.AppDiscoveryError ||
+    @import("../coordinator.zig").CoordinatorError ||
+    lir.CheckedPipeline.LowerResourceError ||
+    error{TestUnexpectedResult};
+
+fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std.testing.TmpDir, source: []const u8, inline_mode: lir.CheckedPipeline.InlineMode) LowerBothPathsError!Lowered {
+    const io = std.testing.io;
+    try tmp_dir.dir.createDirPath(io, ".roc_echo_platform");
+    for (platform_files) |file| try tmp_dir.dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "main.roc", .data = source });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(io, "main.roc", arena);
+
+    var builtin_modules = try eval.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        &builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.os(gpa, gpa, io),
+    );
+    errdefer coord.deinit();
+    coord.enable_hosted_transform = true;
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    if (coord.hasUserErrors()) return error.TestUnexpectedResult;
+
+    coord.runtime_lowering = .{ .target = optimizedTarget(inline_mode) };
+    try coord.finishCheckedProgram(.executable_artifacts);
+    if (coord.hasUserErrors()) return error.TestUnexpectedResult;
+    const session = &coord.program_session.?;
+    // The build continues the evaluation's specialization in a separate
+    // runtime consumer, which is the path that reads the frozen image.
+    try std.testing.expect(session.host != null);
+    try std.testing.expect(session.runtime_prepared != null);
+    var continued = try session.takeRuntime(gpa, session.runtime_roots, optimizedTarget(inline_mode));
+    errdefer continued.deinit();
+
+    const root = coord.executableRootCheckedArtifact();
+    const imports = try coord.collectImportedArtifactViews(arena, root);
+    const relations = try coord.collectRelationArtifactViews(arena, root);
+    const lir_roots = try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root.root_requests.runtime_requests);
+    defer gpa.free(lir_roots);
+    const restored = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        gpa,
+        .{
+            .root = check.CheckedArtifact.loweringViewWithRelations(root, relations),
+            .imports = imports,
+        },
+        .{
+            .requests = lir_roots,
+            .include_provided_data_exports = true,
+            .include_internal_static_data = true,
+        },
+        .{ .target_usize = base.target.TargetUsize.native, .inline_mode = inline_mode },
+    );
+    return .{ .coord = coord, .continued = continued, .restored = restored };
+}
+
+fn countListSlots(result: *const lir.Program.Result) usize {
+    var count: usize = 0;
+    for (result.static_data_values.items) |slot| {
+        if (result.layouts.getLayout(slot.layout_idx).tag == .list) count += 1;
+    }
+    return count;
+}
+
+fn countLowLevel(result: *const lir.Program.Result, op: lir.LIR.LowLevel) usize {
+    var count: usize = 0;
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == op) count += 1;
+    }
+    return count;
+}
+
+fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_literal) continue;
+        switch (stmt.assign_literal.value) {
+            .i64_literal => |literal| if (literal.value == value) return true,
+            .i128_literal => |literal| if (literal.value == value) return true,
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
+        }
+    }
+    return false;
+}
+
+test "two equal compile-time tables freeze to one backing in the continued runtime program" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\first : List(U32)
+        \\first = List.repeat(0.U32, 1000)
+        \\second : List(U32)
+        \\second = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(first, List.len(args))))
+        \\    Echo.line!(Str.inspect(List.get(second, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+
+    const continued = &lowered.continued;
+    const frozen = continued.frozen_static_data orelse return error.TestUnexpectedResult;
+    // Each table is its own root with its own descriptor, and the two
+    // descriptors name one 4000-byte backing.
+    var backings: usize = 0;
+    var descriptor_targets: [2]?u32 = .{ null, null };
+    var descriptors: usize = 0;
+    for (frozen.exports) |item| {
+        if (item.value_id) |slot| {
+            const layout_idx = continued.lir_result.static_data_values.items[@intFromEnum(slot)].layout_idx;
+            if (continued.lir_result.layouts.getLayout(layout_idx).tag != .list) continue;
+            try std.testing.expectEqual(@as(usize, 1), item.relocations.len);
+            if (descriptors < descriptor_targets.len) descriptor_targets[descriptors] = @intFromEnum(item.relocations[0].target.data_symbol);
+            descriptors += 1;
+        } else if (item.bytes.len >= 4000) {
+            backings += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), descriptors);
+    try std.testing.expectEqual(@as(usize, 1), backings);
+    try std.testing.expectEqual(descriptor_targets[0], descriptor_targets[1]);
+    // Neither path rebuilds a table of copies at its reads.
+    try std.testing.expectEqual(@as(usize, 0), countLowLevel(&continued.lir_result, .list_append_unsafe));
+    try std.testing.expectEqual(@as(usize, 0), countLowLevel(&lowered.restored.lir_result, .list_append_unsafe));
+    try std.testing.expect(countListSlots(&lowered.restored.lir_result) > 0);
+}
+
+test "an empty compile-time list read at another layout index still lowers as its capacity request" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    // The roots only the expects read make the evaluation's program intern
+    // three list layouts before the buffer's, while the runtime program, which
+    // lowers only what `main!` reaches, interns the buffer's list layout first:
+    // the two consumers name the same list layout by different indices.
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\names : List(Str)
+        \\names = ["a", "b"]
+        \\shorts : List(U16)
+        \\shorts = [1, 2, 3]
+        \\bytes : List(U8)
+        \\bytes = [4, 5, 6, 7]
+        \\buffer : List(U64)
+        \\buffer = List.with_capacity(64)
+        \\expect List.len(names) == 2
+        \\expect List.len(shorts) == 3
+        \\expect List.len(bytes) == 4
+        \\main! = |args| {
+        \\    # The appended value comes from the arguments, so the read of
+        \\    # `buffer` stays in the runtime program rather than folding.
+        \\    Echo.line!(Str.inspect(List.append(buffer, List.len(args))))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+
+    // The evaluation's program names the buffer's list layout by a different
+    // index than the runtime program does, so a construction matched by
+    // layout index would miss here.
+    const host = &lowered.coord.program_session.?.host.?.lir_result;
+    var host_buffer_layout: ?layout.Idx = null;
+    for (host.static_data_values.items) |slot| {
+        if (slot.compile_time_root == null) continue;
+        const slot_layout = host.layouts.getLayout(slot.layout_idx);
+        if (slot_layout.tag == .list and slot_layout.getIdx() == .u64) host_buffer_layout = slot.layout_idx;
+    }
+    var runtime_buffer_layout: ?layout.Idx = null;
+    for (lowered.continued.lir_result.store.getCFStmts()) |stmt| {
+        if (stmt == .assign_low_level and stmt.assign_low_level.op == .list_with_capacity) {
+            runtime_buffer_layout = lowered.continued.lir_result.store.getLocal(stmt.assign_low_level.target).layout_idx;
+        }
+    }
+    try std.testing.expect(host_buffer_layout != null and runtime_buffer_layout != null);
+    try std.testing.expect(host_buffer_layout.? != runtime_buffer_layout.?);
+
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The buffer is the `with_capacity` it was evaluated with, and no
+        // list reaches static data: the buffer is a construction and the
+        // other lists are read only by the expects the runtime omits.
+        try std.testing.expect(countLowLevel(result, .list_with_capacity) >= 1);
+        try std.testing.expect(hasIntLiteral(result, 64));
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+    }
+}
+
+/// The proven-unique masks of every list operation that may runtime-check
+/// an argument's uniqueness, in statement order.
+fn checkedListOpUniqueMasks(result: *const lir.Program.Result, out: *std.ArrayList(u64), allocator: std.mem.Allocator) std.mem.Allocator.Error!void {
+    for (result.store.getCFStmts()) |stmt| {
+        if (stmt != .assign_low_level) continue;
+        const assign = stmt.assign_low_level;
+        if (!std.mem.startsWith(u8, @tagName(assign.op), "list_") or assign.rc_effect.may_runtime_uniqueness_check_args == 0) continue;
+        try out.append(allocator, assign.unique_args);
+    }
+}
+
+test "a compile-time table only read stays static data, with no fresh build" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args))))
+        \\    Echo.line!(Str.inspect(List.get(table, List.len(args) + 1)))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // Both reads only borrow the table: it rides in static data and no
+        // fresh build survives ARC's choice.
+        try std.testing.expect(countListSlots(result) > 0);
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_append_unsafe));
+        try std.testing.expectEqual(@as(usize, 0), countLowLevel(result, .list_with_capacity));
+    }
+}
+
+test "a compile-time table consumed by an in-place write is built fresh and mutated without a copy" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    written = List.append(table, List.len(args).to_u32_wrap())
+        \\    Echo.line!(Str.inspect(List.get(written, 0)))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The read's value is the argument `List.append` may extend in
+        // place, so the read takes its fresh form: the table's slot is gone,
+        // the fresh build seeds one item and fills the rest as a range copy
+        // rather than looping (the program's own append is the other
+        // unchecked append), and the append is proven unique.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expect(countLowLevel(result, .list_append_unsafe) >= 1);
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_with_capacity));
+        var masks: std.ArrayList(u64) = .empty;
+        defer masks.deinit(gpa);
+        try checkedListOpUniqueMasks(result, &masks, gpa);
+        // The append's reserve is the one checked list operation, and its
+        // list argument is proven unique.
+        try std.testing.expectEqual(@as(usize, 1), masks.items.len);
+        try std.testing.expectEqual(@as(u64, 1), masks.items[0] & 1);
+    }
+}
+
+test "a compile-time table consumed through an uninlined builtin wrapper is still built fresh" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\main! = |args| {
+        \\    written = List.append(table, List.len(args).to_u32_wrap())
+        \\    Echo.line!(Str.inspect(List.get(written, 0)))
+        \\    Ok({})
+        \\}
+    , .none);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The reserve that checks the list sits in `List.append`'s own
+        // procedure, whose seed mask names its list parameter; the seed
+        // composes to the read's procedure, so the read is still needed
+        // and takes its fresh form, and the reserve's runtime check finds
+        // the fresh list unique.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+    }
+}
+
+test "a compile-time table re-bound from a helper's returned record field each iteration is built fresh" {
+    if (is_freestanding) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    var arena = base.SingleThreadArena.init(gpa);
+    defer arena.deinit();
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    var lowered = try lowerBothPaths(gpa, arena.allocator(), tmp_dir,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\import pf.Echo
+        \\table : List(U32)
+        \\table = List.repeat(0.U32, 1000)
+        \\step : List(U32), U64 -> { table : List(U32), sum : U64 }
+        \\step = |t, i| { table: List.append(t, i.to_u32_wrap()), sum: i }
+        \\main! = |args| {
+        \\    var $t = table
+        \\    var $i = 0
+        \\    while $i < List.len(args) {
+        \\        r = step($t, $i)
+        \\        $t = r.table
+        \\        $i = $i + 1
+        \\    }
+        \\    Echo.line!(Str.inspect(List.get($t, 0)))
+        \\    Ok({})
+        \\}
+    , .wrappers);
+    defer lowered.deinit();
+    for ([_]*const lir.Program.Result{ &lowered.continued.lir_result, &lowered.restored.lir_result }) |result| {
+        // The loop variable is the read's value on entry and the helper's
+        // returned field on every later iteration; the origin follows the
+        // value through the call, the record and the take, so the value
+        // the helper's append checks is born of the read, and the read
+        // takes its fresh form.
+        try std.testing.expectEqual(@as(usize, 0), countListSlots(result));
+        try std.testing.expectEqual(@as(usize, 1), countLowLevel(result, .list_append_range_within_unsafe));
+    }
+}

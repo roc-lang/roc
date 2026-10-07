@@ -123,8 +123,8 @@ pub fn extractPackageApi(
 
     var public_input_order = std.ArrayList(usize).empty;
     defer public_input_order.deinit(gpa);
-    for (inputs, 0..) |input, input_index| {
-        if (input.public_type_decl != null) try public_input_order.append(gpa, input_index);
+    for (inputs, 0..) |_, input_index| {
+        try public_input_order.append(gpa, input_index);
     }
     std.mem.sort(usize, public_input_order.items, inputs, struct {
         fn lessThan(all_inputs: []const ModuleInput, a_index: usize, b_index: usize) bool {
@@ -162,7 +162,7 @@ const Extractor = struct {
     origins: *const OriginMap,
     failure: *?Failure,
     inputs: []const ModuleInput,
-    /// Public type inputs sorted by owning checked artifact for binary routing.
+    /// Public namespaces sorted by owning checked artifact for binary routing.
     public_input_order: []const usize,
     current_input: usize = 0,
     /// Current module context for failure reporting.
@@ -348,7 +348,7 @@ const Extractor = struct {
                 return api_id;
             },
             .alias => |alias| {
-                const api_id = try self.addNamedRef(
+                const api_id = try self.convertNamedType(
                     view,
                     names,
                     alias.origin_module,
@@ -357,13 +357,14 @@ const Extractor = struct {
                     names.typeNameText(alias.name),
                     alias.builtin_origin,
                     alias.args,
+                    alias.backing,
                     memo,
                 );
                 try memo.put(self.gpa, id, api_id);
                 return api_id;
             },
             .nominal => |nominal| {
-                const api_id = try self.addNamedRef(
+                const api_id = try self.convertNamedType(
                     view,
                     names,
                     nominal.origin_module,
@@ -372,6 +373,7 @@ const Extractor = struct {
                     names.typeNameText(nominal.name),
                     nominal.builtin != null,
                     nominal.args,
+                    null,
                     memo,
                 );
                 try memo.put(self.gpa, id, api_id);
@@ -520,7 +522,10 @@ const Extractor = struct {
         return try self.convertType(view, names, ext, memo);
     }
 
-    fn addNamedRef(
+    /// Public aliases retain their named API identity. A private alias from
+    /// this package contributes only its already-instantiated checked backing.
+    /// Nominals and dependency identities retain the named-reference contract.
+    fn convertNamedType(
         self: *Extractor,
         view: CheckedTypeStoreView,
         names: *const check.CanonicalNames.CanonicalNameStore,
@@ -530,6 +535,7 @@ const Extractor = struct {
         type_name: []const u8,
         is_builtin: bool,
         args: []const CheckedTypeId,
+        alias_backing: ?CheckedTypeId,
         memo: *ConvertMemo,
     ) ExtractError!PackageApi.TypeId {
         const alloc = self.api.allocator();
@@ -557,7 +563,13 @@ const Extractor = struct {
             return self.fail(.unknown_origin_module, detail);
         };
 
+        if (origin == .self and alias_backing != null and source_decl == null) {
+            return self.fail(.unpublished_public_type, "alias has no checked source declaration");
+        }
         const projected_path = try self.publicReferencePath(owner_module, source_decl);
+        if (origin == .self and projected_path == null) {
+            if (alias_backing) |backing| return self.convertType(view, names, backing, memo);
+        }
         const path = if (projected_path) |public_path|
             public_path
         else
@@ -608,8 +620,10 @@ const Extractor = struct {
             const input = self.inputs[input_index];
             if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) break;
             if (!publicInputOwnsType(input, owner_module, statement)) continue;
-            const root_statement = input.public_type_decl orelse unreachable;
-            const root_len = (typeDeclName(input.module_env, root_statement) orelse unreachable).len;
+            const root_len = if (input.public_type_decl) |root_statement|
+                (typeDeclName(input.module_env, root_statement) orelse unreachable).len
+            else
+                0;
             // The nearest public root owns the reference. Equal roots retain
             // the package header order encoded by the input array.
             if (selected == null or root_len > selected_root_len) {
@@ -648,9 +662,7 @@ const Extractor = struct {
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
     const statement = module_env.store.getStatement(statement_idx);
     const header_idx = switch (statement) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -679,11 +691,20 @@ fn publicInputOwnsType(
     owner_module: CheckedArtifact.ModuleId,
     statement: can.CIR.Statement.Idx,
 ) bool {
-    const root_statement = input.public_type_decl orelse return false;
     if (!std.mem.eql(u8, &input.artifact.key.bytes, &owner_module.bytes)) return false;
-    const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
     const type_name = typeDeclName(input.module_env, statement) orelse return false;
-    return nameIsPublic(type_name, root_name);
+    if (input.exposed_names) |exposed_names| {
+        const root_name = exposedRootName(type_name);
+        for (exposed_names) |name| {
+            if (std.mem.eql(u8, root_name, name)) return true;
+        }
+        return false;
+    }
+    if (input.public_type_decl) |root_statement| {
+        const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
+        return nameIsPublic(type_name, root_name);
+    }
+    return input.module_env.module_kind != .type_module or nameIsPublic(type_name, input.exposed_name);
 }
 
 fn publicItemPath(alloc: Allocator, input: ModuleInput, source_name: []const u8) Allocator.Error![]const u8 {
@@ -703,14 +724,17 @@ fn inputIncludesName(
     name: []const u8,
 ) bool {
     if (input.exposed_names != null) {
-        const root_name = if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
-        return exposed_names.contains(root_name);
+        return exposed_names.contains(exposedRootName(name));
     }
     if (input.public_type_decl) |root_statement| {
         const root_name = typeDeclName(input.module_env, root_statement) orelse return false;
         return nameIsPublic(name, root_name);
     }
     return module_kind != .type_module or nameIsPublic(name, input.exposed_name);
+}
+
+fn exposedRootName(name: []const u8) []const u8 {
+    return if (std.mem.findScalar(u8, name, '.')) |dot| name[0..dot] else name;
 }
 
 /// A name is public within a type module iff it is the module's type itself

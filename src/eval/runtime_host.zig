@@ -61,18 +61,14 @@ pub const HostEvent = union(enum) {
     /// effect events must compare `EffectEvent.name` separately.
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
-            .expect_failed => |msg| msg,
-            .crashed => |msg| msg,
+            inline .dbg, .expect_failed, .crashed => |msg| msg,
             .effect => |effect| effect.payload,
         };
     }
 
     pub fn deinit(self: *HostEvent, allocator: std.mem.Allocator) void {
         switch (self.*) {
-            .dbg => |msg| allocator.free(msg),
-            .expect_failed => |msg| allocator.free(msg),
-            .crashed => |msg| allocator.free(msg),
+            inline .dbg, .expect_failed, .crashed => |msg| allocator.free(msg),
             .effect => |effect| {
                 allocator.free(effect.name);
                 allocator.free(effect.payload);
@@ -156,7 +152,6 @@ termination: Termination = .returned,
 events: std.ArrayListUnmanaged(HostEvent) = .empty,
 allocation_tracker: std.AutoHashMap(usize, AllocationInfo),
 allocation_call_count: u32 = 0,
-longjmp_on_crash: bool = true,
 event_callback: ?EventCallback = null,
 expect_passed: []u64 = &.{},
 expect_failed: []u64 = &.{},
@@ -199,11 +194,6 @@ pub fn checkForLeaks(self: *RuntimeHostEnv) LeakError!void {
 /// Public function `allocationCallCount`.
 pub fn allocationCallCount(self: *const RuntimeHostEnv) u32 {
     return self.allocation_call_count;
-}
-
-/// Controls whether the crash callback exits through the active crash boundary.
-pub fn setLongjmpOnCrash(self: *RuntimeHostEnv, enabled: bool) void {
-    self.longjmp_on_crash = enabled;
 }
 
 /// Install or clear the live host-event observer for this runtime environment.
@@ -344,7 +334,14 @@ pub const STACK_OVERFLOW_MESSAGE = "This Roc program overflowed its stack memory
 /// Record a caught stack overflow exactly the way a Roc `crash` is recorded,
 /// so callers report it as this run's ordinary crash outcome.
 pub fn noteStackOverflow(self: *RuntimeHostEnv) void {
-    self.appendEvent(.crashed, STACK_OVERFLOW_MESSAGE);
+    self.noteCrash(STACK_OVERFLOW_MESSAGE);
+}
+
+/// Record a Roc crash that reached the host some other way than
+/// `roc_crashed`, such as the interpreter's `error.Crash`, exactly the way
+/// `roc_crashed` records one.
+pub fn noteCrash(self: *RuntimeHostEnv, message: []const u8) void {
+    self.appendEvent(.crashed, message);
     self.termination = .crashed;
 }
 
@@ -415,18 +412,14 @@ fn rocExpectFailedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) 
 
 fn rocCrashedFn(ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
-    self.appendEvent(.crashed, bytes[0..len]);
-    self.termination = .crashed;
-
-    if (self.longjmp_on_crash) {
-        if (self.active_jmp_buf) |active_jmp_buf| {
-            self.active_jmp_buf = null;
-            longjmp(active_jmp_buf, 1);
-        }
-    }
+    self.noteCrash(bytes[0..len]);
+    const active_jmp_buf = self.active_jmp_buf orelse
+        std.debug.panic("RuntimeHostEnv: roc_crashed called outside a crash boundary: {s}", .{bytes[0..len]});
+    self.active_jmp_buf = null;
+    longjmp(active_jmp_buf, 1);
 }
 
-fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
     const alloc_ptr = allocateTrackedBytes(self.allocator, length, alignment);
@@ -454,7 +447,7 @@ fn rocDeallocFn(ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     freeTrackedBytes(self.allocator, ptr, alloc_info.value);
 }
 
-fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *RuntimeHostEnv = @ptrCast(@alignCast(ops.env));
     self.allocation_call_count += 1;
     const old_alloc_ptr = @intFromPtr(ptr);
@@ -541,13 +534,15 @@ test "RuntimeHostEnv records raw dbg and expect payloads exactly" {
     try std.testing.expectEqual(Termination.returned, env.terminationState());
 }
 
-test "RuntimeHostEnv records crash payload and termination without a jump buffer" {
+test "RuntimeHostEnv records crash payload and termination, then leaves through the crash boundary" {
     var env = RuntimeHostEnv.init(std.testing.allocator);
     defer env.deinit();
 
     const ops = env.get_ops();
     const crash_msg = "boom";
-    ops.roc_crashed(ops, crash_msg.ptr, crash_msg.len);
+    var crash_boundary = env.enterCrashBoundary();
+    defer crash_boundary.deinit();
+    if (crash_boundary.set() == 0) ops.crash(crash_msg);
 
     try std.testing.expectEqual(@as(usize, 1), env.events.items.len);
     try std.testing.expectEqualStrings(crash_msg, env.events.items[0].bytes());

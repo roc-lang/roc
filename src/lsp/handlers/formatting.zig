@@ -6,6 +6,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const build_options = @import("build_options");
 const protocol = @import("../protocol.zig");
+const position_params = @import("position_params.zig");
 const fmt = @import("fmt");
 const parse = @import("parse");
 const can = @import("can");
@@ -15,36 +16,8 @@ const FormatSourceError = Allocator.Error || fmt.FormatAstError || error{ParseEr
 pub fn handler(comptime ServerType: type) type {
     return struct {
         pub fn call(self: *ServerType, id: *protocol.JsonId, maybe_params: ?std.json.Value) (Allocator.Error || error{WriteFailed})!void {
-            const params = maybe_params orelse {
-                try self.sendError(id, .invalid_params, "formatting requires params");
-                return;
-            };
-
-            if (std.meta.activeTag(params) != .object) {
-                try self.sendError(id, .invalid_params, "formatting params must be an object");
-                return;
-            }
-            const obj = params.object;
-
-            // Extract textDocument.uri
-            const text_doc_value = obj.get("textDocument") orelse {
-                try self.sendError(id, .invalid_params, "missing textDocument");
-                return;
-            };
-            if (std.meta.activeTag(text_doc_value) != .object) {
-                try self.sendError(id, .invalid_params, "textDocument must be an object");
-                return;
-            }
-            const text_doc = text_doc_value.object;
-            const uri_value = text_doc.get("uri") orelse {
-                try self.sendError(id, .invalid_params, "missing uri");
-                return;
-            };
-            if (std.meta.activeTag(uri_value) != .string) {
-                try self.sendError(id, .invalid_params, "uri must be a string");
-                return;
-            }
-            const uri = uri_value.string;
+            const document = try position_params.parseDocument(self, id, "formatting", maybe_params) orelse return;
+            const uri = document.uri;
 
             // Get the document text from the store
             const doc = self.doc_store.get(uri);
@@ -57,6 +30,7 @@ pub fn handler(comptime ServerType: type) type {
             const formatted = formatSource(self.allocator, text) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ParseError,
+                error.ParsingFailed,
                 error.WriteFailed,
                 => {
                     std.log.err("formatting failed: {s}", .{@errorName(err)});
@@ -124,7 +98,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     defer ast.deinit();
 
     // Check for parse errors - if there are errors, return the original source
-    if (ast.parse_diagnostics.items.len > 0) {
+    if (ast.hasErrors()) {
         return error.ParseError;
     }
 
@@ -137,4 +111,8 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
     try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = build_options.compiler_version });
 
     return try result.toOwnedSlice();
+}
+
+test "bidi source produces no LSP formatting edit" {
+    try std.testing.expectError(error.ParseError, formatSource(std.testing.allocator, "value = 1 # \u{2066}"));
 }

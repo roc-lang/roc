@@ -60,9 +60,8 @@ pub const HostEvent = union(enum) {
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
+            inline .dbg, .crashed => |msg| msg,
             .expect_failed => |event| event.message,
-            .crashed => |msg| msg,
         };
     }
 };
@@ -96,6 +95,9 @@ failed_region: ?base.Region = null,
 failed_loc: ?base.SourceLoc = null,
 /// Published producer origins, indexed by the emitted LIR statement.
 failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+/// The LIR statement whose failure-region hook ran last: the failing
+/// statement once the run fails.
+failed_stmt: ?lir.LIR.CFStmtId = null,
 slot_demand: ?SlotDemand = null,
 operational_error: ?FinalizeError = null,
 timing_io: ?std.Io = null,
@@ -143,6 +145,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     self.comptime_failed_site = null;
     self.failed_region = null;
     self.failed_loc = null;
+    self.failed_stmt = null;
     self.operational_error = null;
     self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
@@ -292,6 +295,7 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 /// names the declaring module).
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
+    self.failed_stmt = @enumFromInt(stmt);
     if (stmt < self.failure_origins.len) {
         if (self.failure_origins[stmt]) |origin| {
             self.failed_region = origin.region;
@@ -319,7 +323,7 @@ pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line:
 pub fn rocComptimeCallExit() callconv(.c) void {
     const self = enteredHost();
     if (self.call_regions.items.len == 0) {
-        @panic("compile-time call-region stack underflow");
+        base.invariant("{s}", .{"compile-time call-region stack underflow"});
     }
     _ = self.call_regions.pop();
 }
@@ -327,7 +331,7 @@ pub fn rocComptimeCallExit() callconv(.c) void {
 /// The ops of the evaluation this thread entered, which the hooks above are
 /// only ever called from.
 fn enteredOps() *RocOps {
-    return builtins.in_process_host.current() orelse @panic("compile-time hook ran on a thread that entered no host");
+    return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
 }
 
 fn enteredHost() *CompileTimeHost {
@@ -389,10 +393,10 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
             longjmp(active_jmp_buf, 1);
         }
     }
-    @panic("compile-time host failure escaped without an active crash boundary");
+    base.invariant("{s}", .{"compile-time host failure escaped without an active crash boundary"});
 }
 
-fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const alloc_len = @max(length, 1);
     const arena_allocator = self.arena.allocator();
@@ -408,14 +412,14 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*an
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps deallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
     };
 }
 
-fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps reallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
     };
     const alloc_len = @max(new_length, 1);
     const arena_allocator = self.arena.allocator();
@@ -446,6 +450,7 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
     const loc = self.failed_loc;
     self.failed_region = null;
     self.failed_loc = null;
+    self.failed_stmt = null;
     self.appendExpectFailedEvent(bytes[0..len], region, loc);
 }
 
@@ -467,7 +472,7 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
         4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => @panic("unsupported compile-time RocOps allocation alignment"),
+        else => base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"}),
     };
 }
 

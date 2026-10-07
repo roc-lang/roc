@@ -242,7 +242,6 @@ NAME NOT IN SCOPE - syntax_grab_bag.md:141:2:141:6
 UNDECLARED TYPE - syntax_grab_bag.md:143:14:143:20
 VAR NAME MISSING `$` - syntax_grab_bag.md:146:6:146:12
 NAME NOT IN SCOPE - syntax_grab_bag.md:147:9:147:13
-UNRECOGNIZED SYNTAX - syntax_grab_bag.md:154:2:154:5
 NAME NOT IN SCOPE - syntax_grab_bag.md:158:2:158:11
 NAME NOT IN SCOPE - syntax_grab_bag.md:178:63:178:69
 NAME NOT IN SCOPE - syntax_grab_bag.md:179:42:179:48
@@ -273,11 +272,9 @@ MISSING METHOD - syntax_grab_bag.md:101:3:101:8
 TYPE MISMATCH - syntax_grab_bag.md:84:2:84:2
 TOO FEW ARGS - syntax_grab_bag.md:155:2:157:3
 TYPE MISMATCH - syntax_grab_bag.md:167:3:167:3
-TYPE MISMATCH - syntax_grab_bag.md:175:26:175:27
-TYPE MISMATCH - syntax_grab_bag.md:175:34:175:40
 DECLARATION HAS NO VALUE - syntax_grab_bag.md:201:1:201:25
-MISSING METHOD - syntax_grab_bag.md:189:26:189:40
-MISSING METHOD - syntax_grab_bag.md:189:26:189:66
+TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:40
+TYPE NOT DETERMINED - syntax_grab_bag.md:189:26:189:66
 # PROBLEMS
 ~~~clojure
 (reports
@@ -675,16 +672,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(source-region (file "syntax_grab_bag.md") (start 147 9) (end 147 13) (annotation error) (line-text "\texpect blah == 1"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 154 2) (end 154 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 154 2) (end 154 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Name Not In Scope")
 		(region (start 158 2) (end 158 11))
 		(headline
@@ -1061,7 +1048,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 84 2) (end 138 3))
+		(region (start 102 3) (end 102 24))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -1143,10 +1130,19 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Green, Red, ..], _arg -> d")
+			(text "[Blue, Green, Red, ..d], _arg -> e")
 			(line-break)
 			(indent 1)
-			(text "  where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]")
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -1154,7 +1150,7 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 167 3) (end 170 4))
+		(region (start 168 4) (end 169 11))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -1191,56 +1187,6 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(text "U64")
 			(annotation-end)))
 	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 175 26) (end 175 27))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 175 26) (end 175 27) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 175 34) (end 175 40))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 175 34) (end 175 40) (annotation error) (line-text "\t\tStdout.line!(\"Adding ${n} to ${number}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
-	(report
 		(severity warning)
 		(title "Declaration Has No Value")
 		(region (start 201 1) (end 201 25))
@@ -1253,36 +1199,50 @@ MISSING METHOD - syntax_grab_bag.md:189:26:189:66
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 189 26) (end 189 40))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "static_dispatch_method")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 40) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
 			(line-break)
-			(annotated emphasis "Hint:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 189 26) (end 189 66))
-		(headline
-			(reflow "This is trying to dispatch a method named")
+			(annotated code "static_dispatch_method")
 			(reflow " ")
-			(annotated code "next_static_dispatch_method")
-			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
-		(document
-			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
+			(reflow "method to use.")
+			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be.")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 189 26) (end 189 66))
+		(headline
+			(reflow "Nothing in this program determines the type this")
+			(reflow " ")
+			(annotated code "next_static_dispatch_method")
+			(reflow " ")
+			(reflow "method is called on:"))
+		(document
+			(source-region (file "syntax_grab_bag.md") (start 189 26) (end 189 66) (annotation error) (line-text "\tstatic_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?"))
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "next_static_dispatch_method")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -2019,13 +1979,14 @@ app [main!] { pf: platform "../basic-cli/platform.roc" }
 import pf.Stdout exposing [line!, write!]
 
 import # Comment after import keyword
-	pf.StdoutMultiline # Comment after ident
+	pf # Comment after qualifier
+	.StdoutMultiline # Comment after ident
 		exposing [ # Comment after exposing open
 			line!, # Comment after exposed item
 			write!, # Another after exposed item
 		] # Comment after exposing close
 
-import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
+import pkg.Something exposing [Custom.*, Type as ValueCategory, func as function]
 
 import BadName as GoodName
 import
@@ -2163,7 +2124,7 @@ main! = |_| { # Yeah I can leave a comment here
 	tag = Blue
 	return # Comment after return statement
 
-	# Just a random comment!
+		# Just a random comment!
 
 		
 	match_time(
@@ -2238,7 +2199,27 @@ expect {
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-let
+					(p-assign (ident "other"))
+					(e-num (value "1")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-block
+								(s-dbg
+									(e-runtime-error (tag "erroneous_value_expr")))
+								(e-num (value "0")))))
+					(if-else
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-lookup-local
+								(p-assign (ident "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
@@ -2402,7 +2383,7 @@ expect {
 	(defs
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(patt (type "[Blue, Green, Red, ..d], _arg -> e where [d.is_eq : d, d -> Bool, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(patt (type "List(Error) -> Try({}, _d)"))
 		(patt (type "{}"))
 		(patt (type "Error")))
@@ -2448,7 +2429,7 @@ expect {
 	(expressions
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Green, Red, ..], _arg -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
+		(expr (type "[Blue, Green, Red, ..d], _arg -> e where [d.is_eq : d, d -> Bool, e.from_numeral : Numeral -> Try(e, [InvalidNumeral(Str)])]"))
 		(expr (type "List(Error) -> Try({}, _d)"))
 		(expr (type "{}"))
 		(expr (type "Error"))))

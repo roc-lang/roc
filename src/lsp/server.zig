@@ -3,6 +3,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const CacheConfig = @import("compile").CacheConfig;
+const CoreCtx = @import("ctx").CoreCtx;
 const protocol = @import("protocol.zig");
 const makeTransport = @import("transport.zig").Transport;
 const DocumentStore = @import("document_store.zig").DocumentStore;
@@ -38,7 +40,7 @@ const code_action_handler_mod = @import("handlers/code_action.zig");
 const log = std.log.scoped(.roc_lsp_server);
 
 /// Errors that can occur while opening the optional LSP debug log.
-pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError;
+pub const CreateLogFileError = Allocator.Error || std.Io.File.OpenError || std.Io.Dir.CreateDirPathError || error{NoHomeDirectory};
 /// Errors that can occur while running the LSP server over standard IO.
 pub const RunWithStdIoError = CreateLogFileError || std.Io.File.Reader.Error || error{
     EndOfStream,
@@ -67,7 +69,10 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         pub const RunError = TransportType.ReadMessageError || PayloadError;
         const RunSyntaxCheckError = SyntaxDriverType.CheckError || Allocator.Error || error{WriteFailed};
         const HandlerFn = fn (*Self, *protocol.JsonId, ?std.json.Value) HandlerError!void;
-        const HandlerPtr = *const HandlerFn;
+        const HandlerRegistration = struct {
+            call: *const HandlerFn,
+            requires_trust: bool,
+        };
         const NotificationFn = fn (*Self, ?std.json.Value) NotificationError!void;
         const NotificationPtr = *const NotificationFn;
         const InitializeHandler = initialize_handler_mod.handler(Self);
@@ -86,23 +91,23 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         const ReferencesHandler = references_handler_mod.handler(Self);
         const InlayHintHandler = inlay_hint_handler_mod.handler(Self);
         const CodeActionHandler = code_action_handler_mod.handler(Self);
-        const request_handlers = std.StaticStringMap(HandlerPtr).initComptime(.{
-            .{ "initialize", &InitializeHandler.call },
-            .{ "shutdown", &ShutdownHandler.call },
-            .{ "textDocument/semanticTokens/full", &SemanticTokensHandler.call },
-            .{ "textDocument/hover", &HoverHandler.call },
-            .{ "textDocument/definition", &DefinitionHandler.call },
-            .{ "textDocument/formatting", &FormattingHandler.call },
-            .{ "textDocument/documentSymbol", &DocumentSymbolHandler.call },
-            .{ "textDocument/foldingRange", &FoldingRangeHandler.call },
-            .{ "textDocument/selectionRange", &SelectionRangeHandler.call },
-            .{ "textDocument/documentHighlight", &DocumentHighlightHandler.call },
-            .{ "textDocument/completion", &CompletionHandler.call },
-            .{ "textDocument/rename", &RenameHandler.call },
-            .{ "textDocument/prepareRename", &PrepareRenameHandler.call },
-            .{ "textDocument/references", &ReferencesHandler.call },
-            .{ "textDocument/inlayHint", &InlayHintHandler.call },
-            .{ "textDocument/codeAction", &CodeActionHandler.call },
+        const request_handlers = std.StaticStringMap(HandlerRegistration).initComptime(.{
+            .{ "initialize", HandlerRegistration{ .call = &InitializeHandler.call, .requires_trust = false } },
+            .{ "shutdown", HandlerRegistration{ .call = &ShutdownHandler.call, .requires_trust = false } },
+            .{ "textDocument/semanticTokens/full", HandlerRegistration{ .call = &SemanticTokensHandler.call, .requires_trust = true } },
+            .{ "textDocument/hover", HandlerRegistration{ .call = &HoverHandler.call, .requires_trust = true } },
+            .{ "textDocument/definition", HandlerRegistration{ .call = &DefinitionHandler.call, .requires_trust = true } },
+            .{ "textDocument/formatting", HandlerRegistration{ .call = &FormattingHandler.call, .requires_trust = false } },
+            .{ "textDocument/documentSymbol", HandlerRegistration{ .call = &DocumentSymbolHandler.call, .requires_trust = true } },
+            .{ "textDocument/foldingRange", HandlerRegistration{ .call = &FoldingRangeHandler.call, .requires_trust = false } },
+            .{ "textDocument/selectionRange", HandlerRegistration{ .call = &SelectionRangeHandler.call, .requires_trust = false } },
+            .{ "textDocument/documentHighlight", HandlerRegistration{ .call = &DocumentHighlightHandler.call, .requires_trust = true } },
+            .{ "textDocument/completion", HandlerRegistration{ .call = &CompletionHandler.call, .requires_trust = true } },
+            .{ "textDocument/rename", HandlerRegistration{ .call = &RenameHandler.call, .requires_trust = true } },
+            .{ "textDocument/prepareRename", HandlerRegistration{ .call = &PrepareRenameHandler.call, .requires_trust = true } },
+            .{ "textDocument/references", HandlerRegistration{ .call = &ReferencesHandler.call, .requires_trust = true } },
+            .{ "textDocument/inlayHint", HandlerRegistration{ .call = &InlayHintHandler.call, .requires_trust = true } },
+            .{ "textDocument/codeAction", HandlerRegistration{ .call = &CodeActionHandler.call, .requires_trust = true } },
         });
         const DidOpenHandler = did_open_handler_mod.handler(Self);
         const DidChangeHandler = did_change_handler_mod.handler(Self);
@@ -272,7 +277,11 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
             }
 
             if (request_handlers.get(method)) |handler| {
-                try handler(self, id, maybe_params);
+                if (handler.requires_trust and !self.client.trusted_workspace) {
+                    try self.sendError(id, .request_failed, "Semantic features require initializationOptions.trustedWorkspace: true; restart the server after granting trust.");
+                    return;
+                }
+                try handler.call(self, id, maybe_params);
                 return;
             }
 
@@ -360,6 +369,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
         }
 
         fn runSyntaxCheck(self: *Self, uri: []const u8) RunSyntaxCheckError!void {
+            if (!self.client.trusted_workspace) return;
             const doc = self.doc_store.get(uri);
             const root_path = if (self.client.root_uri) |root_uri|
                 try uri_util.uriToPath(self.allocator, root_uri)
@@ -413,7 +423,7 @@ pub fn ServerWithSyntaxDriver(comptime ReaderType: type, comptime WriterType: ty
 }
 
 /// Launches the LSP server wired to stdin/stdout, optionally mirroring traffic to disk.
-pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOptions) RunWithStdIoError!void {
+pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, roc_ctx: CoreCtx, debug: DebugOptions) RunWithStdIoError!void {
     var stdin_file = std.Io.File.stdin();
     var stdout_file = std.Io.File.stdout();
 
@@ -425,7 +435,7 @@ pub fn runWithStdIo(allocator: std.mem.Allocator, std_io: std.Io, debug: DebugOp
     var log_file: ?std.Io.File = null;
     const enable_logging = debug.transport or debug.build or debug.syntax or debug.server;
     if (enable_logging) {
-        const log_info = try createLogFile(allocator, std_io);
+        const log_info = try createLogFile(allocator, std_io, roc_ctx);
         log_file = log_info.file;
         const stderr_file = std.Io.File.stderr();
         stderr_file.writeStreamingAll(std_io, "roc-lsp logging to ") catch {};
@@ -455,69 +465,50 @@ const LogFileInfo = struct {
     path: []u8,
 };
 
-fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io) CreateLogFileError!LogFileInfo {
-    const dir_path = try resolveTempDir(allocator);
+/// Create a private log for this session. Never reopen an existing path.
+fn createLogFile(allocator: std.mem.Allocator, std_io: std.Io, roc_ctx: CoreCtx) CreateLogFileError!LogFileInfo {
+    const cache_config = CacheConfig{ .roc_ctx = roc_ctx };
+    const dir_path = try cache_config.getEffectiveCacheDir(allocator);
     defer allocator.free(dir_path);
-    const filename = try allocator.dupe(u8, "roc-lsp-debug.log");
+    try std.Io.Dir.cwd().createDirPath(std_io, dir_path);
+    var nonce: [16]u8 = undefined;
+    std_io.random(&nonce);
+    const filename = try std.fmt.allocPrint(allocator, "lsp-debug-{x}.log", .{nonce});
     defer allocator.free(filename);
     const absolute_path = try std.fs.path.resolve(allocator, &.{ dir_path, filename });
-    const file = std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
-        .truncate = false,
-        .read = true,
-    }) catch |err| switch (err) {
-        error.PathAlreadyExists => try std.Io.Dir.openFileAbsolute(std_io, absolute_path, .{
-            .mode = .read_write,
-        }),
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
-    // File is opened in append mode (non-truncate)
+    errdefer allocator.free(absolute_path);
+    const file = try createPrivateLog(std_io, absolute_path);
     return .{ .file = file, .path = absolute_path };
 }
 
-fn resolveTempDir(allocator: std.mem.Allocator) Allocator.Error![]u8 {
-    const env_names = if (builtin.os.tag == .windows)
-        [_][]const u8{ "TMP", "TEMP", "LOCALAPPDATA" }
-    else
-        [_][]const u8{ "TMPDIR", "TMP", "TEMP" };
+fn createPrivateLog(std_io: std.Io, absolute_path: []const u8) std.Io.File.OpenError!std.Io.File {
+    return std.Io.Dir.createFileAbsolute(std_io, absolute_path, .{
+        .exclusive = true,
+        .permissions = if (builtin.os.tag == .windows) .default_file else .fromMode(0o600),
+    });
+}
 
-    for (env_names) |name| {
-        const value = blk: {
-            const key_z = allocator.dupeZ(u8, name) catch return error.OutOfMemory;
-            defer allocator.free(key_z);
-            const cval = std.c.getenv(key_z) orelse continue;
-            const len = std.mem.len(cval);
-            break :blk allocator.dupe(u8, cval[0..len]) catch return error.OutOfMemory;
-        };
-        return value;
-    }
-
-    if (builtin.os.tag == .windows) {
-        return try allocator.dupe(u8, ".");
-    } else {
-        return try allocator.dupe(u8, "/tmp");
+test "debug log refuses existing files and symlinks and has private permissions" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const io = std.testing.io;
+    const dir = try tmp.dir.realPathFileAlloc(io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(dir);
+    const path = try std.fs.path.join(std.testing.allocator, &.{ dir, "log" });
+    defer std.testing.allocator.free(path);
+    const file = try createPrivateLog(io, path);
+    defer file.close(io);
+    try file.writeStreamingAll(io, "original");
+    try std.testing.expectError(error.PathAlreadyExists, createPrivateLog(io, path));
+    // The log handle only writes, and Windows grants a write-only handle no
+    // right to read the file's attributes, so the file is examined by path.
+    const stat = try tmp.dir.statFile(io, "log", .{});
+    try std.testing.expectEqual(@as(u64, 8), stat.size);
+    if (builtin.os.tag != .windows) {
+        try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), stat.permissions.toMode() & 0o777);
+        const link = try std.fs.path.join(std.testing.allocator, &.{ dir, "link" });
+        defer std.testing.allocator.free(link);
+        try tmp.dir.symLink(io, "log", "link", .{});
+        try std.testing.expectError(error.PathAlreadyExists, createPrivateLog(io, link));
     }
 }

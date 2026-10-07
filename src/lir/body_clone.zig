@@ -11,6 +11,7 @@
 //! procedure task independently of the store receiving its cloned output.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -125,7 +126,7 @@ pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
         const stmt = store.getCFStmt(@enumFromInt(index));
         if (stmt != .join) continue;
         const raw = @intFromEnum(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
     }
     return next;
@@ -157,13 +158,13 @@ pub const JoinParamIndex = struct {
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
         const raw = @intFromEnum(join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
 
     /// Reserve an identity in the same domain used by subtree clones.
     pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
-        if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
@@ -178,7 +179,7 @@ pub const JoinParamIndex = struct {
         }
     }
 
-    fn get(self: *const JoinParamIndex, id: LIR.JoinPointId) ?LIR.LocalSpan {
+    pub fn get(self: *const JoinParamIndex, id: LIR.JoinPointId) ?LIR.LocalSpan {
         return self.params.get(id);
     }
 };
@@ -234,17 +235,9 @@ fn forwardLocalAliasChainImpl(
 /// Push every control-flow successor of `stmt_id` onto `work`, covering
 /// straight-line `next` edges, switch branches and continuations, initialized
 /// payload arms, string-match arms, and join bodies. This is the reachability
-/// step shared by the proc walkers.
+/// step shared by the proc walkers. `allocator` must be the one that owns
+/// `work`.
 pub fn appendSuccessors(
-    store: *const LirStore,
-    work: *std.ArrayList(CFStmtId),
-    stmt_id: CFStmtId,
-) Allocator.Error!void {
-    return appendSuccessorsWithAllocator(store, work, stmt_id, store.allocator);
-}
-
-/// Like `appendSuccessors`, using the walk owner's scratch allocator.
-pub fn appendSuccessorsWithAllocator(
     store: *const LirStore,
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
@@ -260,11 +253,13 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -296,11 +291,7 @@ pub fn appendSuccessorsWithAllocator(
             try work.append(allocator, s.initialized_branch);
             try work.append(allocator, s.uninitialized_branch);
         },
-        .str_match => |s| {
-            try work.append(allocator, s.on_match);
-            try work.append(allocator, s.on_miss);
-        },
-        .boxy_tag_match => |s| {
+        inline .str_match, .boxy_tag_match => |s| {
             try work.append(allocator, s.on_match);
             try work.append(allocator, s.on_miss);
         },
@@ -323,6 +314,93 @@ pub fn appendSuccessorsWithAllocator(
         .jump,
         .ret,
         .crash,
+        => {},
+    }
+}
+
+/// Replace every control-flow successor of `stmt_id` with
+/// `resolve(ctx, successor)`, covering exactly the edges `appendSuccessors`
+/// visits. A pass that deletes statements routes each incoming edge past the
+/// deleted ones with this, instead of copying a successor over a deleted
+/// statement (which would duplicate any join it copied).
+pub fn redirectSuccessors(
+    store: *LirStore,
+    stmt_id: CFStmtId,
+    ctx: anytype,
+    comptime resolve: fn (@TypeOf(ctx), CFStmtId) CFStmtId,
+) void {
+    switch (store.getCFStmtPtr(stmt_id).*) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |*s| s.next = resolve(ctx, s.next),
+        inline .boxy_tag_match, .str_match => |*s| {
+            s.on_match = resolve(ctx, s.on_match);
+            s.on_miss = resolve(ctx, s.on_miss);
+        },
+        .str_match_set => |*s| {
+            s.on_miss = resolve(ctx, s.on_miss);
+            const arms = store.getStrMatchArmsMut(s.arms);
+            for (0..arms.len) |arm_index| {
+                const arm = GuardedList.atPtr(arms, arm_index);
+                arm.on_match = resolve(ctx, arm.on_match);
+            }
+        },
+        .switch_stmt => |*s| {
+            s.default_branch = resolve(ctx, s.default_branch);
+            if (s.continuation) |continuation| s.continuation = resolve(ctx, continuation);
+            const branches = store.getCFSwitchBranchesMut(s.branches);
+            for (0..branches.len) |branch_index| {
+                const branch = GuardedList.atPtr(branches, branch_index);
+                branch.body = resolve(ctx, branch.body);
+            }
+        },
+        .switch_initialized_payload => |*s| {
+            s.initialized_branch = resolve(ctx, s.initialized_branch);
+            s.uninitialized_branch = resolve(ctx, s.uninitialized_branch);
+        },
+        .join => |*s| {
+            s.body = resolve(ctx, s.body);
+            s.remainder = resolve(ctx, s.remainder);
+        },
+        .jump,
+        .ret,
+        .crash,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .loop_continue,
+        .loop_break,
         => {},
     }
 }
@@ -384,12 +462,8 @@ pub fn forEachStmtRead(
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| note(ctx, source),
-            .discriminant => |ref| note(ctx, ref.source),
-            .field => |ref| note(ctx, ref.source),
-            .tag_payload => |ref| note(ctx, ref.source),
-            .tag_payload_struct => |ref| note(ctx, ref.source),
-            .list_reinterpret => |ref| note(ctx, ref.backing_ref),
-            .nominal => |ref| note(ctx, ref.backing_ref),
+            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| note(ctx, ref.source),
+            inline .list_reinterpret, .nominal => |ref| note(ctx, ref.backing_ref),
         },
         .assign_call => |s| {
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
@@ -413,11 +487,20 @@ pub fn forEachStmtRead(
             if (s.tag_residual_for) |desc| emitDesc(ctx, note, desc);
             emitSpan(store, ctx, note, s.captures);
         },
-        .assign_boxy_dict_ref => |s| emitDict(ctx, note, s.dict),
+        .assign_boxy_dict_ref => |s| {
+            emitDict(ctx, note, s.dict);
+            emitSpan(store, ctx, note, s.captures);
+        },
         .assign_boxy_box => |s| {
             note(ctx, s.payload);
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
+        },
+        .assign_boxy_record_update => |s| {
+            note(ctx, s.base);
+            note(ctx, s.fields);
+            emitDesc(ctx, note, s.base_desc);
+            emitDesc(ctx, note, s.fields_desc);
         },
         .assign_boxy_reuse_box => |s| {
             note(ctx, s.source);
@@ -433,27 +516,24 @@ pub fn forEachStmtRead(
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_boxy_inspect => |s| {
+        inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
         },
         .assign_boxy_eq => |s| {
             note(ctx, s.lhs);
             note(ctx, s.rhs);
-            emitDesc(ctx, note, s.source_desc);
+            emitDesc(ctx, note, s.desc);
+        },
+        .assign_boxy_hash => |s| {
+            note(ctx, s.value);
+            note(ctx, s.hasher);
+            emitDesc(ctx, note, s.desc);
         },
         .assign_boxy_tag => |s| {
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
-        },
-        .assign_boxy_tag_payload => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
-        },
-        .boxy_tag_match => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
         },
         .assign_call_dict => |s| {
             emitDict(ctx, note, s.dict);
@@ -484,26 +564,20 @@ pub fn forEachStmtRead(
             note(ctx, s.dest);
             if (s.payload) |payload| note(ctx, payload);
         },
-        .set_local => |s| note(ctx, s.value),
-        .debug => |s| note(ctx, s.message),
+        inline .set_local, .ret, .incref, .decref, .free => |s| note(ctx, s.value),
+        inline .debug, .expect_err => |s| note(ctx, s.message),
         .expect => |s| note(ctx, s.condition),
-        .expect_err => |s| note(ctx, s.message),
         .switch_stmt => |s| note(ctx, s.cond),
         .switch_initialized_payload => |s| {
             note(ctx, s.cond);
             note(ctx, s.payload);
         },
-        .str_match => |s| note(ctx, s.source),
-        .str_match_set => |s| note(ctx, s.source),
-        .ret => |s| note(ctx, s.value),
+        inline .str_match, .str_match_set => |s| note(ctx, s.source),
         .crash => |s| if (s.msg.localId()) |message| note(ctx, message),
-        .incref => |s| note(ctx, s.value),
-        .decref => |s| note(ctx, s.value),
         .decref_if_initialized => |s| {
             note(ctx, s.cond);
             note(ctx, s.value);
         },
-        .free => |s| note(ctx, s.value),
         .init_uninitialized,
         .assign_literal,
         .comptime_branch_taken,
@@ -515,13 +589,6 @@ pub fn forEachStmtRead(
         .loop_break,
         => {},
     }
-}
-
-/// Count definitions of every local reachable from `body`, walking all
-/// successor edges: statement targets, join parameters, descriptor outputs,
-/// and pattern-match captures. Operand reads are not definitions.
-pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return countReachableDefsWithAllocator(store, body, store.allocator);
 }
 
 /// Like `countReachableDefs`, using the procedure task's scratch allocator.
@@ -574,11 +641,13 @@ pub fn forEachStmtDef(
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -587,11 +656,7 @@ pub fn forEachStmtDef(
         .assign_tag,
         .set_local,
         => |s| note(ctx, s.target),
-        .assign_call => |s| {
-            note(ctx, s.target);
-            if (s.out_desc) |out_desc| note(ctx, out_desc);
-        },
-        .assign_call_erased => |s| {
+        inline .assign_call, .assign_call_erased => |s| {
             note(ctx, s.target);
             if (s.out_desc) |out_desc| note(ctx, out_desc);
         },
@@ -748,19 +813,12 @@ pub const ReachableStmts = struct {
         while (self.work.pop()) |stmt_id| {
             const entry = try self.visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
-            try appendSuccessorsWithAllocator(self.store, &self.work, stmt_id, self.allocator);
+            try appendSuccessors(self.store, &self.work, stmt_id, self.allocator);
             return stmt_id;
         }
         return null;
     }
 };
-
-/// Return only binders reachable from `body`. Clone passes give these fresh
-/// identities while retaining read-only external inputs. Unlike write counts,
-/// this excludes `set_local` and includes maybe-uninitialized join binders.
-pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return collectReachableDefinitionsWithAllocator(store, body, store.allocator);
-}
 
 /// Like `collectReachableDefinitions`, with independently owned scratch.
 pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
@@ -770,11 +828,6 @@ pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId
 /// Collect lexical binders using an independent lease from the worker's storage.
 pub fn collectReachableDefinitionsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
     return countReachable(store, body, scratch.counts.allocator, scratch, .binders);
-}
-
-/// Add every local defined by `stmt_id` to an existing definition set.
-pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
-    visitStmtDefinitions(store, defined, stmt_id);
 }
 
 /// Add exact lexical binders without allocating for unrelated local identities.
@@ -800,11 +853,13 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -812,11 +867,7 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_struct,
         .assign_tag,
         => |stmt| noteDefinition(defined, stmt.target),
-        .assign_call => |stmt| {
-            noteDefinition(defined, stmt.target);
-            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
-        },
-        .assign_call_erased => |stmt| {
+        inline .assign_call, .assign_call_erased => |stmt| {
             noteDefinition(defined, stmt.target);
             if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
         },
@@ -886,6 +937,118 @@ pub fn chainIsSingleUse(store: *LirStore, proc_body: CFStmtId, chain: []const Lo
     return true;
 }
 
+/// The statements a subtree clone must copy when its rewriter changes only
+/// `seeds`. A copy defines fresh locals and declares fresh join identities,
+/// so every reader of a local a copied statement defines and every jump to a
+/// join a copied statement declares is copied too, and every predecessor of a
+/// copied statement is copied so it can point at the copy. A jump reads its
+/// target's parameters: its arguments are those locals, which a copied jump
+/// bridges back to the target when the copy renamed them. Every other
+/// statement reachable from `root` is shared unchanged by the clone: it stays
+/// reachable through its original predecessors as well, and copying it would
+/// duplicate code the rewrite leaves identical.
+pub fn collectCopiedStmts(
+    store: *LirStore,
+    root: CFStmtId,
+    seeds: []const CFStmtId,
+    join_params: *const JoinParamIndex,
+    allocator: Allocator,
+) Allocator.Error!collections.DenseMap(CFStmtId, void) {
+    const Edge = struct {
+        key: u32,
+        stmt: CFStmtId,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.key < b.key;
+        }
+    };
+    const ReaderCollector = struct {
+        edges: *std.ArrayList(Edge),
+        stmt: CFStmtId,
+        allocator: Allocator,
+        failure: ?Allocator.Error = null,
+
+        fn note(self: *@This(), local: LocalId) void {
+            if (self.failure != null) return;
+            self.edges.append(self.allocator, .{ .key = @intFromEnum(local), .stmt = self.stmt }) catch |err| {
+                self.failure = err;
+            };
+        }
+    };
+
+    // Reverse edges of the region, keyed by the statement, local, or join
+    // each one leads back from.
+    var predecessors = std.ArrayList(Edge).empty;
+    defer predecessors.deinit(allocator);
+    var readers = std.ArrayList(Edge).empty;
+    defer readers.deinit(allocator);
+    var jumps = std.ArrayList(Edge).empty;
+    defer jumps.deinit(allocator);
+    var successors = std.ArrayList(CFStmtId).empty;
+    defer successors.deinit(allocator);
+    var walk = try ReachableStmts.initWithAllocator(store, root, allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        successors.clearRetainingCapacity();
+        try appendSuccessors(store, &successors, stmt_id, allocator);
+        for (successors.items) |successor| {
+            try predecessors.append(allocator, .{ .key = @intFromEnum(successor), .stmt = stmt_id });
+        }
+        const stmt = store.getCFStmt(stmt_id);
+        var collector: ReaderCollector = .{ .edges = &readers, .stmt = stmt_id, .allocator = allocator };
+        forEachStmtRead(store, stmt, &collector, ReaderCollector.note);
+        if (stmt == .jump) {
+            const params = join_params.get(stmt.jump.target) orelse
+                base.invariant("{s}", .{"subtree copy plan found a jump to an unknown join"});
+            emitSpan(store, &collector, ReaderCollector.note, params);
+            try jumps.append(allocator, .{ .key = @intFromEnum(stmt.jump.target), .stmt = stmt_id });
+        }
+        if (collector.failure) |err| return err;
+    }
+    std.mem.sort(Edge, predecessors.items, {}, Edge.lessThan);
+    std.mem.sort(Edge, readers.items, {}, Edge.lessThan);
+    std.mem.sort(Edge, jumps.items, {}, Edge.lessThan);
+
+    var copied = collections.DenseMap(CFStmtId, void).init(allocator);
+    errdefer copied.deinit();
+    var work = std.ArrayList(CFStmtId).empty;
+    defer work.deinit(allocator);
+    try work.appendSlice(allocator, seeds);
+    var defined: ReadCounts = .{ .counts = collections.DenseMap(LocalId, u32).init(allocator) };
+    defer defined.deinit();
+    while (work.pop()) |stmt_id| {
+        const entry = try copied.getOrPut(stmt_id);
+        if (entry.found_existing) continue;
+        try appendEdgeStmts(Edge, &work, predecessors.items, @intFromEnum(stmt_id), allocator);
+        defined.counts.clearRetainingCapacity();
+        try markStmtDefinitionsSparse(store, &defined, stmt_id);
+        var defined_locals = defined.counts.keyIterator();
+        while (defined_locals.next()) |local| {
+            try appendEdgeStmts(Edge, &work, readers.items, @intFromEnum(local.*), allocator);
+        }
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .join) try appendEdgeStmts(Edge, &work, jumps.items, @intFromEnum(stmt.join.id), allocator);
+    }
+    return copied;
+}
+
+fn appendEdgeStmts(
+    comptime Edge: type,
+    work: *std.ArrayList(CFStmtId),
+    edges: []const Edge,
+    key: u32,
+    allocator: Allocator,
+) Allocator.Error!void {
+    var index = std.sort.lowerBound(Edge, edges, key, struct {
+        fn order(target: u32, edge: Edge) std.math.Order {
+            return std.math.order(target, edge.key);
+        }
+    }.order);
+    while (index < edges.len and edges[index].key == key) : (index += 1) {
+        try work.append(allocator, edges[index].stmt);
+    }
+}
+
 /// What a cloned call variant adds to the proc it was cloned from.
 pub const CallVariantSpec = struct {
     /// Locals prepended to the variant's argument list, ahead of the source
@@ -923,7 +1086,7 @@ pub fn cloneCallVariant(
 ) Allocator.Error!LIR.LirProcSpecId {
     const source_spec = store.getProcSpec(source);
     const source_body = source_spec.body orelse
-        @panic("call-variant clone reached a proc with no body");
+        base.invariant("{s}", .{"call-variant clone reached a proc with no body"});
     const source_args = store.getLocalSpan(source_spec.args);
 
     var variant_args = try std.ArrayList(LocalId).initCapacity(
@@ -976,7 +1139,7 @@ pub fn cloneCallVariant(
         .body = body,
         .ret_layout = spec.ret_layout,
         .abi = .roc,
-    });
+    }, store.procLoc(source));
     try store.copyProcDebugInfo(variant, source);
 
     return variant;
@@ -988,9 +1151,9 @@ pub fn cloneCallVariant(
 /// `Rewriter` carries the pass-specific destination state and supplies the
 /// hooks that diverge between passes:
 ///
-///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId)`—required.
+///   * `cloneRet(self: *Rewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin)`—required.
 ///     Produces the cloned tail for a source `ret value`.
-///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt)`—
+///   * `interceptStmt(self: *Rewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin)`—
 ///     optional. Returns a cloned statement id to short-circuit the default
 ///     clone, letting the pass fuse a direct constructor/concat return into
 ///     the tail or rewrite statements it identified up front, or `null` to
@@ -999,6 +1162,10 @@ pub fn cloneCallVariant(
 ///     Retains an uncached local's original identity instead of allocating a
 ///     clone. This lets subtree rewrites preserve external inputs by default
 ///     without seeding a map over the entire store.
+///
+/// `origin` is the provenance of the source statement being cloned, with its
+/// inline scope already mapped into the destination; a hook's statements
+/// state it (with the pass's own kind where the hook rewrites) explicitly.
 ///
 /// Both hooks receive the cloner and use its `mapLocal`, `mapLocalSpan`,
 /// `addTemp`, `directReturnOf`, and `store` surface to build their statements.
@@ -1138,56 +1305,163 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             self.local_map.deinit();
         }
 
+        const CloneFrame = struct {
+            old_id: CFStmtId,
+            origin: LIR.StmtOrigin,
+            source: LIR.CFStmt,
+            built: LIR.CFStmt,
+            intercepted: ?InterceptChildren,
+            results: [2]CFStmtId = undefined,
+            step: u32 = 0,
+            old_branches: []LIR.CFSwitchBranch = &.{},
+            branches: []LIR.CFSwitchBranch = &.{},
+            old_arms: []LIR.StrMatchArm = &.{},
+            arms: []LIR.StrMatchArm = &.{},
+
+            fn deinit(frame: *CloneFrame, allocator: Allocator) void {
+                allocator.free(frame.old_branches);
+                allocator.free(frame.branches);
+                allocator.free(frame.old_arms);
+                allocator.free(frame.arms);
+            }
+        };
+
+        const CloneStep = union(enum) {
+            clone: CFStmtId,
+            finished: CFStmtId,
+        };
+
         /// Clone `old_id` and everything reachable from it, memoizing by
         /// original statement id so shared join targets are cloned once.
-        pub fn cloneStmt(self: *Self, old_id: CFStmtId) Allocator.Error!CFStmtId {
-            if (self.stmt_map.get(old_id)) |existing| return existing;
-
-            const saved_loc = self.store.current_loc;
-            defer self.store.current_loc = saved_loc;
-            const saved_region = self.store.current_region;
-            defer self.store.current_region = saved_region;
-            const saved_inline_scope = self.store.current_inline_scope;
-            defer self.store.current_inline_scope = saved_inline_scope;
-            self.store.current_loc = self.store.stmtLoc(old_id);
-            self.store.current_region = self.store.stmtRegion(old_id);
-            self.store.current_inline_scope = try self.mapInlineScope(self.store.stmtInlineScope(old_id));
-
-            const stmt = self.store.getCFStmt(old_id);
-            if (@hasDecl(Rewriter, "interceptStmt")) {
-                if (try self.rewriter.interceptStmt(self, old_id, stmt)) |intercepted| {
-                    try self.stmt_map.put(old_id, intercepted);
-                    return intercepted;
+        /// Statement chains and nesting live on an explicit frame stack, so
+        /// body length and branch depth never become thread call depth.
+        pub fn cloneStmt(self: *Self, root: CFStmtId) Allocator.Error!CFStmtId {
+            var frames: std.ArrayList(CloneFrame) = .empty;
+            defer {
+                for (frames.items) |*frame| frame.deinit(self.allocator);
+                frames.deinit(self.allocator);
+            }
+            var pending: ?CFStmtId = root;
+            var returned: ?CFStmtId = null;
+            while (true) {
+                if (pending) |old_id| {
+                    pending = null;
+                    returned = try self.openClone(&frames, old_id);
+                }
+                if (frames.items.len == 0) return returned.?;
+                const frame = &frames.items[frames.items.len - 1];
+                switch (try self.advanceClone(frame, returned)) {
+                    .clone => |child| {
+                        pending = child;
+                        returned = null;
+                    },
+                    .finished => |cloned| {
+                        try self.stmt_map.put(frame.old_id, cloned);
+                        frame.deinit(self.allocator);
+                        frames.items.len -= 1;
+                        returned = cloned;
+                    },
                 }
             }
+        }
 
-            const cloned = switch (stmt) {
-                .init_uninitialized => |s| try self.store.addCFStmt(.{ .init_uninitialized = .{
+        /// Clone a statement without successors directly, or push the frame
+        /// that clones its successors. Returns null when a frame was pushed.
+        fn openClone(self: *Self, frames: *std.ArrayList(CloneFrame), old_id: CFStmtId) Allocator.Error!?CFStmtId {
+            if (self.stmt_map.get(old_id)) |existing| return existing;
+
+            var origin = self.store.stmtOrigin(old_id);
+            origin.inline_scope = try self.mapInlineScope(origin.inline_scope);
+
+            const stmt = self.store.getCFStmt(old_id);
+            var intercepted: ?InterceptChildren = null;
+            if (@hasDecl(Rewriter, "interceptStmt")) {
+                switch (try self.rewriter.interceptStmt(self, old_id, stmt, origin)) {
+                    .none => {},
+                    .done => |cloned| {
+                        try self.stmt_map.put(old_id, cloned);
+                        return cloned;
+                    },
+                    .children => |children| {
+                        if (!@hasDecl(Rewriter, "finishIntercept")) unreachable;
+                        intercepted = children;
+                    },
+                }
+            }
+            var built = stmt;
+            if (intercepted == null) {
+                if (try self.cloneTerminal(stmt, origin)) |cloned| {
+                    try self.stmt_map.put(old_id, cloned);
+                    return cloned;
+                }
+                built = try self.mapLinearHead(stmt);
+            }
+            try frames.append(self.allocator, .{
+                .old_id = old_id,
+                .origin = origin,
+                .source = stmt,
+                .built = built,
+                .intercepted = intercepted,
+            });
+            return null;
+        }
+
+        fn cloneTerminal(self: *Self, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) Allocator.Error!?CFStmtId {
+            return switch (stmt) {
+                .expect_err => |s| try self.store.addCFStmt(.{ .expect_err = .{
+                    .message = try self.mapLocal(s.message),
+                    .region = s.region,
+                } }, origin),
+                .runtime_error => try self.store.addCFStmt(.runtime_error, origin),
+                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
+                    .site = s.site,
+                } }, origin),
+                .loop_continue => try self.store.addCFStmt(.loop_continue, origin),
+                .loop_break => try self.store.addCFStmt(.loop_break, origin),
+                .jump => |s| try self.cloneJump(s, origin),
+                .ret => |s| try self.rewriter.cloneRet(self, s.value, origin),
+                .crash => |s| try self.store.addCFStmt(.{ .crash = .{
+                    .msg = switch (s.msg) {
+                        .literal => |literal| .{ .literal = literal },
+                        .local => |local| .{ .local = try self.mapLocal(local) },
+                    },
+                    .literal_rejection = s.literal_rejection,
+                } }, origin),
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+            };
+        }
+
+        /// Map every field of a single-successor statement except `next`,
+        /// which the frame fills once the successor's clone returns.
+        fn mapLinearHead(self: *Self, stmt: LIR.CFStmt) Allocator.Error!LIR.CFStmt {
+            return switch (stmt) {
+                .init_uninitialized => |s| .{ .init_uninitialized = .{
                     .target = try self.mapLocal(s.target),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_ref => |s| try self.store.addCFStmt(.{ .assign_ref = .{
+                    .next = s.next,
+                } },
+                .assign_ref => |s| .{ .assign_ref = .{
                     .target = try self.mapLocal(s.target),
                     .op = try self.mapRefOp(s.op),
                     .take_kind = s.take_kind,
                     .residual_shell_absent_fields = s.residual_shell_absent_fields,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_literal => |s| try self.store.addCFStmt(.{ .assign_literal = .{
+                    .next = s.next,
+                } },
+                .assign_literal => |s| .{ .assign_literal = .{
                     .target = try self.mapLocal(s.target),
                     .value = s.value,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_call => |s| try self.store.addCFStmt(.{ .assign_call = .{
+                    .fresh_alternative = s.fresh_alternative,
+                    .next = s.next,
+                } },
+                .assign_call => |s| .{ .assign_call = .{
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
                     .args = try self.mapLocalSpan(s.args),
                     .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .out_desc = try self.mapMaybeLocal(s.out_desc),
                     .is_cold = s.is_cold,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_call_erased => |s| try self.store.addCFStmt(.{ .assign_call_erased = .{
+                    .next = s.next,
+                } },
+                .assign_call_erased => |s| .{ .assign_call_erased = .{
                     .target = try self.mapLocal(s.target),
                     .closure = try self.mapLocal(s.closure),
                     .args = try self.mapLocalSpan(s.args),
@@ -1199,9 +1473,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .arg_plan = s.arg_plan,
                     .reuse_closure = s.reuse_closure,
                     .reuse_source = try self.mapMaybeLocal(s.reuse_source),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_packed_erased_fn => |s| try self.store.addCFStmt(.{ .assign_packed_erased_fn = .{
+                    .next = s.next,
+                } },
+                .assign_packed_erased_fn => |s| .{ .assign_packed_erased_fn = .{
                     .target = try self.mapLocal(s.target),
                     .proc = s.proc,
                     .capture = try self.mapMaybeLocal(s.capture),
@@ -1210,9 +1484,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .reuse = try self.mapMaybeLocal(s.reuse),
                     .reuse_unique = s.reuse_unique,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_desc_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_desc_ref => |s| .{ .assign_boxy_desc_ref = .{
                     .target = try self.mapLocal(s.target),
                     .desc = try self.mapBoxyDescRef(s.desc),
                     .nested_index = s.nested_index,
@@ -1221,62 +1495,78 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .tag_ext = s.tag_ext,
                     .tag_residual_for = try self.mapMaybeBoxyDescRef(s.tag_residual_for),
                     .captures = try self.mapLocalSpan(s.captures),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_dict_ref => |s| try self.store.addCFStmt(.{ .assign_boxy_dict_ref = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_dict_ref => |s| .{ .assign_boxy_dict_ref = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_box => |s| try self.store.addCFStmt(.{ .assign_boxy_box = .{
+                    .captures = try self.mapLocalSpan(s.captures),
+                    .next = s.next,
+                } },
+                .assign_boxy_box => |s| .{ .assign_boxy_box = .{
                     .target = try self.mapLocal(s.target),
                     .payload = try self.mapLocal(s.payload),
                     .payload_layout = s.payload_layout,
                     .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_reuse_box => |s| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_record_update => |s| .{ .assign_boxy_record_update = .{
+                    .target = try self.mapLocal(s.target),
+                    .base = try self.mapLocal(s.base),
+                    .base_desc = try self.mapBoxyDescRef(s.base_desc),
+                    .fields = try self.mapLocal(s.fields),
+                    .fields_layout = s.fields_layout,
+                    .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
+                    .next = s.next,
+                } },
+                .assign_boxy_reuse_box => |s| .{ .assign_boxy_reuse_box = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .desc = try self.mapBoxyDescRef(s.desc),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_unbox => |s| try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_unbox => |s| .{ .assign_boxy_unbox = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
                     .target_layout = s.target_layout,
                     .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_adapt => |s| try self.store.addCFStmt(.{ .assign_boxy_adapt = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_adapt => |s| .{ .assign_boxy_adapt = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .adapter = s.adapter,
                     .source_desc = try self.mapMaybeBoxyDescRef(s.source_desc),
                     .target_desc = try self.mapMaybeBoxyDescRef(s.target_desc),
                     .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_inspect => |s| try self.store.addCFStmt(.{ .assign_boxy_inspect = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_inspect => |s| .{ .assign_boxy_inspect = .{
                     .target = try self.mapLocal(s.target),
                     .source = try self.mapLocal(s.source),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_eq => |s| try self.store.addCFStmt(.{ .assign_boxy_eq = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_eq => |s| .{ .assign_boxy_eq = .{
                     .target = try self.mapLocal(s.target),
                     .lhs = try self.mapLocal(s.lhs),
                     .rhs = try self.mapLocal(s.rhs),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_tag => |s| try self.store.addCFStmt(.{ .assign_boxy_tag = .{
+                    .desc = try self.mapBoxyDescRef(s.desc),
+                    .next = s.next,
+                } },
+                .assign_boxy_hash => |s| .{ .assign_boxy_hash = .{
+                    .target = try self.mapLocal(s.target),
+                    .value = try self.mapLocal(s.value),
+                    .hasher = try self.mapLocal(s.hasher),
+                    .desc = try self.mapBoxyDescRef(s.desc),
+                    .next = s.next,
+                } },
+                .assign_boxy_tag => |s| .{ .assign_boxy_tag = .{
                     .target = try self.mapLocal(s.target),
                     .target_desc = try self.mapBoxyDescRef(s.target_desc),
                     .tag_name = s.tag_name,
@@ -1284,9 +1574,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .payload_layout = s.payload_layout,
                     .payload_desc = try self.mapMaybeBoxyDescRef(s.payload_desc),
                     .payload_mode = s.payload_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_boxy_tag_payload => |s| try self.store.addCFStmt(.{ .assign_boxy_tag_payload = .{
+                    .next = s.next,
+                } },
+                .assign_boxy_tag_payload => |s| .{ .assign_boxy_tag_payload = .{
                     .target = try self.mapLocal(s.target),
                     .target_desc = try self.mapMaybeLocal(s.target_desc),
                     .source = try self.mapLocal(s.source),
@@ -1294,16 +1584,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .tag_name = s.tag_name,
                     .payload_index = s.payload_index,
                     .source_mode = s.source_mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .boxy_tag_match => |s| try self.store.addCFStmt(.{ .boxy_tag_match = .{
-                    .source = try self.mapLocal(s.source),
-                    .source_desc = try self.mapBoxyDescRef(s.source_desc),
-                    .tag_name = s.tag_name,
-                    .on_match = try self.cloneStmt(s.on_match),
-                    .on_miss = try self.cloneStmt(s.on_miss),
-                } }),
-                .assign_call_dict => |s| try self.store.addCFStmt(.{ .assign_call_dict = .{
+                    .next = s.next,
+                } },
+                .assign_call_dict => |s| .{ .assign_call_dict = .{
                     .target = try self.mapLocal(s.target),
                     .dict = try self.mapBoxyDictRef(s.dict),
                     .method = s.method,
@@ -1313,9 +1596,9 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .hidden_args = try self.mapLocalSpan(s.hidden_args),
                     .result_desc = try self.mapMaybeBoxyDescRef(s.result_desc),
                     .is_cold = s.is_cold,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_low_level => |s| try self.store.addCFStmt(.{ .assign_low_level = .{
+                    .next = s.next,
+                } },
+                .assign_low_level => |s| .{ .assign_low_level = .{
                     .target = try self.mapLocal(s.target),
                     .op = s.op,
                     .rc_effect = s.rc_effect,
@@ -1323,157 +1606,319 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .interchangeable = s.interchangeable,
                     .simd_concat_count = s.simd_concat_count,
                     .args = try self.mapLocalSpan(s.args),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_list => |s| try self.store.addCFStmt(.{ .assign_list = .{
+                    .next = s.next,
+                } },
+                .assign_list => |s| .{ .assign_list = .{
                     .target = try self.mapLocal(s.target),
                     .elems = try self.mapLocalSpan(s.elems),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_struct => |s| try self.store.addCFStmt(.{ .assign_struct = .{
+                    .next = s.next,
+                } },
+                .assign_struct => |s| .{ .assign_struct = .{
                     .target = try self.mapLocal(s.target),
                     .fields = try self.mapLocalSpan(s.fields),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .assign_tag => |s| try self.store.addCFStmt(.{ .assign_tag = .{
+                    .next = s.next,
+                } },
+                .assign_tag => |s| .{ .assign_tag = .{
                     .target = try self.mapLocal(s.target),
                     .variant_index = s.variant_index,
                     .discriminant = s.discriminant,
                     .payload = try self.mapMaybeLocal(s.payload),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .store_struct => |s| try self.store.addCFStmt(.{ .store_struct = .{
+                    .next = s.next,
+                } },
+                .store_struct => |s| .{ .store_struct = .{
                     .dest = try self.mapLocal(s.dest),
                     .struct_layout = s.struct_layout,
                     .fields = try self.mapLocalSpan(s.fields),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .store_tag => |s| try self.store.addCFStmt(.{ .store_tag = .{
+                    .next = s.next,
+                } },
+                .store_tag => |s| .{ .store_tag = .{
                     .dest = try self.mapLocal(s.dest),
                     .tag_layout = s.tag_layout,
                     .variant_index = s.variant_index,
                     .discriminant = s.discriminant,
                     .payload = try self.mapMaybeLocal(s.payload),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .set_local => |s| try self.store.addCFStmt(.{ .set_local = .{
+                    .next = s.next,
+                } },
+                .set_local => |s| .{ .set_local = .{
                     .target = try self.mapLocal(s.target),
                     .value = try self.mapLocal(s.value),
                     .mode = s.mode,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .debug => |s| try self.store.addCFStmt(.{ .debug = .{
+                    .next = s.next,
+                } },
+                .debug => |s| .{ .debug = .{
                     .message = try self.mapLocal(s.message),
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .expect => |s| try self.store.addCFStmt(.{ .expect = .{
+                    .next = s.next,
+                } },
+                .expect => |s| .{ .expect = .{
                     .condition = try self.mapLocal(s.condition),
                     .site = s.site,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .expect_err => |s| try self.store.addCFStmt(.{ .expect_err = .{
-                    .message = try self.mapLocal(s.message),
-                    .region = s.region,
-                } }),
-                .runtime_error => try self.store.addCFStmt(.runtime_error),
-                .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
-                    .site = s.site,
-                } }),
-                .comptime_branch_taken => |s| try self.store.addCFStmt(.{ .comptime_branch_taken = .{
+                    .next = s.next,
+                } },
+                .comptime_branch_taken => |s| .{ .comptime_branch_taken = .{
                     .site = s.site,
                     .branch_index = s.branch_index,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .incref => |s| try self.store.addCFStmt(.{ .incref = .{
+                    .next = s.next,
+                } },
+                .incref => |s| .{ .incref = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .count = s.count,
                     .atomicity = s.atomicity,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .decref => |s| try self.store.addCFStmt(.{ .decref = .{
+                    .next = s.next,
+                } },
+                .decref => |s| .{ .decref = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .atomicity = s.atomicity,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .decref_if_initialized => |s| try self.store.addCFStmt(.{ .decref_if_initialized = .{
+                    .next = s.next,
+                } },
+                .decref_if_initialized => |s| .{ .decref_if_initialized = .{
                     .cond = try self.mapLocal(s.cond),
                     .cond_mask = s.cond_mask,
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .atomicity = s.atomicity,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .free => |s| try self.store.addCFStmt(.{ .free = .{
+                    .next = s.next,
+                } },
+                .free => |s| .{ .free = .{
                     .value = try self.mapLocal(s.value),
                     .rc = s.rc,
                     .atomicity = s.atomicity,
-                    .next = try self.cloneStmt(s.next),
-                } }),
-                .switch_stmt => |s| try self.cloneSwitch(s),
-                .switch_initialized_payload => |s| try self.store.addCFStmt(.{ .switch_initialized_payload = .{
-                    .cond = try self.mapLocal(s.cond),
-                    .cond_mask = s.cond_mask,
-                    .payload = try self.mapLocal(s.payload),
-                    .uninitialized_is_cold = s.uninitialized_is_cold,
-                    .initialized_branch = try self.cloneStmt(s.initialized_branch),
-                    .uninitialized_branch = try self.cloneStmt(s.uninitialized_branch),
-                } }),
-                .str_match => |s| try self.store.addCFStmt(.{ .str_match = .{
-                    .source = try self.mapLocal(s.source),
-                    .prefix = s.prefix,
-                    .steps = try self.mapStrMatchSteps(s.steps),
-                    .end = s.end,
-                    .on_match = try self.cloneStmt(s.on_match),
-                    .on_miss = try self.cloneStmt(s.on_miss),
-                } }),
-                .str_match_set => |s| try self.cloneStrMatchSet(s),
-                .loop_continue => try self.store.addCFStmt(.loop_continue),
-                .loop_break => try self.store.addCFStmt(.loop_break),
-                .join => |s| try self.cloneJoin(s),
-                .jump => |s| try self.cloneJump(s),
-                .ret => |s| try self.rewriter.cloneRet(self, s.value),
-                .crash => |s| try self.store.addCFStmt(.{ .crash = .{ .msg = switch (s.msg) {
-                    .literal => |literal| .{ .literal = literal },
-                    .local => |local| .{ .local = try self.mapLocal(local) },
-                } } }),
+                    .next = s.next,
+                } },
+                .boxy_tag_match,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .join,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .loop_continue,
+                .loop_break,
+                .jump,
+                .ret,
+                .crash,
+                => stmt,
             };
-
-            try self.stmt_map.put(old_id, cloned);
-            return cloned;
         }
 
-        fn cloneJoin(self: *Self, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!CFStmtId {
-            const cloned = try self.store.addCFStmt(.{ .join = .{
-                .id = try self.mapJoinPoint(join.id),
-                .params = try self.mapLocalSpan(join.params),
-                .retained = try self.mapLocalSpan(join.retained),
-                .maybe_uninitialized_params = try self.mapLocalSpan(join.maybe_uninitialized_params),
-                .maybe_uninitialized_conditions = try self.mapLocalSpan(join.maybe_uninitialized_conditions),
-                .maybe_uninitialized_condition_masks = join.maybe_uninitialized_condition_masks,
-                .body = try self.cloneStmt(join.body),
-                .remainder = try self.cloneStmt(join.remainder),
-            } });
-            if (self.join_params) |params| try params.record(self.store.getCFStmt(cloned).join);
-            return cloned;
+        fn advanceClone(self: *Self, frame: *CloneFrame, returned: ?CFStmtId) Allocator.Error!CloneStep {
+            const step = frame.step;
+            frame.step += 1;
+            if (@hasDecl(Rewriter, "finishIntercept")) {
+                if (frame.intercepted) |children| {
+                    if (step > 0) frame.results[step - 1] = returned.?;
+                    if (step < children.len) return .{ .clone = children.ids[step] };
+                    return .{ .finished = try self.rewriter.finishIntercept(
+                        self,
+                        frame.old_id,
+                        frame.source,
+                        frame.origin,
+                        frame.results[0..children.len],
+                    ) };
+                }
+            }
+            switch (frame.source) {
+                .switch_stmt => |s| return try self.advanceSwitch(frame, s, step, returned),
+                .str_match_set => |s| return try self.advanceStrMatchSet(frame, s, step, returned),
+                .join => |s| switch (step) {
+                    0 => {
+                        frame.built = .{ .join = .{
+                            .id = try self.mapJoinPoint(s.id),
+                            .params = try self.mapLocalSpan(s.params),
+                            .retained = try self.mapLocalSpan(s.retained),
+                            .maybe_uninitialized_params = try self.mapLocalSpan(s.maybe_uninitialized_params),
+                            .maybe_uninitialized_conditions = try self.mapLocalSpan(s.maybe_uninitialized_conditions),
+                            .maybe_uninitialized_condition_masks = s.maybe_uninitialized_condition_masks,
+                            .body = undefined,
+                            .remainder = undefined,
+                        } };
+                        return .{ .clone = s.body };
+                    },
+                    1 => {
+                        frame.built.join.body = returned.?;
+                        return .{ .clone = s.remainder };
+                    },
+                    else => {
+                        frame.built.join.remainder = returned.?;
+                        const cloned = try self.store.addCFStmt(frame.built, frame.origin);
+                        if (self.join_params) |params| try params.record(self.store.getCFStmt(cloned).join);
+                        return .{ .finished = cloned };
+                    },
+                },
+                .switch_initialized_payload => |s| switch (step) {
+                    0 => {
+                        frame.built = .{ .switch_initialized_payload = .{
+                            .cond = try self.mapLocal(s.cond),
+                            .cond_mask = s.cond_mask,
+                            .payload = try self.mapLocal(s.payload),
+                            .uninitialized_is_cold = s.uninitialized_is_cold,
+                            .initialized_branch = undefined,
+                            .uninitialized_branch = undefined,
+                        } };
+                        return .{ .clone = s.initialized_branch };
+                    },
+                    1 => {
+                        frame.built.switch_initialized_payload.initialized_branch = returned.?;
+                        return .{ .clone = s.uninitialized_branch };
+                    },
+                    else => {
+                        frame.built.switch_initialized_payload.uninitialized_branch = returned.?;
+                        return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                    },
+                },
+                .str_match => |s| switch (step) {
+                    0 => {
+                        frame.built = .{ .str_match = .{
+                            .source = try self.mapLocal(s.source),
+                            .prefix = s.prefix,
+                            .steps = try self.mapStrMatchSteps(s.steps),
+                            .end = s.end,
+                            .on_match = undefined,
+                            .on_miss = undefined,
+                        } };
+                        return .{ .clone = s.on_match };
+                    },
+                    1 => {
+                        frame.built.str_match.on_match = returned.?;
+                        return .{ .clone = s.on_miss };
+                    },
+                    else => {
+                        frame.built.str_match.on_miss = returned.?;
+                        return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                    },
+                },
+                .boxy_tag_match => |s| switch (step) {
+                    0 => {
+                        frame.built = .{ .boxy_tag_match = .{
+                            .source = try self.mapLocal(s.source),
+                            .source_desc = try self.mapBoxyDescRef(s.source_desc),
+                            .tag_name = s.tag_name,
+                            .on_match = undefined,
+                            .on_miss = undefined,
+                        } };
+                        return .{ .clone = s.on_match };
+                    },
+                    1 => {
+                        frame.built.boxy_tag_match.on_match = returned.?;
+                        return .{ .clone = s.on_miss };
+                    },
+                    else => {
+                        frame.built.boxy_tag_match.on_miss = returned.?;
+                        return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                    },
+                },
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
+                    if (step == 0) return .{ .clone = linearNext(frame.source) };
+                    setLinearNext(&frame.built, returned.?);
+                    return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+                },
+            }
         }
 
+        fn advanceSwitch(
+            self: *Self,
+            frame: *CloneFrame,
+            s: @FieldType(LIR.CFStmt, "switch_stmt"),
+            step: u32,
+            returned: ?CFStmtId,
+        ) Allocator.Error!CloneStep {
+            if (step == 0) {
+                // Cloning a branch body appends switch branches and can
+                // therefore invalidate a guarded borrow of this same backing
+                // list. Own the source descriptors before cloning any body.
+                frame.old_branches = try GuardedList.dupe(
+                    self.allocator,
+                    LIR.CFSwitchBranch,
+                    self.store.getCFSwitchBranches(s.branches),
+                );
+                frame.branches = try self.allocator.alloc(LIR.CFSwitchBranch, frame.old_branches.len);
+            } else if (step <= frame.old_branches.len) {
+                frame.branches[step - 1] = .{
+                    .value = frame.old_branches[step - 1].value,
+                    .body = returned.?,
+                };
+            }
+            const branch_count = frame.old_branches.len;
+            if (step < branch_count) return .{ .clone = frame.old_branches[step].body };
+            if (step == branch_count) {
+                frame.built = .{ .switch_stmt = .{
+                    .cond = try self.mapLocal(s.cond),
+                    .branches = try self.store.addCFSwitchBranches(frame.branches),
+                    .default_branch = undefined,
+                    .default_is_cold = s.default_is_cold,
+                    .continuation = null,
+                } };
+                return .{ .clone = s.default_branch };
+            }
+            if (step == branch_count + 1) {
+                frame.built.switch_stmt.default_branch = returned.?;
+                if (s.continuation) |continuation| return .{ .clone = continuation };
+            } else {
+                frame.built.switch_stmt.continuation = returned.?;
+            }
+            return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+        }
+
+        fn advanceStrMatchSet(
+            self: *Self,
+            frame: *CloneFrame,
+            s: @FieldType(LIR.CFStmt, "str_match_set"),
+            step: u32,
+            returned: ?CFStmtId,
+        ) Allocator.Error!CloneStep {
+            if (step == 0) {
+                // Cloning an arm can append nested string-match arms.
+                // Snapshot the source descriptors so those appends cannot
+                // invalidate the input.
+                frame.old_arms = try GuardedList.dupe(
+                    self.allocator,
+                    LIR.StrMatchArm,
+                    self.store.getStrMatchArms(s.arms),
+                );
+                frame.arms = try self.allocator.alloc(LIR.StrMatchArm, frame.old_arms.len);
+            } else if (step <= frame.old_arms.len) {
+                frame.arms[step - 1].on_match = returned.?;
+            }
+            const arm_count = frame.old_arms.len;
+            if (step < arm_count) {
+                const old = frame.old_arms[step];
+                frame.arms[step] = .{
+                    .prefix = old.prefix,
+                    .steps = try self.mapStrMatchSteps(old.steps),
+                    .end = old.end,
+                    .on_match = undefined,
+                };
+                return .{ .clone = old.on_match };
+            }
+            if (step == arm_count) {
+                frame.built = .{ .str_match_set = .{
+                    .source = try self.mapLocal(s.source),
+                    .arms = try self.store.addStrMatchArms(frame.arms),
+                    .on_miss = undefined,
+                } };
+                return .{ .clone = s.on_miss };
+            }
+            frame.built.str_match_set.on_miss = returned.?;
+            return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
+        }
         /// A declared-subtree clone can alpha-rename a local that is also a
         /// parameter of an enclosing join. Jumps encode their arguments as
         /// preceding writes, so bridge each remapped value back into the
         /// enclosing join's original parameter before leaving the clone.
-        fn cloneJump(self: *Self, jump: @FieldType(LIR.CFStmt, "jump")) Allocator.Error!CFStmtId {
-            var next = try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(jump.target) } });
+        fn cloneJump(self: *Self, jump: @FieldType(LIR.CFStmt, "jump"), origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+            var next = try self.store.addCFStmt(.{ .jump = .{ .target = try self.mapJoinPoint(jump.target) } }, origin);
             if (self.join_remap != .declared or self.declared_joins.contains(jump.target)) return next;
 
             const params = self.join_params.?.get(jump.target) orelse
-                @panic("subtree clone jumped to an unknown external join");
-            next = try self.bridgeExternalJoinParams(params, next);
+                base.invariant("{s}", .{"subtree clone jumped to an unknown external join"});
+            next = try self.bridgeExternalJoinParams(params, origin, next);
             return next;
         }
 
-        fn bridgeExternalJoinParams(self: *Self, span: LIR.LocalSpan, tail: CFStmtId) Allocator.Error!CFStmtId {
+        fn bridgeExternalJoinParams(self: *Self, span: LIR.LocalSpan, origin: LIR.StmtOrigin, tail: CFStmtId) Allocator.Error!CFStmtId {
             var next = tail;
             const params = self.store.getLocalSpan(span);
             var index = params.len;
@@ -1490,7 +1935,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .value = mapped,
                     .mode = .initialize_join_param,
                     .next = next,
-                } });
+                } }, origin);
             }
             return next;
         }
@@ -1500,63 +1945,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
         pub fn directReturnOf(self: *const Self, next: CFStmtId, value: LocalId) bool {
             const stmt = self.store.getCFStmt(next);
             return stmt == .ret and stmt.ret.value == value;
-        }
-
-        fn cloneSwitch(self: *Self, s: anytype) Allocator.Error!CFStmtId {
-            // Recursive body cloning appends switch branches and can therefore
-            // invalidate a guarded borrow of this same backing list. Own the
-            // source descriptors before cloning any branch body.
-            const old_branches = try GuardedList.dupe(
-                self.allocator,
-                LIR.CFSwitchBranch,
-                self.store.getCFSwitchBranches(s.branches),
-            );
-            defer self.allocator.free(old_branches);
-            const branches = try self.allocator.alloc(LIR.CFSwitchBranch, old_branches.len);
-            defer self.allocator.free(branches);
-            for (0..old_branches.len) |index| {
-                const old = old_branches[index];
-                const new = &branches[index];
-                new.* = .{
-                    .value = old.value,
-                    .body = try self.cloneStmt(old.body),
-                };
-            }
-            return try self.store.addCFStmt(.{ .switch_stmt = .{
-                .cond = try self.mapLocal(s.cond),
-                .branches = try self.store.addCFSwitchBranches(branches),
-                .default_branch = try self.cloneStmt(s.default_branch),
-                .default_is_cold = s.default_is_cold,
-                .continuation = if (s.continuation) |continuation| try self.cloneStmt(continuation) else null,
-            } });
-        }
-
-        fn cloneStrMatchSet(self: *Self, s: anytype) Allocator.Error!CFStmtId {
-            // Cloning an arm can append nested string-match arms. Snapshot the
-            // source descriptors so those appends cannot invalidate the input.
-            const old_arms = try GuardedList.dupe(
-                self.allocator,
-                LIR.StrMatchArm,
-                self.store.getStrMatchArms(s.arms),
-            );
-            defer self.allocator.free(old_arms);
-            const arms = try self.allocator.alloc(LIR.StrMatchArm, old_arms.len);
-            defer self.allocator.free(arms);
-            for (0..old_arms.len) |index| {
-                const old = old_arms[index];
-                const new = &arms[index];
-                new.* = .{
-                    .prefix = old.prefix,
-                    .steps = try self.mapStrMatchSteps(old.steps),
-                    .end = old.end,
-                    .on_match = try self.cloneStmt(old.on_match),
-                };
-            }
-            return try self.store.addCFStmt(.{ .str_match_set = .{
-                .source = try self.mapLocal(s.source),
-                .arms = try self.store.addStrMatchArms(arms),
-                .on_miss = try self.cloneStmt(s.on_miss),
-            } });
         }
 
         fn mapStrMatchSteps(self: *Self, span: LIR.StrMatchStepSpan) Allocator.Error!LIR.StrMatchStepSpan {
@@ -1633,27 +2021,52 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return switch (dict) {
                 .static => |id| .{ .static = id },
                 .local => |local| .{ .local = try self.mapLocal(local) },
+                .runtime => base.invariant("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
             };
         }
 
         /// Map an old local to its clone, allocating a fresh same-layout local
-        /// on first encounter.
-        pub fn mapLocal(self: *Self, old: LocalId) Allocator.Error!LocalId {
-            if (self.local_map.get(old)) |existing| return existing;
-            if (@hasDecl(Rewriter, "preserveLocal")) {
-                if (self.rewriter.preserveLocal(old)) {
-                    try self.local_map.put(old, old);
-                    return old;
+        /// on first encounter. A local's Boxy descriptor may itself live in a
+        /// local, so the descriptor chain is mapped outermost first and the
+        /// descriptors are attached innermost first.
+        pub fn mapLocal(self: *Self, root: LocalId) Allocator.Error!LocalId {
+            const Pending = struct { fresh: LocalId, desc: LIR.BoxyDescRef };
+            var pending = std.ArrayList(Pending).empty;
+            defer pending.deinit(self.allocator);
+            var old = root;
+            var mapped = while (true) {
+                if (self.local_map.get(old)) |existing| break existing;
+                if (@hasDecl(Rewriter, "preserveLocal")) {
+                    if (self.rewriter.preserveLocal(old)) {
+                        try self.local_map.put(old, old);
+                        break old;
+                    }
                 }
-            }
 
-            const old_local = self.store.getLocal(old);
-            const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
-            try self.local_map.put(old, fresh);
-            const boxy_desc = try self.mapMaybeBoxyDescRef(old_local.boxy_desc);
-            if (boxy_desc) |desc| self.store.setLocalBoxyDesc(fresh, desc);
-            try self.new_locals.append(self.allocator, fresh);
-            return fresh;
+                const old_local = self.store.getLocal(old);
+                const fresh = try self.store.addLocal(.{ .layout_idx = old_local.layout_idx });
+                try self.local_map.put(old, fresh);
+                const desc = old_local.boxy_desc orelse {
+                    try self.new_locals.append(self.allocator, fresh);
+                    break fresh;
+                };
+                try pending.append(self.allocator, .{ .fresh = fresh, .desc = desc });
+                switch (desc) {
+                    .local => |desc_local| old = desc_local,
+                    .static, .runtime, .dict_method_arg, .dict_method_hidden => {
+                        _ = pending.pop();
+                        self.store.setLocalBoxyDesc(fresh, desc);
+                        try self.new_locals.append(self.allocator, fresh);
+                        break fresh;
+                    },
+                }
+            };
+            while (pending.pop()) |entry| {
+                self.store.setLocalBoxyDesc(entry.fresh, .{ .local = mapped });
+                try self.new_locals.append(self.allocator, entry.fresh);
+                mapped = entry.fresh;
+            }
+            return mapped;
         }
 
         /// Allocate a fresh local of `layout_idx` owned by the clone.
@@ -1663,22 +2076,32 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return local;
         }
 
-        fn mapInlineScope(self: *Self, old: LIR.InlineScopeId) Allocator.Error!LIR.InlineScopeId {
-            if (self.inline_scope_outer == LIR.InlineScopeId.none) return old;
-            if (old == LIR.InlineScopeId.none) return self.inline_scope_outer;
-
-            if (self.inline_scope_map.get(old)) |existing| return existing;
-
-            const source = self.store.inlineScope(old);
-            const mapped = try self.store.addInlineScope(.{
-                .source_symbol = source.source_symbol,
-                .source_name = source.source_name,
-                .source_loc = source.source_loc,
-                .call_site = source.call_site,
-                .parent = try self.mapInlineScope(source.parent),
-            });
-            try self.inline_scope_map.put(old, mapped);
-            return mapped;
+        /// Map an inline scope to its clone. A scope's parent chain is
+        /// cloned outermost first, so every clone's parent exists before it.
+        fn mapInlineScope(self: *Self, root: LIR.InlineScopeId) Allocator.Error!LIR.InlineScopeId {
+            if (self.inline_scope_outer == LIR.InlineScopeId.none) return root;
+            var chain = std.ArrayList(LIR.InlineScopeId).empty;
+            defer chain.deinit(self.allocator);
+            var old = root;
+            var parent = while (true) {
+                if (old == LIR.InlineScopeId.none) break self.inline_scope_outer;
+                if (self.inline_scope_map.get(old)) |existing| break existing;
+                try chain.append(self.allocator, old);
+                old = self.store.inlineScope(old).parent;
+            };
+            while (chain.pop()) |scope| {
+                const source = self.store.inlineScope(scope);
+                const mapped = try self.store.addInlineScope(.{
+                    .source_symbol = source.source_symbol,
+                    .source_name = source.source_name,
+                    .source_loc = source.source_loc,
+                    .call_site = source.call_site,
+                    .parent = parent,
+                });
+                try self.inline_scope_map.put(scope, mapped);
+                parent = mapped;
+            }
+            return parent;
         }
 
         fn mapJoinPoint(self: *Self, old: LIR.JoinPointId) Allocator.Error!LIR.JoinPointId {
@@ -1692,7 +2115,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 if (self.join_params) |params| {
                     entry.value_ptr.* = params.freshJoinPoint();
                 } else {
-                    if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+                    if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
                     entry.value_ptr.* = @enumFromInt(self.next_join_point);
                     self.next_join_point += 1;
                 }
@@ -1702,9 +2125,141 @@ pub fn BodyCloner(comptime Rewriter: type) type {
     };
 }
 
+/// A rewriter's decision for one source statement: clone it normally, use a
+/// finished replacement, or clone the listed source statements in order and
+/// hand their clones to the rewriter's `finishIntercept`.
+pub const Intercept = union(enum) {
+    none,
+    done: CFStmtId,
+    children: InterceptChildren,
+
+    pub fn one(child: CFStmtId) Intercept {
+        return .{ .children = .{ .ids = .{ child, child }, .len = 1 } };
+    }
+
+    pub fn two(first: CFStmtId, second: CFStmtId) Intercept {
+        return .{ .children = .{ .ids = .{ first, second }, .len = 2 } };
+    }
+};
+
+/// Source statements an intercepted statement needs cloned before the
+/// rewriter can build its replacement.
+pub const InterceptChildren = struct {
+    ids: [2]CFStmtId,
+    len: u2,
+};
+
+fn linearNext(stmt: LIR.CFStmt) CFStmtId {
+    return switch (stmt) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |s| s.next,
+        .boxy_tag_match,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => unreachable,
+    };
+}
+
+fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
+    switch (stmt.*) {
+        inline .init_uninitialized,
+        .assign_ref,
+        .assign_literal,
+        .assign_call,
+        .assign_call_erased,
+        .assign_packed_erased_fn,
+        .assign_boxy_desc_ref,
+        .assign_boxy_dict_ref,
+        .assign_boxy_box,
+        .assign_boxy_record_update,
+        .assign_boxy_reuse_box,
+        .assign_boxy_unbox,
+        .assign_boxy_adapt,
+        .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
+        .assign_boxy_tag,
+        .assign_boxy_tag_payload,
+        .assign_call_dict,
+        .assign_low_level,
+        .assign_list,
+        .assign_struct,
+        .assign_tag,
+        .store_struct,
+        .store_tag,
+        .set_local,
+        .debug,
+        .expect,
+        .comptime_branch_taken,
+        .incref,
+        .decref,
+        .decref_if_initialized,
+        .free,
+        => |*s| s.next = next,
+        .boxy_tag_match,
+        .expect_err,
+        .runtime_error,
+        .comptime_exhaustiveness_failed,
+        .switch_stmt,
+        .switch_initialized_payload,
+        .str_match,
+        .str_match_set,
+        .loop_continue,
+        .loop_break,
+        .join,
+        .jump,
+        .ret,
+        .crash,
+        => unreachable,
+    }
+}
+
 const TestRetRewriter = struct {
-    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId) Allocator.Error!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
+    pub fn cloneRet(_: *TestRetRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, origin);
     }
 };
 
@@ -1717,21 +2272,21 @@ test "subtree clone bridges renamed parameters before an external join" {
     const external_id: LIR.JoinPointId = @enumFromInt(1);
     const internal_id: LIR.JoinPointId = @enumFromInt(2);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } });
-    const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } });
-    const jump_internal = try store.addCFStmt(.{ .jump = .{ .target = internal_id } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } }, .test_fixture);
+    const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } }, .test_fixture);
+    const jump_internal = try store.addCFStmt(.{ .jump = .{ .target = internal_id } }, .test_fixture);
     const internal_stmt = try store.addCFStmt(.{ .join = .{
         .id = internal_id,
         .params = try store.addLocalSpan(&.{shared_param}),
         .body = jump_external,
         .remainder = jump_internal,
-    } });
+    } }, .test_fixture);
     const external_stmt = try store.addCFStmt(.{ .join = .{
         .id = external_id,
         .params = try store.addLocalSpan(&.{shared_param}),
         .body = ret,
         .remainder = internal_stmt,
-    } });
+    } }, .test_fixture);
 
     var join_params = JoinParamIndex.init(testing.allocator);
     defer join_params.deinit();
@@ -1765,12 +2320,12 @@ test "chainIsSingleUse rejects an extra read of any link" {
     const b = try store.addLocal(.{ .layout_idx = .str });
     const unit = try store.addLocal(.{ .layout_idx = .zst });
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = b } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = b } }, .test_fixture);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = b,
         .op = .{ .local = a },
         .next = ret,
-    } });
+    } }, .test_fixture);
 
     // `a` is read once (by the alias) and `b` once (by the return).
     try std.testing.expect(try chainIsSingleUse(&store, alias, &.{ a, b }));
@@ -1780,7 +2335,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
         .target = unit,
         .op = .{ .local = a },
         .next = alias,
-    } });
+    } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_head, &.{ a, b }));
 
     // A second read of the tail link refuses it just the same.
@@ -1788,7 +2343,7 @@ test "chainIsSingleUse rejects an extra read of any link" {
         .target = unit,
         .op = .{ .local = b },
         .next = alias,
-    } });
+    } }, .test_fixture);
     try std.testing.expect(!try chainIsSingleUse(&store, extra_tail, &.{ a, b }));
 
     // A local with no reads at all is not "exactly one" either.
@@ -1802,7 +2357,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
     defer store.deinit();
 
     const unit = try store.addLocal(.{ .layout_idx = .zst });
-    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = unit } }, .test_fixture);
 
     const roc_proc = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
@@ -1812,7 +2367,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = body,
         .ret_layout = .zst,
         .abi = .roc,
-    });
+    }, .none);
     try std.testing.expectEqual(body, rewritableProcBody(&store, roc_proc).?);
 
     const bodyless = try store.addProcSpec(.{
@@ -1823,7 +2378,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = null,
         .ret_layout = .zst,
         .abi = .roc,
-    });
+    }, .none);
     try std.testing.expect(rewritableProcBody(&store, bodyless) == null);
 
     const erased = try store.addProcSpec(.{
@@ -1834,7 +2389,7 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .body = body,
         .ret_layout = .zst,
         .abi = .erased_callable,
-    });
+    }, .none);
     try std.testing.expect(rewritableProcBody(&store, erased) == null);
 }
 
@@ -1876,7 +2431,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     };
     for (0..65536) |_| {
         _ = try store.addLocal(.{ .layout_idx = .u64 });
-        _ = try store.addCFStmt(.runtime_error);
+        _ = try store.addCFStmt(.runtime_error, .test_fixture);
         _ = try store.addInlineScope(scope);
     }
     const desc = try store.addLocal(.{ .layout_idx = .u64 });
@@ -1886,19 +2441,20 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     var child_scope = scope;
     child_scope.parent = parent_scope;
     const source_scope = try store.addInlineScope(child_scope);
-    store.current_inline_scope = source_scope;
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } });
+    var source_origin = LIR.StmtOrigin.test_fixture;
+    source_origin.inline_scope = source_scope;
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = alias } }, source_origin);
     const copy = try store.addCFStmt(.{ .assign_ref = .{
         .target = alias,
         .op = .{ .local = value },
         .next = ret,
-    } });
+    } }, source_origin);
     const body = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
         .desc = .{ .local = value },
         .captures = try store.addLocalSpan(&.{ value, value }),
         .next = copy,
-    } });
+    } }, source_origin);
     var scratch: [32768]u8 = undefined;
     var fba = std.heap.FixedBufferAllocator.init(&scratch);
     const allocator = fba.allocator();
@@ -1944,14 +2500,14 @@ test "body_clone sparse maps preserve loop back jumps and local reuse" {
     defer store.deinit();
     const param = try store.addLocal(.{ .layout_idx = .u64 });
     const id: LIR.JoinPointId = @enumFromInt(9);
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = id } });
-    const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
+    const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
     const body = try store.addCFStmt(.{ .join = .{
         .id = id,
         .params = try store.addLocalSpan(&.{param}),
         .body = write,
         .remainder = write,
-    } });
+    } }, .test_fixture);
     var cloner = try BodyCloner(TestRetRewriter).init(&store, .{});
     defer cloner.deinit();
     const cloned = store.getCFStmt(try cloner.cloneStmt(body)).join;
@@ -1967,26 +2523,26 @@ test "body_clone join allocation belongs to the destination procedure" {
     const testing = std.testing;
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
-    const end = try store.addCFStmt(.runtime_error);
+    const end = try store.addCFStmt(.runtime_error, .test_fixture);
     _ = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(9000),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
-    } });
+    } }, .test_fixture);
     const destination = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(40),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
-    } });
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } });
+    } }, .test_fixture);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } }, .test_fixture);
     const source = try store.addCFStmt(.{ .join = .{
         .id = @enumFromInt(2),
         .params = LIR.LocalSpan.empty(),
         .body = jump,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     var inliner = try BodyCloner(TestRetRewriter).initWithInlineScopeOuter(&store, .{}, .none, destination);
     defer inliner.deinit();
     const cloned = store.getCFStmt(try inliner.cloneStmt(source)).join;
@@ -2017,12 +2573,12 @@ test "body_clone sparse counting propagates allocation failures" {
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_ref = .{
         .target = local,
         .op = .{ .local = local },
         .next = ret,
-    } });
+    } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testSparseCountAllocations, .{ &store, body });
 }
 
@@ -2055,15 +2611,15 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     const low = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
-    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
+    const copy = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
     // Both successors share a suffix: count its statements once, but count
     // both operand occurrences of low (the condition and the copy).
     const body = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = low,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = copy }}),
         .default_branch = copy,
-    } });
+    } }, .test_fixture);
     var meter = testing.FailingAllocator.init(testing.allocator, .{});
     var scratch = AnalysisScratch.init(meter.allocator());
     defer scratch.deinit();
@@ -2112,7 +2668,7 @@ test "body_clone retained counts isolate nested inventories and clear only live 
     var other = LirStore.init(testing.allocator);
     defer other.deinit();
     const other_low = try other.addLocal(.{ .layout_idx = .u64 });
-    const other_ret = try other.addCFStmt(.{ .ret = .{ .value = other_low } });
+    const other_ret = try other.addCFStmt(.{ .ret = .{ .value = other_low } }, .test_fixture);
     var reads = try countReachableReadsWithScratch(&other, other_ret, &scratch);
     defer reads.deinit();
     try testing.expectEqual(@as(u32, 1), reads.get(low));
@@ -2136,14 +2692,14 @@ test "body_clone retained counting returns every lease on allocation failure" {
     const local = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..256) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const distant = try store.addLocal(.{ .layout_idx = .u64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_low_level = .{
         .target = local,
         .op = .num_int_add_wrap,
         .rc_effect = .none(),
         .args = try store.addLocalSpan(&.{ local, distant }),
         .next = ret,
-    } });
+    } }, .test_fixture);
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testRetainedCountAllocations, .{ &store, body });
 
     // Retry with the same owner after each possible allocation failure. An

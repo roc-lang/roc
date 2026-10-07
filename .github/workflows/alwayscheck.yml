@@ -1,7 +1,7 @@
 on:
   pull_request:
 
-name: SpellCheck+LinkCheck
+name: SpellCheck
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -10,9 +10,8 @@ concurrency:
 # Do not add permissions here! Configure them at the job level!
 permissions: {}
 
-env:
-  RUST_BACKTRACE: 1
-
+# Glossary.md's repository links are checked by `zig build run-check-tidy`
+# (ci/tidy.zig), which PR CI runs on every PR.
 jobs:
   spellcheck:
     name: Spellcheck
@@ -23,29 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - run: cargo install typos-cli --version 1.44.0
-
-      - name: do spell check with typos-cli 1.44.0
-        run: typos
-
-  markdown-link-check:
-    name: Markdown link check
-    runs-on: [ubuntu-24.04]
-    timeout-minutes: 20
-    env:
-      FORCE_COLOR: 1
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-
-      - name: Set up Roc
-        run: |
-          curl -sS --fail --retry 3 --retry-all-errors -OL https://github.com/roc-lang/roc/releases/download/alpha4-rolling/roc-linux_x86_64-alpha4-rolling.tar.gz
-          tar -xf roc-linux_x86_64-alpha4-rolling.tar.gz
-          rm roc-linux_x86_64-alpha4-rolling.tar.gz
-          cd roc_nightly-*
-          # make roc binary available
-          echo "$(pwd)" >> $GITHUB_PATH
-
-      - run: roc version
-
-      - run: roc ./ci/glossary-link-checker.roc
+      # The action downloads the prebuilt typos 1.44.0 release binary and runs
+      # it over the repo with the implicit typos.toml config.
+      - name: do spell check with typos 1.44.0
+        uses: crate-ci/typos@631208b7aac2daa8b707f55e7331f9112b0e062d # ratchet:crate-ci/typos@v1.44.0

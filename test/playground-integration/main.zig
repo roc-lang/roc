@@ -344,6 +344,16 @@ const TestData = struct {
             \\main = "hello" + 123
         );
     }
+
+    pub fn nonExhaustiveMatchRocCode(allocator: std.mem.Allocator) Allocator.Error![]u8 {
+        return allocator.dupe(u8,
+            \\describe : [Red, Green, Blue] -> Str
+            \\describe = |color| match color {
+            \\    Red => "red"
+            \\    Green => "green"
+            \\}
+        );
+    }
 };
 
 /// Helper to send a message to the WASM Playground and get a response.
@@ -1312,7 +1322,36 @@ pub fn main(init: std.process.Init) anyerror!void {
     try test_cases.append(allocator, try createSimpleTest(allocator, "Syntax Error - Mismatched Braces", syntax_error_code_val, .{ .min_errors = 1, .error_messages = &.{"EXPECTED LIST SEPARATOR"} }, true));
 
     const type_error_code_val = try TestData.typeErrorRocCode(allocator);
-    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"MISSING METHOD"} }, true));
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Adding String and Number", type_error_code_val, .{ .min_errors = 1, .error_messages = &.{"TYPE NOT DETERMINED"} }, true));
+
+    // A buffer checked on its own gets no compile-time finalization, so the
+    // exhaustiveness checks deferred to it are settled when reports are collected.
+    const non_exhaustive_code_val = try TestData.nonExhaustiveMatchRocCode(allocator);
+    try test_cases.append(allocator, try createSimpleTest(allocator, "Type Error - Non-Exhaustive Match", non_exhaustive_code_val, .{ .min_errors = 1, .error_messages = &.{"NON EXHAUSTIVE MATCH"} }, true));
+
+    // Ordinary tokenizer errors retain recovered type information; source-policy
+    // rejection must stop before type checking even when the rest is valid.
+    for ([_]bool{ false, true }) |rejected| {
+        const source = if (rejected) "value = 42 # \u{202e}\n" else "value = 0X42\n";
+        const steps = try allocator.alloc(MessageStep, 3);
+        steps[0] = .{ .message = .{ .type = "INIT" }, .expected_status = "SUCCESS" };
+        steps[1] = .{
+            .message = .{ .type = "LOAD_SOURCE", .source = source },
+            .expected_status = "SUCCESS",
+            .expected_diagnostics = .{
+                .min_errors = 1,
+                .error_messages = if (rejected) &.{"BIDIRECTIONAL CONTROL IN SOURCE"} else &.{},
+            },
+        };
+        steps[2] = if (rejected)
+            .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "ERROR", .expected_message_contains = "Type checking not completed" }
+        else
+            .{ .message = .{ .type = "QUERY_TYPES" }, .expected_status = "SUCCESS", .expected_data_contains = "inferred-types" };
+        try test_cases.append(allocator, .{
+            .name = if (rejected) "Tokenizer policy rejection blocks type queries" else "Tokenizer recovery preserves type queries",
+            .steps = steps,
+        });
+    }
 
     // Invalid message handling at the WASM/JSON boundary.
     var invalid_msg_type_steps = try allocator.alloc(MessageStep, 2);

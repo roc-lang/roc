@@ -455,6 +455,30 @@ test "fx platform host calls boxed callable after provided root returns (speed b
     try expectProvidedBoxedCallablePostRootCall("--opt=speed", "fx_provided_boxed_callable_post_root_call_speed");
 }
 
+/// Repro for https://github.com/roc-lang/roc/issues/12025: a provided root
+/// returns a boxed callable stored in a top-level constant, and the host's later
+/// invocations of it through the erased-callable ABI must return 42 and 43.
+fn expectProvidedConstantBoxedCallableCall(opt_flag: []const u8, output_basename: []const u8) FxPlatformTestError!void {
+    try expectProvidedCallableHostSelfTest(
+        opt_flag,
+        output_basename,
+        "--run-provided-constant-boxed-callable-call",
+        "provided constant boxed callable call",
+    );
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (interpreter)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=interpreter", "fx_provided_constant_boxed_callable_call_interpreter");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (dev backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=dev", "fx_provided_constant_boxed_callable_call_dev");
+}
+
+test "fx platform host calls constant boxed callable after provided root returns (speed backend)" {
+    try expectProvidedConstantBoxedCallableCall("--opt=speed", "fx_provided_constant_boxed_callable_call_speed");
+}
+
 test "fx platform direct run preserves RocOps after F32.abs before list allocation" {
     const allocator = testing.allocator;
 
@@ -1458,6 +1482,7 @@ fn expectTestStackOverflowsReportedAsFailures(opt: []const u8) FxPlatformTestErr
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
+    errdefer std.debug.print("Stack-overflow test stdout:\n{s}\nstderr:\n{s}\n", .{ run_result.stdout, run_result.stderr });
     try util.checkFailure(run_result);
     try testing.expect(std.mem.find(u8, run_result.stderr, "2 passed") != null);
     try testing.expect(std.mem.find(u8, run_result.stderr, "2 failed") != null);
@@ -1482,6 +1507,7 @@ test "comptime stack overflow is a compile error, not a compiler crash" {
     );
     defer allocator.free(run_result.stdout);
     defer allocator.free(run_result.stderr);
+    errdefer std.debug.print("Stack-overflow test stdout:\n{s}\nstderr:\n{s}\n", .{ run_result.stdout, run_result.stderr });
     try util.checkFailure(run_result);
     const combined = [_][]const u8{ run_result.stdout, run_result.stderr };
     var saw_overflow_diagnostic = false;
@@ -1658,9 +1684,10 @@ test "fx platform fold_rev static dispatch regression" {
 }
 
 test "fx platform invalid nested where-clause static dispatch fails in check" {
-    // Regression test for #9657: I64's builtin decode/encode methods do not
-    // have the signatures required by this where-clause, so check must reject
-    // the contract before post-check lowering.
+    // Regression test for #9657: nothing in the program determines the types
+    // this where-clause constrains, and the default chosen for them lacks the
+    // required methods, so check must reject the contract before post-check
+    // lowering, reporting the type as undetermined.
     const allocator = testing.allocator;
 
     var env = try util.buildIsolatedTestEnvMap(std.testing.io, allocator, null);
@@ -1683,7 +1710,7 @@ test "fx platform invalid nested where-clause static dispatch fails in check" {
         .stderr = check_result.stderr,
         .term = check_result.term,
     });
-    try testing.expect(std.mem.find(u8, check_result.stderr, "type mismatch") != null);
+    try testing.expect(std.mem.find(u8, check_result.stderr, "type not determined") != null);
     try testing.expect(std.mem.find(u8, check_result.stderr, "postcheck invariant violated") == null);
 }
 

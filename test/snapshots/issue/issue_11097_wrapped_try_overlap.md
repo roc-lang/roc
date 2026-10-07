@@ -14,20 +14,45 @@ run = |save| {
 use = run(|_| Err(PersistFailed(Foo)))
 ~~~
 # EXPECTED
-TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
+CONFLICTING TAG - issue_11097_wrapped_try_overlap.md:7:1:7:4
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 3 6) (end 3 30))
+		(title "Conflicting Tag")
+		(region (start 7 1) (end 7 4))
 		(headline
-			(reflow "This expression is used in an unexpected way."))
+			(reflow "The")
+			(reflow " ")
+			(annotated code "PersistFailed")
+			(reflow " ")
+			(reflow "tag")
+			(reflow " ")
+			(reflow "comes from two places with different")
+			(reflow " ")
+			(reflow "payloads")
+			(reflow "."))
 		(document
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 7 1) (end 7 4) (annotation error) (line-text "use = run(|_| Err(PersistFailed(Foo)))"))
+			(line-break)
+			(reflow "One comes from here:")
+			(line-break)
 			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 3 6) (end 3 30) (annotation error) (line-text "\t_ = save({}) ? PersistFailed"))
 			(line-break)
-			(reflow "It has the type:")
+			(line-break)
+			(annotation-start code-block)
+			(indent 1)
+			(text "[PersistFailed([PersistFailed([Foo])])]")
+			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "It also comes from here:")
+			(line-break)
+			(source-region (file "issue_11097_wrapped_try_overlap.md") (start 2 6) (end 2 15) (annotation error) (line-text "\t_ = save({})?"))
+			(line-break)
+			(line-break)
+			(reflow "where it is:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
@@ -36,13 +61,7 @@ TYPE MISMATCH - issue_11097_wrapped_try_overlap.md:3:6:3:30
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[]")
-			(annotation-end))))
+			(reflow "A tag union has each tag once, so every occurrence of a tag must have the same payload."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -113,7 +132,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 262)
+								(e-call (constraint-fn-var 267)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-empty_record)))
@@ -144,7 +163,7 @@ NO CHANGE
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 301)
+								(e-call (constraint-fn-var 299)
 									(e-lookup-local
 										(p-assign (ident "save")))
 									(e-empty_record)))
@@ -177,7 +196,7 @@ NO CHANGE
 						(e-empty_record))))))
 	(d-let
 		(p-assign (ident "use"))
-		(e-call (constraint-fn-var 365)
+		(e-call (constraint-fn-var 352)
 			(e-lookup-local
 				(p-assign (ident "run")))
 			(e-lambda

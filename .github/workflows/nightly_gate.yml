@@ -14,7 +14,13 @@ name: Nightly Gate
 
 on:
   schedule:
-    - cron: '17 0 * * *' # non-zero minute; top-of-hour crons get delayed/dropped
+    # 15:17 UTC, off the PR peak. Scheduled runs start hours late (the old
+    # 00:17 cron fired ~04:40 UTC), which put this suite's ~900 macOS
+    # runner-minutes in the 04-12 UTC window where PR CI's macOS jobs already
+    # queue longest (macOS concurrency is the scarce shared resource). The
+    # 16-24 UTC window has the shortest PR macOS queues. Non-zero minute:
+    # top-of-hour crons get delayed/dropped.
+    - cron: '17 15 * * *'
   workflow_dispatch:
 
 concurrency:

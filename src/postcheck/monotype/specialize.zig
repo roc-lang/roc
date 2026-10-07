@@ -65,10 +65,20 @@ pub const Counters = struct {
     interface_replay_digest_root_requests: u64 = 0,
     interface_replay_digest_node_misses: u64 = 0,
     interface_summary_hits: u64 = 0,
+    /// Summary hits whose expansion contributed no constraint beyond its input.
+    interface_summary_unchanged_hits: u64 = 0,
+    /// Relation requests whose settled parametric instantiations were captured as holes.
+    interface_parametric_requests: u64 = 0,
     interface_summary_expansions: u64 = 0,
     interface_summary_verifications: u64 = 0,
     interface_relation_requests: u64 = 0,
     interface_replay_hits: u64 = 0,
+    interface_closed_expansions: u64 = 0,
+    /// Checked dispatch relations replayed into a graph to shape an open
+    /// template interface.
+    template_dispatch_relation_replays: u64 = 0,
+    /// Selected evidence contracts related to the requirements they satisfy.
+    evidence_contract_relations: u64 = 0,
     exact_type_checks: u64 = 0,
     /// Declaration-backed nominal backings served from the per-graph
     /// instantiation cache. Reuse compares argument cells by union-find root,
@@ -102,10 +112,34 @@ pub const LocalHit = struct {
 
 /// Exact durable evidence supplied with a specialization request. The digest
 /// in `SpecIdentity` selects a bucket; this topology remains the collision
-/// authority.
+/// authority. `digest` is the topology's `Ast.fnEvidenceDigest`, computed
+/// once by whoever built the topology.
 pub const EvidenceView = struct {
     nodes: []const check.ConstStore.ConstFnEvidence,
     frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+    digest: Ast.EvidenceDigest,
+    /// Where the topology sits in the program's evidence lists, when it was
+    /// read from them.
+    program_span: ?ProgramEvidenceSpan = null,
+
+    pub fn init(
+        nodes: []const check.ConstStore.ConstFnEvidence,
+        frames: []const check.ConstStore.ConstFnEvidenceFrame,
+        head: ?u32,
+    ) EvidenceView {
+        return .{ .nodes = nodes, .frames = frames, .head = head, .digest = Ast.fnEvidenceDigest(nodes, frames, head) };
+    }
+};
+
+/// An evidence topology's position in the program's evidence lists. The
+/// lists only grow, so a position names the same topology for the program's
+/// whole lifetime.
+pub const ProgramEvidenceSpan = struct {
+    nodes_start: u32,
+    nodes_len: u32,
+    frames_start: u32,
+    frames_len: u32,
     head: ?u32,
 };
 
@@ -113,6 +147,7 @@ const OwnedEvidence = struct {
     nodes: []check.ConstStore.ConstFnEvidence,
     frames: []check.ConstStore.ConstFnEvidenceFrame,
     head: ?u32,
+    digest: Ast.EvidenceDigest,
 
     fn init(allocator: std.mem.Allocator, source: EvidenceView) std.mem.Allocator.Error!OwnedEvidence {
         const nodes = try allocator.dupe(check.ConstStore.ConstFnEvidence, source.nodes);
@@ -121,6 +156,7 @@ const OwnedEvidence = struct {
             .nodes = nodes,
             .frames = try allocator.dupe(check.ConstStore.ConstFnEvidenceFrame, source.frames),
             .head = source.head,
+            .digest = source.digest,
         };
     }
 
@@ -130,16 +166,23 @@ const OwnedEvidence = struct {
     }
 
     fn view(self: OwnedEvidence) EvidenceView {
-        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head };
+        return .{ .nodes = self.nodes, .frames = self.frames, .head = self.head, .digest = self.digest };
     }
 };
 
 fn evidenceEql(left: EvidenceView, right: EvidenceView) bool {
+    if (!std.meta.eql(left.digest, right.digest)) return false;
     return Ast.fnEvidenceEql(left.nodes, left.frames, left.head, right.nodes, right.frames, right.head);
 }
 
+/// The request's identity digest must be its evidence topology's digest.
+/// Debug builds re-derive the digest from the topology itself.
 fn evidenceDigestMatches(identity: Ast.SpecIdentity, evidence: EvidenceView) bool {
-    return std.meta.eql(identity.evidence_digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
+    if (!std.meta.eql(identity.evidence_digest, evidence.digest)) return false;
+    if (builtin.mode == .Debug) {
+        return std.meta.eql(evidence.digest, Ast.fnEvidenceDigest(evidence.nodes, evidence.frames, evidence.head));
+    }
+    return true;
 }
 
 /// Existing specialization found by a lookup.
@@ -251,7 +294,15 @@ pub const SpecBuilder = struct {
     names: *const names.NameStore,
     types: *const Type.Store,
     records: *RecordList,
-    local_evidence: std.ArrayList(OwnedEvidence),
+    /// Per record, its index into `owned_evidence`.
+    local_evidence: std.ArrayList(u32),
+    /// One owned copy per distinct evidence topology, shared by every record
+    /// whose topology is equal, found through `owned_evidence_by_digest`.
+    owned_evidence: std.ArrayList(OwnedEvidence),
+    owned_evidence_by_digest: std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)),
+    /// The owned copy each program evidence position was already found
+    /// equal to.
+    owned_evidence_by_program_span: std.AutoHashMap(ProgramEvidenceSpan, u32),
     lookup: std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)),
     counters: ?*Counters,
     reserved_identities: if (identity_shadow_enabled) std.ArrayList(Ast.SpecIdentity) else void,
@@ -269,6 +320,9 @@ pub const SpecBuilder = struct {
             .types = type_store,
             .records = records,
             .local_evidence = .empty,
+            .owned_evidence = .empty,
+            .owned_evidence_by_digest = std.AutoHashMap(Ast.EvidenceDigest, std.ArrayList(u32)).init(allocator),
+            .owned_evidence_by_program_span = std.AutoHashMap(ProgramEvidenceSpan, u32).init(allocator),
             .lookup = std.AutoHashMap(SpecLookupAddress, std.ArrayList(Ast.SpecId)).init(allocator),
             .counters = null,
             .reserved_identities = if (identity_shadow_enabled) .empty else {},
@@ -284,8 +338,13 @@ pub const SpecBuilder = struct {
         var lists = self.lookup.valueIterator();
         while (lists.next()) |list| list.deinit(self.allocator);
         self.lookup.deinit();
-        for (self.local_evidence.items) |evidence| evidence.deinit(self.allocator);
         self.local_evidence.deinit(self.allocator);
+        for (self.owned_evidence.items) |evidence| evidence.deinit(self.allocator);
+        self.owned_evidence.deinit(self.allocator);
+        var owned_buckets = self.owned_evidence_by_digest.valueIterator();
+        while (owned_buckets.next()) |bucket| bucket.deinit(self.allocator);
+        self.owned_evidence_by_digest.deinit();
+        self.owned_evidence_by_program_span.deinit();
     }
 
     /// Reserve a fresh record for `identity`, or return the existing
@@ -313,8 +372,7 @@ pub const SpecBuilder = struct {
 
         const spec_id: Ast.SpecId = @enumFromInt(@as(u32, @intCast(self.records.len())));
         if (self.local_evidence.items.len != @intFromEnum(spec_id)) invariant("Monotype local specialization evidence table diverged from its records");
-        const owned_evidence = try OwnedEvidence.init(self.allocator, evidence);
-        errdefer owned_evidence.deinit(self.allocator);
+        const owned_index = try self.ownedEvidenceIndex(evidence);
         try self.records.append(self.allocator, .{
             .identity = identity,
             .request_fn_ty = identity.request_fn_ty,
@@ -325,7 +383,7 @@ pub const SpecBuilder = struct {
             .status = .reserved,
         });
         errdefer _ = self.records.pop();
-        try self.local_evidence.append(self.allocator, owned_evidence);
+        try self.local_evidence.append(self.allocator, owned_index);
         errdefer _ = self.local_evidence.pop();
         if (identity_shadow_enabled) {
             try self.reserved_identities.append(self.allocator, identity);
@@ -375,9 +433,13 @@ pub const SpecBuilder = struct {
         identity: Ast.SpecIdentity,
         evidence: EvidenceView,
     ) std.mem.Allocator.Error!?LookupResult {
+        // Owned copies are one per distinct topology, so once the request's
+        // program position is known to equal one, comparing copies is
+        // comparing topologies.
+        const known: ?u32 = if (evidence.program_span) |span| self.owned_evidence_by_program_span.get(span) else null;
         for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
-            if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.request_fn_ty, record.request_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.request_fn_ty);
@@ -385,12 +447,21 @@ pub const SpecBuilder = struct {
         for (entries) |local_spec| {
             const record = self.recordPtr(local_spec);
             if (record.status != .ready) continue;
-            if (!evidenceEql(self.localEvidence(local_spec), evidence)) continue;
+            if (!self.localEvidenceEql(local_spec, evidence, known)) continue;
             if (!try self.localCodecContractMatches(record.identity, identity)) continue;
             if (!try self.localViewMatches(record.solved_fn_ty, record.solved_fn_ty_digest, identity)) continue;
             return localResult(local_spec, record, record.solved_fn_ty);
         }
         return null;
+    }
+
+    fn localEvidenceEql(self: *const SpecBuilder, local_spec: Ast.SpecId, evidence: EvidenceView, known: ?u32) bool {
+        if (known) |index| {
+            const raw = @intFromEnum(local_spec);
+            if (raw >= self.local_evidence.items.len) invariant("Monotype specialization record had no exact evidence topology");
+            return self.local_evidence.items[raw] == index;
+        }
+        return evidenceEql(self.localEvidence(local_spec), evidence);
     }
 
     fn localCodecContractMatches(
@@ -532,7 +603,32 @@ pub const SpecBuilder = struct {
     fn localEvidence(self: *const SpecBuilder, spec: Ast.SpecId) EvidenceView {
         const index = @intFromEnum(spec);
         if (index >= self.local_evidence.items.len) invariant("Monotype specialization record had no exact evidence topology");
-        return self.local_evidence.items[index].view();
+        return self.owned_evidence.items[self.local_evidence.items[index]].view();
+    }
+
+    /// The owned copy equal to `evidence`, made on first use.
+    fn ownedEvidenceIndex(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
+        const span = evidence.program_span orelse return try self.ownedEvidenceIndexByTopology(evidence);
+        const known = try self.owned_evidence_by_program_span.getOrPut(span);
+        if (known.found_existing) return known.value_ptr.*;
+        errdefer _ = self.owned_evidence_by_program_span.remove(span);
+        known.value_ptr.* = try self.ownedEvidenceIndexByTopology(evidence);
+        return known.value_ptr.*;
+    }
+
+    fn ownedEvidenceIndexByTopology(self: *SpecBuilder, evidence: EvidenceView) std.mem.Allocator.Error!u32 {
+        const bucket = try self.owned_evidence_by_digest.getOrPut(evidence.digest);
+        if (!bucket.found_existing) bucket.value_ptr.* = .empty;
+        for (bucket.value_ptr.items) |index| {
+            if (evidenceEql(self.owned_evidence.items[index].view(), evidence)) return index;
+        }
+        const index: u32 = @intCast(self.owned_evidence.items.len);
+        const owned = try OwnedEvidence.init(self.allocator, evidence);
+        errdefer owned.deinit(self.allocator);
+        try self.owned_evidence.append(self.allocator, owned);
+        errdefer _ = self.owned_evidence.pop();
+        try bucket.value_ptr.append(self.allocator, index);
+        return index;
     }
 
     fn countCandidatesBy(self: *SpecBuilder, callable: Ast.CallableIdentity, amount: usize) void {
@@ -1228,7 +1324,7 @@ const test_evidence_frames = [_]check.ConstStore.ConstFnEvidenceFrame{
 };
 
 fn testEvidenceView() EvidenceView {
-    return .{ .nodes = &.{}, .frames = &test_evidence_frames, .head = 0 };
+    return EvidenceView.init(&.{}, &test_evidence_frames, 0);
 }
 
 /// Distinct one-node evidence topologies: scheme parameter `index` supplies
@@ -1240,9 +1336,5 @@ const scheme_evidence_nodes = [_]check.ConstStore.ConstFnEvidence{
 };
 
 fn schemeEvidenceView(comptime index: usize) EvidenceView {
-    return .{
-        .nodes = scheme_evidence_nodes[index .. index + 1],
-        .frames = &test_evidence_frames,
-        .head = 0,
-    };
+    return EvidenceView.init(scheme_evidence_nodes[index .. index + 1], &test_evidence_frames, 0);
 }

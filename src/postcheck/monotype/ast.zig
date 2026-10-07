@@ -224,6 +224,18 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Set for a closed specialization of a Builtin template whose checked
+    /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
+    /// allow list. Direct LIR identifies the plain procedure of such a
+    /// specialization by its argument and result layouts, so specializations
+    /// whose closed types commit the same layouts share one procedure
+    /// (design.md "Layout-Keyed Builtin Procedures").
+    procedure_keyed_by_layout: bool = false,
+    /// The checked template is called at exactly one site of its module's
+    /// source and from nowhere else (`templateHasSingleSourceCall`), stamped
+    /// when Monotype finalizes the program. Dev inline analysis decides
+    /// single-use inlining by this flag, which is the same in every program.
+    single_source_call: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),
@@ -321,7 +333,7 @@ pub const SpecIdentity = struct {
 /// computes the same key as one that names the backing type.
 pub fn specIdentityKey(identity: SpecIdentity) names.TypeDigest {
     var hasher = TypeDigestHasher.init();
-    hasher.update("roc.monotype.spec-key.v3");
+    hasher.update("roc.monotype.spec-key.v4");
     switch (identity.callable) {
         .proc_template => |template| {
             hasher.update("proc_template");
@@ -458,64 +470,89 @@ pub fn fnEvidenceDigest(
     head: ?u32,
 ) EvidenceDigest {
     var hasher = TypeDigestHasher.init();
-    writeBytes(&hasher, "roc.monotype.fn_evidence.v5");
-    writeU32(&hasher, @intCast(evidence.len));
+    writeFnEvidence(&hasher, evidence, frames, head);
+    return .{ .bytes = hasher.finalResult() };
+}
+
+/// A fast hash of retained function evidence over exactly the bytes its
+/// digest covers, for finding a stored conversion to compare with
+/// `fnEvidenceEql`; never an identity by itself.
+pub fn fnEvidenceBucket(
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+) u64 {
+    var hasher = std.hash.Wyhash.init(0);
+    writeFnEvidence(&hasher, evidence, frames, head);
+    return hasher.final();
+}
+
+fn writeFnEvidence(
+    hasher: anytype,
+    evidence: []const check.ConstStore.ConstFnEvidence,
+    frames: []const check.ConstStore.ConstFnEvidenceFrame,
+    head: ?u32,
+) void {
+    writeBytes(hasher, "roc.monotype.fn_evidence.v6");
+    writeU32(hasher, @intCast(evidence.len));
     for (evidence) |entry| {
-        writeU8(&hasher, @intFromEnum(entry));
+        writeU8(hasher, @intFromEnum(entry));
         switch (entry) {
             .target => |target| {
-                writeBytes(&hasher, &target.view.bytes);
-                writeMethodTarget(&hasher, target.method, target.method_callable_key);
+                writeU32(hasher, target.callable_contracts);
+                writeBytes(hasher, &target.view.bytes);
+                writeMethodTarget(hasher, target.method, target.method_callable_key);
                 if (target.instantiation) |instantiation| {
-                    writeU8(&hasher, 1);
-                    writeBytes(&hasher, &instantiation.view.bytes);
-                    writeBytes(&hasher, &instantiation.callable_key.bytes);
-                } else writeU8(&hasher, 0);
-                writeU8(&hasher, @intFromEnum(target.nested));
+                    writeU8(hasher, 1);
+                    writeBytes(hasher, &instantiation.view.bytes);
+                    writeBytes(hasher, &instantiation.callable_key.bytes);
+                } else writeU8(hasher, 0);
+                writeU8(hasher, @intFromEnum(target.nested));
                 switch (target.nested) {
                     .resolved => |nested| {
-                        writeU32(&hasher, nested.count);
-                        writeU32(&hasher, nested.subtree_len);
+                        writeU32(hasher, nested.count);
+                        writeU32(hasher, nested.subtree_len);
                     },
                     .from_callable => {},
                 }
             },
             .structural => |structural| {
-                writeStructuralDerivation(&hasher, structural.derivation);
+                writeU32(hasher, structural.callable_contracts);
+                writeStructuralDerivation(hasher, structural.derivation);
                 if (structural.checked) |checked_structural| {
-                    writeU8(&hasher, 1);
-                    writeBytes(&hasher, &checked_structural.view.bytes);
-                    writeBytes(&hasher, &checked_structural.dispatcher_key.bytes);
-                    writeBytes(&hasher, &checked_structural.callable_key.bytes);
+                    writeU8(hasher, 1);
+                    writeBytes(hasher, &checked_structural.view.bytes);
+                    writeBytes(hasher, &checked_structural.dispatcher_key.bytes);
+                    writeBytes(hasher, &checked_structural.callable_key.bytes);
                     writeOptionalU32(
-                        &hasher,
+                        hasher,
                         if (checked_structural.generated_codec_identity) |derivation|
                             @intFromEnum(derivation)
                         else
                             null,
                     );
-                } else writeU8(&hasher, 0);
+                } else writeU8(hasher, 0);
             },
             .from_callable => |use| {
-                writeU8(&hasher, @intFromBool(use.independent_callable));
+                writeU32(hasher, use.callable_contracts);
+                writeU8(hasher, @intFromBool(use.independent_callable));
             },
-            .from_scheme => |index| writeU32(&hasher, index),
+            .from_scheme => |index| writeU32(hasher, index),
             .unreachable_value, .checked_error => {},
         }
     }
-    writeU32(&hasher, @intCast(frames.len));
+    writeU32(hasher, @intCast(frames.len));
     for (frames) |frame| {
-        writeU8(&hasher, @intFromEnum(frame.scope_id));
+        writeU8(hasher, @intFromEnum(frame.scope_id));
         switch (frame.scope_id) {
             .root => {},
-            .generalized => |scope| writeU32(&hasher, scope),
+            .generalized => |scope| writeU32(hasher, scope),
         }
-        writeOptionalU32(&hasher, frame.parent);
-        writeU32(&hasher, frame.roots_start);
-        writeU32(&hasher, frame.roots_len);
+        writeOptionalU32(hasher, frame.parent);
+        writeU32(hasher, frame.roots_start);
+        writeU32(hasher, frame.roots_len);
     }
-    writeOptionalU32(&hasher, head);
-    return .{ .bytes = hasher.finalResult() };
+    writeOptionalU32(hasher, head);
 }
 
 /// Exact checked-identity equality for retained function evidence. Checked
@@ -529,6 +566,7 @@ pub fn fnEvidenceEql(
     right_head: ?u32,
 ) bool {
     if (left_head != right_head or left_evidence.len != right_evidence.len or left_frames.len != right_frames.len) return false;
+    if (left_evidence.ptr == right_evidence.ptr and left_frames.ptr == right_frames.ptr) return true;
     for (left_evidence, right_evidence) |left, right| {
         switch (left) {
             .target => |left_target| switch (right) {
@@ -557,14 +595,59 @@ pub fn fnEvidenceEql(
 }
 
 fn fnEvidenceTargetEql(left: anytype, right: @TypeOf(left)) bool {
-    if (!std.meta.eql(left.view, right.view)) return false;
+    if (left.callable_contracts != right.callable_contracts) return false;
+    if (!keyBytesEql(left.view, right.view)) return false;
     if (!methodTargetIdentityEql(left.method, left.method_callable_key, right.method, right.method_callable_key)) return false;
     if (left.instantiation) |left_instantiation| {
         const right_instantiation = right.instantiation orelse return false;
-        if (!std.meta.eql(left_instantiation.view, right_instantiation.view)) return false;
-        if (!std.meta.eql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
+        if (!keyBytesEql(left_instantiation.view, right_instantiation.view)) return false;
+        if (!keyBytesEql(left_instantiation.callable_key, right_instantiation.callable_key)) return false;
     } else if (right.instantiation != null) return false;
-    return std.meta.eql(left.nested, right.nested);
+    return valueEql(left.nested, right.nested);
+}
+
+/// Whether two digest keys hold the same bytes, compared as whole slices
+/// rather than element by element.
+fn keyBytesEql(left: anytype, right: @TypeOf(left)) bool {
+    return std.mem.eql(u8, &left.bytes, &right.bytes);
+}
+
+/// `std.meta.eql`, except that byte arrays (the digests identity values
+/// carry) are compared as whole slices rather than one byte at a time.
+pub fn valueEql(left: anytype, right: @TypeOf(left)) bool {
+    const T = @TypeOf(left);
+    switch (@typeInfo(T)) {
+        .@"struct" => |info| {
+            inline for (info.fields) |field| {
+                if (!valueEql(@field(left, field.name), @field(right, field.name))) return false;
+            }
+            return true;
+        },
+        .@"union" => |info| {
+            if (info.tag_type == null) @compileError("valueEql needs a tagged union");
+            const left_tag = std.meta.activeTag(left);
+            if (left_tag != std.meta.activeTag(right)) return false;
+            inline for (info.fields) |field| {
+                if (@field(std.meta.Tag(T), field.name) == left_tag) {
+                    return valueEql(@field(left, field.name), @field(right, field.name));
+                }
+            }
+            unreachable;
+        },
+        .array => |info| {
+            if (info.child == u8) return std.mem.eql(u8, &left, &right);
+            for (left, right) |left_item, right_item| {
+                if (!valueEql(left_item, right_item)) return false;
+            }
+            return true;
+        },
+        .optional => {
+            const left_value = left orelse return right == null;
+            const right_value = right orelse return false;
+            return valueEql(left_value, right_value);
+        },
+        .type, .void, .bool, .noreturn, .int, .float, .pointer, .comptime_float, .comptime_int, .undefined, .null, .error_union, .error_set, .@"enum", .@"fn", .@"opaque", .frame, .@"anyframe", .vector, .enum_literal => return std.meta.eql(left, right),
+    }
 }
 
 fn methodTargetIdentityEql(
@@ -575,12 +658,12 @@ fn methodTargetIdentityEql(
 ) bool {
     return left.module_idx == right.module_idx and
         left.def_idx == right.def_idx and
-        std.meta.eql(left.kind, right.kind) and
-        std.meta.eql(left_callable_key, right_callable_key);
+        valueEql(left.kind, right.kind) and
+        keyBytesEql(left_callable_key, right_callable_key);
 }
 
 fn writeMethodTarget(
-    hasher: *TypeDigestHasher,
+    hasher: anytype,
     target: static_dispatch.MethodTarget,
     callable_key: names.CanonicalTypeKey,
 ) void {
@@ -606,7 +689,7 @@ fn writeMethodTarget(
     writeBytes(hasher, &callable_key.bytes);
 }
 
-fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispatch.StructuralDerivation) void {
+fn writeStructuralDerivation(hasher: anytype, derivation: static_dispatch.StructuralDerivation) void {
     writeU8(hasher, @intFromEnum(derivation));
     switch (derivation) {
         .map, .map_effectful => |plan| {
@@ -617,7 +700,7 @@ fn writeStructuralDerivation(hasher: *TypeDigestHasher, derivation: static_dispa
     }
 }
 
-fn writeOptionalU32(hasher: *TypeDigestHasher, value: ?u32) void {
+fn writeOptionalU32(hasher: anytype, value: ?u32) void {
     if (value) |actual| {
         writeU8(hasher, 1);
         writeU32(hasher, actual);
@@ -760,16 +843,16 @@ fn writeProcTemplate(hasher: *TypeDigestHasher, template: names.ProcTemplate) vo
     writeU32(hasher, @intFromEnum(template.template));
 }
 
-fn writeBytes(hasher: *TypeDigestHasher, bytes: []const u8) void {
+fn writeBytes(hasher: anytype, bytes: []const u8) void {
     writeU32(hasher, @intCast(bytes.len));
     hasher.update(bytes);
 }
 
-fn writeU8(hasher: *TypeDigestHasher, value: u8) void {
+fn writeU8(hasher: anytype, value: u8) void {
     hasher.update(&.{value});
 }
 
-fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
+fn writeU32(hasher: anytype, value: u32) void {
     const little = std.mem.nativeToLittle(u32, value);
     hasher.update(std.mem.asBytes(&little));
 }
@@ -1088,8 +1171,6 @@ pub const ExprData = union(enum(u8)) {
     str_lit: StringLiteralId,
     bytes_lit: PackedListLiteral,
     static_data_candidate: StaticDataCandidate,
-    /// Explicit consumer input: opaque until target LIR selects run/omit.
-    inline_expects_enabled: void,
     comptime_value: ComptimeValue,
     typed_boundary: TypedBoundary,
     list: Span(ExprId),
@@ -1153,11 +1234,25 @@ pub const ExprData = union(enum(u8)) {
     jump: JumpExpr,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
     comptime_branch_taken: ComptimeBranchTaken,
     comptime_exhaustiveness_failed: ComptimeSiteId,
     dbg: ExprId,
     expect_err: ExpectErrExpr,
     expect: ExprId,
+    literal_rejected: LiteralRejected,
+};
+
+/// A literal conversion rejected its literal: the conversion returned `Err`
+/// with `msg`. Compile-time evaluation reports the literal's own diagnostic;
+/// at runtime it crashes with `msg`. Never returns.
+pub const LiteralRejected = struct {
+    /// String-typed expression producing the conversion's error message.
+    msg: ExprId,
+    site: Common.LiteralRejectionSite,
 };
 
 /// The Err arm of a `?` operator used directly inside a top-level `expect`.
@@ -1275,6 +1370,10 @@ pub const Stmt = union(enum(u8)) {
     dbg: ExprId,
     return_: Return,
     crash: StringLiteralId,
+    /// Code that checking rejected and already reported. It crashes with its
+    /// message; compile-time evaluation that reaches it discards the result
+    /// instead of reporting the problem a second time.
+    checked_error: StringLiteralId,
 };
 
 /// Top-level or generated Monotype definition.
@@ -1369,6 +1468,16 @@ pub const Root = struct {
     owner: Common.LoweringModuleId,
 };
 
+/// One literal root, at its `Common.LiteralRootId` position: a zero-argument
+/// definition that converts one custom literal at the concrete type one
+/// specialization gives it, and is evaluated at compile time.
+pub const LiteralRoot = struct {
+    def: DefId,
+    /// Checked module that owns the literal.
+    module: checked.ModuleId,
+    site: Common.LiteralRejectionSite,
+};
+
 /// Runtime layout requested for a checked data value.
 pub const LayoutRequest = struct {
     checked_type: checked.CheckedTypeId,
@@ -1442,6 +1551,7 @@ pub const ProgramView = struct {
     string_literals: []const StringLiteral,
     proc_debug_names: []const ProcDebugName,
     roots: []const Root,
+    literal_roots: []const LiteralRoot,
     layout_requests: []const LayoutRequest,
     /// Evaluated roots this program reads a completed value of, recorded once
     /// each. Whoever materializes those values consumes this instead of
@@ -1487,15 +1597,6 @@ pub const ProgramView = struct {
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
         return procDebugNameInSlice(self.proc_debug_names, symbol);
-    }
-
-    pub fn fieldAccessSegmentSpan(self: ProgramView, span_: Span(FieldAccessSegment)) []const FieldAccessSegment {
-        return self.field_access_segments[span_.start..][0..span_.len];
-    }
-
-    pub fn fieldAccessSegmentAt(self: ProgramView, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
-        if (index >= span_.len) Common.invariant("field access segment index was outside span");
-        return self.field_access_segments[span_.start + index];
     }
 
     /// Verify that a completed program view refers only to durable type-store
@@ -1630,6 +1731,10 @@ pub const ProgramBuilder = struct {
     const_blob_backings: std.AutoHashMapUnmanaged(ConstBlobKey, *SharedLiteralBacking) = .empty,
     proc_debug_names: ProcDebugNameMap,
     roots: ProgramList(Root, "roots"),
+    literal_roots: ProgramList(LiteralRoot, "literal_roots"),
+    /// Each literal root by its definition's content identity: one literal
+    /// converted at one type.
+    literal_root_by_identity: std.AutoHashMapUnmanaged(names.TypeDigest, Common.LiteralRootId) = .empty,
     layout_requests: ProgramList(LayoutRequest, "layout_requests"),
     /// See `ProgramView.comptime_value_reads`.
     comptime_value_reads: ProgramList(Common.ComptimeValueRoot, "comptime_value_reads"),
@@ -1643,6 +1748,9 @@ pub const ProgramBuilder = struct {
     /// lowered and never appended to afterwards, so the rows that carry a
     /// module-local checked id name their owner explicitly.
     lowering_modules: ProgramList(checked.ModuleId, "lowering_modules") = .empty,
+    /// See `Common.PlatformRequirementFilling`; null when no module of the
+    /// input has platform requirements filled by an app.
+    platform_requirement_filling: ?Common.PlatformRequirementFilling = null,
     /// Source file table for `SourceLoc.file` indices (module display and
     /// package-qualified names, owned by this program).
     source_files: ProgramList(base.SourceFileEntry, "source_files"),
@@ -1695,6 +1803,7 @@ pub const ProgramBuilder = struct {
             .string_literals = .empty,
             .proc_debug_names = ProcDebugNameMap.init(allocator),
             .roots = .empty,
+            .literal_roots = .empty,
             .layout_requests = .empty,
             .comptime_value_reads = .empty,
             .runtime_schema_requests = .empty,
@@ -1713,7 +1822,8 @@ pub const ProgramBuilder = struct {
     }
 
     /// Fork the immutable specialization output while preserving every id.
-    /// The fork owns its arrays and diagnostic/literal bytes independently.
+    /// The fork owns its arrays and diagnostic/literal bytes independently,
+    /// and retains the shared constant payloads its literals view.
     pub fn cloneFrozen(self: *const ProgramBuilder, allocator: std.mem.Allocator) std.mem.Allocator.Error!ProgramBuilder {
         if (!self.types.isFrozen()) Common.invariant("Monotype cloning requires a frozen program");
         var result = ProgramBuilder.init(allocator);
@@ -1721,15 +1831,14 @@ pub const ProgramBuilder = struct {
         result.names = try self.names.clone(allocator);
         result.types = try self.types.cloneFrozen(allocator);
         try result.comptime_value_roots.appendSlice(allocator, self.comptime_value_roots.unsafeRawItemsForView());
-        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
+        inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
         try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
-            var copied = literal;
-            copied.backing = try allocator.dupe(u8, literal.backing);
+            const copied = try literal.clone(allocator);
             result.string_literals.append(allocator, copied) catch |err| {
-                allocator.free(copied.backing);
+                copied.deinit(allocator);
                 return err;
             };
         }
@@ -1792,6 +1901,8 @@ pub const ProgramBuilder = struct {
         self.comptime_value_reads.deinit(self.allocator);
         self.layout_requests.deinit(self.allocator);
         self.roots.deinit(self.allocator);
+        self.literal_roots.deinit(self.allocator);
+        self.literal_root_by_identity.deinit(self.allocator);
         self.proc_debug_names.deinit();
         for (self.string_literals.unsafeRawItemsForView()) |literal| literal.deinit(self.allocator);
         var backings = self.const_blob_backings.valueIterator();
@@ -1842,14 +1953,6 @@ pub const ProgramBuilder = struct {
         return .{ .start = start, .len = @intCast(values.len) };
     }
 
-    pub fn constFnEvidence(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
-    pub fn constFnEvidenceFrames(self: *const ProgramBuilder, span: Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
-        return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
     pub fn fnCount(self: *const ProgramBuilder) usize {
         return self.fns.len();
     }
@@ -1864,10 +1967,6 @@ pub const ProgramBuilder = struct {
 
     pub fn setFnSource(self: *ProgramBuilder, id: FnId, source: FnTemplate) void {
         self.fns.getPtrImmediate(@intFromEnum(id)).source = source;
-    }
-
-    pub fn fnsView(self: *const ProgramBuilder) []const Fn {
-        return self.fns.unsafeRawItemsForView();
     }
 
     pub fn addDef(self: *ProgramBuilder, def: Def) std.mem.Allocator.Error!DefId {
@@ -1888,26 +1987,16 @@ pub const ProgramBuilder = struct {
         self.defs.set(@intFromEnum(id), def);
     }
 
-    pub fn setDefFn(self: *ProgramBuilder, id: DefId, fn_id: FnId) void {
-        self.defs.getPtrImmediate(@intFromEnum(id)).fn_id = fn_id;
-    }
-
-    pub fn defsView(self: *const ProgramBuilder) []const Def {
-        return self.defs.unsafeRawItemsForView();
-    }
-
-    pub fn addNestedDef(self: *ProgramBuilder, nested_def: NestedDef) std.mem.Allocator.Error!NestedDefId {
-        const id: NestedDefId = @enumFromInt(@as(u32, @intCast(self.nested_defs.len())));
-        try self.nested_defs.append(self.allocator, nested_def);
-        return id;
-    }
-
     pub fn nestedDefCount(self: *const ProgramBuilder) usize {
         return self.nested_defs.len();
     }
 
     pub fn getNestedDef(self: *const ProgramBuilder, id: NestedDefId) NestedDef {
         return self.nested_defs.unsafeRawItemsForView()[@intFromEnum(id)];
+    }
+
+    pub fn setNestedDefSource(self: *ProgramBuilder, id: NestedDefId, source: FnTemplate) void {
+        self.nested_defs.getPtrImmediate(@intFromEnum(id)).fn_def = source;
     }
 
     pub fn nestedDefsView(self: *const ProgramBuilder) []const NestedDef {
@@ -1918,14 +2007,6 @@ pub const ProgramBuilder = struct {
         const id: SpecId = @enumFromInt(@as(u32, @intCast(self.specs.len())));
         try self.specs.append(self.allocator, record);
         return id;
-    }
-
-    pub fn getSpec(self: *const ProgramBuilder, id: SpecId) SpecRecord {
-        return self.specs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    pub fn setSpecStatus(self: *ProgramBuilder, id: SpecId, status: SpecStatus) void {
-        self.specs.getPtrImmediate(@intFromEnum(id)).status = status;
     }
 
     pub fn specsView(self: *const ProgramBuilder) []const SpecRecord {
@@ -1973,6 +2054,7 @@ pub const ProgramBuilder = struct {
             .string_literals = self.string_literals.unsafeRawItemsForView(),
             .proc_debug_names = self.proc_debug_names.view(),
             .roots = self.roots.unsafeRawItemsForView(),
+            .literal_roots = self.literal_roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),
             .comptime_value_reads = self.comptime_value_reads.unsafeRawItemsForView(),
             .runtime_schema_requests = self.runtime_schema_requests.unsafeRawItemsForView(),
@@ -2032,10 +2114,6 @@ pub const ProgramBuilder = struct {
         return self.pats.len();
     }
 
-    pub fn patsView(self: *const ProgramBuilder) []const Pat {
-        return self.pats.unsafeRawItemsForView();
-    }
-
     pub fn getPat(self: *const ProgramBuilder, id: PatId) Pat {
         return self.pats.unsafeRawItemsForView()[@intFromEnum(id)];
     }
@@ -2046,14 +2124,6 @@ pub const ProgramBuilder = struct {
 
     pub fn stmtCount(self: *const ProgramBuilder) usize {
         return self.stmts.len();
-    }
-
-    pub fn stmtsView(self: *const ProgramBuilder) []const Stmt {
-        return self.stmts.unsafeRawItemsForView();
-    }
-
-    pub fn getStmt(self: *const ProgramBuilder, id: StmtId) Stmt {
-        return self.stmts.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn getStmtAt(self: *const ProgramBuilder, index: usize) Stmt {
@@ -2068,9 +2138,9 @@ pub const ProgramBuilder = struct {
         return self.proc_debug_names.get(symbol);
     }
 
-    /// Register a source file (module display name plus package-qualified
-    /// module identity) and return its index for `SourceLoc.file`. Callers
-    /// deduplicate; this always appends.
+    /// Register a source file (module display name, package-qualified module
+    /// name, and module content identity) and return its index for
+    /// `SourceLoc.file`. Callers deduplicate; this always appends.
     pub fn addSourceFile(self: *ProgramBuilder, file: base.SourceFileEntry) std.mem.Allocator.Error!u32 {
         const id: u32 = @intCast(self.source_files.len());
         const owned_name = try self.allocator.dupe(u8, file.name);
@@ -2080,6 +2150,7 @@ pub const ProgramBuilder = struct {
         try self.source_files.append(self.allocator, .{
             .name = owned_name,
             .qualified_name = owned_qualified,
+            .module_identity = file.module_identity,
         });
         return id;
     }
@@ -2090,26 +2161,6 @@ pub const ProgramBuilder = struct {
         const id: Common.LoweringModuleId = @enumFromInt(@as(u32, @intCast(self.lowering_modules.len())));
         try self.lowering_modules.append(self.allocator, key);
         return id;
-    }
-
-    /// Source location of an expression.
-    pub fn exprLoc(self: *const ProgramBuilder, id: ExprId) base.SourceLoc {
-        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of an expression.
-    pub fn exprRegion(self: *const ProgramBuilder, id: ExprId) base.Region {
-        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Source location of a statement.
-    pub fn stmtLoc(self: *const ProgramBuilder, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of a statement.
-    pub fn stmtRegion(self: *const ProgramBuilder, id: StmtId) base.Region {
-        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *ProgramBuilder, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -2248,21 +2299,8 @@ pub const ProgramBuilder = struct {
         return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
-    pub fn setLocalType(self: *ProgramBuilder, id: LocalId, ty: Type.TypeId) void {
-        self.locals.getPtrImmediate(@intFromEnum(id)).ty = ty;
-        for (self.typed_locals.unsafeRawItemsMutForStore()) |*typed_local| {
-            if (typed_local.local == id) {
-                typed_local.ty = ty;
-            }
-        }
-    }
-
     pub fn localCount(self: *const ProgramBuilder) usize {
         return self.locals.len();
-    }
-
-    pub fn localsView(self: *const ProgramBuilder) []const Local {
-        return self.locals.unsafeRawItemsForView();
     }
 
     pub fn getLocal(self: *const ProgramBuilder, id: LocalId) Local {
@@ -2281,20 +2319,18 @@ pub const ProgramBuilder = struct {
         try self.roots.append(self.allocator, root);
     }
 
+    pub fn addLiteralRoot(self: *ProgramBuilder, root: LiteralRoot) std.mem.Allocator.Error!Common.LiteralRootId {
+        const id: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.len())));
+        try self.literal_roots.append(self.allocator, root);
+        return id;
+    }
+
     pub fn layoutRequestCount(self: *const ProgramBuilder) usize {
         return self.layout_requests.len();
     }
 
-    pub fn layoutRequestsView(self: *const ProgramBuilder) []const LayoutRequest {
-        return self.layout_requests.unsafeRawItemsForView();
-    }
-
     pub fn addLayoutRequest(self: *ProgramBuilder, request: LayoutRequest) std.mem.Allocator.Error!void {
         try self.layout_requests.append(self.allocator, request);
-    }
-
-    pub fn comptimeValueReadsView(self: *const ProgramBuilder) []const Common.ComptimeValueRoot {
-        return self.comptime_value_reads.unsafeRawItemsForView();
     }
 
     /// Record that this program reads one evaluated root's completed value.
@@ -2314,11 +2350,6 @@ pub const ProgramBuilder = struct {
 
     pub fn addRuntimeSchemaRequest(self: *ProgramBuilder, request: RuntimeSchemaRequest) std.mem.Allocator.Error!void {
         try self.runtime_schema_requests.append(self.allocator, request);
-    }
-
-    pub fn addStaticDataValue(self: *ProgramBuilder, value: StaticDataValue) std.mem.Allocator.Error!Common.StaticDataId {
-        try self.ensureStaticDataValueCapacity(1);
-        return self.addStaticDataValueAssumeCapacity(value);
     }
 
     /// Preflight static-data publication so parallel identity tables cannot
@@ -2395,10 +2426,6 @@ pub const ProgramBuilder = struct {
         return self.field_exprs.get(index);
     }
 
-    pub fn getFieldAccessSegmentAt(self: *const ProgramBuilder, index: usize) FieldAccessSegment {
-        return self.field_access_segments.get(index);
-    }
-
     pub fn getRecordDestructAt(self: *const ProgramBuilder, index: usize) RecordDestruct {
         return self.record_destructs.get(index);
     }
@@ -2441,52 +2468,16 @@ pub const ProgramBuilder = struct {
         return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
-    pub fn addFnDefCaptureSpan(self: *ProgramBuilder, values: []const FnDefCapture) std.mem.Allocator.Error!Span(FnDefCapture) {
-        return try Common.appendSpan(FnDefCapture, &self.fn_def_captures, self.allocator, values);
-    }
-
-    pub fn addRecordDestructSpan(self: *ProgramBuilder, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
-        return try Common.appendSpan(RecordDestruct, &self.record_destructs, self.allocator, values);
-    }
-
-    pub fn addStrPatternStepSpan(self: *ProgramBuilder, values: []const StrPatternStep) std.mem.Allocator.Error!Span(StrPatternStep) {
-        return try Common.appendSpan(StrPatternStep, &self.str_pattern_steps, self.allocator, values);
-    }
-
     pub fn addBranchSpan(self: *ProgramBuilder, values: []const Branch) std.mem.Allocator.Error!Span(Branch) {
         return try Common.appendSpan(Branch, &self.branches, self.allocator, values);
-    }
-
-    pub fn addIfBranchSpan(self: *ProgramBuilder, values: []const IfBranch) std.mem.Allocator.Error!Span(IfBranch) {
-        return try Common.appendSpan(IfBranch, &self.if_branches, self.allocator, values);
-    }
-
-    pub fn addStmtSpan(self: *ProgramBuilder, ids: []const StmtId) std.mem.Allocator.Error!Span(StmtId) {
-        return try Common.appendSpan(StmtId, &self.stmt_ids, self.allocator, ids);
-    }
-
-    pub fn exprSpan(self: *const ProgramBuilder, span_: Span(ExprId)) ProgramSpanBorrow(ExprId, "expr_ids") {
-        return self.expr_ids.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn patSpan(self: *const ProgramBuilder, span_: Span(PatId)) ProgramSpanBorrow(PatId, "pat_ids") {
-        return self.pat_ids.borrowSpan(span_.start, span_.len);
     }
 
     pub fn typedLocalSpan(self: *const ProgramBuilder, span_: Span(TypedLocal)) ProgramSpanBorrow(TypedLocal, "typed_locals") {
         return self.typed_locals.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn stmtSpan(self: *const ProgramBuilder, span_: Span(StmtId)) ProgramSpanBorrow(StmtId, "stmt_ids") {
-        return self.stmt_ids.borrowSpan(span_.start, span_.len);
-    }
-
     pub fn fieldExprSpan(self: *const ProgramBuilder, span_: Span(FieldExpr)) ProgramSpanBorrow(FieldExpr, "field_exprs") {
         return self.field_exprs.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn fieldAccessSegmentSpan(self: *const ProgramBuilder, span_: Span(FieldAccessSegment)) ProgramSpanBorrow(FieldAccessSegment, "field_access_segments") {
-        return self.field_access_segments.borrowSpan(span_.start, span_.len);
     }
 
     pub fn fieldAccessSegmentAt(self: *const ProgramBuilder, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
@@ -2494,23 +2485,8 @@ pub const ProgramBuilder = struct {
         return self.field_access_segments.get(span_.start + index);
     }
 
-    pub fn fnDefCaptureSpan(self: *const ProgramBuilder, span_: Span(FnDefCapture)) ProgramSpanBorrow(FnDefCapture, "fn_def_captures") {
-        return self.fn_def_captures.borrowSpan(span_.start, span_.len);
-    }
-
     pub fn addCaptureOperandSpan(self: *ProgramBuilder, values: []const CaptureOperand) std.mem.Allocator.Error!Span(CaptureOperand) {
         return try Common.appendSpan(CaptureOperand, &self.capture_operands, self.allocator, values);
-    }
-
-    pub fn captureOperandSpan(self: *const ProgramBuilder, span_: Span(CaptureOperand)) ProgramSpanBorrow(CaptureOperand, "capture_operands") {
-        return self.capture_operands.borrowSpan(span_.start, span_.len);
-    }
-
-    /// The CaptureId of a local. Every local that participates in a capture set
-    /// carries one; asserts it is present.
-    pub fn captureIdOfLocal(self: *const ProgramBuilder, id: LocalId) checked.CaptureId {
-        return self.locals.unsafeRawItemsForView()[@intFromEnum(id)].capture_id orelse
-            Common.invariant("Monotype capture local had no CaptureId");
     }
 
     /// Seal provisional identities on locals emitted outside a body
@@ -2535,28 +2511,10 @@ pub const ProgramBuilder = struct {
     pub fn recordDestructSpan(self: *const ProgramBuilder, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
         return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
-
-    pub fn strPatternStepSpan(self: *const ProgramBuilder, span_: Span(StrPatternStep)) ProgramSpanBorrow(StrPatternStep, "str_pattern_steps") {
-        return self.str_pattern_steps.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn branchSpan(self: *const ProgramBuilder, span_: Span(Branch)) ProgramSpanBorrow(Branch, "branches") {
-        return self.branches.borrowSpan(span_.start, span_.len);
-    }
-
-    pub fn ifBranchSpan(self: *const ProgramBuilder, span_: Span(IfBranch)) ProgramSpanBorrow(IfBranch, "if_branches") {
-        return self.if_branches.borrowSpan(span_.start, span_.len);
-    }
 };
 
 /// Compatibility name for existing Monotype builder-owned program storage.
 pub const Program = ProgramBuilder;
-
-/// Design-document name for mutable Monotype builder storage.
-pub const MonoProgramBuilder = ProgramBuilder;
-
-/// Design-document name for the read-only Monotype program view.
-pub const MonoProgramView = ProgramView;
 
 test "monotype ast declarations are referenced" {
     std.testing.refAllDecls(@This());
@@ -3053,7 +3011,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc" });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
@@ -3062,7 +3020,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try source.proc_debug_names.put(@enumFromInt(1), name);
     const root_a: Common.ComptimeValueRoot = .{
         .module = std.mem.zeroes(check.CheckedModule.ModuleId),
-        .root = @enumFromInt(7),
+        .root = .{ .checked = @enumFromInt(7) },
         .const_locator = null,
     };
     var root_b = root_a;
@@ -3099,4 +3057,22 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqual(name, copy.proc_debug_names.get(@enumFromInt(1)).?);
     try std.testing.expectEqual(name, try copy.names.internExportName("entry"));
     try std.testing.expect(copy.types.isFrozen());
+}
+
+test "issue 11737: callable contract topology distinguishes specialization identities" {
+    const frames = [_]check.ConstStore.ConstFnEvidenceFrame{
+        check.ConstStore.ConstFnEvidenceFrame.init(.root, null, 0, 2),
+    };
+    const left = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{ .callable_contracts = 1 } },
+        .{ .from_callable = .{} },
+        .checked_error,
+    };
+    const right = [_]check.ConstStore.ConstFnEvidence{
+        .{ .from_callable = .{} },
+        .{ .from_callable = .{ .callable_contracts = 1 } },
+        .checked_error,
+    };
+    try std.testing.expect(!fnEvidenceEql(&left, &frames, 0, &right, &frames, 0));
+    try std.testing.expect(!std.meta.eql(fnEvidenceDigest(&left, &frames, 0), fnEvidenceDigest(&right, &frames, 0)));
 }

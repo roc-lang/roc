@@ -1177,4 +1177,494 @@ pub const tests = [_]TestCase{
         .returned,
         0,
     ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: construction is lazy and runs no advance",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    _stream = Stream.custom(0, Unknown, counter!)
+        \\    dbg "built"
+        \\    {}
+        \\}
+    ,
+        &.{dbg("\"built\"")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: each pull advances exactly once from the updated state",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n * 10, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(1, Unknown, counter!)
+        \\    first = match Stream.next!(stream) {
+        \\        One({ item, rest }) => {
+        \\            dbg "pulled"
+        \\            match Stream.next!(rest) {
+        \\                One(second) => [item, second.item]
+        \\                _ => []
+        \\            }
+        \\        }
+        \\        _ => []
+        \\    }
+        \\    expect first == [10, 20]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("1"), dbg("\"pulled\""), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: empty source terminates after one advance",
+        \\none! : U64 => Try((U64, U64), [NoMore])
+        \\none! = |n| {
+        \\    dbg n
+        \\    Err(NoMore)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    items = Stream.collect!(Stream.custom(7, Unknown, none!))
+        \\    expect items == []
+        \\    {}
+        \\}
+    ,
+        &.{dbg("7")},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: finite source with known length collects every item then terminates",
+        \\up_to_three! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(0, Known(3), up_to_three!)
+        \\    expect Stream.size_hint(stream) == Known(3)
+        \\    items = Stream.collect!(stream)
+        \\    expect items == [0, 1, 2]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2"), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: an undercounted Known hint degrades to Unknown and still collects every item",
+        \\count! : U64 => Try((U64, U64), [NoMore])
+        \\count! = |n| if n < 4 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom(0, Known(1), count!)
+        \\    match Stream.next!(stream) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Known(0)
+        \\            match Stream.next!(rest) {
+        \\                One({ rest: after, .. }) => {
+        \\                    expect Stream.size_hint(after) == Unknown
+        \\                }
+        \\                _ => {
+        \\                    crash "expected a second item"
+        \\                }
+        \\            }
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    actual0 = Stream.collect!(Stream.custom(0, Known(0), count!))
+        \\    expect actual0 == [0, 1, 2, 3]
+        \\    actual1 = Stream.collect!(Stream.custom(0, Known(2), count!))
+        \\    expect actual1 == [0, 1, 2, 3]
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: pulls each stream item exactly once, interleaved with the loop body",
+        \\up_to_three! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_three! = |n| {
+        \\    dbg n
+        \\    if n < 3 { Ok((n * 10, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    var $sum = 0
+        \\    for! item in Stream.custom(0, Unknown, up_to_three!) {
+        \\        dbg "body"
+        \\        $sum = $sum + item
+        \\    }
+        \\    expect $sum == 30
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("\"body\""), dbg("1"), dbg("\"body\""), dbg("2"), dbg("\"body\""), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: consumes an Iter through Iter.stream",
+        \\main : () => {}
+        \\main = || {
+        \\    var $total = 0.U64
+        \\    for! n in [1.U64, 2, 3].iter() {
+        \\        $total = $total + n
+        \\    }
+        \\    expect $total == 6
+        \\    var $stream_total = 0.U64
+        \\    for! n in [1.U64, 2, 3].iter().stream() {
+        \\        $stream_total = $stream_total + n
+        \\    }
+        \\    expect $stream_total == 6
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: break stops pulling from the stream",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    var $last = 0
+        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\        $last = n
+        \\        if n == 2 {
+        \\            break
+        \\        }
+        \\    }
+        \\    expect $last == 2
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: return exits the enclosing function from inside the loop",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\first_above! : U64 => U64
+        \\first_above! = |limit| {
+        \\    for! n in Stream.custom(0, Unknown, counter!) {
+        \\        if n > limit {
+        \\            return n
+        \\        }
+        \\    }
+        \\    0
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    actual2 = first_above!(1)
+        \\    expect actual2 == 2
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "for!: expression form drives the stream",
+        \\print_all! : Stream(Str) => {}
+        \\print_all! = |stream| for! word in stream { dbg word }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    print_all!(["a", "b"].iter().stream())
+        \\}
+    ,
+        &.{ dbg("\"a\""), dbg("\"b\"") },
+        .returned,
+        0,
+    ),
+    // repro for https://github.com/roc-lang/roc/issues/12026
+    moduleTestWithLiveAllocations(
+        "Stream: next! on a stream captured by a returned closure",
+        \\make : U64 -> ({} => U64)
+        \\make = |value| {
+        \\    stream = [value].iter().stream()
+        \\    |{}| match stream.next!() {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    f! = make(42)
+        \\    actual = f!({})
+        \\    expect actual == 42
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: next! on returned, captured custom, and local streams",
+        \\first! : Stream(U64) => U64
+        \\first! = |stream| match stream.next!() {
+        \\    One({ item, .. }) => item
+        \\    _ => 0
+        \\}
+        \\
+        \\make_stream : U64 -> Stream(U64)
+        \\make_stream = |value| [value].iter().stream()
+        \\
+        \\make_custom : U64 -> ({} => U64)
+        \\make_custom = |value| {
+        \\    stream = Stream.custom(value, Unknown, |s| if s > 50 { Err(NoMore) } else { Ok((s, s + 100)) })
+        \\    |{}| first!(stream)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    returned = first!(make_stream(1))
+        \\    expect returned == 1
+        \\    custom! = make_custom(2)
+        \\    captured = custom!({})
+        \\    expect captured == 2
+        \\    local = [3.U64].iter().stream()
+        \\    direct = match local.next!() {
+        \\        One({ item, .. }) => item
+        \\        _ => 0
+        \\    }
+        \\    expect direct == 3
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: keep_if, drop_if, with_index, take_first, and drop_first",
+        \\main : () => {}
+        \\main = || {
+        \\    nums = [1.U64, 2, 3, 4, 5, 6].iter().stream()
+        \\    actual3 = nums.keep_if(|n| n % 2 == 0).collect!()
+        \\    expect actual3 == [2, 4, 6]
+        \\    actual4 = nums.drop_if(|n| n % 2 == 0).collect!()
+        \\    expect actual4 == [1, 3, 5]
+        \\    actual5 = nums.keep_if(|n| n > 4).with_index().collect!()
+        \\    expect actual5 == [(0, 5), (1, 6)]
+        \\    actual6 = nums.take_first(2).collect!()
+        \\    expect actual6 == [1, 2]
+        \\    actual7 = nums.take_first(10).collect!()
+        \\    expect actual7 == [1, 2, 3, 4, 5, 6]
+        \\    actual8 = nums.drop_first(4).collect!()
+        \\    expect actual8 == [5, 6]
+        \\    actual9 = nums.drop_first(10).collect!()
+        \\    expect actual9 == []
+        \\    expect nums.take_first(3).size_hint() == Known(3)
+        \\    expect nums.drop_first(4).size_hint() == Known(2)
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: take_first stops pulling the source after n items",
+        \\counter! : U64 => Try((U64, U64), [NoMore])
+        \\counter! = |n| {
+        \\    dbg n
+        \\    Ok((n, n + 1))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    actual10 = Stream.custom(0, Unknown, counter!).take_first(2).collect!()
+        \\    expect actual10 == [0, 1]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("0"), dbg("1") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: fold! and for_each! drive the stream in order",
+        \\main : () => {}
+        \\main = || {
+        \\    words = ["a", "b", "c"].iter().stream()
+        \\    actual11 = words.fold!("", |acc, word| Str.concat(acc, word))
+        \\    expect actual11 == "abc"
+        \\    words.for_each!(|word| {
+        \\        dbg word
+        \\        {}
+        \\    })
+        \\}
+    ,
+        &.{ dbg("\"a\""), dbg("\"b\""), dbg("\"c\"") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream: effectful keep_if predicates run once per pulled item",
+        \\keep! : U64 => Bool
+        \\keep! = |n| {
+        \\    dbg n
+        \\    n != 2
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    actual12 = [1.U64, 2, 3].iter().stream().keep_if(keep!).collect!()
+        \\    expect actual12 == [1, 3]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("1"), dbg("2"), dbg("3") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: size hint counts down per pull and Unknown stays Unknown",
+        \\count! : U64 => Try((U64, U64), [NoMore])
+        \\count! = |n| if n < 3 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    known = Stream.custom(0, Known(3), count!)
+        \\    match Stream.next!(known) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Known(2)
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    unknown = Stream.custom(0, Unknown, count!)
+        \\    match Stream.next!(unknown) {
+        \\        One({ rest, .. }) => {
+        \\            expect Stream.size_hint(rest) == Unknown
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    {}
+        \\}
+    ,
+        &.{},
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: map composes lazily in per-element pull order",
+        \\up_to_two! : U64 => Try((U64, U64), [NoMore])
+        \\up_to_two! = |n| {
+        \\    dbg n
+        \\    if n < 2 { Ok((n, n + 1)) } else { Err(NoMore) }
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    mapped = Stream.custom(0, Unknown, up_to_two!).map(|x| {
+        \\        dbg x * 10
+        \\        x * 10
+        \\    })
+        \\    dbg "mapped"
+        \\    items = Stream.collect!(mapped)
+        \\    expect items == [0, 10]
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("\"mapped\""), dbg("0"), dbg("0"), dbg("1"), dbg("10"), dbg("2") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: early termination of an infinite source stops advancing and releases state",
+        \\forever! : Str => Try((Str, Str), [NoMore])
+        \\forever! = |s| {
+        \\    dbg Str.count_utf8_bytes(s)
+        \\    Ok((s, Str.concat(s, "!")))
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    stream = Stream.custom("a heap string definitely long enough to allocate outside small-string storage", Unknown, forever!)
+        \\    match Stream.next!(stream) {
+        \\        One({ rest, .. }) => {
+        \\            match Stream.next!(rest) {
+        \\                One(_) => {}
+        \\                _ => {
+        \\                    crash "expected a second item"
+        \\                }
+        \\            }
+        \\        }
+        \\        _ => {
+        \\            crash "expected an item"
+        \\        }
+        \\    }
+        \\    {}
+        \\}
+    ,
+        &.{ dbg("77"), dbg("78") },
+        .returned,
+        0,
+    ),
+    moduleTestWithLiveAllocations(
+        "Stream.custom: error item with terminal state drops the resource",
+        \\Source : [Open(Str), Finished]
+        \\
+        \\read! : Source => Try((Try(U64, [ReadErr(Str)]), Source), [NoMore])
+        \\read! = |source| match source {
+        \\    Open(handle) => {
+        \\        dbg "read"
+        \\        Ok((Err(ReadErr(handle)), Finished))
+        \\    }
+        \\    Finished => Err(NoMore)
+        \\}
+        \\
+        \\main : () => {}
+        \\main = || {
+        \\    items = Stream.collect!(Stream.custom(Open("a heap handle definitely long enough to allocate outside small-string storage"), Unknown, read!))
+        \\    expect List.len(items) == 1
+        \\    {}
+        \\}
+    ,
+        &.{dbg("\"read\"")},
+        .returned,
+        0,
+    ),
 };

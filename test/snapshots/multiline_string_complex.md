@@ -55,7 +55,7 @@ x = {
 ~~~
 # EXPECTED
 TYPE MISMATCH - multiline_string_complex.md:40:6:40:8
-TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
+TYPE NOT DETERMINED - multiline_string_complex.md:37:3:37:4
 # PROBLEMS
 ~~~clojure
 (reports
@@ -77,41 +77,32 @@ TYPE MISMATCH - multiline_string_complex.md:37:3:37:4
 			(annotation-end)))
 	(report
 		(severity runtime_error)
-		(title "Type Mismatch")
+		(title "Type Not Determined")
 		(region (start 37 3) (end 37 4))
 		(headline
-			(reflow "The")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "method on")
-			(reflow " ")
-			(annotated code "Dec")
-			(reflow " ")
-			(reflow "has an incompatible type."))
+			(reflow "Nothing in this program determines the type of this number:"))
 		(document
 			(source-region (file "multiline_string_complex.md") (start 37 3) (end 37 4) (annotation error) (line-text "\t\t0 - \\\\"))
 			(line-break)
-			(reflow "The method")
-			(reflow " ")
-			(annotated code "minus")
-			(reflow " ")
-			(reflow "has the type:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Dec, Dec -> Dec")
+			(text "f where [f.minus : f, g -> f]")
 			(annotation-end)
 			(line-break)
 			(line-break)
-			(reflow "But I need it to have the type:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated operator "-")
+			(reflow " ")
+			(reflow "to use.")
 			(line-break)
 			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec, Str -> Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a suffix or a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -247,7 +238,7 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "value1"))))
-			(e-interpolation (constraint-fn-var 289) (dispatcher-var 15)
+			(e-interpolation (constraint-fn-var 290) (dispatcher-var 15)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -263,7 +254,7 @@ With multiple lines
 				(p-assign (ident "#interp_1"))
 				(e-lookup-local
 					(p-assign (ident "value2"))))
-			(e-interpolation (constraint-fn-var 307) (dispatcher-var 25)
+			(e-interpolation (constraint-fn-var 304) (dispatcher-var 25)
 				(first
 					(e-literal (string "This is a string
 With multiple lines
@@ -292,14 +283,14 @@ With multiple lines
 							(e-string
 								(e-literal (string "multiline"))))))
 				(field (name "d")
-					(e-dispatch-call (method "minus") (constraint-fn-var 358)
+					(e-dispatch-call (method "minus") (constraint-fn-var 355)
 						(receiver
 							(e-runtime-error (tag "erroneous_value_expr")))
 						(args
 							(e-string))))
 				(field (name "e")
-					(e-call (constraint-fn-var 373)
-						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "17185") (target-def "17185"))
+					(e-call (constraint-fn-var 370)
+						(e-lookup-associated-resolved (source "Bool.not") (builtin) (target-node "18191") (target-def "18191"))
 						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "x"))

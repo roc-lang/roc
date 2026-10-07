@@ -10,8 +10,10 @@ const CodecId = dispatch.GeneratedCodecDerivationId;
 const Span = @import("artifact_serialize.zig").Span;
 const type_roles = .{ "source_constructor_ty", "source_runtime_ty", "source_shape_ty", "source_body_shape_ty", "source_encoding_ty", "source_state_ty", "source_error_ty", "constructor_ty", "runtime_ty", "shape_ty", "body_shape_ty", "encoding_ty", "state_ty", "error_ty" };
 
-/// Intern each completed contract once. Type and call keys select candidates;
-/// exact comparison of the whole proof graph is the equality authority.
+/// Intern each completed contract once, in table order. Type and call keys
+/// select candidates; exact comparison of the proof graph is the equality
+/// authority. A nested contract interned earlier in the order is reached
+/// through its identity, so a comparison never walks a nested chain again.
 pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: *dispatch.StaticDispatchPlanTable) Allocator.Error!void {
     var buckets = std.AutoHashMap(u64, u32).init(allocator);
     defer buckets.deinit();
@@ -21,6 +23,7 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     defer comparer.deinit();
     for (table.generated_codec_derivations, 0..) |*derivation, index| {
         const raw: u32 = @intCast(index);
+        comparer.interned_len = raw;
         // Bucket selector only: the derivation's own types and method names
         // are package-controlled, but a Wyhash collision just adds a chain
         // step, because a candidate is accepted solely by `comparer.equal`.
@@ -30,7 +33,6 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
         for (derivation.callsSlice(table)) |call| {
             std.hash.autoHash(&hash, call.method);
             std.hash.autoHash(&hash, call.method_role);
-            std.hash.autoHash(&hash, call.conditional);
             std.hash.autoHash(&hash, std.meta.activeTag(call.resolution));
             hash.update(&types.rootKey(call.dispatcher_ty).bytes);
             hash.update(&types.rootKey(call.callable_ty).bytes);
@@ -51,11 +53,45 @@ pub fn intern(allocator: Allocator, types: checked.CheckedTypeStoreView, table: 
     }
 }
 
+/// Whether two calls of one generated codec body select the same method with
+/// the same proof: equal checked types modulo transparent aliases and fresh
+/// variable names, and equivalent resolution graphs. Repeated occurrences of a
+/// subject each record their own edge, whose evidence nodes are distinct
+/// allocations with the same content.
+pub fn callsEquivalent(
+    allocator: Allocator,
+    types: checked.CheckedTypeStoreView,
+    table: *const dispatch.StaticDispatchPlanTable,
+    left: dispatch.GeneratedCodecCall,
+    right: dispatch.GeneratedCodecCall,
+) Allocator.Error!bool {
+    var comparer = Comparer{ .allocator = allocator, .types = types, .table = table, .types_eql = .alias_transparent };
+    defer comparer.deinit();
+    if (left.method != right.method or std.meta.activeTag(left.resolution) != std.meta.activeTag(right.resolution)) return false;
+    try comparer.typesPair(left.dispatcher_ty, right.dispatcher_ty);
+    try comparer.typesPair(left.callable_ty, right.callable_ty);
+    if (!try comparer.optionalTypes(left.subject_ty, right.subject_ty)) return false;
+    switch (left.resolution) {
+        .pending => unreachable,
+        .checked_error => {},
+        .callable => |id| try comparer.work.append(allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(right.resolution.callable) }),
+        .structural => |id| if (!try comparer.codecs(id, right.resolution.structural)) return false,
+    }
+    return try comparer.run();
+}
+
 const Pair = struct { kind: enum { codec, evidence }, left: u32, right: u32 };
 const Comparer = struct {
     allocator: Allocator,
     types: checked.CheckedTypeStoreView,
     table: *const dispatch.StaticDispatchPlanTable,
+    /// Specialization identity is exact; agreement between repeated
+    /// occurrences of one role is modulo transparent aliases, like the role.
+    types_eql: enum { exact, alias_transparent } = .exact,
+    /// While interning, how many contracts at the front of the table already
+    /// hold their identity. Two of them are equal exactly when their
+    /// identities are.
+    interned_len: u32 = 0,
     work: std.ArrayList(Pair) = .empty,
     seen: std.AutoHashMapUnmanaged(Pair, void) = .empty,
     left_types: std.ArrayList(TypeId) = .empty,
@@ -81,15 +117,37 @@ const Comparer = struct {
 
     fn codecs(self: *Comparer, left: ?CodecId, right: ?CodecId) Allocator.Error!bool {
         if ((left == null) != (right == null)) return false;
-        if (left) |id| try self.work.append(self.allocator, .{ .kind = .codec, .left = @intFromEnum(id), .right = @intFromEnum(right.?) });
+        const left_id = left orelse return true;
+        const right_index = @intFromEnum(right.?);
+        const left_index = @intFromEnum(left_id);
+        if (left_index < self.interned_len and right_index < self.interned_len) {
+            const derivations = self.table.generated_codec_derivations;
+            return derivations[left_index].identity == derivations[right_index].identity;
+        }
+        try self.work.append(self.allocator, .{ .kind = .codec, .left = left_index, .right = right_index });
         return true;
     }
 
-    fn refs(self: *Comparer, left: Span, right: Span) Allocator.Error!bool {
+    /// Compare two evidence reference spans, and the callable contracts
+    /// they carry, from an explicit work list.
+    fn refs(self: *Comparer, root_left: Span, root_right: Span) Allocator.Error!bool {
+        var pending: std.ArrayList([2]Span) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, .{ root_left, root_right });
+        while (pending.pop()) |pair| {
+            if (!try self.refsSpan(pair[0], pair[1], &pending)) return false;
+        }
+        return true;
+    }
+
+    /// Compare one pair of evidence reference spans; the callable contracts
+    /// each reference carries are queued.
+    fn refsSpan(self: *Comparer, left: Span, right: Span, pending: *std.ArrayList([2]Span)) Allocator.Error!bool {
         if (left.len != right.len) return false;
         const left_refs = self.table.evidence_refs[left.start..][0..left.len];
         const right_refs = self.table.evidence_refs[right.start..][0..right.len];
         for (left_refs, right_refs) |a, b| {
+            try pending.append(self.allocator, .{ a.callable_contracts, b.callable_contracts });
             if (a.runtime_dictionary != b.runtime_dictionary or std.meta.activeTag(a.resolution) != std.meta.activeTag(b.resolution)) return false;
             try self.typesPair(a.dispatcher_ty, b.dispatcher_ty);
             switch (a.resolution) {
@@ -108,12 +166,20 @@ const Comparer = struct {
         return true;
     }
 
-    fn equal(self: *Comparer, left: u32, right: u32) Allocator.Error!bool {
+    fn reset(self: *Comparer) void {
         self.work.clearRetainingCapacity();
         self.seen.clearRetainingCapacity();
         self.left_types.clearRetainingCapacity();
         self.right_types.clearRetainingCapacity();
+    }
+
+    fn equal(self: *Comparer, left: u32, right: u32) Allocator.Error!bool {
+        self.reset();
         try self.work.append(self.allocator, .{ .kind = .codec, .left = left, .right = right });
+        return try self.run();
+    }
+
+    fn run(self: *Comparer) Allocator.Error!bool {
         while (self.work.pop()) |pair| {
             const visited = try self.seen.getOrPut(self.allocator, pair);
             if (visited.found_existing) continue;
@@ -126,7 +192,7 @@ const Comparer = struct {
                         try self.typesPair(@field(a, field), @field(b, field));
                     }
                     for (a.callsSlice(self.table), b.callsSlice(self.table)) |ac, bc| {
-                        if (ac.method != bc.method or ac.method_role != bc.method_role or ac.conditional != bc.conditional or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
+                        if (ac.method != bc.method or ac.method_role != bc.method_role or std.meta.activeTag(ac.resolution) != std.meta.activeTag(bc.resolution)) return false;
                         try self.typesPair(ac.dispatcher_ty, bc.dispatcher_ty);
                         try self.typesPair(ac.callable_ty, bc.callable_ty);
                         if (!try self.optionalTypes(ac.subject_ty, bc.subject_ty)) return false;
@@ -134,7 +200,7 @@ const Comparer = struct {
                             .pending => unreachable,
                             .checked_error => {},
                             .callable => |id| try self.work.append(self.allocator, .{ .kind = .evidence, .left = @intFromEnum(id), .right = @intFromEnum(bc.resolution.callable) }),
-                            .structural => |id| _ = try self.codecs(id, bc.resolution.structural),
+                            .structural => |id| if (!try self.codecs(id, bc.resolution.structural)) return false,
                         }
                     }
                 },
@@ -160,11 +226,14 @@ const Comparer = struct {
         }
         // One bijection covers all roots, including sharing across nested
         // evidence and source/frozen roles. Individual root equality is weaker.
-        return self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items);
+        return switch (self.types_eql) {
+            .exact => self.types.rootsAlphaExactEql(self.allocator, self.left_types.items, self.right_types.items),
+            .alias_transparent => self.types.rootsAliasTransparentAlphaEql(self.allocator, self.left_types.items, self.right_types.items),
+        };
     }
 };
 
-test "codec identity preserves cross-root sharing, conditional calls, and recursive selections" {
+test "codec identity preserves cross-root sharing, method roles, and recursive selections" {
     const gpa = std.testing.allocator;
     var types = checked.CheckedTypeStore{};
     defer types.deinit(gpa);
@@ -208,7 +277,7 @@ test "codec identity preserves cross-root sharing, conditional calls, and recurs
         };
     }
     derivations[2].source_shape_ty = variables[2];
-    calls[3].conditional = true;
+    calls[3].method_role = 1;
     calls[4].resolution = .checked_error;
     var table = dispatch.StaticDispatchPlanTable{
         .generated_codec_derivations = &derivations,

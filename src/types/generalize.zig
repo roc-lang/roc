@@ -47,6 +47,7 @@
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
@@ -384,9 +385,17 @@ pub const Generalizer = struct {
         // Check if this variable is one we're trying to generalize at this rank
         const is_var_to_generalize = self.vars_to_generalized.contains(resolved.var_);
 
-        // Early return for already-processed vars to handle recursive types
+        // Early return for already-processed vars to handle recursive types.
+        // A var reached again while its own walk is still in progress (a
+        // cycle) has not settled yet, so its descriptor still holds its
+        // pre-adjustment rank, which can exceed the rank this walk is
+        // settling. Checking admits cyclic graphs until the settled-state
+        // occurs sweep reports them, and every cycle this walk can reach is
+        // one that sweep rejects; capping the in-progress contribution at
+        // `group_rank` keeps adjustment from ever raising a rank. A var that
+        // already settled holds a rank no higher than `group_rank`.
         if (is_var_to_generalize and self.rank_adjusted_vars.contains(resolved.var_)) {
-            try self.pending_ranks.append(self.gpa, resolved.desc.rank);
+            try self.pending_ranks.append(self.gpa, resolved.desc.rank.min(group_rank));
             return true;
         }
 
@@ -398,7 +407,13 @@ pub const Generalizer = struct {
             return true;
         }
 
-        // Mark as seen before descending to handle cycles
+        // Publish the traversal's scope before marking this node as seen.
+        // A back-edge must observe the rank of this walk, not the node's
+        // original inner scope: otherwise an effect-dependency cycle can
+        // raise an enclosing function back to that inner scope.
+        if (@intFromEnum(resolved.desc.rank) > @intFromEnum(group_rank)) {
+            try self.store.setDescRank(resolved.desc_idx, group_rank);
+        }
         try self.rank_adjusted_vars.put(resolved.var_, {});
 
         // For vars being generalized: rank INCREASES to max of nested vars
@@ -436,7 +451,7 @@ pub const Generalizer = struct {
                 // `outermost` on its own, so it can't raise the rank). Traversing the
                 // backing var would therefore be redundant—the rank is just the max
                 // over the args.
-                return try self.pushOverArgs(fill, self.store.sliceAliasArgs(alias));
+                return try self.pushOverArgs(fill, self.store.sliceAliasAllArgs(alias));
             },
             .structure => |flat_type| switch (flat_type) {
                 .empty_record, .empty_tag_union => {
@@ -727,19 +742,10 @@ pub const VarPool = struct {
     pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
-                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
+                base.invariant("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
             }
         }
         try self.ranks.items[@intFromEnum(rank)].append(variable);
-    }
-
-    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) Allocator.Error!void {
-        if (builtin.mode == .Debug) {
-            if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
-                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
-            }
-        }
-        try self.ranks.items[@intFromEnum(rank)].appendSlice(variables);
     }
 
     /// Shrink the vars recorded for `rank` back to `new_len`, discarding
@@ -754,7 +760,7 @@ pub const VarPool = struct {
     pub fn getVarsForRank(self: *Self, rank: Rank) []Var {
         if (builtin.mode == .Debug) {
             if (@intFromEnum(rank) > @intFromEnum(self.current_rank)) {
-                std.debug.panic("trying to get vars at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
+                base.invariant("trying to get vars at rank {}, but current rank is {}", .{ @intFromEnum(rank), @intFromEnum(self.current_rank) });
             }
         }
         return self.ranks.items[@intFromEnum(rank)].items;
@@ -813,6 +819,56 @@ test "mergeFrom - vars at multiple ranks" {
     try expectVarsEqual(pool_a.getVarsForRank(.outermost), &.{ mkVar(1), mkVar(10) });
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(2)), &.{mkVar(20)});
     try expectVarsEqual(pool_a.getVarsForRank(@enumFromInt(3)), &.{mkVar(30)});
+}
+
+test "generalize - effect cycles inherit the enclosing traversal rank" {
+    const gpa = std.testing.allocator;
+    const outer: Rank = @enumFromInt(2);
+    const inner: Rank = @enumFromInt(3);
+
+    for ([_]usize{ 1, 2, 32 }) |depth| {
+        var store = try TypesStore.initCapacity(gpa, 64, 8);
+        defer store.deinit();
+        var pool = try VarPool.init(gpa);
+        defer pool.deinit();
+        try pool.pushRank();
+        try pool.pushRank();
+        try pool.pushRank();
+        var gen = try Generalizer.init(gpa, &store);
+        defer gen.deinit(gpa);
+
+        const captured = try store.freshWithRank(outer);
+        const result = try store.freshWithRank(inner);
+        const independent = try store.freshWithRank(inner);
+        const cycle = try gpa.alloc(Var, depth);
+        defer gpa.free(cycle);
+        for (cycle) |*node| node.* = try store.freshWithRank(inner);
+        for (cycle, 0..) |node, i| {
+            try store.setVarContent(node, try store.mkFuncUnboundWithEffectDeps(
+                &.{},
+                result,
+                &.{cycle[(i + 1) % depth]},
+            ));
+            try pool.addVarToRank(node, inner);
+        }
+        try store.setVarContent(captured, try store.mkFuncUnboundWithEffectDeps(&.{}, result, &.{cycle[0]}));
+        // The captured root was unified into this pool from an outer scope.
+        try pool.addVarToRank(captured, outer);
+        try pool.addVarToRank(captured, inner);
+        try pool.addVarToRank(result, inner);
+        try pool.addVarToRank(independent, inner);
+
+        try gen.generalize(gpa, &pool, inner);
+        try std.testing.expectEqual(outer, store.resolveVar(captured).desc.rank);
+        try std.testing.expectEqual(outer, store.resolveVar(result).desc.rank);
+        for (cycle) |node| try std.testing.expectEqual(outer, store.resolveVar(node).desc.rank);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(independent).desc.rank);
+
+        pool.popRank();
+        try gen.generalize(gpa, &pool, outer);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(captured).desc.rank);
+        try std.testing.expectEqual(Rank.generalized, store.resolveVar(result).desc.rank);
+    }
 }
 
 // Depth pin for rank adjustment. Generalization visits every var the

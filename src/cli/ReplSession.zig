@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
 const can = @import("can");
+const check = @import("check");
 const compile = @import("compile");
 const eval = @import("eval");
 const parse = @import("parse");
@@ -124,6 +125,7 @@ pub const DefinitionCommit = struct {
 pub const LanguageStepResult = union(enum) {
     expression: []u8,
     definition: DefinitionCommit,
+    statement,
     diagnostic: LanguageDiagnostic,
     runtime_crash: []u8,
     none,
@@ -132,7 +134,7 @@ pub const LanguageStepResult = union(enum) {
         switch (self) {
             .expression, .runtime_crash => |bytes| allocator.free(bytes),
             .diagnostic => |diagnostic| allocator.free(diagnostic.message),
-            .definition, .none => {},
+            .definition, .statement, .none => {},
         }
     }
 };
@@ -307,7 +309,7 @@ pub fn stepWithConfig(self: *ReplSession, input: []const u8, report_config: repo
         },
         .diagnostic => |diagnostic| .{ .diagnostic = diagnostic.message },
         .runtime_crash => |message| .{ .runtime_crash = message },
-        .none => .none,
+        .statement, .none => .none,
     };
 }
 
@@ -337,6 +339,22 @@ pub fn stepLanguageWithConfig(self: *ReplSession, input: []const u8, report_conf
             const result = try self.evaluateExpression(line, report_config);
             return switch (result) {
                 .output => |output| .{ .expression = output },
+                .diagnostic => |message| .{ .diagnostic = .{
+                    .kind = .compile_error,
+                    .input = input_info,
+                    .message = message,
+                } },
+                .runtime_crash => |message| .{ .runtime_crash = message },
+                .none, .exit => error.Internal,
+            };
+        },
+        .statement => {
+            const result = try self.evaluateStatement(line, report_config);
+            return switch (result) {
+                .output => |output| blk: {
+                    self.allocator.free(output);
+                    break :blk .statement;
+                },
                 .diagnostic => |message| .{ .diagnostic = .{
                     .kind = .compile_error,
                     .input = input_info,
@@ -712,44 +730,13 @@ fn addModuleRecursive(
             defer if (read_path.ptr != rel_path.ptr) self.allocator.free(read_path);
 
             break :source std.Io.Dir.cwd().readFileAlloc(self.roc_ctx.std_io, read_path, self.allocator, std.Io.Limit.limited(max_import_file_bytes)) catch |err| {
-                failure.* = switch (err) {
-                    error.FileNotFound => try std.fmt.allocPrint(
+                failure.* = switch (base.read_file_failure.kind(err)) {
+                    .file_not_found => try std.fmt.allocPrint(
                         self.allocator,
                         "I couldn't find the imported module `{s}` (looked for `{s}` relative to the current directory).",
                         .{ module_name, read_path },
                     ),
-                    error.AccessDenied,
-                    error.AntivirusInterference,
-                    error.BadPathName,
-                    error.Canceled,
-                    error.ConnectionResetByPeer,
-                    error.DeviceBusy,
-                    error.FileBusy,
-                    error.FileLocksUnsupported,
-                    error.FileTooBig,
-                    error.InputOutput,
-                    error.IsDir,
-                    error.LockViolation,
-                    error.NameTooLong,
-                    error.NetworkNotFound,
-                    error.NoDevice,
-                    error.NoSpaceLeft,
-                    error.NotDir,
-                    error.NotOpenForReading,
-                    error.OutOfMemory,
-                    error.PathAlreadyExists,
-                    error.PermissionDenied,
-                    error.PipeBusy,
-                    error.ProcessFdQuotaExceeded,
-                    error.ReadOnlyFileSystem,
-                    error.SocketUnconnected,
-                    error.StreamTooLong,
-                    error.SymLinkLoop,
-                    error.SystemFdQuotaExceeded,
-                    error.SystemResources,
-                    error.Unexpected,
-                    error.WouldBlock,
-                    => try std.fmt.allocPrint(
+                    .out_of_memory, .other => try std.fmt.allocPrint(
                         self.allocator,
                         "I couldn't read the imported module `{s}` (`{s}`): {s}.",
                         .{ module_name, read_path, @errorName(err) },
@@ -1283,6 +1270,117 @@ const DefinitionValidation = struct {
     error_message: ?[]u8,
 };
 
+/// How building a REPL program failed: with type or parse diagnostics to
+/// render, or with an operational error.
+pub const ProgramFailureKind = enum { type_check, parse, out_of_memory, operational };
+
+/// Classifies a failure to build or evaluate a program. The switch names every
+/// error so each one is placed explicitly.
+pub fn programFailureKind(err: eval.Inspected.Error) ProgramFailureKind {
+    return switch (err) {
+        error.TypeCheckError => .type_check,
+        error.ParseError => .parse,
+        error.OutOfMemory => .out_of_memory,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.BitcodeParseError,
+        error.BrokenPipe,
+        error.Canceled,
+        error.CompilationFailed,
+        error.ComptimeExhaustiveness,
+        error.ConnectionResetByPeer,
+        error.CorruptEmbeddedBuiltins,
+        error.Crash,
+        error.CreateFileMappingFailed,
+        error.DevBackendUnavailable,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.DivisionByZero,
+        error.ElfHashTableNotFound,
+        error.ElfStringSectionNotFound,
+        error.ElfSymSectionNotFound,
+        error.EmptyCode,
+        error.EntrypointNotFound,
+        error.EvaluationFailed,
+        error.ExpectErr,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.FtruncateFailed,
+        error.HostedFunctionNotBound,
+        error.InputOutput,
+        error.Internal,
+        error.InvalidHandle,
+        error.InvalidLirImage,
+        error.InvalidUtf8,
+        error.IsDir,
+        error.LinkFailed,
+        error.LlvmBackendUnavailable,
+        error.LlvmModuleVerificationFailed,
+        error.LlvmObjectEmitFailed,
+        error.LockViolation,
+        error.LockedMemoryLimitExceeded,
+        error.MapViewOfFileFailed,
+        error.MappingAlreadyExists,
+        error.MemfdCreateFailed,
+        error.MemoryMappingNotSupported,
+        error.MissingBuiltinBitcode,
+        error.MissingDynamicLinkingInformation,
+        error.MmapFailed,
+        error.ModuleLinkFailed,
+        error.MprotectFailed,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoBitcodeModules,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotDynamicLibrary,
+        error.NotElfFile,
+        error.NotOpenForReading,
+        error.NotOpenForWriting,
+        error.OpenFileMappingFailed,
+        error.PageSizeQueryFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.RuntimeError,
+        error.ShmOpenFailed,
+        error.ShmUnlinkFailed,
+        error.SocketUnconnected,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.TempFileOpenFailed,
+        error.TempFileUnlinkFailed,
+        error.TestExpectedEqual,
+        error.TestUnexpectedResult,
+        error.ThreadQuotaExceeded,
+        error.Unexpected,
+        error.Unseekable,
+        error.UnsupportedHostedFunction,
+        error.InvalidHostedFunctionSignature,
+        error.UnsupportedLirImageVersion,
+        error.UnsupportedLlvmTriple,
+        error.UnsupportedLowLevel,
+        error.UnsupportedPlatform,
+        error.UnsupportedTarget,
+        error.UnwindRegistrationFailed,
+        error.VirtualAllocFailed,
+        error.VirtualProtectFailed,
+        error.WasmExecFailed,
+        error.WindowsSDKNotFound,
+        error.WouldBlock,
+        error.WriteFailed,
+        => .operational,
+    };
+}
+
 fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingConfig) Allocator.Error!DefinitionValidation {
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
@@ -1307,325 +1405,23 @@ fn validateDefinitions(self: *ReplSession, report_config: reporting.ReportingCon
         var parsed = parsed_value;
         defer parsed.deinit(self.allocator);
         if (try eval.Inspected.parsedResourcesHaveErrorDiagnostics(self.allocator, &parsed)) {
-            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.BitcodeParseError,
-                error.BrokenPipe,
-                error.Canceled,
-                error.CompilationFailed,
-                error.ComptimeExhaustiveness,
-                error.ConnectionResetByPeer,
-                error.CorruptEmbeddedBuiltins,
-                error.Crash,
-                error.CreateFileMappingFailed,
-                error.DevBackendUnavailable,
-                error.DeviceBusy,
-                error.DiskQuota,
-                error.DivisionByZero,
-                error.ElfHashTableNotFound,
-                error.ElfStringSectionNotFound,
-                error.ElfSymSectionNotFound,
-                error.EmptyCode,
-                error.EntrypointNotFound,
-                error.EvaluationFailed,
-                error.ExpectErr,
-                error.FileBusy,
-                error.FileLocksUnsupported,
-                error.FileNotFound,
-                error.FileTooBig,
-                error.FtruncateFailed,
-                error.HostedFunctionNotBound,
-                error.InputOutput,
-                error.Internal,
-                error.InvalidHandle,
-                error.InvalidLirImage,
-                error.InvalidUtf8,
-                error.IsDir,
-                error.LinkFailed,
-                error.LlvmBackendUnavailable,
-                error.LlvmModuleVerificationFailed,
-                error.LlvmObjectEmitFailed,
-                error.LockViolation,
-                error.LockedMemoryLimitExceeded,
-                error.MapViewOfFileFailed,
-                error.MappingAlreadyExists,
-                error.MemfdCreateFailed,
-                error.MemoryMappingNotSupported,
-                error.MissingBuiltinBitcode,
-                error.MissingDynamicLinkingInformation,
-                error.MmapFailed,
-                error.ModuleLinkFailed,
-                error.MprotectFailed,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoBitcodeModules,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.NotDynamicLibrary,
-                error.NotElfFile,
-                error.NotOpenForReading,
-                error.NotOpenForWriting,
-                error.OpenFileMappingFailed,
-                error.PageSizeQueryFailed,
-                error.ParseError,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.ReadOnlyFileSystem,
-                error.RuntimeError,
-                error.ShmOpenFailed,
-                error.ShmUnlinkFailed,
-                error.SocketUnconnected,
-                error.Streaming,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.TempFileError,
-                error.TempFileOpenFailed,
-                error.TempFileUnlinkFailed,
-                error.TestExpectedEqual,
-                error.TestUnexpectedResult,
-                error.ThreadQuotaExceeded,
-                error.TypeCheckError,
-                error.Unexpected,
-                error.Unseekable,
-                error.UnsupportedHostedFunction,
-                error.InvalidHostedFunctionSignature,
-                error.UnsupportedLirImageVersion,
-                error.UnsupportedLlvmTriple,
-                error.UnsupportedLowLevel,
-                error.UnsupportedPlatform,
-                error.UnsupportedTarget,
-                error.UnwindRegistrationFailed,
-                error.VirtualAllocFailed,
-                error.VirtualProtectFailed,
-                error.WasmExecFailed,
-                error.WindowsSDKNotFound,
-                error.WouldBlock,
-                error.WriteFailed,
-                => return .{ .valid = false, .error_message = null },
-            };
+            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
             return .{ .valid = false, .error_message = msg };
         }
         return .{ .valid = true, .error_message = null };
-    } else |err| switch (err) {
-        error.TypeCheckError => {
-            const msg = self.renderModuleProblems(source, import_sources, report_config) catch |render_err| switch (render_err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.AccessDenied,
-                error.AntivirusInterference,
-                error.BadPathName,
-                error.BitcodeParseError,
-                error.BrokenPipe,
-                error.Canceled,
-                error.CompilationFailed,
-                error.ComptimeExhaustiveness,
-                error.ConnectionResetByPeer,
-                error.CorruptEmbeddedBuiltins,
-                error.Crash,
-                error.CreateFileMappingFailed,
-                error.DevBackendUnavailable,
-                error.DeviceBusy,
-                error.DiskQuota,
-                error.DivisionByZero,
-                error.ElfHashTableNotFound,
-                error.ElfStringSectionNotFound,
-                error.ElfSymSectionNotFound,
-                error.EmptyCode,
-                error.EntrypointNotFound,
-                error.EvaluationFailed,
-                error.ExpectErr,
-                error.FileBusy,
-                error.FileLocksUnsupported,
-                error.FileNotFound,
-                error.FileTooBig,
-                error.FtruncateFailed,
-                error.HostedFunctionNotBound,
-                error.InputOutput,
-                error.Internal,
-                error.InvalidHandle,
-                error.InvalidLirImage,
-                error.InvalidUtf8,
-                error.IsDir,
-                error.LinkFailed,
-                error.LlvmBackendUnavailable,
-                error.LlvmModuleVerificationFailed,
-                error.LlvmObjectEmitFailed,
-                error.LockViolation,
-                error.LockedMemoryLimitExceeded,
-                error.MapViewOfFileFailed,
-                error.MappingAlreadyExists,
-                error.MemfdCreateFailed,
-                error.MemoryMappingNotSupported,
-                error.MissingBuiltinBitcode,
-                error.MissingDynamicLinkingInformation,
-                error.MmapFailed,
-                error.ModuleLinkFailed,
-                error.MprotectFailed,
-                error.NameTooLong,
-                error.NetworkNotFound,
-                error.NoBitcodeModules,
-                error.NoDevice,
-                error.NoSpaceLeft,
-                error.NotDir,
-                error.NotDynamicLibrary,
-                error.NotElfFile,
-                error.NotOpenForReading,
-                error.NotOpenForWriting,
-                error.OpenFileMappingFailed,
-                error.PageSizeQueryFailed,
-                error.PathAlreadyExists,
-                error.PermissionDenied,
-                error.PipeBusy,
-                error.ProcessFdQuotaExceeded,
-                error.ReadOnlyFileSystem,
-                error.RuntimeError,
-                error.ShmOpenFailed,
-                error.ShmUnlinkFailed,
-                error.SocketUnconnected,
-                error.Streaming,
-                error.SymLinkLoop,
-                error.SystemFdQuotaExceeded,
-                error.SystemResources,
-                error.TempFileError,
-                error.TempFileOpenFailed,
-                error.TempFileUnlinkFailed,
-                error.TestExpectedEqual,
-                error.TestUnexpectedResult,
-                error.ThreadQuotaExceeded,
-                error.Unexpected,
-                error.Unseekable,
-                error.UnsupportedHostedFunction,
-                error.InvalidHostedFunctionSignature,
-                error.UnsupportedLirImageVersion,
-                error.UnsupportedLlvmTriple,
-                error.UnsupportedLowLevel,
-                error.UnsupportedPlatform,
-                error.UnsupportedTarget,
-                error.UnwindRegistrationFailed,
-                error.VirtualAllocFailed,
-                error.VirtualProtectFailed,
-                error.WasmExecFailed,
-                error.WindowsSDKNotFound,
-                error.WouldBlock,
-                error.WriteFailed,
-                error.ParseError,
-                error.TypeCheckError,
-                => return .{ .valid = false, .error_message = null },
-            };
+    } else |err| switch (programFailureKind(err)) {
+        .type_check => {
+            const msg = try self.renderModuleProblemsOrNull(source, import_sources, report_config);
             return .{ .valid = false, .error_message = msg };
         },
-        error.ParseError => {
+        .parse => {
             const msg = self.renderModuleParseDiagnostics(source, report_config) catch |render_err| switch (render_err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.WriteFailed => return .{ .valid = false, .error_message = null },
             };
             return .{ .valid = false, .error_message = msg };
         },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.OutOfMemory,
-        error.PageSizeQueryFailed,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileError,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.InvalidHostedFunctionSignature,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => return .{ .valid = false, .error_message = null },
+        .out_of_memory, .operational => return .{ .valid = false, .error_message = null },
     }
 }
 
@@ -1638,7 +1434,21 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     // evaluation and archives the resulting Str directly in ConstStore.
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect(({s}))\n", .{ definitions, expr });
     defer self.allocator.free(source);
+    return self.evaluateMainSource(source, report_config);
+}
 
+/// Evaluate a value-less statement (`expect`, `for`, `while`) by running it
+/// as the body of a block whose result is the unit record.
+fn evaluateStatement(self: *ReplSession, statement: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+    const definitions = try self.definitionsSource();
+    defer self.allocator.free(definitions);
+
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s}\nStr.inspect({{}})\n}}\n", .{ definitions, statement });
+    defer self.allocator.free(source);
+    return self.evaluateMainSource(source, report_config);
+}
+
+fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
     const import_sources = switch (try self.resolveImports()) {
         .resolved => |s| s,
         .failed => |msg| return .{ .diagnostic = msg },
@@ -1659,108 +1469,10 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
             .context = @ptrCast(&event_collector),
             .notify = ComptimeEventCollector.notify,
         },
-    ) catch |err| switch (err) {
-        error.TypeCheckError => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
-        error.ParseError => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.OutOfMemory,
-        error.PageSizeQueryFailed,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileError,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.InvalidHostedFunctionSignature,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => return err,
+    ) catch |err| switch (programFailureKind(err)) {
+        .type_check => return .{ .diagnostic = try self.renderModuleProblems(source, import_sources, report_config) },
+        .parse => return .{ .diagnostic = try self.renderModuleParseDiagnostics(source, report_config) },
+        .out_of_memory, .operational => return err,
     };
     defer resources.deinit(self.allocator);
     self.last_events = try event_collector.events.toOwnedSlice(self.allocator);
@@ -1780,112 +1492,25 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     }
 
     const output = try eval.Inspected.finalizedComptimeReplStr(&resources);
-    return .{ .output = try self.allocator.dupe(u8, output) };
+    var visible = std.Io.Writer.Allocating.init(self.allocator);
+    defer visible.deinit();
+    try base.bidi.writeVisible(&visible.writer, output);
+    return .{ .output = try visible.toOwnedSlice() };
+}
+
+/// Module problems rendered for display, or null when rendering fails for a
+/// reason other than allocation.
+fn renderModuleProblemsOrNull(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) Allocator.Error!?[]u8 {
+    return self.renderModuleProblems(source, imports, report_config) catch |render_err| switch (programFailureKind(render_err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .type_check, .parse, .operational => return null,
+    };
 }
 
 fn renderModuleProblems(self: *ReplSession, source: []const u8, imports: []const ModuleSource, report_config: reporting.ReportingConfig) ModuleRenderError![]u8 {
-    return eval.Inspected.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (err) {
-        error.ParseError => self.renderModuleParseDiagnostics(source, report_config),
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.OutOfMemory,
-        error.PageSizeQueryFailed,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileError,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.TypeCheckError,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.InvalidHostedFunctionSignature,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => err,
+    return eval.Inspected.renderProblemsWithConfigAndImports(self.allocator, .module, source, imports, report_config, self.roc_ctx) catch |err| switch (programFailureKind(err)) {
+        .parse => self.renderModuleParseDiagnostics(source, report_config),
+        .type_check, .out_of_memory, .operational => err,
     };
 }
 
@@ -1926,21 +1551,14 @@ fn renderAstDiagnostics(
     var out: std.Io.Writer.Allocating = .init(self.allocator);
     errdefer out.deinit();
 
-    var rendered_any = false;
-    for (ast.tokenize_diagnostics.items) |diagnostic| {
-        var report = try ast.tokenizeDiagnosticToReport(diagnostic, self.allocator, filename);
-        defer report.deinit();
-        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
-        rendered_any = true;
-    }
-    for (ast.parse_diagnostics.items) |diagnostic| {
-        var report = try ast.parseDiagnosticToReport(env, diagnostic, self.allocator, filename);
-        defer report.deinit();
-        try reporting.renderReportWithConfig(&report, &out.writer, report_config);
-        rendered_any = true;
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    defer check.module_reports.deinit(self.allocator, &reports);
+    try check.module_reports.appendSyntax(self.allocator, &reports, ast, env, filename);
+    for (reports.items) |*report| {
+        try reporting.renderReportWithConfig(report, &out.writer, report_config);
     }
 
-    if (!rendered_any) {
+    if (reports.items.len == 0) {
         out.deinit();
         return self.renderFallbackParseDiagnostic(env.source, report_config);
     }
@@ -1968,6 +1586,9 @@ fn renderFallbackParseDiagnostic(self: *ReplSession, source: []const u8, report_
 pub const InputKind = enum {
     definition,
     expression,
+    /// A statement that only exists for its effect (`expect`, `for`, `while`)
+    /// and has no value to print.
+    statement,
 };
 
 /// Distinguishes declarations that can share a name in the REPL definition store.
@@ -2036,12 +1657,13 @@ pub fn inputStatusWithAllocator(allocator: Allocator, line: []const u8) Allocato
             .expr,
             .crash,
             .dbg,
-            .expect,
-            .@"for",
-            .@"while",
             .@"return",
             .@"break",
             => .{ .kind = .expression },
+            .expect,
+            .@"for",
+            .@"while",
+            => .{ .kind = .statement },
             .decl => |decl| .{
                 .kind = .definition,
                 .definition_kind = .value,
@@ -2357,19 +1979,6 @@ pub const DefinitionStore = struct {
         return false;
     }
 
-    pub fn removeByNameAndKind(self: *DefinitionStore, allocator: Allocator, name: []const u8, kind: DefinitionKind) void {
-        var i: usize = 0;
-        while (i < self.items.items.len) {
-            const definition = &self.items.items[i];
-            if (definition.kind == kind and definition.bindsName(name)) {
-                var removed = self.items.orderedRemove(i);
-                removed.deinit(allocator);
-                return;
-            }
-            i += 1;
-        }
-    }
-
     fn addOrReplace(
         self: *DefinitionStore,
         allocator: Allocator,
@@ -2559,7 +2168,7 @@ fn expectAllBackends(expr: []const u8, expected: []const u8) ReplTestError!void 
 
     try expectCompiledBackend(.interpreter, expr, expected, &compiled.lowered);
     try expectCompiledBackend(.dev, expr, expected, &compiled.lowered);
-    try expectCompiledBackend(.wasm, expr, expected, &compiled.wasm_lowered);
+    try expectCompiledBackend(.wasm, expr, expected, &compiled.wasm_lowered.?);
 }
 
 fn expectCompiledBackend(
@@ -2669,7 +2278,7 @@ test "Repl - language stepping returns structured definition metadata" {
             try testing.expectEqualStrings("answer", definition.name);
             try testing.expectEqual(DefinitionKind.value, definition.kind);
         },
-        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 }
 
@@ -2687,7 +2296,7 @@ test "Repl - compile-time evaluation rejects one-way effects" {
             std.debug.print("Repl import failed:\n{s}\n", .{diagnostic.message});
             return error.TestUnexpectedResult;
         },
-        .expression, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const inspected = try repl.inspectExpressionType(
@@ -2715,7 +2324,7 @@ test "Repl - compile-time evaluation rejects one-way effects" {
             try testing.expect(std.mem.find(u8, diagnostic.message, "Effectful Compile Time Expression") != null);
             try testing.expect(std.mem.find(u8, diagnostic.message, "REPL expressions are evaluated at compile time") != null);
         },
-        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2741,7 +2350,7 @@ test "Repl - compile-time evaluation records dbg events" {
     defer result.deinit(testing.allocator);
     switch (result) {
         .expression => |output| try testing.expectEqualStrings("42.0", output),
-        .definition, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .definition, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const events = repl.takeEvents();
@@ -2756,6 +2365,75 @@ test "Repl - compile-time evaluation records dbg events" {
     }
 }
 
+test "Repl - passing expect statement produces no output" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const status = try repl.inputStatus("expect 10 == (2 + 8)");
+    switch (status) {
+        .complete => |info| try testing.expectEqual(InputKind.statement, info.kind),
+        .incomplete, .invalid => return error.TestUnexpectedResult,
+    }
+
+    const result = try repl.stepLanguageWithConfig("expect 10 == (2 + 8)", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .statement => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl expect failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - failing expect statement is reported" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig("expect 1 == 2", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .diagnostic => |diagnostic| {
+            try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind);
+            try testing.expect(std.mem.find(u8, diagnostic.message, "Compile Time Expect Failed") != null);
+        },
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - expect statement sees stored definitions" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
+
+    const defined = try repl.stepLanguageWithConfig("x = 5", config);
+    defer defined.deinit(testing.allocator);
+
+    const result = try repl.stepLanguageWithConfig("expect x + 1 == 6", config);
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .statement => {},
+        .expression, .definition, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
+test "Repl - for loop statement runs" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+
+    const result = try repl.stepLanguageWithConfig("for n in [1, 2, 3] { expect n > 0 }", reporting.ReportingConfig.initForTesting());
+    defer result.deinit(testing.allocator);
+    switch (result) {
+        .statement => {},
+        .diagnostic => |diagnostic| {
+            std.debug.print("Repl for failed:\n{s}\n", .{diagnostic.message});
+            return error.TestUnexpectedResult;
+        },
+        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+    }
+}
+
 test "Repl - failed annotated value restores the exact pending annotation state" {
     var repl = try testRepl(.interpreter);
     defer repl.deinit();
@@ -2765,14 +2443,14 @@ test "Repl - failed annotated value restores the exact pending annotation state"
     defer annotation.deinit(testing.allocator);
     switch (annotation) {
         .definition => |definition| try testing.expectEqual(DefinitionKind.annotation, definition.kind),
-        .expression, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .statement, .diagnostic, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const failed_value = try repl.stepLanguageWithConfig("pending = 42", config);
     defer failed_value.deinit(testing.allocator);
     switch (failed_value) {
         .diagnostic => |diagnostic| try testing.expectEqual(LanguageDiagnosticKind.compile_error, diagnostic.kind),
-        .expression, .definition, .runtime_crash, .none => return error.TestUnexpectedResult,
+        .expression, .definition, .statement, .runtime_crash, .none => return error.TestUnexpectedResult,
     }
 
     const stored = try repl.storedDefinitions();
@@ -3691,4 +3369,35 @@ test "Repl - representative all-backends coverage (incl. wasm)" {
     try expectAllBackends("Str.from_utf8([72, 105])", "Ok(\"Hi\")");
     try expectAllBackends("U8.from_str(\"42\")", "Ok(42)");
     try expectAllBackends("F64.to_str(2.5)", "\"2.5\"");
+}
+
+test "Repl bidi rejection preserves definitions and escaped values remain legal" {
+    var repl = try testRepl(.interpreter);
+    defer repl.deinit();
+    const config = reporting.ReportingConfig.initForTesting();
+    for (base.bidi.controls) |control| {
+        const source = try std.mem.concat(testing.allocator, u8, &.{ "unsafe = 42 # ", control.utf8 });
+        defer testing.allocator.free(source);
+        const rejected = try repl.stepLanguageWithConfig(source, config);
+        defer rejected.deinit(testing.allocator);
+        try testing.expect(rejected == .diagnostic);
+        try testing.expectEqual(@as(usize, 0), repl.definitions.count());
+        var iter = base.bidi.Iterator{ .bytes = rejected.diagnostic.message };
+        try testing.expect(iter.next() == null);
+        const literal = try std.fmt.allocPrint(testing.allocator, "\"\\u({X})\"", .{control.codepoint});
+        defer testing.allocator.free(literal);
+        const inspected = try repl.stepWithConfig(literal, config);
+        defer inspected.deinit(testing.allocator);
+        try testing.expect(inspected == .output);
+        var displayed = base.bidi.Iterator{ .bytes = inspected.output };
+        try testing.expect(displayed.next() == null);
+        const escaped = try std.fmt.allocPrint(testing.allocator, "\"\\u({X})\".count_utf8_bytes()", .{control.codepoint});
+        defer testing.allocator.free(escaped);
+        const result = try repl.stepWithConfig(escaped, config);
+        defer result.deinit(testing.allocator);
+        try testing.expect(result == .output);
+        const expected = try std.fmt.allocPrint(testing.allocator, "{d}", .{control.utf8.len});
+        defer testing.allocator.free(expected);
+        try testing.expectEqualStrings(expected, result.output);
+    }
 }

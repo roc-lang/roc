@@ -19,6 +19,7 @@
 //! Aggregates".
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -37,50 +38,44 @@ pub const Error = std.mem.Allocator.Error;
 const no_index: u32 = std.math.maxInt(u32);
 
 /// Compact description of an aggregate projection whose result may carry a
-/// stored ownership unit out of its source. The high two bits identify the
-/// projection form; the remaining bits hold the semantic field or tag indices.
-pub const no_projection: u64 = std.math.maxInt(u64);
-const projection_kind_shift = 62;
-const projection_data_mask = (@as(u64, 1) << projection_kind_shift) - 1;
-const ProjectionKind = enum(u2) {
-    field,
-    tag_payload,
-    tag_payload_struct,
-    reserved,
+/// stored ownership unit out of its source: the projection form and its
+/// semantic field or tag indices. It has no padding, so its bytes hash
+/// directly.
+pub const Projection = extern struct {
+    kind: Kind,
+    /// The field index of a `.field` projection, or the variant index of a tag
+    /// payload projection.
+    first: u32,
+    /// The payload index within the variant of a `.tag_payload` projection.
+    second: u32,
+
+    pub const Kind = enum(u32) {
+        none,
+        field,
+        tag_payload,
+        tag_payload_struct,
+    };
+
+    pub const none: Projection = .{ .kind = .none, .first = 0, .second = 0 };
+
+    pub fn eql(a: Projection, b: Projection) bool {
+        return a.kind == b.kind and a.first == b.first and a.second == b.second;
+    }
+
+    pub fn isNone(self: Projection) bool {
+        return self.kind == .none;
+    }
 };
 
 /// Encodes the ownership-relevant shape of a reference projection, or null
 /// when the operation does not select aggregate storage.
-pub fn encodeProjection(op: LIR.RefOp) ?u64 {
+pub fn encodeProjection(op: LIR.RefOp) ?Projection {
     return switch (op) {
-        .field => |field| @as(u64, field.field_idx),
-        .tag_payload => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload)) << projection_kind_shift) |
-            (@as(u64, payload.variant_index) << 16) |
-            @as(u64, payload.payload_idx),
-        .tag_payload_struct => |payload| (@as(u64, @intFromEnum(ProjectionKind.tag_payload_struct)) << projection_kind_shift) |
-            @as(u64, payload.variant_index),
+        .field => |field| .{ .kind = .field, .first = field.field_idx, .second = 0 },
+        .tag_payload => |payload| .{ .kind = .tag_payload, .first = payload.variant_index, .second = payload.payload_idx },
+        .tag_payload_struct => |payload| .{ .kind = .tag_payload_struct, .first = payload.variant_index, .second = 0 },
         .local, .discriminant, .list_reinterpret, .nominal => null,
     };
-}
-
-fn projectionKind(projection: u64) ProjectionKind {
-    return @enumFromInt(@as(u2, @intCast(projection >> projection_kind_shift)));
-}
-
-fn projectionField(projection: u64) u16 {
-    return @intCast(projection & projection_data_mask);
-}
-
-fn projectionVariant(projection: u64) u16 {
-    return switch (projectionKind(projection)) {
-        .tag_payload => @intCast((projection >> 16) & 0xffff),
-        .tag_payload_struct => @intCast(projection & 0xffff),
-        .field, .reserved => 0,
-    };
-}
-
-fn projectionPayload(projection: u64) u16 {
-    return @intCast(projection & 0xffff);
 }
 
 /// Cycle-safe check for whether a layout may hold descriptor-driven dynamic
@@ -122,7 +117,7 @@ pub fn layoutMayContainBoxyDynamic(
     return false;
 }
 
-fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) ?layout_mod.StructField {
+fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) ?layout_mod.StructField {
     const info = layouts.getStructInfo(struct_layout);
     for (0..info.fields.len) |index| {
         const field = info.fields.get(@intCast(index));
@@ -131,9 +126,9 @@ fn structFieldBySemanticIndex(layouts: *const layout_mod.Store, struct_layout: l
     return null;
 }
 
-fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u16) bool {
+fn structHasOneRcField(layouts: *const layout_mod.Store, struct_layout: layout_mod.Layout, field_idx: u32) bool {
     const info = layouts.getStructInfo(struct_layout);
-    var only_field: ?u16 = null;
+    var only_field: ?u32 = null;
     for (0..info.fields.len) |index| {
         const field = info.fields.get(@intCast(index));
         if (!layouts.layoutContainsRefcounted(layouts.getLayout(field.layout))) continue;
@@ -153,16 +148,15 @@ pub fn projectionOwnsAllRc(
     layouts: *const layout_mod.Store,
     source: LIR.LocalId,
     target: LIR.LocalId,
-    projection: u64,
+    projection: Projection,
 ) bool {
-    if (projection == no_projection) return false;
     const source_layout_idx = store.getLocal(source).layout_idx;
     const target_layout_idx = store.getLocal(target).layout_idx;
     const source_layout = layouts.getLayout(source_layout_idx);
-    switch (projectionKind(projection)) {
+    switch (projection.kind) {
         .field => {
             if (source_layout.tag != .struct_) return false;
-            const field_idx = projectionField(projection);
+            const field_idx = projection.first;
             const field = structFieldBySemanticIndex(layouts, source_layout, field_idx) orelse return false;
             return field.layout == target_layout_idx and
                 layouts.layoutContainsRefcounted(layouts.getLayout(field.layout)) and
@@ -171,15 +165,15 @@ pub fn projectionOwnsAllRc(
         .tag_payload, .tag_payload_struct => {
             if (source_layout.tag != .tag_union) return false;
             const info = layouts.getTagUnionInfo(source_layout);
-            const variant_index = projectionVariant(projection);
+            const variant_index = projection.first;
             if (variant_index >= info.variants.len) return false;
             const payload_layout_idx = info.variants.get(variant_index).payload_layout;
             const payload_layout = layouts.getLayout(payload_layout_idx);
-            if (projectionKind(projection) == .tag_payload_struct) {
+            if (projection.kind == .tag_payload_struct) {
                 return payload_layout_idx == target_layout_idx and
                     layouts.layoutContainsRefcounted(payload_layout);
             }
-            const payload_idx = projectionPayload(projection);
+            const payload_idx = projection.second;
             if (payload_layout.tag == .struct_) {
                 const field = structFieldBySemanticIndex(layouts, payload_layout, payload_idx) orelse return false;
                 return field.layout == target_layout_idx and
@@ -189,7 +183,7 @@ pub fn projectionOwnsAllRc(
             return payload_idx == 0 and payload_layout_idx == target_layout_idx and
                 layouts.layoutContainsRefcounted(payload_layout);
         },
-        .reserved => return false,
+        .none => return false,
     }
 }
 
@@ -207,10 +201,7 @@ pub const FieldPlace = struct {
 /// the first for the union's single ownership-complete claim.
 pub const PayloadView = struct {
     view: LIR.LocalId,
-    tag_discriminant: u16,
-    /// Scratch layout for the residual dispatch, borrowed from the
-    /// container's single-definition discriminant read.
-    discriminant_layout: layout_mod.Idx,
+    tag_discriminant: u32,
 };
 
 /// Committed field-place domain for one dismantlable container. Residual
@@ -362,7 +353,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .Debug) base.invariant(message, .{});
     unreachable;
 }
 
@@ -405,9 +396,8 @@ const UnionRoot = struct {
     /// The single payload view, `no_index` before one is seen and
     /// `ambiguous_view` once a second view or variant appears.
     view: u32 = no_index,
-    variant_index: u16 = 0,
-    tag_discriminant: u16 = 0,
-    discriminant_layout: ?layout_mod.Idx = null,
+    variant_index: u32 = 0,
+    tag_discriminant: u32 = 0,
 };
 
 const ambiguous_view: u32 = no_index - 1;
@@ -662,12 +652,6 @@ const Analysis = struct {
         const root_index = self.unionRootOf(local) orelse return;
         const entry = try self.unionEntryOf(root_index);
         entry.disqualified = true;
-    }
-
-    fn noteDiscriminantRead(self: *Analysis, source: LIR.LocalId, target: LIR.LocalId) Error!void {
-        const root_index = self.unionRootOf(source) orelse return;
-        const entry = try self.unionEntryOf(root_index);
-        if (entry.discriminant_layout == null) entry.discriminant_layout = self.store.getLocal(target).layout_idx;
     }
 
     /// A borrowed payload view of a union root that owns every refcounted
@@ -947,11 +931,13 @@ const FutureFields = struct {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -979,7 +965,7 @@ const FutureFields = struct {
                 .comptime_exhaustiveness_failed,
                 => {
                     successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
                     for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
                 },
             }
@@ -1049,11 +1035,13 @@ fn fieldObservedAfter(
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1079,7 +1067,7 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            => try body_clone.appendSuccessors(@constCast(store), &work, cursor),
+            => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
     return false;
@@ -1111,7 +1099,7 @@ fn collectProcJoinBodies(
                 entry.value_ptr.* = stmt.join.body;
             }
         }
-        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1124,25 +1112,25 @@ test "future field uses resolve joins in their procedure" {
     var join_ids = body_clone.JoinParamIndex.init(gpa);
     defer join_ids.deinit();
     const join_id = join_ids.freshJoinPoint();
-    const exit = try store.addCFStmt(.{ .ret = .{ .value = field } });
-    const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } });
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = field } }, .test_fixture);
+    const back_edge = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = field,
         .op = .{ .field = .{ .source = container, .field_idx = 0 } },
         .next = back_edge,
-    } });
+    } }, .test_fixture);
     const loop_proc = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = .empty(),
         .body = read,
         .remainder = back_edge,
-    } });
+    } }, .test_fixture);
     const other_proc = try store.addCFStmt(.{ .join = .{
         .id = join_id,
         .params = .empty(),
         .body = exit,
         .remainder = back_edge,
-    } });
+    } }, .test_fixture);
     var loop_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer loop_joins.deinit(gpa);
     var other_joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
@@ -1175,26 +1163,26 @@ test "future field observations agree with per-read traversal across joins rebin
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
     const other = try store.addLocal(.{ .layout_idx = .str });
-    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } });
-    const boundary = try store.addCFStmt(.loop_continue);
+    const exit = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
+    const boundary = try store.addCFStmt(.loop_continue, .test_fixture);
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
     for (&join_ids, 0..) |*id, index| id.* = @enumFromInt(index);
     const outer_id = join_ids[0];
     const nested_id = join_ids[1];
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const rebind = try store.addCFStmt(.{ .set_local = .{
         .target = local,
         .value = other,
         .mode = .initialize_join_param,
         .next = jump,
-    } });
+    } }, .test_fixture);
     const read = try store.addCFStmt(.{ .assign_ref = .{
         .target = other,
         .op = .{ .field = .{ .source = local, .field_idx = 0 } },
         .next = rebind,
-    } });
+    } }, .test_fixture);
     const branch = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = other,
         .branches = try store.addCFSwitchBranches(&.{
@@ -1202,20 +1190,20 @@ test "future field observations agree with per-read traversal across joins rebin
             .{ .value = 1, .body = boundary },
         }),
         .default_branch = read,
-    } });
-    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } });
+    } }, .test_fixture);
+    const nested_jump = try store.addCFStmt(.{ .jump = .{ .target = nested_id } }, .test_fixture);
     const nested = try store.addCFStmt(.{ .join = .{
         .id = nested_id,
         .params = .empty(),
         .body = branch,
         .remainder = nested_jump,
-    } });
+    } }, .test_fixture);
     const outer = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = .empty(),
         .body = nested,
         .remainder = jump,
-    } });
+    } }, .test_fixture);
     var joins = std.AutoHashMapUnmanaged(u32, LIR.CFStmtId).empty;
     defer joins.deinit(gpa);
     try joins.put(gpa, @intFromEnum(outer_id), nested);
@@ -1231,7 +1219,7 @@ test "future field observations agree with per-read traversal across joins rebin
             .target = other,
             .op = .{ .field = .{ .source = local, .field_idx = 2 } },
             .next = start,
-        } });
+        } }, .test_fixture);
         try reads.put(gpa, probe, .{ .bit = 4, .consuming = true });
     }
     // These queries consume only join membership and the outcome signature
@@ -1281,7 +1269,7 @@ test "future field observations share CFG discovery across many consuming reads"
     var store = LirStore.init(gpa);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
-    var start = try store.addCFStmt(.{ .ret = .{ .value = local } });
+    var start = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
     const exit = start;
     // Mutually exclusive consuming reads share a long continuation observing
     // another field: the old DFS cannot exit early for any of their queries.
@@ -1290,7 +1278,7 @@ test "future field observations share CFG discovery across many consuming reads"
             .target = local,
             .op = .{ .local = local },
             .next = start,
-        } });
+        } }, .test_fixture);
     }
     var reads = std.AutoHashMapUnmanaged(LIR.CFStmtId, ReadKind).empty;
     defer reads.deinit(gpa);
@@ -1309,7 +1297,7 @@ test "future field observations share CFG discovery across many consuming reads"
                 .target = local,
                 .op = .{ .field = .{ .source = local, .field_idx = 0 } },
                 .next = start,
-            } });
+            } }, .test_fixture);
             try reads.put(gpa, probe, .{ .bit = 1, .consuming = true });
         }
         var old_visits: usize = 0;
@@ -1403,9 +1391,9 @@ fn findOutcomeRefinement(
 }
 
 fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-    if (value > std.math.maxInt(u16)) return null;
+    if (value > std.math.maxInt(u32)) return null;
     for (outcomes) |outcome| {
-        if (outcome.discriminant == @as(u16, @intCast(value))) return outcome.restituted_params;
+        if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
     }
     return null;
 }
@@ -1482,7 +1470,7 @@ const StatementDominance = struct {
         defer successors.deinit(store.allocator);
         for (0..store.cfStmtCount()) |index| {
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))));
+            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))), store.allocator);
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @intFromEnum(next) });
         }
         for (0..store.procSpecCount()) |index| {
@@ -1720,7 +1708,7 @@ pub fn compute(
         const index = @intFromEnum(stmt_id);
         if (reachable.isSet(index)) continue;
         reachable.set(index);
-        try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
+        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
     }
 
     const join_init_counts = try gpa.alloc(u32, store.localCount());
@@ -1759,9 +1747,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const local = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local, .discriminant, .list_reinterpret, .nominal => unreachable,
                 };
                 if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
@@ -1907,9 +1893,7 @@ pub fn compute(
                     },
                     .discriminant => |op| {
                         // The tag word is disjoint from every stored unit, so
-                        // reading it is no use of a tag union beyond lending
-                        // its layout to the residual dispatch.
-                        try analysis.noteDiscriminantRead(op.source, stmt.target);
+                        // reading it is no use of a tag union.
                         analysis.disqualify(op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
@@ -1921,11 +1905,7 @@ pub fn compute(
                         if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
-                    .list_reinterpret => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                    .nominal => |op| {
+                    inline .list_reinterpret, .nominal => |op| {
                         try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
@@ -1976,6 +1956,8 @@ pub fn compute(
             },
             .assign_boxy_dict_ref => |stmt| {
                 if (stmt.dict.localOrNull()) |local| try analysis.useWhole(current, local);
+                const captures = store.getLocalSpan(stmt.captures);
+                for (0..GuardedList.borrowLen(captures)) |i| try analysis.useWhole(current, GuardedList.at(captures, i));
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -1986,25 +1968,14 @@ pub fn compute(
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_reuse_box => |stmt| {
-                try analysis.useWhole(current, stmt.source);
+            .assign_boxy_record_update => |stmt| {
+                try analysis.useWhole(current, stmt.base);
+                try analysis.useWhole(current, stmt.fields);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_unbox => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_adapt => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_inspect => |stmt| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
@@ -2013,6 +1984,13 @@ pub fn compute(
             .assign_boxy_eq => |stmt| {
                 try analysis.useWhole(current, stmt.lhs);
                 try analysis.useWhole(current, stmt.rhs);
+                try analysis.noteDef(stmt.target, current);
+                analysis.disqualify(stmt.target);
+                try stack.append(gpa, stmt.next);
+            },
+            .assign_boxy_hash => |stmt| {
+                try analysis.useWhole(current, stmt.value);
+                try analysis.useWhole(current, stmt.hasher);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2102,25 +2080,16 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error => {},
-            .comptime_exhaustiveness_failed => {},
+            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
-            .incref => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref => |stmt| {
+            inline .incref, .decref, .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref_if_initialized => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
@@ -2172,14 +2141,12 @@ pub fn compute(
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
-            .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
                 // locals are scalar presence words.
                 try stack.append(gpa, stmt.body);
                 try stack.append(gpa, stmt.remainder);
             },
-            .jump => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
             .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
@@ -2263,7 +2230,7 @@ pub fn compute(
             } else if (owner.* != @as(u32, @intCast(proc_index))) {
                 owner.* = ambiguous_proc;
             }
-            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
         }
     }
     var future_fields = FutureFields.init(gpa);
@@ -2356,7 +2323,6 @@ pub fn compute(
         const union_root: ?*UnionRoot = if (analysis.view_root[@intFromEnum(local)] != no_index) blk: {
             const root_entry = analysis.union_roots.getPtr(analysis.view_root[@intFromEnum(local)]) orelse continue :candidates;
             if (root_entry.disqualified or root_entry.def_count != 1 or root_entry.view != @intFromEnum(local)) continue :candidates;
-            if (root_entry.discriminant_layout == null) continue :candidates;
             break :blk root_entry;
         } else null;
 
@@ -2374,11 +2340,13 @@ pub fn compute(
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2615,7 +2583,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2666,7 +2634,7 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
                         cursor = stmt.uninitialized_branch;
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
@@ -2675,10 +2643,6 @@ pub fn compute(
                         for (0..GuardedList.borrowLen(arms)) |i| {
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
-                        cursor = stmt.on_miss;
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
                     .loop_continue, .loop_break => {
@@ -2742,6 +2706,12 @@ pub fn compute(
             const take = Take{ .root = local, .field_mask = bit };
             if (owned_only) {
                 try result.owned_only_takes.put(gpa, read.stmt, take);
+                // A target solved owned holds its own unit in every emission;
+                // the take only spares its retain. Only a target solved
+                // borrowed needs its binding overridden to owned, and a
+                // borrowed binding has exactly one defining read, so exactly
+                // one parameter root authorizes the override.
+                if (!solution.isBorrowed(read.target)) continue;
                 const target_index = @intFromEnum(read.target);
                 const prior = result.owned_only_binding_roots[target_index];
                 if (prior != no_index and prior != @intFromEnum(activation_root)) {
@@ -2781,7 +2751,6 @@ pub fn compute(
                 .payload_view = .{
                     .view = local,
                     .tag_discriminant = view_root_entry.tag_discriminant,
-                    .discriminant_layout = view_root_entry.discriminant_layout.?,
                 },
             });
         } else if (owned_only) {
@@ -2897,9 +2866,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const projection_source = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local,
                     .discriminant,
                     .list_reinterpret,

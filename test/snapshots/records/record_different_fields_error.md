@@ -704,27 +704,6 @@ EndOfFile,
 			(e-string-part (raw "at symbol")))
 		(e-malformed (reason "expr_unexpected_token"))))
 ~~~
-# FORMATTED
-~~~roc
-{
-	_privateField :
-			
-	field_ :
-			
-	PascalCase
-		"pascal"
-	
-	kebab
-	-case
-		"kebab"
-	
-	field$special :
-			
-	field
-			"at symbol"
-	
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (e-block
@@ -732,59 +711,59 @@ EndOfFile,
 		(p-assign (ident "_privateField"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "field_"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-tag (name "PascalCase")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
 		(e-unary-minus
 			(e-runtime-error (tag "ident_not_in_scope"))))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-let
 		(p-assign (ident "field$special"))
 		(e-anno-only))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
-		(e-runtime-error (tag "expr_not_canonicalized")))
+		(e-runtime-error (tag "expr_syntax_error")))
 	(s-expr
 		(e-runtime-error (tag "erroneous_value_expr")))
-	(e-runtime-error (tag "expr_not_canonicalized")))
+	(e-runtime-error (tag "expr_syntax_error")))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Error"))
+(expr (type "_a"))
 ~~~

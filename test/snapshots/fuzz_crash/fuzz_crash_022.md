@@ -34,7 +34,6 @@ EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:8:9:8:10
 EXPECTED TUPLE SEPARATOR - fuzz_crash_022.md:9:1:9:1
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_022.md:9:1:9:1
 MALFORMED TYPE - fuzz_crash_022.md:1:19:1:27
-INVALID IF CONDITION - :0:0:0:0
 UNUSED VARIABLE - fuzz_crash_022.md:6:12:6:14
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:1:16:1:27
 DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
@@ -510,21 +509,6 @@ DECLARATION HAS NO VALUE - fuzz_crash_022.md:5:1:5:20
 		(document
 			(source-region (file "fuzz_crash_022.md") (start 1 19) (end 1 27) (annotation error) (line-text "app [main!] { |f: platform \"c\" }"))))
 	(report
-		(severity runtime_error)
-		(title "Invalid If Condition")
-		(headline
-			(reflow "The condition in this ")
-			(annotated keyword "if")
-			(reflow " expression could not be processed."))
-		(document
-			(reflow "The condition must be a valid expression that evaluates to a ")
-			(annotated keyword "Bool")
-			(reflow " value (")
-			(annotated keyword "Bool.true")
-			(reflow " or ")
-			(annotated keyword "Bool.false")
-			(reflow ").")))
-	(report
 		(severity warning)
 		(title "Unused Variable")
 		(region (start 6 12) (end 6 14))
@@ -627,7 +611,16 @@ getUser = |id| if
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getUser"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "id")))
+			(e-if
+				(if-branches
+					(if-branch
+						(e-runtime-error (tag "expr_syntax_error"))
+						(e-runtime-error (tag "expr_syntax_error"))))
+				(if-else
+					(e-empty_record)))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin))))
@@ -638,12 +631,12 @@ getUser = |id| if
 	(defs
 		(patt (type "Error"))
 		(patt (type "UserId -> Str"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> {}")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId"))))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "UserId -> Str"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> {}"))))
 ~~~

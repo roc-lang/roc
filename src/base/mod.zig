@@ -2,6 +2,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// Shared declaration polarity equations for AST and CIR producers.
+pub const annotation_positions = @import("annotation_positions.zig");
+
 pub const SExprTree = @import("SExprTree.zig");
 pub const TextRankCache = @import("TextRankCache.zig");
 pub const Ident = @import("Ident.zig");
@@ -29,17 +32,21 @@ pub const parallel = @import("parallel.zig");
 pub const post_check_task_executor = @import("post_check_task_executor.zig");
 pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
+
+pub const invariant = @import("invariant.zig").invariant;
 pub const SerialStringInterner = @import("SerialStringInterner.zig");
 pub const InternedBytes = @import("InternedBytes.zig");
 pub const SpecializationStrategy = @import("SpecializationStrategy.zig").SpecializationStrategy;
 pub const TypeDigestHasher = @import("TypeDigestHasher.zig");
+/// SHA-256 on the CPU's SHA-256 instructions, interchangeable with `std.crypto.hash.sha2.Sha256`.
+pub const Sha256 = @import("sha256.zig").Sha256;
 pub const ModuleIdentity = @import("module_identity.zig");
 
 /// Single-threaded arena allocator, re-exported from `collections` for callers
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
-pub const safe_memory = @import("safe_memory.zig");
+pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
 pub const stack_budget = @import("stack_budget.zig");
@@ -47,14 +54,16 @@ pub const stack_overflow = @import("stack_overflow.zig");
 
 pub const target = @import("target.zig");
 pub const DataSpan = @import("DataSpan.zig").DataSpan;
-pub const PackedDataSpan = @import("PackedDataSpan.zig").PackedDataSpan;
-pub const FunctionArgs = @import("PackedDataSpan.zig").FunctionArgs;
-pub const SmallCollections = @import("PackedDataSpan.zig").SmallCollections;
 
 pub const CommonEnv = @import("CommonEnv.zig");
+/// Exact Unicode bidi-control source policy and visible display helpers.
+pub const bidi = @import("bidi.zig");
 pub const source_utils = @import("source_utils.zig");
+pub const read_file_failure = @import("read_file_failure.zig");
 pub const module_path = @import("module_path.zig");
 pub const url = @import("url.zig");
+/// Default expanded-size cap for platform and CLI URL bundles.
+pub const max_bundle_expanded_bytes: u64 = 512 * 1024 * 1024;
 pub const roc_version = @import("roc_version.zig");
 pub const doc_comment = @import("doc_comment.zig");
 /// Canonical byte encodings shared across compiler stages.
@@ -90,6 +99,7 @@ test {
     std.testing.refAllDecls(LargeBlockAllocator);
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
+    std.testing.refAllDecls(@import("sha256.zig"));
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
@@ -174,14 +184,13 @@ test "base tests" {
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
+    std.testing.refAllDecls(@import("memory_fault.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
-    std.testing.refAllDecls(@import("PackedDataSpan.zig"));
     std.testing.refAllDecls(@import("parallel.zig"));
     std.testing.refAllDecls(post_check_task_executor);
     std.testing.refAllDecls(@import("Region.zig"));
     std.testing.refAllDecls(@import("RegionInfo.zig"));
     std.testing.refAllDecls(@import("rc_effect_rules.zig"));
-    std.testing.refAllDecls(@import("safe_memory.zig"));
     std.testing.refAllDecls(@import("signal_handler.zig"));
     std.testing.refAllDecls(@import("Scratch.zig"));
     std.testing.refAllDecls(@import("SExprTree.zig"));

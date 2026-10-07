@@ -10,11 +10,8 @@ const i128h = @import("compiler_rt_128.zig");
 const parse_float = @import("vendor_parse_float");
 const decimal_parse = @import("decimal_parse.zig");
 const float_bits = @import("float_bits.zig");
-const float_math_f32 = @import("float_math/f32.zig");
-const float_math_f64 = @import("float_math/f64.zig");
 
 const WithOverflow = @import("utils.zig").WithOverflow;
-const Ordering = @import("utils.zig").Ordering;
 const RocOps = @import("utils.zig").RocOps;
 const TestEnv = @import("utils.zig").TestEnv;
 const RocStr = @import("str.zig").RocStr;
@@ -87,21 +84,103 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
+/// Result of parsing a number from the longest numeric prefix of some bytes.
+///
+/// `consumed` is the byte length of the longest token matching the type's
+/// numeric grammar. `errorcode` is 0 on success, `prefix_parse_not_a_number`
+/// when no prefix matched (`consumed` is then 0), or `prefix_parse_out_of_range`
+/// when a token matched but the whole-token `from_str` of it failed.
+pub fn NumPrefixParseResult(comptime T: type) type {
+    return extern struct {
+        value: T,
+        consumed: u64,
+        errorcode: u8,
+    };
+}
+
+/// `NumPrefixParseResult.errorcode` when no prefix of the input is a number token.
+pub const prefix_parse_not_a_number: u8 = 1;
+/// `NumPrefixParseResult.errorcode` when the matched token does not denote a value of the type.
+pub const prefix_parse_out_of_range: u8 = 2;
+
+fn prefixParseResult(comptime T: type, consumed: usize, value: ?T) NumPrefixParseResult(T) {
+    if (consumed == 0) {
+        return .{ .value = 0, .consumed = 0, .errorcode = prefix_parse_not_a_number };
+    }
+    if (value) |success| {
+        return .{ .value = success, .consumed = consumed, .errorcode = 0 };
+    }
+    return .{ .value = 0, .consumed = consumed, .errorcode = prefix_parse_out_of_range };
+}
+
 /// Parses an integer from a RocStr
 pub fn parseIntFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    const bytes = buf.asSlice();
-    const parsed = if (hasExplicitRadix(bytes))
-        parseIntNoFmt(T, bytes)
-    else if (decimal_parse.parseInt(T, bytes)) |value|
-        value
-    else
-        error.InvalidCharacter;
-
-    if (parsed) |success| {
+    if (parseIntSlice(T, buf.asSlice())) |success| {
         return .{ .errorcode = 0, .value = success };
-    } else |_| {
+    } else {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+/// Whole-input integer parse (`from_str` semantics): the input must be exactly
+/// one integer token, and the token must denote a value of `T`.
+pub fn parseIntSlice(comptime T: type, bytes: []const u8) ?T {
+    const consumed = intPrefixLen(bytes);
+    if (consumed == 0 or consumed != bytes.len) return null;
+    return parseIntToken(T, bytes);
+}
+
+/// Parse an integer from the longest integer token at the start of `bytes`.
+pub fn parseIntPrefix(comptime T: type, bytes: []const u8) NumPrefixParseResult(T) {
+    const consumed = intPrefixLen(bytes);
+    if (consumed == 0) return prefixParseResult(T, 0, null);
+    return prefixParseResult(T, consumed, parseIntToken(T, bytes[0..consumed]));
+}
+
+/// Length of the longest integer token at the start of `bytes`, or 0.
+///
+/// An integer token is either an explicit-radix token (`sign? 0x|0o|0b` then
+/// digits of that radix, `_` only between digits) or a decimal token
+/// (`sign? D (_? D)* (e sign? D (_? D)*)?`). A radix prefix without any digit
+/// of its radix is not a radix token, so `"0x"` matches the decimal token `"0"`.
+pub fn intPrefixLen(bytes: []const u8) usize {
+    const radix_len = radixIntPrefixLen(bytes);
+    if (radix_len != 0) return radix_len;
+    return decimal_parse.prefixLen(bytes, .int);
+}
+
+fn parseIntToken(comptime T: type, token: []const u8) ?T {
+    if (hasExplicitRadix(token)) return parseIntNoFmt(T, token) catch null;
+    return decimal_parse.parseInt(T, token);
+}
+
+fn radixIntPrefixLen(bytes: []const u8) usize {
+    if (!hasExplicitRadix(bytes)) return 0;
+    const digits_start: usize = @as(usize, @intFromBool(bytes[0] == '-' or bytes[0] == '+')) + 2;
+    const radix: u8 = switch (bytes[digits_start - 1]) {
+        'b', 'B' => 2,
+        'o', 'O' => 8,
+        'x', 'X' => 16,
+        else => unreachable,
+    };
+
+    var end = digits_start;
+    var index = digits_start;
+    while (index < bytes.len) : (index += 1) {
+        const byte = bytes[index];
+        if (byte == '_') {
+            if (index == digits_start or index + 1 == bytes.len or !isRadixDigit(bytes[index + 1], radix)) break;
+            continue;
+        }
+        if (!isRadixDigit(byte, radix)) break;
+        end = index + 1;
+    }
+    return if (end == digits_start) 0 else end;
+}
+
+fn isRadixDigit(byte: u8, radix: u8) bool {
+    const digit = digitValue(byte) orelse return false;
+    return digit < radix;
 }
 
 const ParseIntError = error{
@@ -153,17 +232,6 @@ fn parseIntNoFmt(comptime T: type, bytes: []const u8) ParseIntError!T {
         if (negative and magnitude != 0) return error.Overflow;
         return @intCast(magnitude);
     }
-}
-
-/// Parse an unsigned decimal integer, returning null on invalid input or overflow.
-pub fn parseUnsignedDecimal(comptime T: type, bytes: []const u8) ?T {
-    const info = @typeInfo(T).int;
-    const limit: u128 = switch (info.signedness) {
-        .signed => @intCast(std.math.maxInt(T)),
-        .unsigned => @intCast(std.math.maxInt(T)),
-    };
-    const magnitude = parseMagnitude(limit, bytes, 0, 10) catch return null;
-    return @intCast(magnitude);
 }
 
 fn detectRadix(bytes: []const u8, index: *usize) u8 {
@@ -236,27 +304,96 @@ fn digitValue(byte: u8) ?u8 {
     };
 }
 
-/// Exports a function to parse integers from strings.
-pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(buf: RocStr) callconv(.c) NumParseResult(T) {
-            return @call(.always_inline, parseIntFromStr, .{ T, buf });
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
 /// Parses a floating-point number from a RocStr.
 pub fn parseFloatFromStr(comptime T: type, buf: RocStr) NumParseResult(T) {
-    const bytes = buf.asSlice();
-    if (parse_float.parseFloat(T, bytes)) |success| {
-        if (std.math.isInf(success) and !isExplicitInfinity(bytes)) {
-            return .{ .errorcode = 1, .value = 0 };
-        }
+    if (parseFloatSlice(T, buf.asSlice())) |success| {
         return .{ .errorcode = 0, .value = success };
-    } else |_| {
+    } else {
         return .{ .errorcode = 1, .value = 0 };
     }
+}
+
+/// Whole-input float parse (`from_str` semantics): the input must be exactly
+/// one float token, and a finite token must not round to infinity.
+pub fn parseFloatSlice(comptime T: type, bytes: []const u8) ?T {
+    const consumed = floatPrefixLen(bytes);
+    if (consumed == 0 or consumed != bytes.len) return null;
+    return parseFloatToken(T, bytes);
+}
+
+/// Parse a float from the longest float token at the start of `bytes`.
+pub fn parseFloatPrefix(comptime T: type, bytes: []const u8) NumPrefixParseResult(T) {
+    const consumed = floatPrefixLen(bytes);
+    if (consumed == 0) return prefixParseResult(T, 0, null);
+    return prefixParseResult(T, consumed, parseFloatToken(T, bytes[0..consumed]));
+}
+
+/// Length of the longest float token at the start of `bytes`, or 0.
+///
+/// A float token is `sign?` followed by one of: a hex mantissa
+/// `0x (H+ | H+ . H* | . H+)` with optional `p sign? D+` exponent; a decimal
+/// mantissa `(D+ | D+ . D* | . D+)` with optional `e sign? D+` exponent; or
+/// `infinity`, `inf`, `nan` in any case. `_` is accepted only between digits.
+/// A hex prefix without any hex digit is not a hex token, so `"0x"` matches `"0"`.
+pub fn floatPrefixLen(bytes: []const u8) usize {
+    const start: usize = @intFromBool(bytes.len > 0 and (bytes[0] == '-' or bytes[0] == '+'));
+    const body = bytes[start..];
+
+    if (body.len >= 2 and body[0] == '0' and (body[1] == 'x' or body[1] == 'X')) {
+        const hex_len = floatMantissaExponentPrefixLen(body[2..], 16, 'p');
+        if (hex_len != 0) return start + 2 + hex_len;
+    }
+
+    const decimal_len = floatMantissaExponentPrefixLen(body, 10, 'e');
+    if (decimal_len != 0) return start + decimal_len;
+
+    if (std.ascii.startsWithIgnoreCase(body, "infinity")) return start + "infinity".len;
+    if (std.ascii.startsWithIgnoreCase(body, "inf")) return start + "inf".len;
+    if (std.ascii.startsWithIgnoreCase(body, "nan")) return start + "nan".len;
+    return 0;
+}
+
+fn floatMantissaExponentPrefixLen(bytes: []const u8, comptime radix: u8, comptime exponent_char: u8) usize {
+    var index: usize = 0;
+    var digits: usize = 0;
+    var had_point = false;
+    while (index < bytes.len) : (index += 1) {
+        const byte = bytes[index];
+        if (isRadixDigit(byte, radix)) {
+            digits += 1;
+        } else if (byte == '_' and index > 0 and isRadixDigit(bytes[index - 1], radix) and
+            index + 1 < bytes.len and isRadixDigit(bytes[index + 1], radix))
+        {
+            continue;
+        } else if (byte == '.' and !had_point) {
+            had_point = true;
+        } else {
+            break;
+        }
+    }
+    if (digits == 0) return 0;
+
+    if (index < bytes.len and (bytes[index] | 0x20) == exponent_char) {
+        var cursor = index + 1;
+        if (cursor < bytes.len and (bytes[cursor] == '-' or bytes[cursor] == '+')) cursor += 1;
+        if (cursor < bytes.len and isRadixDigit(bytes[cursor], 10)) {
+            while (cursor < bytes.len) : (cursor += 1) {
+                const byte = bytes[cursor];
+                if (isRadixDigit(byte, 10)) continue;
+                if (byte == '_' and isRadixDigit(bytes[cursor - 1], 10) and
+                    cursor + 1 < bytes.len and isRadixDigit(bytes[cursor + 1], 10)) continue;
+                break;
+            }
+            index = cursor;
+        }
+    }
+    return index;
+}
+
+fn parseFloatToken(comptime T: type, token: []const u8) ?T {
+    const value = parse_float.parseFloat(T, token) catch return null;
+    if (std.math.isInf(value) and !isExplicitInfinity(token)) return null;
+    return value;
 }
 
 fn isExplicitInfinity(bytes: []const u8) bool {
@@ -266,386 +403,6 @@ fn isExplicitInfinity(bytes: []const u8) bool {
     }
     return std.ascii.eqlIgnoreCase(text, "inf") or
         std.ascii.eqlIgnoreCase(text, "infinity");
-}
-
-/// Exports a function to parse floating-point numbers from strings.
-pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(buf: RocStr) callconv(.c) NumParseResult(T) {
-            return @call(.always_inline, parseFloatFromStr, .{ T, buf });
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Cast an integer to a float.
-pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(x: T) callconv(.c) F {
-            if (T == i128) {
-                return if (F == f32) i128h.i128_to_f32(x) else i128h.i128_to_f64(x);
-            } else if (T == u128) {
-                return if (F == f32) i128h.u128_to_f32(x) else i128h.u128_to_f64(x);
-            } else {
-                return @floatFromInt(x);
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Raise a number to a power, with overflow handling.
-pub fn exportPow(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            base: T,
-            exp: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            if (@typeInfo(T) == .int) {
-                // std.math.pow can handle ints via powi, but it turns any errors to unreachable
-                // we want to catch overflow and report a proper error to the user
-                if (T == i128 or T == u128) {
-                    // Use custom powi that avoids compiler_rt calls
-                    if (powi128(T, base, exp)) |value| {
-                        return value;
-                    } else |err| switch (err) {
-                        error.Overflow => {
-                            roc_ops.crash("Integer exponentiation overflowed");
-                        },
-                        error.Underflow => return 0,
-                    }
-                } else {
-                    if (std.math.powi(T, base, exp)) |value| {
-                        return value;
-                    } else |err| switch (err) {
-                        error.Overflow => {
-                            roc_ops.crash("Integer exponentiation overflowed");
-                        },
-                        error.Underflow => return 0,
-                    }
-                }
-            } else {
-                if (T == f32) return float_math_f32.pow(base, exp);
-                if (T == f64) return float_math_f64.pow(base, exp);
-                @compileError("floating-point power supports only F32 and F64");
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Integer power for i128/u128 that avoids compiler_rt calls.
-/// Uses our custom mul_i128/mul_u128_lo instead of native * and @mulWithOverflow.
-fn powi128(comptime T: type, base: T, exp: T) error{ Overflow, Underflow }!T {
-    const info = @typeInfo(T).int;
-    if (info.signedness == .signed and exp < 0) {
-        // Negative exponent: result is 1/base^|exp|, which is 0 for |base|>1
-        if (base == 1) return 1;
-        if (base == -1) return if (@as(u1, @truncate(@as(u128, @bitCast(exp)))) == 0) @as(T, 1) else @as(T, -1);
-        return error.Underflow;
-    }
-
-    if (base == 0) {
-        if (exp == 0) return 1;
-        return 0;
-    }
-
-    if (info.signedness == .signed) {
-        const is_negative_result = base < 0 and (@as(u1, @truncate(@as(u128, @bitCast(@as(i128, exp))))) != 0);
-        const magnitude_limit = if (is_negative_result)
-            @as(u128, 1) << 127
-        else
-            @as(u128, @intCast(std.math.maxInt(i128)));
-        var b: u128 = @abs(base);
-        var e: u128 = @intCast(exp);
-        var result: u128 = 1;
-
-        while (e > 0) {
-            if (e & 1 != 0) {
-                result = mul_u128_with_limit(result, b, magnitude_limit) orelse return error.Overflow;
-            }
-            e = i128h.shr(e, 1);
-            if (e > 0) {
-                b = mul_u128_with_limit(b, b, magnitude_limit) orelse return error.Overflow;
-            }
-        }
-
-        if (is_negative_result) {
-            if (result == (@as(u128, 1) << 127)) return std.math.minInt(i128);
-            return -@as(T, @intCast(result));
-        }
-        return @intCast(result);
-    }
-
-    var b: u128 = base;
-    var e: u128 = exp;
-    var result: u128 = 1;
-
-    while (e > 0) {
-        if (e & 1 != 0) {
-            result = mul_u128_checked(result, b) orelse return error.Overflow;
-        }
-        e = i128h.shr(e, 1);
-        if (e > 0) {
-            b = mul_u128_checked(b, b) orelse return error.Overflow;
-        }
-    }
-
-    return result;
-}
-
-fn mul_u128_checked(lhs: u128, rhs: u128) ?u128 {
-    const product = mul_u128(lhs, rhs);
-    return if (product.hi == 0) product.lo else null;
-}
-
-fn mul_u128_with_limit(lhs: u128, rhs: u128, limit: u128) ?u128 {
-    const product = mul_u128(lhs, rhs);
-    if (product.hi != 0 or product.lo > limit) return null;
-    return product.lo;
-}
-
-/// Check if a value is NaN.
-pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) bool {
-            return std.math.isNan(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Check if a value is infinite.
-pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) bool {
-            return std.math.isInf(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Check if a value is finite.
-pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) bool {
-            return std.math.isFinite(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute arcsine using Roc's width-specific float implementation.
-pub fn exportAsin(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.asin(input);
-            if (T == f64) return float_math_f64.asin(input);
-            @compileError("arcsine supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute arccosine using Roc's width-specific float implementation.
-pub fn exportAcos(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.acos(input);
-            if (T == f64) return float_math_f64.acos(input);
-            @compileError("arccosine supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute arctangent using Roc's width-specific float implementation.
-pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.atan(input);
-            if (T == f64) return float_math_f64.atan(input);
-            @compileError("arctangent supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Export two-coordinate arctangent (y, x).
-pub fn exportAtan2(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(y: T, x: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.atan2(y, x);
-            if (T == f64) return float_math_f64.atan2(y, x);
-            @compileError("arctangent supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute sine using Roc's width-specific float implementation.
-pub fn exportSin(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.sin(input);
-            if (T == f64) return float_math_f64.sin(input);
-            @compileError("sine supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute cosine using Roc's width-specific float implementation.
-pub fn exportCos(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.cos(input);
-            if (T == f64) return float_math_f64.cos(input);
-            @compileError("cosine supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute tangent using Roc's width-specific float implementation.
-pub fn exportTan(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            if (T == f32) return float_math_f32.tan(input);
-            if (T == f64) return float_math_f64.tan(input);
-            @compileError("tangent supports only F32 and F64");
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute natural logarithm using zig @log builtin.
-pub fn exportLog(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            return @log(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute absolute value using zig @abs builtin.
-pub fn exportFAbs(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            return @abs(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Compute square root using zig std.math.
-pub fn exportSqrt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: T) callconv(.c) T {
-            return math.sqrt(input);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Round a float to the nearest integer using zig std.math.
-pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: F) callconv(.c) T {
-            return @as(T, @round(input));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Round a float down to the nearest integer using zig std.math.
-pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: F) callconv(.c) T {
-            return @as(T, @floor(input));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Round a float up to the nearest integer using zig std.math.
-pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: F) callconv(.c) T {
-            return @as(T, @ceil(input));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Integer division with ceiling using zig std.math.
-pub fn exportDivCeil(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            a: T,
-            b: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            return math.divCeil(T, a, b) catch {
-                roc_ops.crash("Integer division by 0!");
-            };
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Integer division truncating towards zero.
-/// For signed integers, this rounds towards zero (not negative infinity).
-pub fn exportDivTrunc(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            a: T,
-            b: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            if (b == 0) {
-                roc_ops.crash("Integer division by 0!");
-            }
-            if (T == i128) return i128h.divTrunc_i128(a, b);
-            if (T == u128) return i128h.divTrunc_u128(a, b);
-            return @divTrunc(a, b);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Integer remainder after truncating division.
-/// The result has the same sign as the dividend.
-pub fn exportRemTrunc(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            a: T,
-            b: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            if (b == 0) {
-                roc_ops.crash("Integer remainder by 0!");
-            }
-            if (T == i128) return i128h.rem_i128(a, b);
-            if (T == u128) return i128h.rem_u128(a, b);
-            return @rem(a, b);
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 /// i128 division truncating towards zero - callable from generated code.
@@ -688,68 +445,6 @@ pub fn modI128(a: i128, b: i128, roc_ops: *RocOps) callconv(.c) i128 {
     return i128h.mod_i128(a, b);
 }
 
-/// Result type for checked integer conversions.
-pub fn ToIntCheckedResult(comptime T: type) type {
-    // On the Roc side we sort by alignment; putting the errorcode last
-    // always works out (no number with smaller alignment than 1).
-    return extern struct {
-        value: T,
-        out_of_bounds: bool,
-    };
-}
-
-/// Exports a function to convert to integer, checking only max bound.
-pub fn exportToIntCheckingMax(comptime From: type, comptime To: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: From) callconv(.c) ToIntCheckedResult(To) {
-            if (input > std.math.maxInt(To)) {
-                return .{ .out_of_bounds = true, .value = 0 };
-            }
-            return .{ .out_of_bounds = false, .value = @as(To, @intCast(input)) };
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(From), .linkage = .strong });
-}
-
-/// Exports a function to convert to integer, checking both bounds.
-pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(input: From) callconv(.c) ToIntCheckedResult(To) {
-            if (input > std.math.maxInt(To) or input < std.math.minInt(To)) {
-                return .{ .out_of_bounds = true, .value = 0 };
-            }
-            return .{ .out_of_bounds = false, .value = @as(To, @intCast(input)) };
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(From), .linkage = .strong });
-}
-
-/// Returns true if lhs is a multiple of rhs.
-pub fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
-    if (rhs == 0 or rhs == -1) {
-        // lhs is a multiple of rhs iff
-        //
-        // - rhs == -1
-        // - rhs == 0 and lhs == 0
-        //
-        // Note: lhs % 0 is a runtime panic, so we can't use @mod.
-        return (rhs == -1) or (lhs == 0);
-    } else {
-        const rem = if (T == i128) i128h.mod_i128(lhs, rhs) else @mod(lhs, rhs);
-        return rem == 0;
-    }
-}
-
-/// Exports a function to check if a value is a multiple of another.
-pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(lhs: T, rhs: T) callconv(.c) bool {
-            return @call(.always_inline, isMultipleOf, .{ T, lhs, rhs });
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
 /// Adds two numbers, returning result and overflow flag.
 pub fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     if (@typeInfo(T) == .int) {
@@ -772,58 +467,6 @@ pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Exports a function to add two integers, saturating on overflow.
-pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            const result = addWithOverflow(T, self, other);
-            if (result.has_overflowed) {
-                // We can unambiguously tell which way it wrapped, because we have N+1 bits including the overflow bit
-                if (result.value >= 0 and @typeInfo(T).int.signedness == .signed) {
-                    return std.math.minInt(T);
-                } else {
-                    return std.math.maxInt(T);
-                }
-            } else {
-                return result.value;
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to add two integers, wrapping on overflow.
-pub fn exportAddWrappedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            return self +% other;
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to add two numbers, panicking on overflow.
-pub fn exportAddOrPanic(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            self: T,
-            other: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            const result = addWithOverflow(T, self, other);
-            if (result.has_overflowed) {
-                roc_ops.crash("Integer addition overflowed");
-            } else {
-                return result.value;
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
 /// Subtracts two numbers, returning result and overflow flag.
 pub fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     if (@typeInfo(T) == .int) {
@@ -841,59 +484,6 @@ pub fn exportSubWithOverflow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.c) WithOverflow(T) {
             return @call(.always_inline, subWithOverflow, .{ T, self, other });
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to subtract two integers, saturating on overflow.
-pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            const result = subWithOverflow(T, self, other);
-            if (result.has_overflowed) {
-                if (@typeInfo(T).int.signedness == .unsigned) {
-                    return 0;
-                } else if (self < 0) {
-                    return std.math.minInt(T);
-                } else {
-                    return std.math.maxInt(T);
-                }
-            } else {
-                return result.value;
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to subtract two integers, wrapping on overflow.
-pub fn exportSubWrappedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            return self -% other;
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to subtract two numbers, panicking on overflow.
-pub fn exportSubOrPanic(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            self: T,
-            other: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            const result = subWithOverflow(T, self, other);
-            if (result.has_overflowed) {
-                roc_ops.crash("Integer subtraction overflowed");
-            } else {
-                return result.value;
-            }
         }
     }.func;
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
@@ -978,192 +568,6 @@ pub fn exportMulWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// Exports a function to multiply two integers, saturating on overflow.
-pub fn exportMulSaturatedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
-            return result.value;
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to multiply two integers, wrapping on overflow.
-pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T, other: T) callconv(.c) T {
-            if (T == i128) return i128h.mul_i128(self, other);
-            if (T == u128) return i128h.mul_u128_lo(self, other);
-            return self *% other;
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Shifts an i128 right with zero fill.
-pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.c) i128 {
-    if (other & 0b1000_0000 > 0) {
-        return 0;
-    } else {
-        // Zero-fill right shift on a signed value: cast to unsigned, shift, cast back.
-        return @bitCast(i128h.shr(@as(u128, @bitCast(self)), @as(u7, @intCast(other))));
-    }
-}
-
-/// Shifts a u128 right with zero fill.
-pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.c) u128 {
-    if (other & 0b1000_0000 > 0) {
-        return 0;
-    } else {
-        return i128h.shr(self, @as(u7, @intCast(other)));
-    }
-}
-
-/// Compares two i128 values, returning ordering.
-pub fn compareI128(self: i128, other: i128) callconv(.c) Ordering {
-    if (self == other) {
-        return Ordering.Same;
-    } else if (self < other) {
-        return Ordering.Before;
-    } else {
-        return Ordering.After;
-    }
-}
-
-/// Compares two u128 values, returning ordering.
-pub fn compareU128(self: u128, other: u128) callconv(.c) Ordering {
-    if (self == other) {
-        return Ordering.Same;
-    } else if (self < other) {
-        return Ordering.Before;
-    } else {
-        return Ordering.After;
-    }
-}
-
-/// Returns true if self < other for i128.
-pub fn lessThanI128(self: i128, other: i128) callconv(.c) bool {
-    return self < other;
-}
-
-/// Returns true if self <= other for i128.
-pub fn lessThanOrEqualI128(self: i128, other: i128) callconv(.c) bool {
-    return self <= other;
-}
-
-/// Returns true if self > other for i128.
-pub fn greaterThanI128(self: i128, other: i128) callconv(.c) bool {
-    return self > other;
-}
-
-/// Returns true if self >= other for i128.
-pub fn greaterThanOrEqualI128(self: i128, other: i128) callconv(.c) bool {
-    return self >= other;
-}
-
-/// Returns true if self < other for u128.
-pub fn lessThanU128(self: u128, other: u128) callconv(.c) bool {
-    return self < other;
-}
-
-/// Returns true if self <= other for u128.
-pub fn lessThanOrEqualU128(self: u128, other: u128) callconv(.c) bool {
-    return self <= other;
-}
-
-/// Returns true if self > other for u128.
-pub fn greaterThanU128(self: u128, other: u128) callconv(.c) bool {
-    return self > other;
-}
-
-/// Returns true if self >= other for u128.
-pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.c) bool {
-    return self >= other;
-}
-
-/// Exports a function to multiply two numbers, panicking on overflow.
-pub fn exportMulOrPanic(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            self: T,
-            other: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            const result = @call(.always_inline, mulWithOverflow, .{ T, self, other });
-            if (result.has_overflowed) {
-                roc_ops.crash("Integer multiplication overflowed");
-            } else {
-                return result.value;
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to count leading zero bits.
-pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T) callconv(.c) u8 {
-            return @as(u8, @clz(self));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to count trailing zero bits.
-pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T) callconv(.c) u8 {
-            return @as(u8, @ctz(self));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Exports a function to count one bits (population count).
-pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(self: T) callconv(.c) u8 {
-            return @as(u8, @popCount(self));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Returns the bitwise parts of an f32.
-pub fn f32ToParts(self: f32) callconv(.c) F32Parts {
-    const u32Value = @as(u32, @bitCast(self));
-    return F32Parts{
-        .fraction = u32Value & 0x7fffff,
-        .exponent = @truncate(u32Value >> 23 & 0xff),
-        .sign = u32Value >> 31 & 1 == 1,
-    };
-}
-
-/// Returns the bitwise parts of an f64.
-pub fn f64ToParts(self: f64) callconv(.c) F64Parts {
-    const u64Value = @as(u64, @bitCast(self));
-    return F64Parts{
-        .fraction = u64Value & 0xfffffffffffff,
-        .exponent = @truncate(u64Value >> 52 & 0x7ff),
-        .sign = u64Value >> 63 & 1 == 1,
-    };
-}
-
-/// Constructs an f32 from its bitwise parts.
-pub fn f32FromParts(parts: F32Parts) callconv(.c) f32 {
-    return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
-}
-
-/// Constructs an f64 from its bitwise parts.
-pub fn f64FromParts(parts: F64Parts) callconv(.c) f64 {
-    return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
-}
-
 /// Returns the bit pattern of an f32 as u32.
 pub fn f32ToBits(self: f32) callconv(.c) u32 {
     return float_bits.normalizeF32NanBits(@bitCast(self));
@@ -1174,11 +578,6 @@ pub fn f64ToBits(self: f64) callconv(.c) u64 {
     return float_bits.normalizeF64NanBits(@bitCast(self));
 }
 
-/// Returns the bit pattern of an i128 as u128.
-pub fn i128ToBits(self: i128) callconv(.c) u128 {
-    return @as(u128, @bitCast(self));
-}
-
 /// Constructs an f32 from its bit pattern.
 pub fn f32FromBits(bits: u32) callconv(.c) f32 {
     return @as(f32, @bitCast(bits));
@@ -1187,11 +586,6 @@ pub fn f32FromBits(bits: u32) callconv(.c) f32 {
 /// Constructs an f64 from its bit pattern.
 pub fn f64FromBits(bits: u64) callconv(.c) f64 {
     return @as(f64, @bitCast(bits));
-}
-
-/// Constructs an i128 from its bit pattern.
-pub fn i128FromBits(bits: u128) callconv(.c) i128 {
-    return @as(i128, @bitCast(bits));
 }
 
 fn signedMinText(comptime T: type) []const u8 {
@@ -1250,6 +644,12 @@ fn unsignedMaxPlusOneText(comptime T: type) []const u8 {
 
 const NumTestHelperError = error{
     TestExpectedEqual,
+};
+
+/// Errors raised by the numeric prefix-parse test helpers.
+pub const PrefixTestError = error{
+    TestExpectedEqual,
+    TestUnexpectedResult,
 };
 
 fn expectParseIntText(comptime T: type, text: []const u8, expected: T, roc_ops: *RocOps) NumTestHelperError!void {
@@ -1424,20 +824,6 @@ test "integer overflow helpers match Zig overflow intrinsics across widths" {
     try std.testing.expect(!u128_no_overflow.has_overflowed);
 }
 
-test "powi128 handles signed magnitude and overflow boundaries" {
-    try std.testing.expectEqual(@as(i128, -128), try powi128(i128, -2, 7));
-    try std.testing.expectEqual(@as(i128, 256), try powi128(i128, -2, 8));
-    try std.testing.expectEqual(@as(i128, -1), try powi128(i128, -1, 3));
-    try std.testing.expectEqual(@as(i128, 1), try powi128(i128, -1, 4));
-    try std.testing.expectEqual(@as(i128, std.math.minInt(i128)), try powi128(i128, std.math.minInt(i128), 1));
-    try std.testing.expectError(error.Overflow, powi128(i128, std.math.minInt(i128), 2));
-    try std.testing.expectError(error.Overflow, powi128(i128, std.math.maxInt(i128), 2));
-    try std.testing.expectError(error.Underflow, powi128(i128, 2, -1));
-
-    try std.testing.expectEqual(@as(u128, 1024), try powi128(u128, 2, 10));
-    try std.testing.expectError(error.Overflow, powi128(u128, std.math.maxInt(u128), 2));
-}
-
 fn expectSeparatorsIgnored(comptime T: type, with_separators: []const u8, roc_ops: *RocOps) NumTestHelperError!void {
     var buf: [512]u8 = undefined;
     var n: usize = 0;
@@ -1487,6 +873,40 @@ test "parseFloatFromStr matches IEEE bit fixtures for finite edge cases" {
         .{ .text = "2.2250738585072014e-308", .bits = 0x0010000000000000 },
         .{ .text = "1.7976931348623157e308", .bits = 0x7fefffffffffffff },
         .{ .text = "0x1.921fb54442d18p+1", .bits = 0x400921fb54442d18 },
+    }) |text| {
+        try expectParseFloatBits(f64, text.text, text.bits, test_env.getOps());
+    }
+}
+
+test "parseFloatFromStr rounds hex floats with more significant digits than the mantissa holds" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+
+    inline for (&[_]struct { text: []const u8, bits: u32 }{
+        // 1 + 2^-24 is exactly halfway between 1 and 1 + 2^-23, so it rounds to even.
+        .{ .text = "0x1.00000100000000000000p0", .bits = 0x3f800000 },
+        .{ .text = "0x1.00000100000000000001p0", .bits = 0x3f800001 },
+    }) |text| {
+        try expectParseFloatBits(f32, text.text, text.bits, test_env.getOps());
+    }
+
+    inline for (&[_]struct { text: []const u8, bits: u64 }{
+        // 1 + 2^-53 is exactly halfway between 1 and 1 + 2^-52.
+        .{ .text = "0x1.000000000000080000p0", .bits = 0x3ff0000000000000 },
+        .{ .text = "0x1.0000000000000800000000000000p0", .bits = 0x3ff0000000000000 },
+        .{ .text = "0x1.0000000000000801p0", .bits = 0x3ff0000000000001 },
+        .{ .text = "0x1.0000000000000800000001p0", .bits = 0x3ff0000000000001 },
+        .{ .text = "0x1.0000000000000800000000000001p0", .bits = 0x3ff0000000000001 },
+        // 1 + 3 * 2^-53 is halfway between 1 + 2^-52 and 1 + 2^-51, so it rounds to even.
+        .{ .text = "0x1.00000000000018000p0", .bits = 0x3ff0000000000002 },
+        .{ .text = "0x1.0000000000001800000000000000p0", .bits = 0x3ff0000000000002 },
+        .{ .text = "0x123456789abcdef01", .bits = 0x43f23456789abcdf },
+        // 2^72 + 2^19 is halfway between 2^72 and 2^72 + 2^20.
+        .{ .text = "0x1000000000000080000p0", .bits = 0x4470000000000000 },
+        .{ .text = "0x1_0000_0000_0000_0800_01p0", .bits = 0x4470000000000001 },
+        .{ .text = "0x0.00000000000000000010000000000000080000p0", .bits = 0x3b30000000000000 },
+        .{ .text = "1.00000000000000000000000000", .bits = 0x3ff0000000000000 },
+        .{ .text = "12345678901234567890123.0000000000000", .bits = 0x4484ea15b273b38a },
     }) |text| {
         try expectParseFloatBits(f64, text.text, text.bits, test_env.getOps());
     }
@@ -1623,53 +1043,6 @@ test "addWithOverflow with floating point" {
     try std.testing.expectEqual(true, result2.has_overflowed);
 }
 
-test "isMultipleOf functionality" {
-    // Test basic multiples
-    try std.testing.expect(isMultipleOf(i32, 10, 5));
-    try std.testing.expect(isMultipleOf(i32, 15, 3));
-    try std.testing.expect(!isMultipleOf(i32, 10, 3));
-
-    // Test edge cases
-    try std.testing.expect(isMultipleOf(i32, 0, 5)); // 0 is multiple of anything
-    try std.testing.expect(isMultipleOf(i32, 5, -1)); // anything is multiple of -1
-    try std.testing.expect(isMultipleOf(i32, 0, 0)); // 0 is multiple of 0
-    try std.testing.expect(!isMultipleOf(i32, 5, 0)); // 5 is not multiple of 0
-}
-
-test "compareI128 functionality" {
-    const a: i128 = 1000000000000000000;
-    const b: i128 = 2000000000000000000;
-    const c: i128 = 1000000000000000000;
-
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Before, compareI128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.After, compareI128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Same, compareI128(a, c));
-}
-
-test "compareU128 functionality" {
-    const a: u128 = 1000000000000000000;
-    const b: u128 = 2000000000000000000;
-    const c: u128 = 1000000000000000000;
-
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Before, compareU128(a, b));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.After, compareU128(b, a));
-    try std.testing.expectEqual(@import("utils.zig").Ordering.Same, compareU128(a, c));
-}
-
-test "128-bit comparison functions" {
-    const small: i128 = 100;
-    const large: i128 = 200;
-
-    try std.testing.expect(lessThanI128(small, large));
-    try std.testing.expect(!lessThanI128(large, small));
-    try std.testing.expect(lessThanOrEqualI128(small, large));
-    try std.testing.expect(lessThanOrEqualI128(small, small));
-    try std.testing.expect(greaterThanI128(large, small));
-    try std.testing.expect(!greaterThanI128(small, large));
-    try std.testing.expect(greaterThanOrEqualI128(large, small));
-    try std.testing.expect(greaterThanOrEqualI128(small, small));
-}
-
 test "mul_u128 basic functionality" {
     const a: u128 = 1000000;
     const b: u128 = 2000000;
@@ -1678,30 +1051,6 @@ test "mul_u128 basic functionality" {
     // 1000000 * 2000000 = 2000000000000, which fits in u128
     try std.testing.expectEqual(@as(u128, 0), result.hi);
     try std.testing.expectEqual(@as(u128, 2000000000000), result.lo);
-}
-
-test "f32ToParts and f32FromParts roundtrip" {
-    const values = [_]f32{ 0.0, 1.0, -1.0, 3.14159, -42.5, std.math.inf(f32), -std.math.inf(f32) };
-
-    for (values) |val| {
-        if (!std.math.isNan(val)) { // Skip NaN since NaN != NaN
-            const parts = f32ToParts(val);
-            const reconstructed = f32FromParts(parts);
-            try std.testing.expectEqual(val, reconstructed);
-        }
-    }
-}
-
-test "f64ToParts and f64FromParts roundtrip" {
-    const values = [_]f64{ 0.0, 1.0, -1.0, 3.141592653589793, -42.5, std.math.inf(f64), -std.math.inf(f64) };
-
-    for (values) |val| {
-        if (!std.math.isNan(val)) { // Skip NaN since NaN != NaN
-            const parts = f64ToParts(val);
-            const reconstructed = f64FromParts(parts);
-            try std.testing.expectEqual(val, reconstructed);
-        }
-    }
 }
 
 test "f32ToBits and f32FromBits roundtrip" {
@@ -1741,66 +1090,6 @@ test "float to bits normalizes every NaN representation" {
     }
 }
 
-test "f32ToParts specific values" {
-    // Test zero
-    const zero_parts = f32ToParts(0.0);
-    try std.testing.expectEqual(@as(u32, 0), zero_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 0), zero_parts.exponent);
-    try std.testing.expectEqual(false, zero_parts.sign);
-
-    // Test negative zero
-    const neg_zero_parts = f32ToParts(-0.0);
-    try std.testing.expectEqual(@as(u32, 0), neg_zero_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 0), neg_zero_parts.exponent);
-    try std.testing.expectEqual(true, neg_zero_parts.sign);
-
-    // Test 1.0
-    const one_parts = f32ToParts(1.0);
-    try std.testing.expectEqual(@as(u32, 0), one_parts.fraction);
-    try std.testing.expectEqual(@as(u8, 127), one_parts.exponent); // bias is 127
-    try std.testing.expectEqual(false, one_parts.sign);
-}
-
-test "shiftRightZeroFillI128 basic functionality" {
-    // Test normal shift
-    const value: i128 = 0x1000;
-    const result1 = shiftRightZeroFillI128(value, 4);
-    try std.testing.expectEqual(@as(i128, 0x100), result1);
-
-    // Test shift by 0
-    const result2 = shiftRightZeroFillI128(value, 0);
-    try std.testing.expectEqual(value, result2);
-
-    // Test large shift (should return 0)
-    const result3 = shiftRightZeroFillI128(value, 128);
-    try std.testing.expectEqual(@as(i128, 0), result3);
-
-    // Test negative value (zero-fill right shift clears the sign bit)
-    const neg_value: i128 = -1;
-    const result4 = shiftRightZeroFillI128(neg_value, 1);
-    try std.testing.expectEqual(@as(i128, std.math.maxInt(i128)), result4);
-}
-
-test "shiftRightZeroFillU128 basic functionality" {
-    // Test normal shift
-    const value: u128 = 0x1000;
-    const result1 = shiftRightZeroFillU128(value, 4);
-    try std.testing.expectEqual(@as(u128, 0x100), result1);
-
-    // Test shift by 0
-    const result2 = shiftRightZeroFillU128(value, 0);
-    try std.testing.expectEqual(value, result2);
-
-    // Test large shift (should return 0)
-    const result3 = shiftRightZeroFillU128(value, 128);
-    try std.testing.expectEqual(@as(u128, 0), result3);
-
-    // Test max value
-    const max_value: u128 = std.math.maxInt(u128);
-    const result4 = shiftRightZeroFillU128(max_value, 1);
-    try std.testing.expectEqual(@as(u128, 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF), result4);
-}
-
 test "mul_u128 large values" {
     // Test multiplication that would overflow into high bits
     const large1: u128 = 0xFFFFFFFFFFFFFFFF; // max u64
@@ -1821,4 +1110,284 @@ test "mul_u128 overflow into high bits" {
     // 2^64 * 2^64 = 2^128, which should give hi = 1, lo = 0
     try std.testing.expectEqual(@as(u128, 1), result.hi);
     try std.testing.expectEqual(@as(u128, 0), result.lo);
+}
+
+// ── Numeric prefix parsing ──
+
+/// Generative input for numeric prefix-parse property tests: a random
+/// composition of small numeric-token pieces (signs, digit runs, `_`, radix
+/// prefixes, `.`, exponent markers, special-value words) and terminators.
+pub const prefix_parse_testing = struct {
+    const pieces = [_][]const u8{
+        "-",  "+", "_",  ".",  "0x",  "0o",       "0b",  "0X",
+        "e",  "E", "e+", "e-", "p",   "p-",       "P+",  "a",
+        "f",  "F", "g",  "x",  "inf", "infinity", "nan", "NaN",
+        "In", ",", " ",  "]",  "\n",  "9",        "1",   "0",
+    };
+
+    /// Fill `buf` with a random composition of pieces and return the used prefix.
+    pub fn randomText(random: std.Random, buf: []u8) []const u8 {
+        var len: usize = 0;
+        const piece_count = random.uintAtMost(usize, 7);
+        var i: usize = 0;
+        while (i < piece_count) : (i += 1) {
+            if (random.boolean()) {
+                const digit_count = random.intRangeAtMost(usize, 1, 3);
+                var d: usize = 0;
+                while (d < digit_count and len < buf.len) : (d += 1) {
+                    buf[len] = '0' + random.uintLessThan(u8, 10);
+                    len += 1;
+                }
+            } else {
+                const piece = pieces[random.uintLessThan(usize, pieces.len)];
+                if (len + piece.len > buf.len) break;
+                @memcpy(buf[len..][0..piece.len], piece);
+                len += piece.len;
+            }
+        }
+        return buf[0..len];
+    }
+
+    /// Check the prefix-parse properties of one generated input against the
+    /// whole-string parser of the same type.
+    pub fn expectProperties(comptime T: type, text: []const u8, comptime prefixLen: fn ([]const u8) usize, comptime parsePrefix: fn ([]const u8) NumPrefixParseResult(T), comptime parseWhole: fn ([]const u8) ?T) PrefixTestError!void {
+        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const result = parsePrefix(text);
+        const consumed: usize = @intCast(result.consumed);
+        try std.testing.expect(consumed <= text.len);
+        try std.testing.expectEqual(prefixLen(text), consumed);
+
+        switch (result.errorcode) {
+            0 => {
+                try std.testing.expect(consumed > 0);
+                const whole = parseWhole(text[0..consumed]) orelse return error.TestUnexpectedResult;
+                try std.testing.expectEqual(@as(Bits, @bitCast(whole)), @as(Bits, @bitCast(result.value)));
+            },
+            prefix_parse_out_of_range => {
+                try std.testing.expect(consumed > 0);
+                try std.testing.expectEqual(@as(?T, null), parseWhole(text[0..consumed]));
+            },
+            prefix_parse_not_a_number => try std.testing.expectEqual(@as(usize, 0), consumed),
+            else => return error.TestUnexpectedResult,
+        }
+
+        // Longest match: no longer prefix of the input is itself a whole token.
+        var longer = consumed + 1;
+        while (longer <= text.len) : (longer += 1) {
+            try std.testing.expect(prefixLen(text[0..longer]) != longer);
+        }
+
+        // Whole-string acceptance followed by a byte that continues no token.
+        if (parseWhole(text)) |whole| {
+            var buf: [64]u8 = undefined;
+            for (", ]\n") |terminator| {
+                @memcpy(buf[0..text.len], text);
+                buf[text.len] = terminator;
+                const terminated = parsePrefix(buf[0 .. text.len + 1]);
+                try std.testing.expectEqual(@as(u8, 0), terminated.errorcode);
+                try std.testing.expectEqual(@as(u64, text.len), terminated.consumed);
+                try std.testing.expectEqual(@as(Bits, @bitCast(whole)), @as(Bits, @bitCast(terminated.value)));
+            }
+        }
+    }
+};
+
+fn expectPrefixOk(comptime T: type, result: NumPrefixParseResult(T), expected: T, consumed: usize) PrefixTestError!void {
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+    if (@typeInfo(T) == .float) {
+        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        try std.testing.expectEqual(@as(Bits, @bitCast(expected)), @as(Bits, @bitCast(result.value)));
+    } else {
+        try std.testing.expectEqual(expected, result.value);
+    }
+}
+
+fn expectPrefixErr(comptime T: type, result: NumPrefixParseResult(T), errorcode: u8, consumed: usize) PrefixTestError!void {
+    try std.testing.expectEqual(errorcode, result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+}
+
+test "parseIntPrefix width boundaries and overflow by one digit" {
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        const max_text = comptime unsignedMaxText(T);
+        try expectPrefixOk(T, parseIntPrefix(T, max_text ++ ","), std.math.maxInt(T), max_text.len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime unsignedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime unsignedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, max_text ++ "0 "), prefix_parse_out_of_range, max_text.len + 1);
+    }
+    inline for (.{ i8, i16, i32, i64, i128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMaxText(T) ++ ","), std.math.maxInt(T), comptime signedMaxText(T).len);
+        try expectPrefixOk(T, parseIntPrefix(T, comptime signedMinText(T) ++ " "), std.math.minInt(T), comptime signedMinText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMaxPlusOneText(T) ++ "]"), prefix_parse_out_of_range, comptime signedMaxPlusOneText(T).len);
+        try expectPrefixErr(T, parseIntPrefix(T, comptime signedMinMinusOneText(T) ++ "\n"), prefix_parse_out_of_range, comptime signedMinMinusOneText(T).len);
+    }
+
+    try expectPrefixErr(u8, parseIntPrefix(u8, "256,"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "300,"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(i8, parseIntPrefix(i8, "-129"), prefix_parse_out_of_range, 4);
+    try expectPrefixErr(i8, parseIntPrefix(i8, "128"), prefix_parse_out_of_range, 3);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "1e99,"), prefix_parse_out_of_range, 4);
+}
+
+test "parseIntPrefix never ends a token on a dangling sign, underscore, or exponent" {
+    inline for (.{ u8, i8, u64, i128 }) |T| {
+        try expectPrefixErr(T, parseIntPrefix(T, ""), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "-"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "+"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "-abc"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, "_1"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, " 1"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseIntPrefix(T, ".5"), prefix_parse_not_a_number, 0);
+
+        try expectPrefixOk(T, parseIntPrefix(T, "1_"), 1, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "1__2"), 1, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "1_2x"), 12, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e+"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2E+1,"), 20, 4);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e_1"), 2, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e1_"), 20, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "2e-"), 2, 1);
+        try expectPrefixErr(T, parseIntPrefix(T, "2e-1"), prefix_parse_out_of_range, 4);
+        // `.` is not integer grammar: version strings split at the first `.`.
+        try expectPrefixOk(T, parseIntPrefix(T, "1.2.3"), 1, 1);
+    }
+    try expectPrefixOk(u32, parseIntPrefix(u32, "2e5ast"), 200_000, 3);
+    try expectPrefixOk(u8, parseIntPrefix(u8, "0e99999999999999999999,"), 0, 22);
+}
+
+test "parseIntPrefix radix tokens take the longest run of valid radix digits" {
+    inline for (.{ u8, i8, u64, i128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, "0x"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0xg"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0x_1"), 0, 1);
+        try expectPrefixOk(T, parseIntPrefix(T, "0b12"), 1, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "0o78"), 7, 3);
+        try expectPrefixOk(T, parseIntPrefix(T, "0B1_0_"), 2, 5);
+        try expectPrefixOk(T, parseIntPrefix(T, "+0x1f,"), 31, 5);
+        // Hex digits include `e`, so there is no exponent after a radix prefix.
+        try expectPrefixOk(T, parseIntPrefix(T, "0x1e"), 30, 4);
+    }
+    try expectPrefixOk(u8, parseIntPrefix(u8, "0xFFg"), 255, 4);
+    try expectPrefixErr(u8, parseIntPrefix(u8, "0x100"), prefix_parse_out_of_range, 5);
+    try expectPrefixOk(i8, parseIntPrefix(i8, "-0x80]"), -128, 5);
+    try expectPrefixOk(i8, parseIntPrefix(i8, "-0x"), 0, 2);
+}
+
+test "parseIntPrefix unsigned negative zero is Ok and negative magnitudes are out of range" {
+    inline for (.{ u8, u16, u32, u64, u128 }) |T| {
+        try expectPrefixOk(T, parseIntPrefix(T, "-0,"), 0, 2);
+        try expectPrefixErr(T, parseIntPrefix(T, "-5,"), prefix_parse_out_of_range, 2);
+    }
+}
+
+test "parseIntPrefix integer exponents may be negative, and non-integral values are out of range" {
+    // The integer token grammar is `D (e sign? D)?`, independent of value, so
+    // whole-string `from_str` is unchanged: `1e-0` is an integer and `0e-5`,
+    // `2e-1` are complete tokens that do not denote integers.
+    try expectPrefixOk(i64, parseIntPrefix(i64, "1e-0,"), 1, 4);
+    try std.testing.expectEqual(@as(?i64, 1), parseIntSlice(i64, "1e-0"));
+    try std.testing.expectEqual(@as(?i64, 10), parseIntSlice(i64, "10e-00"));
+    try expectPrefixErr(i64, parseIntPrefix(i64, "0e-5,"), prefix_parse_out_of_range, 4);
+    try std.testing.expectEqual(@as(?i64, null), parseIntSlice(i64, "0e-5"));
+    try expectPrefixErr(u64, parseIntPrefix(u64, "2e-1,"), prefix_parse_out_of_range, 4);
+    try expectPrefixOk(u64, parseIntPrefix(u64, "2e-"), 2, 1);
+}
+
+test "parseFloatPrefix decimal mantissa forms" {
+    inline for (.{ f32, f64 }) |T| {
+        try expectPrefixOk(T, parseFloatPrefix(T, ".5"), 0.5, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1."), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.x"), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.5e3]"), 1500.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-.5e1,"), -5.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1_0 "), 10.0, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1_"), 1.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1._5"), 1.0, 2);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e"), 2.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e+"), 2.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "2e-1,"), 0.2, 4);
+        try expectPrefixOk(T, parseFloatPrefix(T, "1.2.3"), 1.2, 3);
+        try expectPrefixErr(T, parseFloatPrefix(T, ""), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "-"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "."), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, "e5"), prefix_parse_not_a_number, 0);
+        try expectPrefixErr(T, parseFloatPrefix(T, " 1"), prefix_parse_not_a_number, 0);
+    }
+}
+
+test "parseFloatPrefix hex floats" {
+    inline for (.{ f32, f64 }) |T| {
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1p3"), 8.0, 5);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1.8p1,"), 3.0, 7);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-0X1P-1]"), -0.5, 7);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x1p"), 1.0, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x"), 0.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0xg"), 0.0, 1);
+        try expectPrefixOk(T, parseFloatPrefix(T, "0x.8"), 0.5, 4);
+    }
+}
+
+test "parseFloatPrefix special values underflow and overflow" {
+    inline for (.{ f32, f64 }) |T| {
+        const inf = std.math.inf(T);
+        try expectPrefixOk(T, parseFloatPrefix(T, "inf"), inf, 3);
+        try expectPrefixOk(T, parseFloatPrefix(T, "Infinity,"), inf, 8);
+        try expectPrefixOk(T, parseFloatPrefix(T, "-INF]"), -inf, 4);
+        try expectPrefixOk(T, parseFloatPrefix(T, "+infinix"), inf, 4);
+
+        const nan_result = parseFloatPrefix(T, "NaN,");
+        try std.testing.expectEqual(@as(u8, 0), nan_result.errorcode);
+        try std.testing.expectEqual(@as(u64, 3), nan_result.consumed);
+        try std.testing.expect(std.math.isNan(nan_result.value));
+        try std.testing.expectEqual(@as(u64, 4), parseFloatPrefix(T, "-nanx").consumed);
+
+        try expectPrefixErr(T, parseFloatPrefix(T, "in"), prefix_parse_not_a_number, 0);
+    }
+
+    try expectPrefixOk(f64, parseFloatPrefix(f64, "1e-400,"), 0.0, 6);
+    try expectPrefixOk(f32, parseFloatPrefix(f32, "1e-50,"), 0.0, 5);
+    try expectPrefixErr(f64, parseFloatPrefix(f64, "1e400,"), prefix_parse_out_of_range, 5);
+    try expectPrefixErr(f32, parseFloatPrefix(f32, "1e39,"), prefix_parse_out_of_range, 4);
+}
+
+fn IntPrefixFns(comptime T: type) type {
+    return struct {
+        fn prefix(bytes: []const u8) NumPrefixParseResult(T) {
+            return parseIntPrefix(T, bytes);
+        }
+        fn whole(bytes: []const u8) ?T {
+            return parseIntSlice(T, bytes);
+        }
+    };
+}
+
+fn FloatPrefixFns(comptime T: type) type {
+    return struct {
+        fn prefix(bytes: []const u8) NumPrefixParseResult(T) {
+            return parseFloatPrefix(T, bytes);
+        }
+        fn whole(bytes: []const u8) ?T {
+            return parseFloatSlice(T, bytes);
+        }
+    };
+}
+
+test "numeric prefix parse properties over generated token compositions" {
+    var prng = std.Random.DefaultPrng.init(0x7010_0bad_cafe);
+    const random = prng.random();
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 20_000) : (iteration += 1) {
+        const text = prefix_parse_testing.randomText(random, &buf);
+        inline for (.{ u8, i8, u16, i32, u64, i64, u128, i128 }) |T| {
+            const fns = IntPrefixFns(T);
+            try prefix_parse_testing.expectProperties(T, text, intPrefixLen, fns.prefix, fns.whole);
+        }
+        inline for (.{ f32, f64 }) |T| {
+            const fns = FloatPrefixFns(T);
+            try prefix_parse_testing.expectProperties(T, text, floatPrefixLen, fns.prefix, fns.whole);
+        }
+    }
 }

@@ -27,9 +27,6 @@ pub const RuntimeLoweringConfig = struct {
     explicit_roots: ?lir.CheckedPipeline.RootRequestSet = null,
     root_module: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
     target: lir.CheckedPipeline.TargetConfig,
-    /// The object cache's artifacts, for the compile-time evaluator to
-    /// splice the entries `target.spec_cache` serves into its image.
-    splice_source: ?eval.CompileTimeFinalization.SpliceSource = null,
     include_provided_data_exports: bool = false,
     include_internal_static_data: bool = false,
 };
@@ -50,8 +47,6 @@ pub const InitError = Allocator.Error || BuiltinModules.InitError;
 pub const CompileDiscoveredError = coordinator_mod.CoordinatorError || BuildError || compile_package.PublishError || error{ UnsupportedBuiltinAnnotationOnly, BuiltinLowLevelAnnotationMustBeFunction, LowLevelOperationsNotFound };
 /// Errors that can occur while building a root module.
 pub const BuildRootError = BuildError || CompileDiscoveredError;
-/// Errors that can occur while building an app module.
-pub const BuildAppError = BuildRootError || error{NotAnApp};
 /// Errors that can occur while building with an explicit main module.
 pub const BuildWithMainError = BuildError || CompileDiscoveredError;
 
@@ -215,6 +210,11 @@ pub const BuildEnv = struct {
     // Actor model coordinator (owns all mutable compilation state)
     coordinator: ?*Coordinator = null,
     runtime_lowering: ?RuntimeLoweringConfig = null,
+    /// Instrumentation only; never participates in checked or object identity.
+    detailed_monotype_diagnostics: bool = false,
+    /// See `eval.CompileTimeFinalization.CompileTimeObjectCache`.
+    compile_time_object_cache: ?eval.CompileTimeFinalization.CompileTimeObjectCache = null,
+    compile_time_object_cache_owner: ?CompileTimeObjectCacheOwner = null,
     /// Let a caller declare a test plan from prepared artifacts before CTFE.
     defer_post_check: bool = false,
     // Cache manager for compiled modules
@@ -229,6 +229,8 @@ pub const BuildEnv = struct {
     /// Whether `compileDiscovered` validates that the selected platform target's
     /// declared link files exist before type checking.
     validate_target_files_for_selected_target: bool = false,
+    /// Collect fine-grained compile-time lowering timings and counters.
+    detailed_lowering_timing: bool = false,
 
     /// Controls which checked-artifact publication work runs after ordinary
     /// checking has completed.
@@ -243,18 +245,20 @@ pub const BuildEnv = struct {
 
     /// Whether executable artifacts were published for this build. User
     /// diagnostics do not change this: checked recovery nodes remain valid
-    /// lowering input and crash only if execution reaches them.
+    /// lowering input and crash only if execution reaches them. A build whose
+    /// app root never finished checking (for example because it depends on an
+    /// import cycle) has no program to publish.
     executable_artifacts_finalized: bool = false,
 
-    /// Compiler role to assign to the root module of this build.
-    root_module_role: ModuleEnv.ModuleRole = .user,
-
-    /// Post-canonicalization validation to apply to the root module of this
-    /// build. `roc test` sets `.explicit_roots` because it runs the root file's
-    /// top-level `expect`s, which are compile-time roots in their own right: a
-    /// headerless root that is neither a type module nor a default app is a
-    /// plain module there rather than a file missing its `main!`.
-    root_validation: Can.Validation = .checking,
+    /// Post-canonicalization validation of the module this build was pointed
+    /// at when that module is the package root. `roc test` sets
+    /// `.explicit_roots` because it runs the file's top-level `expect`s, which
+    /// are compile-time roots in their own right: a headerless file that is
+    /// neither a type module nor a default app is a plain module there rather
+    /// than a file missing its `main!`. A separate entry module below an
+    /// owning `main.roc` always takes `.explicit_roots`, and that `main.roc`
+    /// takes ordinary `.checking` validation.
+    entry_validation: Can.Validation = .checking,
 
     /// Optional source directory used to resolve imports from the root module.
     root_source_dir_override: ?[]const u8 = null,
@@ -438,6 +442,8 @@ pub const BuildEnv = struct {
         self.workspace_roots.deinit();
 
         self.sink.deinit();
+        // Last: the coordinator's retained programs may borrow cached code.
+        if (self.compile_time_object_cache_owner) |owner| owner.deinit(owner.context);
     }
 
     /// Set the cache manager for this build environment
@@ -459,12 +465,6 @@ pub const BuildEnv = struct {
             .roc_ctx = self.filesystem,
         }, self.filesystem);
         self.cache_manager = manager;
-    }
-
-    /// Set the I/O implementation.
-    pub fn setCoreCtx(self: *BuildEnv, roc_ctx: CoreCtx) void {
-        self.filesystem = roc_ctx;
-        self.sink.std_io = self.filesystem.std_io;
     }
 
     /// Get the TargetsConfig from the platform package, if any.
@@ -493,6 +493,11 @@ pub const BuildEnv = struct {
         self.validate_target_files_for_selected_target = enabled;
     }
 
+    pub fn setDetailedLoweringTiming(self: *BuildEnv, enabled: bool) void {
+        if (self.coordinator) |coordinator| coordinator.setDetailedLoweringTiming(enabled);
+        self.detailed_lowering_timing = enabled;
+    }
+
     pub fn setFinalizeExecutableArtifacts(self: *BuildEnv, enabled: bool) void {
         self.post_check_publication_mode = if (enabled) .executable_artifacts else .none;
     }
@@ -501,23 +506,12 @@ pub const BuildEnv = struct {
         self.post_check_publication_mode = mode;
     }
 
-    pub fn setRootModuleRole(self: *BuildEnv, role: ModuleEnv.ModuleRole) void {
-        self.root_module_role = role;
-    }
-
-    pub fn setRootValidation(self: *BuildEnv, validation: Can.Validation) void {
-        self.root_validation = validation;
+    pub fn setEntryValidation(self: *BuildEnv, validation: Can.Validation) void {
+        self.entry_validation = validation;
     }
 
     pub fn setRootSourceDirOverride(self: *BuildEnv, source_dir: []const u8) void {
         self.root_source_dir_override = source_dir;
-    }
-
-    pub fn setCompilerOwnedSourceDir(self: *BuildEnv, source_dir: []const u8) Allocator.Error!void {
-        if (self.compiler_owned_source_dir) |old| {
-            self.gpa.free(@constCast(old));
-        }
-        self.compiler_owned_source_dir = try self.gpa.dupe(u8, source_dir);
     }
 
     pub fn setSyntheticRootSourceMapping(
@@ -583,22 +577,6 @@ pub const BuildEnv = struct {
         if (self.coordinator) |coord| coord.setWatchInputTracking(enabled);
     }
 
-    /// Build an app file specifically (validates it's an app)
-    pub fn buildApp(self: *BuildEnv, app_file: []const u8) BuildAppError!void {
-        // Build and let the main function handle everything
-        // The build function accepts both apps and modules
-        try self.build(app_file);
-
-        // After building, verify it was actually an app
-        // Check the package we just created
-        const pkg_name = self.discovered_pkg_name orelse return error.NotAnApp;
-        const pkg = self.packages.get(pkg_name);
-        if (pkg == null or pkg.?.kind != .app) {
-            // If it wasn't an app, return an error
-            return error.NotAnApp;
-        }
-    }
-
     // Build the workspace starting from an app root file path.
     // Assumptions:
     // - All header-declared paths are local filesystem paths (no URLs).
@@ -612,9 +590,15 @@ pub const BuildEnv = struct {
     }
 
     pub fn buildWithMain(self: *BuildEnv, root_file: []const u8, main_file: []const u8) BuildWithMainError!void {
+        try self.discoverWithMain(root_file, main_file);
+        try self.compileDiscovered();
+    }
+
+    /// Phase 1 of `buildWithMain`: resolve dependencies from `main_file` and
+    /// make `root_file` the entry module. Follow with `compileDiscovered()`.
+    pub fn discoverWithMain(self: *BuildEnv, root_file: []const u8, main_file: []const u8) BuildError!void {
         try self.discoverDependencies(main_file);
         try self.setDiscoveredEntryModule(root_file);
-        try self.compileDiscovered();
     }
 
     /// Walk `start_dir` and its parents for a file named `main.roc`.
@@ -659,13 +643,21 @@ pub const BuildEnv = struct {
     /// when set and different from `root_file`. Otherwise module/type_module/hosted
     /// roots walk ancestor directories for `main.roc` (same convention as #6538).
     pub fn buildResolvingMain(self: *BuildEnv, root_file: []const u8, preferred_main: ?[]const u8) BuildWithMainError!void {
+        try self.discoverResolvingMain(root_file, preferred_main);
+        try self.compileDiscovered();
+    }
+
+    /// Phase 1 of `buildResolvingMain`: choose the discovery root and resolve
+    /// its dependencies (downloading any uncached packages). Follow with
+    /// `compileDiscovered()`.
+    pub fn discoverResolvingMain(self: *BuildEnv, root_file: []const u8, preferred_main: ?[]const u8) BuildError!void {
         const root_abs = try self.makeAbsolute(root_file);
         defer self.gpa.free(root_abs);
 
         const kind = self.peekPackageKind(root_abs) catch null;
         const carries_packages = kind == .app or kind == .default_app or kind == .package or kind == .platform;
         if (carries_packages) {
-            try self.build(root_file);
+            try self.discoverDependencies(root_file);
             return;
         }
 
@@ -673,7 +665,7 @@ pub const BuildEnv = struct {
             const main_abs = try self.makeAbsolute(main_path);
             defer self.gpa.free(main_abs);
             if (std.mem.eql(u8, root_abs, main_abs)) {
-                try self.build(root_file);
+                try self.discoverDependencies(root_file);
             } else {
                 // The main file is the discovery root here, so its bundle
                 // provenance—not the checked file's—is the root identity.
@@ -684,7 +676,7 @@ pub const BuildEnv = struct {
                     }
                     self.root_url = try package_source.UrlSource.init(self.gpa, main_url.view());
                 }
-                try self.buildWithMain(root_file, main_path);
+                try self.discoverWithMain(root_file, main_path);
             }
             return;
         }
@@ -693,12 +685,12 @@ pub const BuildEnv = struct {
         if (try findOwningMainRoc(self.gpa, self.filesystem, start_dir)) |main_abs| {
             defer self.gpa.free(main_abs);
             if (!std.mem.eql(u8, root_abs, main_abs)) {
-                try self.buildWithMain(root_file, main_abs);
+                try self.discoverWithMain(root_file, main_abs);
                 return;
             }
         }
 
-        try self.build(root_file);
+        try self.discoverDependencies(root_file);
     }
 
     /// Silently read the package/header kind of `file_abs` without emitting reports.
@@ -782,8 +774,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Source directory: ");
         try report.document.addAnnotated(source_root, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("The checked module must be inside the selected package's source directory.");
 
         try self.sink.emitReport("workspace", "root", report);
@@ -813,7 +804,33 @@ pub const BuildEnv = struct {
         coord.enable_hosted_transform = true;
         coord.setWatchInputTracking(self.track_watch_inputs);
         coord.runtime_lowering = self.runtime_lowering;
+        coord.setDetailedLoweringTiming(self.detailed_lowering_timing);
+        coord.compile_time_object_cache = self.compile_time_object_cache;
+        if (self.detailed_monotype_diagnostics) coord.ctfe_timing.lowering.enableDetailedMonotypeBody();
         self.coordinator = coord;
+    }
+
+    /// The storage behind a compile-time object cache, which this build
+    /// environment owns once attached.
+    pub const CompileTimeObjectCacheOwner = struct {
+        context: *anyopaque,
+        /// Gives the cache this build environment, whose module set decides
+        /// which packs it loads, before compile-time evaluation reads it.
+        bind: *const fn (*anyopaque, *BuildEnv) void,
+        deinit: *const fn (*anyopaque) void,
+    };
+
+    /// Every command that checks a program attaches this the same way, so
+    /// compile-time evaluation reads one object cache whatever the command.
+    pub fn setCompileTimeObjectCache(
+        self: *BuildEnv,
+        cache: eval.CompileTimeFinalization.CompileTimeObjectCache,
+        owner: CompileTimeObjectCacheOwner,
+    ) void {
+        std.debug.assert(self.compile_time_object_cache_owner == null);
+        if (self.coordinator) |coordinator| coordinator.compile_time_object_cache = cache;
+        self.compile_time_object_cache = cache;
+        self.compile_time_object_cache_owner = owner;
     }
 
     pub fn setRuntimeLowering(self: *BuildEnv, config: RuntimeLoweringConfig) void {
@@ -862,6 +879,17 @@ pub const BuildEnv = struct {
 
         var header_info = try self.parseHeaderDeps(root_abs);
         defer header_info.deinit(self.gpa);
+
+        // Absolute platform specs are rejected for every command, matching the
+        // run path, so a project cannot pass `roc check` and then fail on its
+        // first `roc run`.
+        for (header_info.resolver_root.deps) |dep| {
+            if (dep.is_platform and std.fs.path.isAbsolute(dep.spec)) {
+                try self.emitAbsolutePlatformPathReport(dep.spec);
+                try self.makeWorkspaceReportsDrainable();
+                return error.InvalidDependency;
+            }
+        }
 
         // Every header kind names a module this build can root at: apps and
         // default apps produce programs, and the rest are compiled for their own
@@ -1050,8 +1078,14 @@ pub const BuildEnv = struct {
         const coord_pkg = coord.getPackage(pkg_name).?;
         const module_name = base.module_path.getModuleName(pkg_root_file);
         const root_id = try coord_pkg.ensureModule(self.gpa, module_name, pkg_root_file);
-        coord_pkg.modules.items[root_id].module_role = self.root_module_role;
-        coord_pkg.modules.items[root_id].validation = self.root_validation;
+        // When an owning `main.roc` supplied the packages, the file the build
+        // was pointed at is a separate entry module and owns the entry
+        // validation; the `main.roc` root is validated as an ordinary module.
+        const has_separate_entry = if (self.entry_module_abs) |entry_file|
+            !std.mem.eql(u8, entry_file, pkg_root_file)
+        else
+            false;
+        coord_pkg.modules.items[root_id].validation = if (has_separate_entry) .checking else self.entry_validation;
         if (self.root_source_dir_override) |source_dir| {
             coord_pkg.modules.items[root_id].source_dir_override = try self.gpa.dupe(u8, source_dir);
         }
@@ -1132,11 +1166,16 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
+        const test_modules = try self.collectProgramTestModules(self.gpa);
+        defer self.gpa.free(test_modules);
+        coord.program_test_modules = test_modules;
+        defer coord.program_test_modules = &.{};
         coord.finishCheckedProgram(self.post_check_publication_mode) catch |err| {
             self.emitAccumulatedReportsForError();
             return err;
         };
-        self.executable_artifacts_finalized = self.post_check_publication_mode == .executable_artifacts;
+        self.executable_artifacts_finalized = coord.hasCheckedProgram();
 
         try self.resolvePlatformTargetConfigConstants();
 
@@ -1411,7 +1450,18 @@ pub const BuildEnv = struct {
                 }
 
                 // Extract targets config from the platform AST
-                info.targets_config = try targets_config_mod.TargetsConfig.fromAST(self.gpa, ast);
+                var path_diagnostic: targets_config_mod.InvalidTargetPathDiagnostic = undefined;
+                info.targets_config = targets_config_mod.TargetsConfig.fromAST(self.gpa, ast, &path_diagnostic) catch |err| switch (err) {
+                    error.OutOfMemory => return error.OutOfMemory,
+                    error.InvalidTargetPath => {
+                        const pkg_name = "main";
+                        const report = try path_diagnostic.toReport(self.gpa, &env.common, file_abs);
+                        try self.sink.emitReport(pkg_name, file_abs, report);
+                        try self.sink.buildOrder(&[_][]const u8{pkg_name}, &[_][]const u8{file_abs}, &[_]u32{0});
+                        self.sink.tryEmit();
+                        return error.UnsupportedHeader;
+                    },
+                };
             },
             .module => {
                 info.kind = .module;
@@ -1895,6 +1945,26 @@ pub const BuildEnv = struct {
         self.sink.tryEmit();
     }
 
+    /// Emit the same "Absolute Platform Path" report the CLI run path produces
+    /// (see `validatePlatformSpec` in `src/cli/main.zig`), so `check` and `build`
+    /// reject absolute platform specs with an identical diagnostic.
+    fn emitAbsolutePlatformPathReport(self: *BuildEnv, platform_spec: []const u8) Allocator.Error!void {
+        var report = try Report.init(
+            self.gpa,
+            "Absolute Platform Path",
+            "Absolute paths are not allowed for platform specifications.",
+            .runtime_error,
+        );
+        errdefer report.deinit();
+        try report.document.addText("    ");
+        try report.document.addAnnotated(platform_spec, .path);
+        try report.document.addLineBreaks(2);
+        try report.document.addText("Tip: Use a relative path like ");
+        try report.document.addAnnotated("../path/to/platform", .emphasized);
+        try report.document.addText(" or a URL.");
+        try self.sink.emitReport("workspace", "root", report);
+    }
+
     fn validateDiscoveredPlatformTargetFiles(
         self: *BuildEnv,
         platform_source_path: []const u8,
@@ -1948,8 +2018,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Expected directory: ");
         try report.document.addAnnotated(info.expected_path, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("Create this directory or update the platform `targets` section. Builds cannot proceed until declared target inputs exist.");
 
         try self.sink.emitReport("workspace", "root", report);
@@ -1976,8 +2045,7 @@ pub const BuildEnv = struct {
         try report.document.addLineBreak();
         try report.document.addText("Expected file: ");
         try report.document.addAnnotated(info.expected_full_path, .path);
-        try report.document.addLineBreak();
-        try report.document.addLineBreak();
+        try report.document.addLineBreaks(2);
         try report.document.addText("The selected target's platform entry lists this file. Add the file or remove it from that target config before building.");
 
         try self.sink.emitReport("workspace", "root", report);
@@ -2218,7 +2286,7 @@ pub const BuildEnv = struct {
             if (self.version_notes.get(drained[i].pkg_name)) |note| {
                 if (!noted_pkgs.contains(drained[i].pkg_name)) {
                     for (drained[i].reports) |*report| {
-                        if (report.severity != .runtime_error and report.severity != .fatal) continue;
+                        if (!report.severity.isError()) continue;
                         try noted_pkgs.put(self.gpa, drained[i].pkg_name, {});
                         const owned = try report.addOwnedString(note);
                         try report.addNote(owned);
@@ -2298,45 +2366,6 @@ pub const BuildEnv = struct {
         module_time_min_ns: u64 = std.math.maxInt(u64),
         module_time_max_ns: u64 = 0,
         module_time_sum_ns: u64 = 0,
-
-        /// Record a module's compilation time
-        pub fn recordModuleTime(self: *BuildStats, time_ns: u64) void {
-            self.modules_compiled += 1;
-            self.module_time_sum_ns += time_ns;
-            if (time_ns < self.module_time_min_ns) self.module_time_min_ns = time_ns;
-            if (time_ns > self.module_time_max_ns) self.module_time_max_ns = time_ns;
-        }
-
-        /// Get average module compile time in nanoseconds
-        pub fn moduleTimeAvgNs(self: BuildStats) u64 {
-            if (self.modules_compiled == 0) return 0;
-            return self.module_time_sum_ns / self.modules_compiled;
-        }
-
-        /// Get module time min in milliseconds (rounded)
-        pub fn moduleTimeMinMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.module_time_min_ns + 500_000) / 1_000_000);
-        }
-
-        /// Get module time max in milliseconds (rounded)
-        pub fn moduleTimeMaxMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.module_time_max_ns + 500_000) / 1_000_000);
-        }
-
-        /// Get module time average in milliseconds (rounded)
-        pub fn moduleTimeAvgMs(self: BuildStats) u32 {
-            if (self.modules_compiled == 0) return 0;
-            return @intCast((self.moduleTimeAvgNs() + 500_000) / 1_000_000);
-        }
-
-        /// Get cache hit rate as percentage (0-100)
-        pub fn cacheHitPercent(self: BuildStats) u32 {
-            const total = self.cache_hits + self.cache_misses;
-            if (total == 0) return 0;
-            return @intCast((@as(u64, self.cache_hits) * 100 + total / 2) / total);
-        }
     };
 
     /// Get build statistics from the coordinator
@@ -2459,7 +2488,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .Debug) std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+            if (builtin.mode == .Debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
             unreachable;
         }
 
@@ -2476,7 +2505,7 @@ pub const BuildEnv = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
             const state = pkg.root_file_state orelse {
-                if (builtin.mode == .Debug) std.debug.panic("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
+                if (builtin.mode == .Debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
                 unreachable;
             };
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
@@ -2489,7 +2518,7 @@ pub const BuildEnv = struct {
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
                     const state = mod.source_file_state orelse {
-                        if (builtin.mode == .Debug) std.debug.panic("coordinator module {s} has no source_file_state", .{mod.name});
+                        if (builtin.mode == .Debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
                         unreachable;
                     };
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
@@ -2590,10 +2619,6 @@ pub const BuildEnv = struct {
         }
 
         return self.findModuleByNameInPackage(importing_pkg_opt, qualified_name);
-    }
-
-    pub fn findModuleByQualifiedName(self: *BuildEnv, qualified_name: []const u8) ?*coordinator_mod.ModuleState {
-        return self.findModuleByQualifiedNameInPackage(null, qualified_name);
     }
 
     pub fn findModuleByNameInPackage(
@@ -2760,6 +2785,40 @@ pub const BuildEnv = struct {
     /// compiler-owned platform, because a path dependency declared inside a
     /// fetched dependency arrived by download too and must not inherit the
     /// root's ownership.
+    /// The checked modules whose `expect`s are the developer's own tests,
+    /// exactly the modules `roc test` runs, ordered by package and module
+    /// name so every command evaluates their test roots in one order.
+    fn collectProgramTestModules(
+        self: *BuildEnv,
+        allocator: Allocator,
+    ) Allocator.Error![]check.CheckedArtifact.CheckedModuleArtifactKey {
+        const coord = self.coordinator orelse unreachable;
+        var test_owned_packages = try self.collectTestOwnedPackages(allocator);
+        defer test_owned_packages.deinit(allocator);
+
+        const Entry = struct { package: []const u8, module: []const u8, key: check.CheckedArtifact.CheckedModuleArtifactKey };
+        var entries = std.ArrayList(Entry).empty;
+        defer entries.deinit(allocator);
+        var pkg_it = coord.packages.iterator();
+        while (pkg_it.next()) |entry| {
+            if (!test_owned_packages.contains(entry.key_ptr.*)) continue;
+            for (entry.value_ptr.*.modules.items) |*mod| {
+                const artifact = mod.checkedArtifact() orelse continue;
+                try entries.append(allocator, .{ .package = entry.key_ptr.*, .module = mod.name, .key = artifact.key });
+            }
+        }
+        std.mem.sort(Entry, entries.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                const package_order = std.mem.order(u8, a.package, b.package);
+                if (package_order != .eq) return package_order == .lt;
+                return std.mem.lessThan(u8, a.module, b.module);
+            }
+        }.lessThan);
+        const keys = try allocator.alloc(check.CheckedArtifact.CheckedModuleArtifactKey, entries.items.len);
+        for (entries.items, keys) |entry, *key| key.* = entry.key;
+        return keys;
+    }
+
     fn collectTestOwnedPackages(
         self: *BuildEnv,
         allocator: Allocator,
@@ -2803,7 +2862,7 @@ pub const BuildEnv = struct {
 
     pub fn getCompiledModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]CompiledModuleInfo {
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: compiled modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: compiled modules requested before coordinator initialization", .{});
         };
 
         var modules = std.ArrayList(CompiledModuleInfo).empty;
@@ -2864,19 +2923,19 @@ pub const BuildEnv = struct {
     /// completed compiler outputs. Dependency modules are deliberately absent.
     pub fn getPublicRootModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
-            std.debug.panic("build env invariant violated: public modules requested before dependency discovery", .{});
+            base.invariant("build env invariant violated: public modules requested before dependency discovery", .{});
         };
         const root_pkg = self.packages.getPtr(root_name) orelse {
-            std.debug.panic("build env invariant violated: public-module root package is unavailable", .{});
+            base.invariant("build env invariant violated: public-module root package is unavailable", .{});
         };
         if (root_pkg.kind != .package and root_pkg.kind != .platform) {
-            std.debug.panic("build env invariant violated: public modules requested for a non-package root", .{});
+            base.invariant("build env invariant violated: public modules requested for a non-package root", .{});
         }
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
         };
         const root_coord_pkg = coord.packages.get(root_name) orelse {
-            std.debug.panic("build env invariant violated: public-module root coordinator package is unavailable", .{});
+            base.invariant("build env invariant violated: public-module root coordinator package is unavailable", .{});
         };
 
         var public_modules = std.ArrayList(PublicModuleInfo).empty;
@@ -2885,20 +2944,20 @@ pub const BuildEnv = struct {
         for (root_pkg.public_surface.modules.items, 0..) |public_module, public_index| {
             const module_name = public_module.name;
             const public_target = root_coord_pkg.getPublicModuleTarget(module_name) orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' has no source target",
                     .{module_name},
                 );
             };
             const module_id = root_coord_pkg.getPublicModuleId(module_name) orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' was not compiled",
                     .{module_name},
                 );
             };
             const module_state = root_coord_pkg.getModule(module_id).?;
             const module_data = module_state.semanticData() orelse {
-                std.debug.panic(
+                base.invariant(
                     "build env invariant violated: public module '{s}' has no completed compiler output",
                     .{module_name},
                 );
@@ -2912,7 +2971,7 @@ pub const BuildEnv = struct {
                 .public_type_decl = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
-                    .unresolved_nested_type => std.debug.panic(
+                    .unresolved_nested_type => base.invariant(
                         "build env invariant violated: public module '{s}' has an unresolved nested type",
                         .{module_name},
                     ),
@@ -2928,7 +2987,7 @@ pub const BuildEnv = struct {
     /// source-module names; type views additionally carry their exact root.
     pub fn getCompiledPublicModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const coord = self.coordinator orelse {
-            std.debug.panic("build env invariant violated: public modules requested before coordinator initialization", .{});
+            base.invariant("build env invariant violated: public modules requested before coordinator initialization", .{});
         };
 
         var public_modules = std.ArrayList(PublicModuleInfo).empty;
@@ -2948,7 +3007,7 @@ pub const BuildEnv = struct {
                 const source_decl: ?CIR.Statement.Idx = switch (public_target.selection) {
                     .type_decl => |statement| statement,
                     .whole_module => null,
-                    .unresolved_nested_type => std.debug.panic(
+                    .unresolved_nested_type => base.invariant(
                         "build env invariant violated: compiled public module '{s}' has an unresolved nested type",
                         .{public_module.name},
                     ),
@@ -2972,10 +3031,10 @@ pub const BuildEnv = struct {
     /// their root module when the header exposes root-owned names.
     pub fn getDocumentationModules(self: *BuildEnv, allocator: Allocator) Allocator.Error![]PublicModuleInfo {
         const root_name = self.discovered_pkg_name orelse {
-            std.debug.panic("build env invariant violated: documentation requested before dependency discovery", .{});
+            base.invariant("build env invariant violated: documentation requested before dependency discovery", .{});
         };
         const root_pkg = self.packages.getPtr(root_name) orelse {
-            std.debug.panic("build env invariant violated: documentation root package is unavailable", .{});
+            base.invariant("build env invariant violated: documentation root package is unavailable", .{});
         };
 
         if (root_pkg.kind == .package) {
@@ -2995,10 +3054,10 @@ pub const BuildEnv = struct {
 
             if (root_pkg.public_surface.root_names.items.len > 0) {
                 const root_module = self.rootModule(root_name) orelse {
-                    std.debug.panic("build env invariant violated: platform documentation root module is unavailable", .{});
+                    base.invariant("build env invariant violated: platform documentation root module is unavailable", .{});
                 };
                 const root_data = root_module.semanticData() orelse {
-                    std.debug.panic("build env invariant violated: platform documentation root module has no completed compiler output", .{});
+                    base.invariant("build env invariant violated: platform documentation root module has no completed compiler output", .{});
                 };
                 docs_modules.appendAssumeCapacity(.{
                     .name = root_module.name,
@@ -3105,27 +3164,6 @@ pub const BuildEnv = struct {
         return result.toOwnedSlice(allocator);
     }
 
-    /// Find the index of the primary module (platform main if present, otherwise app) in a module list.
-    pub fn findPrimaryModuleIndex(modules: []const CompiledModuleInfo) ?usize {
-        // First look for platform main
-        for (modules, 0..) |mod, i| {
-            if (mod.is_platform_main) return i;
-        }
-        // Fall back to app
-        for (modules, 0..) |mod, i| {
-            if (mod.is_app) return i;
-        }
-        return null;
-    }
-
-    /// Find the index of the app module in a module list.
-    pub fn findAppModuleIndex(modules: []const CompiledModuleInfo) ?usize {
-        for (modules, 0..) |mod, i| {
-            if (mod.is_app) return i;
-        }
-        return null;
-    }
-
     /// Get the root semantic data for the app package (convenience method).
     pub fn getAppSemanticData(self: *BuildEnv) ?SemanticModuleData {
         const root_name = self.discovered_pkg_name orelse return null;
@@ -3165,13 +3203,13 @@ pub const BuildEnv = struct {
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
         const semantic = self.getExecutableRootSemanticData() orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("build env invariant violated: executable root semantic data is missing", .{});
+                base.invariant("build env invariant violated: executable root semantic data is missing", .{});
             }
             unreachable;
         };
         return semantic.checked_artifact orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("build env invariant violated: executable root has no checked artifact", .{});
+                base.invariant("build env invariant violated: executable root has no checked artifact", .{});
             }
             unreachable;
         };
@@ -3205,7 +3243,7 @@ pub const BuildEnv = struct {
         const pkg = self.packages.get(location.pkg_name) orelse return null;
         const coord_pkg = coord.packages.get(location.pkg_name) orelse return null;
         const module = coord_pkg.getModule(location.module_id) orelse return null;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        var hasher = base.Sha256.init(.{});
         if (pkg.url) |url| {
             hasher.update("pkg\x00");
             hasher.update(url.url);
@@ -3261,7 +3299,7 @@ pub const BuildEnv = struct {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             const artifact = self.artifactByKey(key) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("build env invariant violated: missing lowering visibility artifact", .{});
+                    base.invariant("build env invariant violated: missing lowering visibility artifact", .{});
                 }
                 unreachable;
             };
@@ -3282,7 +3320,7 @@ pub const BuildEnv = struct {
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("build env invariant violated: missing relation artifact", .{});
+                    base.invariant("build env invariant violated: missing relation artifact", .{});
                 }
                 unreachable;
             };
@@ -3353,10 +3391,7 @@ pub const BuildEnv = struct {
 
         for (drained) |mod| {
             for (mod.reports) |*report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => total_error_count += 1,
-                    .warning => total_warning_count += 1,
-                }
+                if (report.severity.isError()) total_error_count += 1 else total_warning_count += 1;
                 reporting.renderReportToTerminal(report, writer, palette, config) catch {};
             }
         }
@@ -3381,6 +3416,10 @@ pub const BuildEnv = struct {
 
         var total: usize = 0;
         for (modules) |mod| {
+            // A module that never finished checking (for example, a member of
+            // an import cycle) is not part of any built artifact, and its
+            // canonical tree still holds unresolved import references.
+            if (mod.semantic.checked_artifact == null) continue;
             var regions = std.ArrayList(base.Region).empty;
             defer regions.deinit(self.gpa);
 
@@ -3500,10 +3539,7 @@ pub const BuildEnv = struct {
         statement_idx: CIR.Statement.Idx,
     ) Allocator.Error!void {
         switch (env.store.getStatement(statement_idx)) {
-            .s_decl => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_var => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_reassign => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
-            .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
+            inline .s_decl, .s_var, .s_reassign, .s_expr => |stmt| try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr),
             .s_expect => {},
             .s_dbg => |stmt| {
                 try regions.append(allocator, env.store.getStatementRegion(statement_idx));
@@ -3513,15 +3549,7 @@ pub const BuildEnv = struct {
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.expr);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
-            .s_while => |stmt| {
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
-            },
-            .s_infinite_loop => |stmt| {
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
-                try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
-            },
-            .s_breakable_loop => |stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |stmt| {
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.cond);
                 try collectDbgRegionsInExpr(allocator, env, regions, stmt.body);
             },
@@ -3604,11 +3632,7 @@ pub const BuildEnv = struct {
             },
             .e_unary_minus => |unary| try collectDbgRegionsInExpr(allocator, env, regions, unary.expr),
             .e_field_access => |field| try collectDbgRegionsInExpr(allocator, env, regions, field.receiver),
-            .e_method_call => |call| {
-                try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
-                try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try collectDbgRegionsInExpr(allocator, env, regions, call.receiver);
                 try collectDbgRegionsInExprSpan(allocator, env, regions, call.args);
             },
@@ -3672,59 +3696,13 @@ pub const BuildEnv = struct {
             .e_break,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
     pub const RenderDiagnosticsResult = struct {
         errors: usize,
         warnings: usize,
-    };
-
-    /// Get compiled module envs ready for backend use: Builtin at [0], imports resolved.
-    /// Replaces the repeated pattern of getCompiledModules + build array + resolveImports.
-    pub fn getResolvedModuleEnvs(self: *BuildEnv, allocator: Allocator) Allocator.Error!ResolvedModules {
-        const modules = try self.getCompiledModules(allocator);
-        if (modules.len == 0) return error.NoModulesCompiled;
-
-        const builtin_env = self.builtin_modules.builtin_module.env;
-        var all_module_envs = try allocator.alloc(*ModuleEnv, modules.len + 1);
-        all_module_envs[0] = builtin_env;
-        for (modules, 0..) |mod, i| {
-            all_module_envs[i + 1] = mod.semantic.env;
-        }
-
-        // Resolve imports directly from the assembled module env array.
-        for (all_module_envs) |module| {
-            module.imports.clearResolvedModules();
-            for (module.imports.imports.items.items, 0..) |str_idx, i| {
-                const import_name = module.getString(str_idx);
-                for (all_module_envs, 0..) |candidate_env, module_idx| {
-                    if (std.mem.eql(u8, candidate_env.module_name, import_name)) {
-                        module.imports.setResolvedModule(@enumFromInt(i), @intCast(module_idx));
-                        break;
-                    }
-                }
-            }
-        }
-
-        return .{
-            .all_module_envs = all_module_envs,
-            .compiled_modules = modules,
-        };
-    }
-
-    /// Result of getResolvedModuleEnvs: compiled modules with Builtin at [0] and imports resolved.
-    pub const ResolvedModules = struct {
-        /// Module envs array with Builtin at index 0, ready for backend use.
-        all_module_envs: []*ModuleEnv,
-        /// Metadata for each compiled module (indices correspond to all_module_envs[1..]).
-        compiled_modules: []CompiledModuleInfo,
-
-        /// Get module envs excluding Builtin (for closure pipeline, etc.)
-        pub fn compiledModuleEnvs(self: *const ResolvedModules) []*ModuleEnv {
-            return self.all_module_envs[1..];
-        }
     };
 };
 
@@ -4238,6 +4216,67 @@ test "issue 9737: logicalModuleToPath frees its scratch path exactly once on the
     try std.testing.expectError(error.PathOutsideWorkspace, env.logicalModuleToPath("/tmp/roc-issue-9737", "Mod"));
 }
 
+// Regression test for https://github.com/roc-lang/roc/issues/11714
+// `roc check` and `roc build` must reject an absolute platform path with the
+// same report `roc run` produces.
+test "discoverDependencies rejects absolute platform spec with Absolute Platform Path report" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const tmp_root = try tmp.dir.realPathFileAlloc(testing.io, ".", allocator);
+    defer allocator.free(tmp_root);
+
+    // The platform file never needs to exist: discovery aborts before
+    // resolution reads it.
+    const platform_spec = try std.fs.path.join(allocator, &.{ tmp_root, "pf", "main.roc" });
+    defer allocator.free(platform_spec);
+
+    // Windows paths contain backslashes, which must be escaped inside a Roc
+    // string literal.
+    const platform_spec_literal = try std.mem.replaceOwned(u8, allocator, platform_spec, "\\", "\\\\");
+    defer allocator.free(platform_spec_literal);
+
+    const app_source = try std.fmt.allocPrint(
+        allocator,
+        "app [main!] {{ pf: platform \"{s}\" }}\n\nmain! = || {{}}\n",
+        .{platform_spec_literal},
+    );
+    defer allocator.free(app_source);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "app.roc", .data = app_source });
+
+    const app_path = try std.fs.path.join(allocator, &.{ tmp_root, "app.roc" });
+    defer allocator.free(app_path);
+
+    var env = try BuildEnv.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        tmp_root,
+        testing.io,
+    );
+    defer env.deinit();
+
+    try testing.expectError(error.InvalidDependency, env.discoverDependencies(app_path));
+
+    const drained = try env.drainReports();
+    defer env.freeDrainedReports(drained);
+
+    var found = false;
+    for (drained) |mod| {
+        for (mod.reports) |report| {
+            if (std.mem.eql(u8, report.title, "Absolute Platform Path")) {
+                try testing.expectEqual(reporting.Severity.runtime_error, report.severity);
+                found = true;
+            }
+        }
+    }
+    try testing.expect(found);
+}
+
 test "findPackageForModulePath deterministically selects nested package over outer package root_dir" {
     const gpa = std.testing.allocator;
 
@@ -4298,12 +4337,10 @@ test "findModuleByQualifiedNameInPackage strictly preserves shorthand identity a
     try pkg_app.shorthands.put(try gpa.dupe(u8, "dep"), try gpa.dupe(u8, "dep_pkg"));
 
     // App also has a hierarchical module named "dep.Missing"
-    try pkg_app.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "dep.Missing"), try gpa.dupe(u8, "/workspace/dep_Missing.roc")));
-    try pkg_app.module_names.put(pkg_app.modules.items[0].name, 0);
+    _ = try pkg_app.ensureModule(gpa, "dep.Missing", "/workspace/dep_Missing.roc");
 
     // dep_pkg has module "RealModule" (but not "Missing")
-    try pkg_dep.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "RealModule"), try gpa.dupe(u8, "/workspace/dep/RealModule.roc")));
-    try pkg_dep.module_names.put(pkg_dep.modules.items[0].name, 0);
+    _ = try pkg_dep.ensureModule(gpa, "RealModule", "/workspace/dep/RealModule.roc");
 
     try coord.packages.put("app", &pkg_app);
     try coord.packages.put("dep_pkg", &pkg_dep);
@@ -4325,8 +4362,7 @@ test "findModuleByQualifiedNameInPackage strictly preserves shorthand identity a
     // 3. Dotted name with undeclared qualifier does NOT resolve against foreign canonical packages
     var pkg_other = coordinator_mod.PackageState.init(gpa, try gpa.dupe(u8, "foreign"), try gpa.dupe(u8, "/workspace/foreign"), null);
     defer pkg_other.deinit(gpa);
-    try pkg_other.modules.append(gpa, coordinator_mod.ModuleState.init(try gpa.dupe(u8, "Mod"), try gpa.dupe(u8, "/workspace/foreign/Mod.roc")));
-    try pkg_other.module_names.put(pkg_other.modules.items[0].name, 0);
+    _ = try pkg_other.ensureModule(gpa, "Mod", "/workspace/foreign/Mod.roc");
     try coord.packages.put("foreign", &pkg_other);
 
     const foreign_res = env.findModuleByQualifiedNameInPackage(&pkg_app, "foreign.Mod");

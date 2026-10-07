@@ -294,8 +294,9 @@ fn withRocMacosDeploymentTarget(b: *std.Build, target: ResolvedTarget) ResolvedT
 ///   scalar.
 /// - musl has no ifunc and no x86_64 string assembly, so it is unaffected.
 /// - compiler_rt has no dispatch and nothing above baseline to give up.
-/// - Roc's own code under src/ contains no `@Vector` and no `std.simd`, so the
-///   only thing a higher floor buys it is wider autovectorization.
+/// - Zig string primitives use scalar/word operations and standard-library
+///   helpers. Roc SIMD operations go through the compiler's explicit lowering.
+///   SHA rounds separately use target-specific assembly with runtime dispatch.
 ///
 /// build.zig.zon carries the same accounting for each declared dependency.
 fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query {
@@ -347,7 +348,7 @@ fn getReleaseTargetQuery(b: *std.Build, target: ResolvedTarget) std.Target.Query
 /// instructions in the target CPU's feature set, so without the feature such
 /// a build has no hardware rounds at all and computes every digest with the
 /// portable rounds (see `dispatches_at_runtime` in
-/// src/base/sha256_rounds.zig). The floor keeps Debug builds and test suites
+/// src/base/sha256.zig). The floor keeps Debug builds and test suites
 /// on hardware rounds where the CPU allows it; a machine without the
 /// extension gets the portable rounds, and every LLVM build stays at the
 /// architecture baseline and dispatches at runtime, like a released binary.
@@ -365,12 +366,33 @@ fn withSha256Floor(b: *std.Build, target: ResolvedTarget, optimize: std.builtin.
     return b.resolveTargetQuery(query);
 }
 
+/// `target` without the SHA-256 instructions `withSha256Floor` adds, for the
+/// native builtins objects. Those objects are linked into programs for Roc
+/// targets whose CPU contract may lack the instructions (`BuiltinsObjects.forTarget`
+/// in src/cli/main.zig hands a `v1` target its default twin's object), and the
+/// `Crypto` builtins compress with the SHA-256 instructions exactly when their
+/// object is compiled with them (see `Rounds` in src/builtins/sha256.zig). A
+/// `-Dcpu` choice stands, as it does for `withSha256Floor`.
+fn withoutSha256Floor(b: *std.Build, target: ResolvedTarget) ResolvedTarget {
+    var query = target.query;
+    switch (query.cpu_model) {
+        .determined_by_arch_os, .baseline => {},
+        .native, .explicit => return target,
+    }
+    switch (roc_target.classifyCpuArch(target.result.cpu.arch)) {
+        .x86_64 => query.cpu_features_add.removeFeature(@intFromEnum(std.Target.x86.Feature.sha)),
+        .aarch64 => query.cpu_features_add.removeFeature(@intFromEnum(std.Target.aarch64.Feature.sha2)),
+        .aarch64_be, .arm, .wasm32, .other => return target,
+    }
+    return b.resolveTargetQuery(query);
+}
+
 /// Whether `target` is this machine's own x86_64 architecture and OS and this
 /// machine's CPU has the SHA extension and SSSE3. `builtin.cpu` here is the
 /// CPU the build runner was compiled for, which Zig detects from the machine.
 /// x86_64 macOS never takes the floor: it computes digests with the portable
 /// rounds unless `-Dcpu` names its CPU (see `uses_software_rounds` in
-/// src/base/sha256_rounds.zig).
+/// src/base/sha256.zig).
 fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
     if (builtin.target.cpu.arch != .x86_64) return false;
     if (target.result.cpu.arch != .x86_64 or target.result.os.tag != builtin.target.os.tag) return false;
@@ -386,7 +408,7 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
 /// feature added above the architecture baseline: the `sha2` crypto extension,
 /// present on all Apple Silicon, Graviton, Ampere and Raspberry Pi 5, absent on
 /// the Cortex-A53/A72 in Raspberry Pi 4 and earlier. A `-Dcpu` that omits the
-/// feature fails to compile `TypeDigestHasher` rather than silently getting a
+/// feature fails to compile `Sha256` rather than silently getting a
 /// slower binary.
 ///
 /// x86_64 gets no floor here. Its SHA extension is missing from Intel's
@@ -394,7 +416,7 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
 /// still a common Linux and Windows machine, so the binary stays at the
 /// architecture baseline and the rounds are chosen for the CPU it runs on: at
 /// runtime by CPUID on every x86_64 target except macOS (see
-/// `dispatches_at_runtime` in src/base/sha256_rounds.zig), and always the
+/// `dispatches_at_runtime` in src/base/sha256.zig), and always the
 /// portable rounds on x86_64 macOS (see `uses_software_rounds` there). Debug
 /// builds for this machine are the one exception, in `withSha256Floor`.
 fn addSha256Floor(query: *std.Target.Query) void {
@@ -769,6 +791,9 @@ const CheckTypeCheckerPatternsStep = struct {
 
     const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
     const excluded_ranges = [_]ExcludedRange{
+        // Runtime equality compares Roc value bytes, never compiler identifiers.
+        .{ .file = "boxy_runtime.zig", .start = 5614, .end = 5614 },
+        .{ .file = "boxy_runtime.zig", .start = 5624, .end = 5624 },
         // Cross-module name matching in Check.zig requires string comparison (lines 5530-5547)
         // This is necessary because origin_module is an ident from the type's defining module,
         // while module_name is from the importing module's ident store - no way to compare without strings
@@ -799,7 +824,7 @@ const CheckTypeCheckerPatternsStep = struct {
         // report.zig compares already-formatted diagnostic text only to avoid
         // printing two visually identical types. This is presentation logic,
         // not a type-checking or identifier comparison.
-        .{ .file = "report.zig", .start = 581, .end = 581 },
+        .{ .file = "report.zig", .start = 615, .end = 615 },
     };
 
     fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
@@ -1295,47 +1320,6 @@ const CheckPostcheckArchitectureStep = struct {
     }
 };
 
-const CheckWasmBuiltinRoutingStep = struct {
-    step: Step,
-
-    fn create(b: *std.Build) *CheckWasmBuiltinRoutingStep {
-        const self = b.allocator.create(CheckWasmBuiltinRoutingStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = Step.Id.custom,
-                .name = "check-wasm-builtin-routing",
-                .owner = b,
-                .makeFn = make,
-            }),
-        };
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const b = step.owner;
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping WASM builtin routing check on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        const io = b.graph.io;
-        var child = try std.process.spawn(io, .{
-            .argv = &.{ "perl", "ci/check_wasm_builtin_routing.pl" },
-            .environ_map = &b.graph.environ_map,
-        });
-        const term = try child.wait(io);
-        switch (term) {
-            .exited => |code| if (code != 0) {
-                return step.fail(
-                    "WASM builtin routing check failed. Run 'perl ci/check_wasm_builtin_routing.pl' to see details.",
-                    .{},
-                );
-            },
-            .signal, .stopped, .unknown => return step.fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
-        }
-    }
-};
-
 /// Build step that fails when tracked snapshots differ from the freshly regenerated
 /// output. Detects whether the build root is backed by Git or JJ and invokes the
 /// matching diff command directly. This deliberately avoids shelling out through
@@ -1771,12 +1755,10 @@ const CoverageSummaryStep = struct {
     /// - macOS (ARM64 and x86_64): Uses libdwarf for DWARF parsing
     /// - Linux ARM64: Uses libdw (elfutils) for DWARF parsing
     ///
-    /// TODO ZIG 16: re-check if this DWARF bug is fixed in 0.16—may be able to enable x86_64 coverage
-    /// Coverage does NOT work on Linux x86_64 due to a Zig 0.15.2 compiler bug that
-    /// generates invalid DWARF .debug_line sections. libdw fails with "invalid
-    /// .debug_line section" when parsing user code compilation units, while stdlib
-    /// CUs parse successfully. This causes kcov to find only stdlib files, not user
-    /// source files. ARM64 Zig generates valid DWARF, so coverage works there.
+    /// Coverage is not enabled on Linux x86_64. With Zig 0.15.2 the x86_64 backend
+    /// emitted DWARF .debug_line sections that libdw rejects ("invalid .debug_line
+    /// section") for user compilation units while stdlib CUs parse, so kcov found
+    /// only stdlib files. That has not been re-measured with kcov on Zig 0.16.
     /// See: https://github.com/roc-lang/roc/pull/8864 for investigation details.
     fn create(b: *std.Build, coverage_dir: []const u8, exe_name: []const u8) *CoverageSummaryStep {
         return createWithOptions(b, coverage_dir, exe_name, "PARSER", 28.0);
@@ -2224,6 +2206,56 @@ const CheckBuiltinBakeReproducibleStep = struct {
     }
 };
 
+/// Size budget for echo.wasm, the browser compiler on www.roc-lang.org. The website
+/// rejects a module over Cloudflare's 25 MiB asset limit (`MAX_ASSET_SIZE` in
+/// roc-lang/www.roc-lang.org `ci_scripts/prepare_compiler_wasm.mjs`). The website
+/// measures after `wasm-opt -Oz`, which in practice only shrinks the module (by about
+/// 10%), so checking the raw ReleaseSmall build against the full limit is conservative
+/// and needs no Binaryen in CI.
+const echo_wasm_size_budget: u64 = 26_214_400;
+
+/// Fails when a wasm module exceeds its size budget, and warns from 90% of it.
+const CheckWasmSizeStep = struct {
+    step: Step,
+    wasm: std.Build.LazyPath,
+    budget: u64,
+    budget_name: []const u8,
+
+    fn create(b: *std.Build, compile: *Step.Compile, budget: u64, budget_name: []const u8) *CheckWasmSizeStep {
+        const self = b.allocator.create(CheckWasmSizeStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = .custom,
+                .name = b.fmt("check {s} size", .{compile.name}),
+                .owner = b,
+                .makeFn = make,
+            }),
+            .wasm = compile.getEmittedBin(),
+            .budget = budget,
+            .budget_name = budget_name,
+        };
+        self.step.dependOn(&compile.step);
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CheckWasmSizeStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const path = self.wasm.getPath2(b, step);
+        const size = (try std.Io.Dir.cwd().statFile(b.graph.io, path, .{})).size;
+        const name = std.fs.path.basename(path);
+        const permille = size * 1000 / self.budget;
+        if (size > self.budget) {
+            return step.fail("{s} is {d} bytes, {d} bytes over the {d} byte budget ({s} in build.zig)", .{ name, size, size - self.budget, self.budget, self.budget_name });
+        }
+        std.debug.print("{s}: {d} bytes, {d}.{d}% of the {d} byte budget ({d} bytes left)\n", .{ name, size, permille / 10, permille % 10, self.budget, self.budget - size });
+        if (permille >= 900) {
+            const prefix = if (b.graph.environ_map.get("GITHUB_ACTIONS") != null) "::warning::" else "warning: ";
+            std.debug.print("{s}{s} is within 10% of its size budget ({s} in build.zig)\n", .{ prefix, name, self.budget_name });
+        }
+    }
+};
+
 const BuiltinCompilerRun = struct {
     exe: *Step.Compile,
     run: *Step.Run,
@@ -2231,6 +2263,40 @@ const BuiltinCompilerRun = struct {
     builtin_indices_zig: std.Build.LazyPath,
     builtin_artifact_bin: std.Build.LazyPath,
 };
+
+/// zstd frames of the builtin blobs, for browser modules that must stay under the
+/// website's asset size limit. A root module opts in with
+/// `pub const roc_compressed_builtins = @import("compressed_builtins");` and calls
+/// `compiled_builtins.decompress()` before compiling. Level 9 takes about a second
+/// even with the Debug zstd of default builds; levels 18+ save another 1 MB but take
+/// tens of seconds there, on the critical path of the wasm compile.
+fn addCompressedBuiltins(
+    b: *std.Build,
+    compress_exe: *Step.Compile,
+    builtin_compiler: BuiltinCompilerRun,
+    builtin_roc: std.Build.LazyPath,
+) *std.Build.Module {
+    const files = b.addWriteFiles();
+    const inputs = [_]struct { std.Build.LazyPath, []const u8 }{
+        .{ builtin_compiler.builtin_bin, "Builtin.bin.zst" },
+        .{ builtin_roc, "Builtin.roc.zst" },
+        .{ builtin_compiler.builtin_artifact_bin, "Builtin.artifact.bin.zst" },
+    };
+    for (inputs) |input| {
+        const compress = b.addRunArtifact(compress_exe);
+        compress.addFileArg(input[0]);
+        const output = compress.addOutputFileArg(input[1]);
+        compress.addArg("9");
+        _ = files.addCopyFile(output, input[1]);
+    }
+    const source = files.add("compressed_builtins.zig",
+        \\pub const builtin_bin = @embedFile("Builtin.bin.zst");
+        \\pub const builtin_source = @embedFile("Builtin.roc.zst");
+        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin.zst");
+        \\
+    );
+    return b.createModule(.{ .root_source_file = source });
+}
 
 fn createAndRunBuiltinCompiler(
     b: *std.Build,
@@ -2541,6 +2607,7 @@ const RemoveDirTreeStep = struct {
 fn buildAndCopyWasmHostObject(
     b: *std.Build,
     target: ResolvedTarget,
+    target_name: []const u8,
     optimize: OptimizeMode,
     roc_modules: modules.RocModules,
     strip: bool,
@@ -2568,7 +2635,7 @@ fn buildAndCopyWasmHostObject(
     // Wasm LLD must resolve these against Roc's strong builtins definitions.
     obj.bundle_compiler_rt = true;
 
-    const dest_path = "test/wasm/platform/targets/wasm32/host.wasm";
+    const dest_path = b.fmt("test/wasm/platform/targets/{s}/host.wasm", .{target_name});
     const copy_step = b.addUpdateSourceFiles();
     copy_step.addCopyFileToSource(obj.getEmittedBin(), dest_path);
 
@@ -2847,6 +2914,64 @@ fn createClearCacheStep(b: *std.Build) *Step {
     return &clear_cache.step;
 }
 
+/// Host outputs available before copying platform-local fixture inputs.
+const TestPlatformSteps = struct {
+    wasm: *Step,
+    hosts: *Step,
+};
+
+/// Copy shared test hosts into each fixture platform's own target directory.
+/// Platforms declare only relative inputs within their own directory.
+const CopyFixtureTargetInputsStep = struct {
+    step: Step,
+    platform_filter: ?[]const u8,
+
+    fn create(b: *std.Build, platform_filter: ?[]const u8) *CopyFixtureTargetInputsStep {
+        const self = b.allocator.create(CopyFixtureTargetInputsStep) catch @panic("OOM");
+        self.* = .{ .platform_filter = platform_filter, .step = Step.init(.{
+            .id = .custom,
+            .name = "copy-fixture-target-inputs",
+            .owner = b,
+            .makeFn = make,
+        }) };
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CopyFixtureTargetInputsStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const root = b.build_root.handle;
+        const fixtures = [_]struct { source: []const u8, destination: []const u8 }{
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/static-lib-platform/targets" },
+            .{ .source = "test/wasm/platform/targets", .destination = "test/wasm/field_default_root_order/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/hosted_nominal_return/platform/targets" },
+            .{ .source = "test/dylib/platform/targets", .destination = "test/missing-host-symbol/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9864_static_dispatch_package_nominal/platform/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11693_nominal_boxing/targets" },
+            .{ .source = "test/str/platform/targets", .destination = "test/cli/issue_11220_required_main_host_entry/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_9731_nominal_for_clause/platform/targets" },
+            .{ .source = "test/fx/platform/targets", .destination = "test/cli/issue_10379_custom_encoder_field_state/platform/targets" },
+        };
+        for (fixtures) |fixture| {
+            if (self.platform_filter) |filter| {
+                if (!std.mem.eql(u8, fixture.source, "test/wasm/platform/targets") and
+                    !std.mem.eql(u8, fixture.source, b.fmt("test/{s}/platform/targets", .{filter}))) continue;
+            }
+            var source = try root.openDir(io, fixture.source, .{ .iterate = true });
+            defer source.close(io);
+            var walker = try source.walk(b.allocator);
+            defer walker.deinit();
+            while (try walker.next(io)) |entry| {
+                if (entry.kind != .file) continue;
+                const destination = try std.fs.path.join(b.allocator, &.{ fixture.destination, entry.path });
+                defer b.allocator.free(destination);
+                try source.copyFile(entry.path, root, destination, io, .{ .make_path = true, .replace = true });
+            }
+        }
+    }
+};
+
 fn setupTestPlatforms(
     b: *std.Build,
     target: ResolvedTarget,
@@ -2856,7 +2981,7 @@ fn setupTestPlatforms(
     strip: bool,
     omit_frame_pointer: ?bool,
     platform_filter: ?[]const u8,
-) *Step {
+) TestPlatformSteps {
     // Clear the Roc cache when test platforms are rebuilt to ensure stale cached hosts aren't used
     const clear_cache_step = createClearCacheStep(b);
     const native_target_name = roc_target.RocTarget.fromStdTarget(target.result).toName();
@@ -2922,6 +3047,9 @@ fn setupTestPlatforms(
     // Cross-compile for glibc targets declared by test platform manifests.
     for (glibc_cross_targets) |cross_target| {
         const cross_resolved_target = b.resolveTargetQuery(cross_target.query);
+        if (generateGlibcStub(b, cross_resolved_target, cross_target.name)) |stub| {
+            clear_cache_step.dependOn(&stub.step);
+        }
 
         for (glibc_test_platform_dirs) |platform_dir| {
             if (platform_filter) |filter| {
@@ -2975,11 +3103,22 @@ fn setupTestPlatforms(
     const wasm_host_step = buildAndCopyWasmHostObject(
         b,
         wasm_target,
+        "wasm32",
         optimize,
         roc_modules,
         strip,
         omit_frame_pointer,
     );
+    const wasm_v1_host_step = buildAndCopyWasmHostObject(
+        b,
+        b.resolveTargetQuery(roc_target.RocTarget.wasm32v1.llvmTargetQuery()),
+        "wasm32v1",
+        optimize,
+        roc_modules,
+        strip,
+        omit_frame_pointer,
+    );
+    wasm_host_step.dependOn(wasm_v1_host_step);
     clear_cache_step.dependOn(wasm_host_step);
     clear_cache_step.dependOn(buildAndCopyStrongIntrinsicWasmHostObject(
         b,
@@ -3001,7 +3140,58 @@ fn setupTestPlatforms(
     b.getInstallStep().dependOn(clear_cache_step);
     build_test_hosts_step.dependOn(clear_cache_step);
 
-    return wasm_host_step;
+    return .{ .wasm = wasm_host_step, .hosts = clear_cache_step };
+}
+
+const WasmStaticLibAppBuild = struct {
+    run: *Step.Run,
+    wasm: std.Build.LazyPath,
+};
+
+/// `roc build --target=wasm32` of one app staged in `sources`, which holds the
+/// app, its platform's Roc modules, and the wasm host. Every file the build
+/// reads lives under that staged directory, whose path is derived from all of
+/// their contents, so the step is cached exactly when its inputs are unchanged.
+///
+/// The run follows `build_roc_step`, which installs `roc`: a run hashes an
+/// artifact by its installed path once installed and by its cache path before,
+/// so ordering it after the install keeps its cache key from depending on
+/// which of the two the scheduler happened to reach first.
+fn addWasmStaticLibAppBuild(
+    b: *std.Build,
+    roc_exe: *Step.Compile,
+    build_roc_step: *Step,
+    build_test_hosts_step: *Step,
+    sources: *Step.WriteFile,
+    app: []const u8,
+    options: []const []const u8,
+    output_basename: []const u8,
+) WasmStaticLibAppBuild {
+    return addWasmStaticLibAppBuildForTarget(b, roc_exe, build_roc_step, build_test_hosts_step, sources, app, options, output_basename, "wasm32");
+}
+
+fn addWasmStaticLibAppBuildForTarget(
+    b: *std.Build,
+    roc_exe: *Step.Compile,
+    build_roc_step: *Step,
+    build_test_hosts_step: *Step,
+    sources: *Step.WriteFile,
+    app: []const u8,
+    options: []const []const u8,
+    output_basename: []const u8,
+    target_name: []const u8,
+) WasmStaticLibAppBuild {
+    const run = b.addRunArtifact(roc_exe);
+    run.step.dependOn(build_roc_step);
+    // Test-host rebuilding clears the Roc cache, including compiler scratch.
+    // Finish that invalidation before any fixture compilation starts.
+    run.step.dependOn(build_test_hosts_step);
+    run.addArg("build");
+    run.addFileArg(sources.getDirectory().path(b, app));
+    run.addArgs(options);
+    run.addArg(b.fmt("--target={s}", .{target_name}));
+    const wasm = run.addPrefixedOutputFileArg("--output=", output_basename);
+    return .{ .run = run, .wasm = wasm };
 }
 
 fn configureZigCacheEnvironment(b: *std.Build) void {
@@ -3050,6 +3240,7 @@ pub fn build(b: *std.Build) void {
     const build_check_tools_step = b.step("build-check-tools", "Build host check tools used by CI");
     const run_check_zig_format_step = b.step("run-check-zig-format", "Check formatting of all zig code");
     const run_check_zig_lints_step = b.step("run-check-zig-lints", "Run Zig lints");
+    const run_check_source_bidi_step = b.step("run-check-source-bidi", "Reject bidirectional controls in tracked source and paths");
     const run_check_tidy_step = b.step("run-check-tidy", "Run code tidiness checks");
     const run_check_git_lints_step = b.step("run-check-git-lints", "Run Git-backed code checks");
     const run_check_test_asset_coverage_step = b.step("run-check-test-asset-coverage", "Check that every app .roc file in spec-driven test asset dirs has a spec entry");
@@ -3058,7 +3249,6 @@ pub fn build(b: *std.Build) void {
     const run_check_unused_suppression_step = b.step("run-check-unused-suppression", "Check unused-variable suppression patterns");
     const run_check_semantic_audit_step = b.step("run-check-semantic-audit", "Run the checked-data audit gate");
     const run_check_postcheck_architecture_step = b.step("run-check-postcheck-architecture", "Check that deleted post-check output/remapping APIs stay gone");
-    const run_check_wasm_builtin_routing_step = b.step("run-check-wasm-builtin-routing", "Check that WASM builtin calls use explicit host/relocation routing");
     const run_check_panic_step = b.step("run-check-panic", "Check forbidden panic usage in interpreter and builtins");
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
@@ -3096,6 +3286,7 @@ pub fn build(b: *std.Build) void {
     const run_test_builtin_bake_reproducible_step = b.step("run-test-builtin-bake-reproducible", "Bake the builtins in three separate processes and compare every output byte");
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
+    const repro_issue_11529_step = b.step("repro-issue-11529", "Build and run the wasm32 top-level boxed function regression");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const run_check_machine_code_shim_archive_step = b.step("run-check-machine-code-shim-archive", "Check that the machine-code shim keeps compiler-private support local");
@@ -3106,6 +3297,7 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
+    const check_echo_wasm_size_step = b.step("check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -3394,14 +3586,55 @@ pub fn build(b: *std.Build) void {
     // Generate compiled_builtins.zig with hardcoded Builtin module.
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
     // static storage, so runtime code can build views over them directly.
+    //
+    // A root module that declares `roc_compressed_builtins` (see
+    // `addCompressedBuiltins`) embeds zstd frames instead: the blobs are about
+    // 40 MB raw and 4 MB compressed. The raw files are then only read for their
+    // lengths, so they are not linked, and `decompress` must run before any blob is read.
     const builtins_source_str =
+        \\const std = @import("std");
+        \\const root = @import("root");
         \\const generated_indices = @import("builtin_indices");
         \\
+        \\const compressed = @hasDecl(root, "roc_compressed_builtins");
+        \\// The zstd decoder needs one spare block of output capacity.
+        \\const slack = if (compressed) std.compress.zstd.block_size_max else 0;
+        \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
-        \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
-        \\pub const builtin_source = @embedFile("Builtin.roc");
+        \\var builtin_bin_storage: [builtin_bin_raw.len + slack]u8 align(16) =
+        \\    if (compressed) @splat(0) else builtin_bin_raw.*;
+        \\pub const builtin_bin: *align(16) [builtin_bin_raw.len]u8 = builtin_bin_storage[0..builtin_bin_raw.len];
+        \\const builtin_source_raw = @embedFile("Builtin.roc");
+        \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
+        \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\var builtin_artifact_bin_storage: [builtin_artifact_bin_raw.len + slack]u8 align(16) =
+        \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
+        \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
+        \\
+        \\var decompressed = !compressed;
+        \\
+        \\/// Fill the blobs from `root.roc_compressed_builtins`; a no-op once done or
+        \\/// when the blobs are embedded raw. Not thread-safe.
+        \\pub fn decompress() error{CorruptEmbeddedBuiltins}!void {
+        \\    if (!compressed) return;
+        \\    if (decompressed) return;
+        \\    const frames = root.roc_compressed_builtins;
+        \\    try decompressInto(frames.builtin_bin, &builtin_bin_storage, builtin_bin_raw.len);
+        \\    try decompressInto(frames.builtin_source, &builtin_source_storage, builtin_source_raw.len);
+        \\    try decompressInto(frames.builtin_artifact_bin, &builtin_artifact_bin_storage, builtin_artifact_bin_raw.len);
+        \\    decompressed = true;
+        \\}
+        \\
+        \\fn decompressInto(frame: []const u8, storage: []u8, len: usize) error{CorruptEmbeddedBuiltins}!void {
+        \\    var in: std.Io.Reader = .fixed(frame);
+        \\    var out: std.Io.Writer = .fixed(storage);
+        \\    // The whole output stays buffered, so any window size fits.
+        \\    var zstd: std.compress.zstd.Decompress = .init(&in, &.{}, .{ .window_len = std.math.maxInt(u32) });
+        \\    const n = zstd.reader.streamRemaining(&out) catch return error.CorruptEmbeddedBuiltins;
+        \\    if (n != len) return error.CorruptEmbeddedBuiltins;
+        \\}
+        \\
         \\pub const builtin_indices_raw = generated_indices.builtin_indices_raw;
         \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
         \\    return generated_indices.builtinIndices(CIR);
@@ -3452,6 +3685,26 @@ pub fn build(b: *std.Build) void {
             .optimize = .Debug,
         }),
     });
+    const source_bidi_module = b.createModule(.{
+        .root_source_file = b.path("src/base/bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const source_bidi_root = b.createModule(.{
+        .root_source_file = b.path("ci/check_source_bidi.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    source_bidi_root.addImport("bidi", source_bidi_module);
+    const source_bidi_exe = b.addExecutable(.{ .name = "check-source-bidi", .root_module = source_bidi_root });
+    const install_source_bidi = b.addInstallArtifact(source_bidi_exe, .{});
+    build_check_tools_step.dependOn(&install_source_bidi.step);
+    const run_source_bidi = b.addRunArtifact(source_bidi_exe);
+    run_source_bidi.step.dependOn(&install_source_bidi.step);
+    const source_bidi_tests = b.addTest(.{ .name = "source-bidi-tests", .root_module = source_bidi_root });
+    run_check_source_bidi_step.dependOn(&b.addRunArtifact(source_bidi_tests).step);
+    run_check_source_bidi_step.dependOn(&run_source_bidi.step);
+
     const minici_exe = b.addExecutable(.{
         .name = "minici",
         .root_module = b.createModule(.{
@@ -3615,7 +3868,12 @@ pub fn build(b: *std.Build) void {
     roc_modules.eval.addImport("wasm32_builtins", wasm32_builtins_module);
 
     // Setup test platform host libraries
-    const wasm_host_step = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const test_platform_steps = setupTestPlatforms(b, target, optimize, roc_modules, build_test_hosts_step, strip, omit_frame_pointer, platform_filter);
+    const wasm_host_step = test_platform_steps.wasm;
+    const fixture_target_inputs = CopyFixtureTargetInputsStep.create(b, platform_filter);
+    fixture_target_inputs.step.dependOn(test_platform_steps.hosts);
+    b.getInstallStep().dependOn(&fixture_target_inputs.step);
+    build_test_hosts_step.dependOn(&fixture_target_inputs.step);
     const wasm_host_fixture_files = b.addWriteFiles();
     _ = wasm_host_fixture_files.addCopyFile(
         b.path("test/wasm/platform/targets/wasm32/host.wasm"),
@@ -3651,6 +3909,7 @@ pub fn build(b: *std.Build) void {
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
+            .{ .name = "base", .module = roc_modules.base },
             .{ .name = "vendor_macho", .module = roc_modules.vendor_macho },
         },
     });
@@ -3944,6 +4203,7 @@ pub fn build(b: *std.Build) void {
                 .target = target,
                 .optimize = optimize,
                 .imports = &.{
+                    .{ .name = "base", .module = roc_modules.base },
                     .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                     .{ .name = "collections", .module = roc_modules.collections },
                     .{ .name = "backend", .module = roc_modules.backend },
@@ -3958,7 +4218,7 @@ pub fn build(b: *std.Build) void {
         build_test_cli_runners_step.dependOn(&parallel_cli_runner_exe.step);
 
         const run_cli = b.addRunArtifact(parallel_cli_runner_exe);
-        run_cli.addArg("zig-out/bin/roc");
+        run_cli.addArg(b.getInstallPath(.bin, "roc"));
         if (cli_test_llvm) {
             run_cli.addArg("--include-llvm");
         }
@@ -4020,216 +4280,33 @@ pub fn build(b: *std.Build) void {
         },
     });
     const builtins64_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
-    const builtins64_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_bc_obj.root_module.stack_check = false;
-    builtins64_bc_obj.root_module.link_libc = false;
-    builtins64_bc_obj.use_llvm = true;
-    builtins64_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_bc_obj.getEmittedBin();
-    const builtins64_bc_file = builtins64_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_bc_obj.root_module.stack_check = false;
-    builtins64_core_bc_obj.root_module.link_libc = false;
-    builtins64_core_bc_obj.use_llvm = true;
-    builtins64_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_bc_obj.getEmittedBin();
-    const builtins64_core_bc_file = builtins64_core_bc_obj.getEmittedLlvmBc();
+    const builtins64_bc_file = addBuiltinsBitcode(b, roc_modules, "64_bc", "src/builtins/static_lib.zig", builtins64_target, false);
+    const builtins64_core_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_bc", "src/builtins/static_lib_core.zig", builtins64_target, false);
 
     const builtins32_target = b.resolveTargetQuery(.{ .cpu_arch = .wasm32, .os_tag = .freestanding, .abi = .none });
-    const builtins32_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_bc_obj.root_module.stack_check = false;
-    builtins32_bc_obj.use_llvm = true;
-    builtins32_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_bc_obj.getEmittedBin();
-    const builtins32_bc_file = builtins32_bc_obj.getEmittedLlvmBc();
+    const builtins32_bc_file = addBuiltinsBitcode(b, roc_modules, "32_bc", "src/builtins/static_lib.zig", builtins32_target, null);
+    const builtins32_core_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_bc", "src/builtins/static_lib_core.zig", builtins32_target, null);
+    const builtins64_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_extern_bc", "src/builtins/extern_static_lib.zig", builtins64_target, null);
+    const builtins64_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "64_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins64_target, null);
+    const builtins32_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_extern_bc", "src/builtins/extern_static_lib.zig", builtins32_target, null);
+    const builtins32_core_extern_bc_file = addBuiltinsBitcode(b, roc_modules, "32_core_extern_bc", "src/builtins/extern_static_lib_core.zig", builtins32_target, null);
 
-    const builtins32_core_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
+    // The 64-bit builtins bitcode references its SHA-256 compression by name
+    // (see `Sha256` in src/builtins/crypto.zig), and the LLVM backend links the
+    // definition for the rounds the target's CPU features select. Each of
+    // these payloads is compiled for exactly the features its rounds need.
+    const sha256_portable_bc_file = addSha256RoundsBitcode(b, "portable", .{ .cpu_arch = .wasm64, .os_tag = .freestanding, .abi = .none });
+    const sha256_x86_sha_bc_file = addSha256RoundsBitcode(b, "x86_sha", x86_sha: {
+        var query: std.Target.Query = .{ .cpu_arch = .x86_64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline };
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.sha));
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.x86.Feature.ssse3));
+        break :x86_sha query;
     });
-    builtins32_core_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_bc_obj.root_module.stack_check = false;
-    builtins32_core_bc_obj.use_llvm = true;
-    builtins32_core_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_bc_obj.getEmittedBin();
-    const builtins32_core_bc_file = builtins32_core_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
+    const sha256_aarch64_sha2_bc_file = addSha256RoundsBitcode(b, "aarch64_sha2", aarch64_sha2: {
+        var query: std.Target.Query = .{ .cpu_arch = .aarch64, .os_tag = .freestanding, .abi = .none, .cpu_model = .baseline };
+        query.cpu_features_add.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
+        break :aarch64_sha2 query;
     });
-    builtins64_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_extern_bc_obj.root_module.stack_check = false;
-    builtins64_extern_bc_obj.use_llvm = true;
-    builtins64_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_extern_bc_obj.getEmittedBin();
-    const builtins64_extern_bc_file = builtins64_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins64_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins64_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins64_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins64_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub64_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins64_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins64_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io64_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins64_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins64_core_extern_bc_obj.root_module.stack_check = false;
-    builtins64_core_extern_bc_obj.use_llvm = true;
-    builtins64_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins64_core_extern_bc_obj.getEmittedBin();
-    const builtins64_core_extern_bc_file = builtins64_core_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_extern_bc_obj.root_module.stack_check = false;
-    builtins32_extern_bc_obj.use_llvm = true;
-    builtins32_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_extern_bc_obj.getEmittedBin();
-    const builtins32_extern_bc_file = builtins32_extern_bc_obj.getEmittedLlvmBc();
-
-    const builtins32_core_extern_bc_obj = b.addObject(.{
-        .name = "roc_builtins32_core_extern_bc",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/builtins/extern_static_lib_core.zig"),
-            .target = builtins32_target,
-            .optimize = .ReleaseFast,
-            .strip = true,
-            .pic = true,
-            .single_threaded = true,
-        }),
-    });
-    builtins32_core_extern_bc_obj.root_module.addImport("tracy", b.addModule("tracy_stub32_core_extern_bc", .{
-        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
-    builtins32_core_extern_bc_obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
-    builtins32_core_extern_bc_obj.root_module.addImport("shim_io", b.addModule("shim_io32_core_extern_bc", .{
-        .root_source_file = b.path("src/shim_io.zig"),
-    }));
-    builtins32_core_extern_bc_obj.root_module.omit_frame_pointer = true;
-    builtins32_core_extern_bc_obj.root_module.stack_check = false;
-    builtins32_core_extern_bc_obj.use_llvm = true;
-    builtins32_core_extern_bc_obj.bundle_compiler_rt = false;
-    _ = builtins32_core_extern_bc_obj.getEmittedBin();
-    const builtins32_core_extern_bc_file = builtins32_core_extern_bc_obj.getEmittedLlvmBc();
 
     const llvm_embedded_files = b.addWriteFiles();
     _ = llvm_embedded_files.addCopyFile(builtins32_bc_file, "builtins32.bc");
@@ -4240,6 +4317,9 @@ pub fn build(b: *std.Build) void {
     _ = llvm_embedded_files.addCopyFile(builtins64_extern_bc_file, "builtins64_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins32_core_extern_bc_file, "builtins32_core_extern.bc");
     _ = llvm_embedded_files.addCopyFile(builtins64_core_extern_bc_file, "builtins64_core_extern.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_portable_bc_file, "sha256_portable.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_x86_sha_bc_file, "sha256_x86_sha.bc");
+    _ = llvm_embedded_files.addCopyFile(sha256_aarch64_sha2_bc_file, "sha256_aarch64_sha2.bc");
 
     const llvm_embedded_source: []const u8 =
         \\pub const builtins32_bc = @embedFile("builtins32.bc");
@@ -4250,6 +4330,9 @@ pub fn build(b: *std.Build) void {
         \\pub const builtins64_extern_bc = @embedFile("builtins64_extern.bc");
         \\pub const builtins32_core_extern_bc = @embedFile("builtins32_core_extern.bc");
         \\pub const builtins64_core_extern_bc = @embedFile("builtins64_core_extern.bc");
+        \\pub const sha256_portable_bc = @embedFile("sha256_portable.bc");
+        \\pub const sha256_x86_sha_bc = @embedFile("sha256_x86_sha.bc");
+        \\pub const sha256_aarch64_sha2_bc = @embedFile("sha256_aarch64_sha2.bc");
         \\pub const builtins_bc = builtins64_bc;
         \\
     ;
@@ -4664,6 +4747,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "base", .module = roc_modules.base },
             .{ .name = "can", .module = roc_modules.can },
+            .{ .name = "check", .module = roc_modules.check },
             .{ .name = "compile", .module = roc_modules.compile },
             .{ .name = "ctx", .module = roc_modules.ctx },
             .{ .name = "eval", .module = roc_modules.eval },
@@ -4725,6 +4809,9 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(echo_wasm, echo_wasm_target);
+        // This embeds the recursive compiler and interpreter, so its linear-memory
+        // stack needs the compiler budget rather than wasm's 1 MiB default.
+        echo_wasm.stack_size = stack_budget.roc_stack_size;
         echo_wasm.entry = .disabled;
         echo_wasm.rdynamic = true;
         echo_wasm.root_module.addImport("compile", roc_modules.compile);
@@ -4738,6 +4825,10 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("reporting", roc_modules.reporting);
         echo_wasm.root_module.addImport("roc_target", roc_modules.roc_target);
         echo_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_wasm.root_module.addImport(
+            "compressed_builtins",
+            addCompressedBuiltins(b, wasm_archive_exe, builtin_compiler, b.path(builtin_roc_path)),
+        );
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
@@ -4753,6 +4844,9 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
         const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo/echo.wasm.zst");
         echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
+
+        const check_echo_wasm_size = CheckWasmSizeStep.create(b, echo_wasm, echo_wasm_size_budget, "echo_wasm_size_budget");
+        check_echo_wasm_size_step.dependOn(&check_echo_wasm_size.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
@@ -4965,314 +5059,139 @@ pub fn build(b: *std.Build) void {
         provided_callable_wasm_host.link_function_sections = true;
         provided_callable_wasm_host.link_data_sections = true;
 
-        const copy_provided_callable_wasm_host = b.addUpdateSourceFiles();
-        copy_provided_callable_wasm_host.addCopyFileToSource(
-            provided_callable_wasm_host.getEmittedBin(),
-            "test/provided-callable-host/platform/targets/wasm32/host.wasm",
-        );
-
-        const build_wasm_provided_callable_app = b.addRunArtifact(roc_exe);
-        build_wasm_provided_callable_app.addArgs(&.{
-            "build",
-            "test/provided-callable-host/app.roc",
-            "--target=wasm32",
-            "--output=test/provided-callable-host/app.wasm",
+        // Each app tree is staged with its platform's Roc modules and wasm
+        // host, so every input a `roc build` below reads is a hashed input of
+        // its cached step, and the built modules are declared outputs.
+        const provided_callable_app_sources = b.addWriteFiles();
+        _ = provided_callable_app_sources.addCopyDirectory(b.path("test/provided-callable-host"), ".", .{
+            .include_extensions = &.{".roc"},
         });
-        build_wasm_provided_callable_app.step.dependOn(&copy_provided_callable_wasm_host.step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.step);
+        _ = provided_callable_app_sources.addCopyFile(provided_callable_wasm_host.getEmittedBin(), "platform/targets/wasm32/host.wasm");
 
-        const build_wasm_app = b.addRunArtifact(roc_exe);
-        build_wasm_app.addArgs(&.{
-            "build",
-            "test/wasm/app.roc",
-            "--target=wasm32",
-            "--output=test/wasm/app.wasm",
+        const wasm_app_sources = b.addWriteFiles();
+        _ = wasm_app_sources.addCopyDirectory(b.path("test/wasm"), ".", .{
+            .include_extensions = &.{".roc"},
         });
-        build_wasm_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.step);
+        _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32/host.wasm"), "platform/targets/wasm32/host.wasm");
+        _ = wasm_app_sources.addCopyFile(b.path("test/wasm/platform/targets/wasm32v1/host.wasm"), "platform/targets/wasm32v1/host.wasm");
+        for ([_][]const u8{ "wasm32", "wasm32v1" }) |wasm_target_name| {
+            _ = wasm_app_sources.addCopyFile(
+                b.path(b.fmt("test/wasm/platform/targets/{s}/host.wasm", .{wasm_target_name})),
+                b.fmt("static-lib-platform/targets/{s}/host.wasm", .{wasm_target_name}),
+            );
+        }
+        wasm_app_sources.step.dependOn(wasm_host_step);
 
-        const build_wasm_list_builtin_app = b.addRunArtifact(roc_exe);
-        build_wasm_list_builtin_app.addArgs(&.{
-            "build",
-            "test/wasm/list_builtin_static_lib_app.roc",
-            "--target=wasm32",
-            "--output=test/wasm/list_builtin_static_lib_app.wasm",
-        });
-        build_wasm_list_builtin_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.step);
+        const build_wasm_provided_callable_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, provided_callable_app_sources, "app.roc", &.{}, "app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_provided_callable_app.run.step);
 
-        const build_wasm_builtin_routing_app = b.addRunArtifact(roc_exe);
-        build_wasm_builtin_routing_app.addArgs(&.{
-            "build",
-            "test/wasm/builtin_routing_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/builtin_routing_static_lib_app.wasm.a",
-        });
-        build_wasm_builtin_routing_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.step);
+        const build_wasm_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "app.roc", &.{}, "app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_app.run.step);
 
-        const build_wasm_single_variant_hosted_app = b.addRunArtifact(roc_exe);
-        build_wasm_single_variant_hosted_app.addArgs(&.{
-            "build",
-            "test/wasm/single_variant_hosted_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/single_variant_hosted_static_lib_app.wasm",
-        });
-        build_wasm_single_variant_hosted_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.step);
+        const build_wasm_list_builtin_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "list_builtin_static_lib_app.roc", &.{}, "list_builtin_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_list_builtin_app.run.step);
+
+        const build_wasm_builtin_routing_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "builtin_routing_static_lib_app.roc", &.{"--opt=dev"}, "builtin_routing_static_lib_app.wasm.a");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_builtin_routing_app.run.step);
+        const build_wasm_v1_builtin_routing_app = addWasmStaticLibAppBuildForTarget(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "builtin_routing_static_lib_app.roc", &.{"--opt=dev"}, "builtin_routing_static_lib_app_v1.wasm", "wasm32v1");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_v1_builtin_routing_app.run.step);
+
+        const build_wasm_single_variant_hosted_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "single_variant_hosted_static_lib_app.roc", &.{"--opt=speed"}, "single_variant_hosted_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_single_variant_hosted_app.run.step);
 
         // Host ABI gate on wasm32: a hosted Try unwrapped with `?` into a wider
         // error row must still reach the host through its declared boundary,
         // which the cart shows by returning the host's own "ok".
-        const build_wasm_hosted_try_widen_app = b.addRunArtifact(roc_exe);
-        build_wasm_hosted_try_widen_app.addArgs(&.{
-            "build",
-            "test/wasm/hosted_try_widen_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/hosted_try_widen_static_lib_app.wasm",
-        });
-        build_wasm_hosted_try_widen_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.step);
+        const build_wasm_hosted_try_widen_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "hosted_try_widen_static_lib_app.roc", &.{"--opt=dev"}, "hosted_try_widen_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_hosted_try_widen_app.run.step);
 
-        const build_wasm_str_concat_join_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_concat_join_app.addArgs(&.{
-            "build",
-            "test/wasm/str_concat_join_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_concat_join_static_lib_app.wasm",
-        });
-        build_wasm_str_concat_join_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.step);
+        const build_wasm_str_concat_join_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "str_concat_join_static_lib_app.roc", &.{"--opt=dev"}, "str_concat_join_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_join_app.run.step);
 
-        const build_wasm_issue_10957_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_10957_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_10957_json_camel_long_field_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
-        });
-        build_wasm_issue_10957_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10957_app.step);
+        const build_wasm_issue_10957_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_10957_json_camel_long_field_static_lib_app.roc", &.{"--opt=dev"}, "issue_10957_json_camel_long_field_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10957_app.run.step);
 
-        const build_wasm_str_interp_leading_literal_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_interp_leading_literal_app.addArgs(&.{
-            "build",
-            "test/wasm/str_interp_leading_literal_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_interp_leading_literal_static_lib_app.wasm",
-        });
-        build_wasm_str_interp_leading_literal_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.step);
+        const build_wasm_str_interp_leading_literal_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "str_interp_leading_literal_static_lib_app.roc", &.{"--opt=dev"}, "str_interp_leading_literal_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_interp_leading_literal_app.run.step);
 
-        const build_wasm_str_concat_unique_reuse_app = b.addRunArtifact(roc_exe);
-        build_wasm_str_concat_unique_reuse_app.addArgs(&.{
-            "build",
-            "test/wasm/str_concat_unique_reuse_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
-        });
-        build_wasm_str_concat_unique_reuse_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.step);
+        const build_wasm_str_concat_unique_reuse_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "str_concat_unique_reuse_static_lib_app.roc", &.{"--opt=dev"}, "str_concat_unique_reuse_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_str_concat_unique_reuse_app.run.step);
 
         // End-to-end cart gate for the minted-iterator `for`-loop drive. The
         // size build covers the LLVM cart path, and the dev build covers wasm
         // composite loop-state rebinding for recursive generated iterators.
-        const build_wasm_iter_for_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_for_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_static_lib_app.wasm",
-        });
-        build_wasm_iter_for_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_app.step);
+        const build_wasm_iter_for_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "iter_for_static_lib_app.roc", &.{"--opt=size"}, "iter_for_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_app.run.step);
 
-        const build_wasm_iter_for_dev_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_for_dev_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_static_lib_app_dev.wasm",
-        });
-        build_wasm_iter_for_dev_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_dev_app.step);
+        const build_wasm_iter_for_dev_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "iter_for_static_lib_app.roc", &.{"--opt=dev"}, "iter_for_static_lib_app_dev.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_for_dev_app.run.step);
 
         // Dev-mode recursive iterator construction must converge at the
         // explicit forced-dynamic representation tier.
-        const build_wasm_iter_recursive_concat_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_recursive_concat_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_recursive_concat_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/iter_recursive_concat_static_lib_app.wasm",
-        });
-        build_wasm_iter_recursive_concat_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_recursive_concat_app.step);
+        const build_wasm_iter_recursive_concat_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "iter_recursive_concat_static_lib_app.roc", &.{"--opt=dev"}, "iter_recursive_concat_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_recursive_concat_app.run.step);
 
         // Static-data hoisting gate: a constant list literal consumed via
         // `.iter()` must materialize as static data and allocate nothing, so the
         // whole minted chain (base list included) is zero-alloc on the cart path.
-        const build_wasm_iter_list_hoist_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_list_hoist_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_list_hoist_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_list_hoist_static_lib_app.wasm",
-        });
-        build_wasm_iter_list_hoist_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_list_hoist_app.step);
+        const build_wasm_iter_list_hoist_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "iter_list_hoist_static_lib_app.roc", &.{"--opt=size"}, "iter_list_hoist_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_list_hoist_app.run.step);
 
         // Noiter twin: the same sums over plain list literals. The runner prints
         // each cart's byte size, so the iter build minus this baseline is the
         // minted-adapter premium tracked in CI (the fusion pass's target).
-        const build_wasm_iter_noiter_app = b.addRunArtifact(roc_exe);
-        build_wasm_iter_noiter_app.addArgs(&.{
-            "build",
-            "test/wasm/iter_for_noiter_static_lib_app.roc",
-            "--opt=size",
-            "--target=wasm32",
-            "--output=test/wasm/iter_for_noiter_static_lib_app.wasm",
-        });
-        build_wasm_iter_noiter_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_noiter_app.step);
+        const build_wasm_iter_noiter_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "iter_for_noiter_static_lib_app.roc", &.{"--opt=size"}, "iter_for_noiter_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_iter_noiter_app.run.step);
 
-        const build_wasm_rc_cleanup_app = b.addRunArtifact(roc_exe);
-        build_wasm_rc_cleanup_app.addArgs(&.{
-            "build",
-            "test/wasm/rc_cleanup_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/rc_cleanup_static_lib_app.wasm",
-        });
-        build_wasm_rc_cleanup_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.step);
+        const build_wasm_rc_cleanup_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "rc_cleanup_static_lib_app.roc", &.{"--opt=dev"}, "rc_cleanup_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_app.run.step);
 
-        const build_wasm_rc_cleanup_model_list_app = b.addRunArtifact(roc_exe);
-        build_wasm_rc_cleanup_model_list_app.addArgs(&.{
-            "build",
-            "test/wasm/rc_cleanup_model_list_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
-        });
-        build_wasm_rc_cleanup_model_list_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.step);
+        const build_wasm_rc_cleanup_model_list_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "rc_cleanup_model_list_static_lib_app.roc", &.{"--opt=dev"}, "rc_cleanup_model_list_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_rc_cleanup_model_list_app.run.step);
 
-        const build_wasm_box_zst_app = b.addRunArtifact(roc_exe);
-        build_wasm_box_zst_app.addArgs(&.{
-            "build",
-            "test/wasm/box_zst_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/box_zst_static_lib_app.wasm",
-        });
-        build_wasm_box_zst_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_box_zst_app.step);
+        const build_wasm_box_zst_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "box_zst_static_lib_app.roc", &.{"--opt=dev"}, "box_zst_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_box_zst_app.run.step);
 
-        const build_wasm_boxed_model_update_app = b.addRunArtifact(roc_exe);
-        build_wasm_boxed_model_update_app.addArgs(&.{
-            "build",
-            "test/wasm/boxed_model_update_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/boxed_model_update_static_lib_app.wasm",
-        });
-        build_wasm_boxed_model_update_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.step);
+        const build_wasm_boxed_model_update_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "boxed_model_update_static_lib_app.roc", &.{"--opt=dev"}, "boxed_model_update_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_boxed_model_update_app.run.step);
 
-        const build_wasm_issue_10836_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_10836_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
-        });
-        build_wasm_issue_10836_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.step);
+        const build_wasm_issue_10836_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_10836_boxed_low_alignment_static_lib_app.roc", &.{"--opt=dev"}, "issue_10836_boxed_low_alignment_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_10836_app.run.step);
 
         // A constant record whose pointer fields are laid out in the opposite
         // order to their field order: its relocations must still reach the
         // object in offset order, or wasm-ld refuses it (#11419).
-        const build_wasm_issue_11419_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11419_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
-        });
-        build_wasm_issue_11419_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.step);
+        const build_wasm_issue_11419_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_11419_static_record_reloc_order_static_lib_app.roc", &.{"--opt=dev"}, "issue_11419_static_record_reloc_order_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11419_app.run.step);
 
         // Two `List.concat` calls over different refcounted element types keep
         // the element incref/decref callbacks indirect, so the generated RC
         // helpers must carry the callback ABI's signature exactly or wasm traps
         // at the `call_indirect` (#11454). Only the optimizing backend reaches
         // the indirect call, so this cart is built at `--opt=speed`.
-        const build_wasm_issue_11454_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11454_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11454_concat_rc_callback_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
-        });
-        build_wasm_issue_11454_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11454_app.step);
+        const build_wasm_issue_11454_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_11454_concat_rc_callback_static_lib_app.roc", &.{"--opt=speed"}, "issue_11454_concat_rc_callback_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11454_app.run.step);
 
         // A boxed erased callable whose capture is refcounted: the helper in its
         // `Payload.on_drop` slot must carry the published host on-drop
         // signature, which wasm checks at the runtime's `call_indirect`.
-        const build_wasm_on_drop_app = b.addRunArtifact(roc_exe);
-        build_wasm_on_drop_app.addArgs(&.{
-            "build",
-            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
-            "--opt=speed",
-            "--target=wasm32",
-            "--output=test/wasm/erased_callable_on_drop_static_lib_app.wasm",
-        });
-        build_wasm_on_drop_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_app.step);
+        const build_wasm_on_drop_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "erased_callable_on_drop_static_lib_app.roc", &.{"--opt=speed"}, "erased_callable_on_drop_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_app.run.step);
 
         // The same cart on the wasm backend, whose generated on-drop adapter is
         // a separate code path from the optimizing backend's.
-        const build_wasm_on_drop_dev_app = b.addRunArtifact(roc_exe);
-        build_wasm_on_drop_dev_app.addArgs(&.{
-            "build",
-            "test/wasm/erased_callable_on_drop_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
-        });
-        build_wasm_on_drop_dev_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.step);
+        const build_wasm_on_drop_dev_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "erased_callable_on_drop_static_lib_app.roc", &.{"--opt=dev"}, "erased_callable_on_drop_dev_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_on_drop_dev_app.run.step);
 
         // A nominal tag union carrying `Box({})`, a box of a zero-sized
         // payload, as the payload of a multi-variant tag union matched at a
         // runtime value. The dev wasm backend must emit a module that
         // validates and runs (#11455).
-        const build_wasm_issue_11455_app = b.addRunArtifact(roc_exe);
-        build_wasm_issue_11455_app.addArgs(&.{
-            "build",
-            "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.roc",
-            "--opt=dev",
-            "--target=wasm32",
-            "--output=test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
-        });
-        build_wasm_issue_11455_app.step.dependOn(build_test_hosts_step);
-        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.step);
+        const build_wasm_issue_11455_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_11455_boxed_zst_nominal_payload_static_lib_app.roc", &.{"--opt=dev"}, "issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11455_app.run.step);
+
+        const build_wasm_issue_11529_app = addWasmStaticLibAppBuild(b, roc_exe, build_roc_step, build_test_hosts_step, wasm_app_sources, "issue_11529_top_level_boxed_function_static_lib_app.roc", &.{ "--opt=dev", "--no-cache" }, "issue_11529_top_level_boxed_function_static_lib_app.wasm");
+        build_test_wasm_static_lib_runner_step.dependOn(&build_wasm_issue_11529_app.run.step);
 
         const wasm_test_exe = b.addExecutable(.{
             .name = "wasm_static_lib_test",
@@ -5300,8 +5219,8 @@ pub fn build(b: *std.Build) void {
         });
         configureBackend(wasm_dce_check_exe, target);
         const run_wasm_dce_check = b.addRunArtifact(wasm_dce_check_exe);
+        run_wasm_dce_check.addFileArg(build_wasm_app.wasm);
         run_wasm_dce_check.addArgs(&.{
-            "test/wasm/app.wasm",
             "--absent",
             "roc_unused_host_canary_7f3a9c",
             "--absent",
@@ -5312,82 +5231,68 @@ pub fn build(b: *std.Build) void {
             "ROC_DCE_WASM_DEAD_HELPER_BLOB_f25a77",
             "ROC_DCE_WASM_SHARED_BLOB_31e82f",
         });
-        run_wasm_dce_check.step.dependOn(&build_wasm_app.step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_dce_check.step);
 
         const run_wasm_test = b.addRunArtifact(wasm_test_exe);
+        const run_wasm_issue_11529_test = b.addRunArtifact(wasm_test_exe);
+        run_wasm_issue_11529_test.addArg("--wasm-path");
+        run_wasm_issue_11529_test.addFileArg(build_wasm_issue_11529_app.wasm);
+        run_wasm_issue_11529_test.addArgs(&.{
+            "--expected",
+            "x",
+        });
+        run_wasm_issue_11529_test.step.dependOn(&install.step);
+        repro_issue_11529_step.dependOn(&run_wasm_issue_11529_test.step);
+        run_wasm_test.addArg("--wasm-path");
+        run_wasm_test.addFileArg(build_wasm_app.wasm);
         if (run_args.len != 0) {
             run_wasm_test.addArgs(run_args);
         } else {
-            const run_wasm_provided_callable_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_provided_callable_test.addArgs(&.{
-                "--wasm-path",
-                "test/provided-callable-host/app.wasm",
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11529_test.step);
+
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_provided_callable_app.wasm, &.{
                 "--expected",
                 "42",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_provided_callable_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_provided_callable_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_list_builtin_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_list_builtin_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/list_builtin_static_lib_app.wasm",
+            const run_wasm_v1_builtin_routing_test = b.addRunArtifact(wasm_test_exe);
+            run_wasm_v1_builtin_routing_test.addArg("--wasm-path");
+            run_wasm_v1_builtin_routing_test.addFileArg(build_wasm_v1_builtin_routing_app.wasm);
+            run_wasm_v1_builtin_routing_test.addArgs(&.{ "--expected", "ok", "--assert-alloc-balanced" });
+            run_wasm_v1_builtin_routing_test.step.dependOn(build_test_wasm_static_lib_runner_step);
+            run_test_wasm_static_lib_step.dependOn(&run_wasm_v1_builtin_routing_test.step);
+
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_list_builtin_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_list_builtin_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_list_builtin_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_single_variant_hosted_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_single_variant_hosted_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/single_variant_hosted_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_single_variant_hosted_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_single_variant_hosted_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_single_variant_hosted_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_hosted_try_widen_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_hosted_try_widen_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/hosted_try_widen_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_hosted_try_widen_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_hosted_try_widen_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_hosted_try_widen_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_join_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_join_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_concat_join_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_join_app.wasm, &.{
                 "--expected",
                 "X:1Y:2",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_str_concat_join_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_join_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10957_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10957_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_10957_json_camel_long_field_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10957_app.wasm, &.{
                 "--expected",
                 "14",
-            });
-            run_wasm_issue_10957_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10957_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_interp_leading_literal_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_interp_leading_literal_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_interp_leading_literal_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_interp_leading_literal_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5395,14 +5300,9 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "2",
-            });
-            run_wasm_str_interp_leading_literal_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_interp_leading_literal_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_str_concat_unique_reuse_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_str_concat_unique_reuse_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/str_concat_unique_reuse_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_str_concat_unique_reuse_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5410,19 +5310,14 @@ pub fn build(b: *std.Build) void {
                 "1",
                 "--max-allocs",
                 "1",
-            });
-            run_wasm_str_concat_unique_reuse_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_str_concat_unique_reuse_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Boot-and-play the minted-iterator `for`-loop cart; "ok" means every
             // inlined `for` over append/map/concat/chained minted chains ran to
             // completion with correct sums (i.e. the drive advanced its inner
             // iterators and terminated). `--assert-alloc-balanced` also catches a
             // per-step allocate/free leak in the drive.
-            const run_wasm_iter_for_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5432,14 +5327,9 @@ pub fn build(b: *std.Build) void {
                 // sizes and is the fusion pass's target, not a hard gate pre-fusion.
                 "--max-bytes",
                 "65536",
-            });
-            run_wasm_iter_for_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_recursive_concat_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_recursive_concat_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_recursive_concat_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_recursive_concat_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
@@ -5448,154 +5338,87 @@ pub fn build(b: *std.Build) void {
                 // callable expansion exceeded 815 KB before failing to lower.
                 "--max-bytes",
                 "750000",
-            });
-            run_wasm_iter_recursive_concat_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_recursive_concat_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Static-data hoisting: the constant list literal is materialized as
             // static data, so the whole chain allocates nothing. `--max-allocs 0`
             // is a strictly stronger assertion than `--assert-alloc-balanced`.
-            const run_wasm_iter_list_hoist_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_list_hoist_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_list_hoist_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_list_hoist_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--max-allocs",
                 "0",
-            });
-            run_wasm_iter_list_hoist_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_list_hoist_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_iter_for_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_for_dev_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_static_lib_app_dev.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_for_dev_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_iter_for_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_for_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
             // Noiter twin—asserts correctness and prints its size so CI logs
             // carry both numbers for premium tracking.
-            const run_wasm_iter_noiter_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_iter_noiter_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/iter_for_noiter_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_iter_noiter_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_iter_noiter_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_iter_noiter_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/rc_cleanup_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "1",
-            });
-            run_wasm_rc_cleanup_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_rc_cleanup_model_list_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_rc_cleanup_model_list_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/rc_cleanup_model_list_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_rc_cleanup_model_list_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
                 "--min-allocs",
                 "2",
-            });
-            run_wasm_rc_cleanup_model_list_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_rc_cleanup_model_list_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_box_zst_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_box_zst_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/box_zst_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_box_zst_app.wasm, &.{
                 "--expected",
                 "ok",
                 "--assert-alloc-balanced",
-            });
-            run_wasm_box_zst_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_box_zst_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_boxed_model_update_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_boxed_model_update_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/boxed_model_update_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_boxed_model_update_app.wasm, &.{
                 "--expected",
                 "ok",
-            });
-            run_wasm_boxed_model_update_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_boxed_model_update_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_10836_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_10836_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_10836_boxed_low_alignment_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_10836_app.wasm, &.{
                 "--expected",
                 "7,9;11,13;Inc(42)",
-            });
-            run_wasm_issue_10836_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_10836_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11419_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11419_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11419_static_record_reloc_order_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11419_app.wasm, &.{
                 "--expected",
                 "id=txt",
-            });
-            run_wasm_issue_11419_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11419_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11454_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11454_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11454_concat_rc_callback_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11454_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} a, {\"favoritesCount\":14} b, {\"favoritesCount\":14} c, {\"favoritesCount\":14} d",
-            });
-            run_wasm_issue_11454_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11454_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/erased_callable_on_drop_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_on_drop_dev_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_on_drop_dev_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/erased_callable_on_drop_dev_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_on_drop_dev_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14} ok",
-            });
-            run_wasm_on_drop_dev_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_on_drop_dev_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
 
-            const run_wasm_issue_11455_test = b.addRunArtifact(wasm_test_exe);
-            run_wasm_issue_11455_test.addArgs(&.{
-                "--wasm-path",
-                "test/wasm/issue_11455_boxed_zst_nominal_payload_static_lib_app.wasm",
+            addWasmStaticLibRun(b, wasm_test_exe, build_wasm_issue_11455_app.wasm, &.{
                 "--expected",
                 "{\"favoritesCount\":14}",
-            });
-            run_wasm_issue_11455_test.step.dependOn(build_test_wasm_static_lib_runner_step);
-            run_test_wasm_static_lib_step.dependOn(&run_wasm_issue_11455_test.step);
+            }, build_test_wasm_static_lib_runner_step, run_test_wasm_static_lib_step);
         }
         run_wasm_test.step.dependOn(build_test_wasm_static_lib_runner_step);
         run_test_wasm_static_lib_step.dependOn(&run_wasm_test.step);
@@ -5746,6 +5569,41 @@ pub fn build(b: *std.Build) void {
         run_wasm_archive_check.addArgs(&.{ "--archive", "test/archive/app-wasm32.a", "roc_builtins" });
         run_wasm_archive_check.step.dependOn(&build_wasm_archive_app.step);
         run_test_archive_step.dependOn(&run_wasm_archive_check.step);
+
+        // The same app through the LLVM backend: `llvmObjectUsesPic` decides
+        // PIC for that object, so the dev-backend archive above cannot cover it.
+        const build_wasm_archive_app_llvm = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app_llvm.addArgs(&.{
+            "build",
+            "test/archive/app.roc",
+            "--opt=speed",
+            "--target=wasm32",
+            "--output=test/archive/app-wasm32-speed.a",
+        });
+        build_wasm_archive_app_llvm.step.dependOn(build_test_hosts_step);
+
+        // A wasm32 archive is handed to a foreign linker, so it must contain no
+        // absolute data/table relocations or emcc cannot build a SIDE_MODULE
+        // from it. Checked for both backends that produce these objects.
+        const wasm_pic_check_exe = b.addExecutable(.{
+            .name = "wasm_pic_check",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("test/archive/wasm_pic_check.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        configureBackend(wasm_pic_check_exe, target);
+
+        const run_wasm_pic_check_dev = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_dev.addArgs(&.{"test/archive/app-wasm32.a"});
+        run_wasm_pic_check_dev.step.dependOn(&build_wasm_archive_app.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_dev.step);
+
+        const run_wasm_pic_check_llvm = b.addRunArtifact(wasm_pic_check_exe);
+        run_wasm_pic_check_llvm.addArgs(&.{"test/archive/app-wasm32-speed.a"});
+        run_wasm_pic_check_llvm.step.dependOn(&build_wasm_archive_app_llvm.step);
+        run_test_archive_step.dependOn(&run_wasm_pic_check_llvm.step);
     }
 
     // Check fx platform test coverage convenience step
@@ -6095,6 +5953,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .link_libc = true,
             .imports = &.{
+                .{ .name = "base", .module = roc_modules.base },
                 .{ .name = "test_harness", .module = createTestHarnessModule(b, roc_modules) },
                 .{ .name = "collections", .module = roc_modules.collections },
                 .{ .name = "backend", .module = roc_modules.backend },
@@ -6530,9 +6389,6 @@ pub fn build(b: *std.Build) void {
     const check_postcheck_architecture = CheckPostcheckArchitectureStep.create(b);
     run_check_postcheck_architecture_step.dependOn(&check_postcheck_architecture.step);
 
-    const check_wasm_builtin_routing = CheckWasmBuiltinRoutingStep.create(b);
-    run_check_wasm_builtin_routing_step.dependOn(&check_wasm_builtin_routing.step);
-
     // Add check that semantic compiler stages do not recover missing data.
     const run_semantic_audit = ci_steps.SemanticAuditStep.create(b);
     run_check_semantic_audit_step.dependOn(&run_semantic_audit.step);
@@ -6576,10 +6432,6 @@ pub fn build(b: *std.Build) void {
     if (is_coverage_supported and isNativeishOrMusl(target)) {
         // Get the kcov dependency and build it from source
         // lazyDependency returns null on first pass; Zig re-runs build() after fetching
-        // TODO ZIG 16: re-check if lazy dependency bug is fixed—may be able to restructure this block
-        // ALL coverage-related code must be inside this block due to Zig 0.15.2 lazy dependency bug
-        // where dependencies added to a step outside the lazy block are not executed when the step
-        // also has dependencies added inside the lazy block.
         if (b.lazyDependency("kcov", .{})) |kcov_dep| {
             // Create parse module unit tests for coverage
             // We only use the parse unit tests (not snapshot tool) because:
@@ -6724,9 +6576,6 @@ pub fn build(b: *std.Build) void {
             }
 
             // Cross-compile for Windows to verify comptime branches compile
-            // TODO ZIG 16: re-check if this lazy dependency bug is fixed
-            // NOTE: This must be inside the lazy block due to Zig 0.15.2 bug where
-            // dependencies added outside the lazy block prevent those inside from executing
             const windows_target = b.resolveTargetQuery(.{
                 .cpu_arch = .x86_64,
                 .os_tag = .windows,
@@ -6744,9 +6593,7 @@ pub fn build(b: *std.Build) void {
             // Just compile, don't run - verifies Windows comptime branches
             build_coverage_tools_step.dependOn(&windows_parse_build.step);
 
-            // Add explicit dependencies on install steps to the build step itself
-            // TODO ZIG 16: re-check if lazy dependency issues are fixed
-            // to work around Zig 0.15.2 lazy dependency issues
+            // The coverage tools step builds and installs the instrumented test and kcov.
             build_coverage_tools_step.dependOn(&install_parse_test.step);
             build_coverage_tools_step.dependOn(&install_kcov.step);
 
@@ -6788,6 +6635,9 @@ pub fn build(b: *std.Build) void {
     build_ci_step.dependOn(build_test_serialization_sizes_step);
     build_ci_step.dependOn(build_test_builtin_bake_reproducible_step);
     build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
+    // `run-test-simd-differential` runs the installed Lambda Mono runner; build
+    // it here so MiniCI shards running with `--minici-skip-build` reuse it.
+    build_ci_step.dependOn(build_test_lambda_mono_differential_step);
     build_ci_step.dependOn(build_coverage_tools_step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
@@ -7166,6 +7016,7 @@ pub fn build(b: *std.Build) void {
         "canonicalize",
         "typecheck",
         "build",
+        "build-errors",
     };
     for (names) |name| {
         add_fuzz_target(
@@ -7685,6 +7536,83 @@ const MainExeResult = struct {
     machine_code_shim_archive_test: ?*Step.Compile,
     archive_member_names_test: ?*Step.Compile,
 };
+/// LLVM bitcode for `src/builtins/sha256_rounds_lib.zig` compiled for `query`,
+/// whose CPU features select the SHA-256 rounds the payload defines.
+fn addSha256RoundsBitcode(b: *std.Build, comptime rounds_name: []const u8, query: std.Target.Query) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_sha256_" ++ rounds_name ++ "_bc",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/builtins/sha256_rounds_lib.zig"),
+            .target = b.resolveTargetQuery(query),
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
+/// Run the wasm static-lib test runner on one built app as part of `step`.
+fn addWasmStaticLibRun(
+    b: *std.Build,
+    wasm_test_exe: *Step.Compile,
+    wasm: std.Build.LazyPath,
+    args: []const []const u8,
+    runner_step: *Step,
+    step: *Step,
+) void {
+    const run = b.addRunArtifact(wasm_test_exe);
+    run.addArg("--wasm-path");
+    run.addFileArg(wasm);
+    run.addArgs(args);
+    run.step.dependOn(runner_step);
+    step.dependOn(&run.step);
+}
+
+/// Compile one builtins bitcode payload for the LLVM backend to link.
+/// `link_libc` is left at the build system's default when null.
+fn addBuiltinsBitcode(
+    b: *std.Build,
+    roc_modules: modules.RocModules,
+    comptime suffix: []const u8,
+    root_source_file: []const u8,
+    target: ResolvedTarget,
+    link_libc: ?bool,
+) std.Build.LazyPath {
+    const obj = b.addObject(.{
+        .name = "roc_builtins" ++ suffix,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(root_source_file),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .strip = true,
+            .pic = true,
+            .single_threaded = true,
+        }),
+    });
+    obj.root_module.addImport("tracy", b.addModule("tracy_stub" ++ suffix, .{
+        .root_source_file = b.path("src/builtins/tracy_stub.zig"),
+    }));
+    obj.root_module.addImport("vendor_parse_float", roc_modules.vendor_parse_float);
+    obj.root_module.addImport("vendor_ryu", roc_modules.vendor_ryu);
+    obj.root_module.addImport("shim_io", b.addModule("shim_io" ++ suffix, .{
+        .root_source_file = b.path("src/shim_io.zig"),
+    }));
+    obj.root_module.omit_frame_pointer = true;
+    obj.root_module.stack_check = false;
+    if (link_libc) |link| obj.root_module.link_libc = link;
+    obj.use_llvm = true;
+    obj.bundle_compiler_rt = false;
+    _ = obj.getEmittedBin();
+    return obj.getEmittedLlvmBc();
+}
+
 fn addMainExe(
     b: *std.Build,
     roc_modules: modules.RocModules,
@@ -7763,25 +7691,18 @@ fn addMainExe(
             );
             b.getInstallStep().dependOn(copy_step);
         }
-
-        // Generate glibc stubs for gnu targets
-        if (cross_target.query.abi == .gnu) {
-            const glibc_stub = generateGlibcStub(b, cross_resolved_target, cross_target.name);
-            if (glibc_stub) |stub| {
-                b.getInstallStep().dependOn(&stub.step);
-            }
-        }
     }
 
     // Create builtins object file at build time with minimal dependencies.
     // This is a plain .o (not a .a archive) since we don't bundle compiler_rt here
     // (compiler_rt is bundled in the shim instead). Using .o avoids ar archive format
     // issues and is simpler since we pass it directly to the linker.
+    const builtins_target = withoutSha256Floor(b, target);
     const builtins_obj = b.addObject(.{
         .name = "roc_builtins",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/static_lib.zig"),
-            .target = target,
+            .target = builtins_target,
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
@@ -7810,7 +7731,7 @@ fn addMainExe(
         .name = "roc_builtins_extern",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/builtins/extern_static_lib.zig"),
-            .target = target,
+            .target = builtins_target,
             .optimize = optimize,
             .strip = strip,
             .omit_frame_pointer = omit_frame_pointer,
@@ -7892,11 +7813,26 @@ fn addMainExe(
         }),
     });
     configureBackend(archive_member_names_tool, b.graph.host);
+    // The link inputs `roc` embeds are digested once here (see
+    // src/build/embedded_digests.zig), so `roc run` never rehashes them.
+    const embedded_digests_tool = b.addExecutable(.{
+        .name = "embedded_digests",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/build/embedded_digests.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    configureBackend(embedded_digests_tool, b.graph.host);
+    const embedded_digests = b.addRunArtifact(embedded_digests_tool);
+    const embedded_digests_source = embedded_digests.addOutputFileArg("embedded_digests.zig");
     const interpreter_shim_filename = if (target.result.os.tag == .windows) "roc_interpreter_shim.lib" else "libroc_interpreter_shim.a";
     const strip_interpreter_shim_names = b.addRunArtifact(archive_member_names_tool);
     strip_interpreter_shim_names.addArg(@tagName(target.result.os.tag));
     strip_interpreter_shim_names.addFileArg(interpreter_shim_lib.getEmittedBin());
     const bare_interpreter_shim = strip_interpreter_shim_names.addOutputFileArg(interpreter_shim_filename);
+    embedded_digests.addArg("interpreter_shim");
+    embedded_digests.addFileArg(bare_interpreter_shim);
     // Install shim library to the output directory
     const install_interpreter_shim = b.addInstallLibFile(bare_interpreter_shim, interpreter_shim_filename);
     b.getInstallStep().dependOn(&install_interpreter_shim.step);
@@ -8008,6 +7944,8 @@ fn addMainExe(
     strip_machine_code_shim_names.addArg(@tagName(target.result.os.tag));
     strip_machine_code_shim_names.addFileArg(checked_machine_code_shim);
     const bare_machine_code_shim = strip_machine_code_shim_names.addOutputFileArg(machine_code_shim_filename);
+    embedded_digests.addArg("machine_code_shim");
+    embedded_digests.addFileArg(bare_machine_code_shim);
 
     // Cross-check every shipped native ABI from any developer host. No target
     // executable is run: the host checker reads each target's object format.
@@ -8156,8 +8094,11 @@ fn addMainExe(
         // (gets compiler-rt via the dedicated merged object below) and macOS
         // (resolves them against -lSystem at the final link, and `-fcompiler-rt`
         // crashes the Zig compiler for macOS targets under --listen). BSD is
-        // also excluded because Zig 0.16.0 segfaults when compiling compiler_rt
-        // for x86_64-*-bsd-none targets.
+        // also excluded because Zig 0.16.0 segfaults when bundling compiler-rt
+        // (`-fcompiler-rt`) for x86_64-*-bsd-none targets; there the calls
+        // resolve against the platform's C library, or against the default
+        // platform's compiler-rt carrier below when that platform is
+        // freestanding.
         const cross_is_wasm = std.mem.eql(u8, cross_target.name, "wasm32");
         const cross_is_macos = cross_target.query.os_tag == .macos;
         const cross_os = roc_target.classifyOs(cross_target.query.os_tag orelse .freestanding);
@@ -8265,6 +8206,12 @@ fn addMainExe(
             .{ .root_source_file = b.path("src/shim_io.zig") },
         ));
         cross_builtins_extern_obj.bundle_compiler_rt = cross_bundle_compiler_rt;
+        // This object links into -nostdlib executables, and a freestanding
+        // default-platform program has no libc at all, so nothing in the link
+        // defines the stack protector's `__stack_chk_fail` and
+        // `__stack_chk_guard`. Zig turns the protector on in safe build modes
+        // for the targets it assumes always link libc, the BSDs among them.
+        cross_builtins_extern_obj.root_module.stack_protector = false;
         configureBackend(cross_builtins_extern_obj, cross_resolved_target);
 
         const builtins_extern_ext = if (cross_target.query.os_tag == .windows) "roc_builtins_extern.obj" else "roc_builtins_extern.o";
@@ -8324,6 +8271,7 @@ fn addMainExe(
             default_platform_runtime_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_runtime_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_runtime_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_runtime_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_runtime_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_runtime_options = b.addOptions();
             default_platform_runtime_options.addOption(bool, "include_process_entrypoint", false);
@@ -8340,12 +8288,23 @@ fn addMainExe(
                 b.pathJoin(&.{ "src/cli/targets", cross_target.name, default_runtime_ext }),
             );
             exe.step.dependOn(&copy_default_platform_runtime.step);
+            embedded_digests.addArg(b.fmt("default_runtime_{s}", .{cross_target.name}));
+            embedded_digests.addFileArg(default_platform_runtime_obj.getEmittedBin());
 
-            // A shared-memory run of the synthetic Linux default platform has
-            // no external platform host to provide compiler-rt. Keep that
-            // carrier explicit and default-platform-owned instead of hiding it
-            // in the machine-code shim, which is also linked with user hosts.
-            if (default_platform_os == .linux) {
+            // The synthetic default platform is freestanding on Linux, FreeBSD
+            // and NetBSD: it links no libc and has no external platform host,
+            // so nothing else in its links is certain to provide compiler-rt
+            // or the C math and memory routines code generation calls. Keep
+            // that carrier explicit and default-platform-owned instead of
+            // hiding it in the machine-code shim, which is also linked with
+            // user hosts. A shared-memory run and every standalone
+            // default-platform link consume it. Each routine gets its own
+            // section so a link keeps only the ones it references, and the
+            // object carries no debug info: a linker keeps an input's debug
+            // sections even when it discards all of that input's code, so
+            // they would be copied into every executable whether or not it
+            // calls anything here.
+            if (default_platform_os == .linux or default_platform_os == .freebsd or default_platform_os == .netbsd) {
                 const zig_lib_path = b.fmt("{f}", .{b.graph.zig_lib_directory});
                 const default_platform_compiler_rt_obj = b.addObject(.{
                     .name = b.fmt("roc_default_compiler_rt_{s}", .{cross_target.name}),
@@ -8353,12 +8312,14 @@ fn addMainExe(
                         .root_source_file = .{ .cwd_relative = b.pathJoin(&.{ zig_lib_path, "compiler_rt.zig" }) },
                         .target = cross_resolved_target,
                         .optimize = .ReleaseFast,
-                        .strip = strip,
+                        .strip = true,
                         .omit_frame_pointer = false,
                         .pic = true,
                     }),
                 });
                 default_platform_compiler_rt_obj.bundle_compiler_rt = false;
+                default_platform_compiler_rt_obj.link_function_sections = true;
+                default_platform_compiler_rt_obj.link_data_sections = true;
                 configureBackend(default_platform_compiler_rt_obj, cross_resolved_target);
 
                 const copy_default_platform_compiler_rt = b.addUpdateSourceFiles();
@@ -8367,6 +8328,8 @@ fn addMainExe(
                     b.pathJoin(&.{ "src/cli/targets", cross_target.name, "roc_default_compiler_rt.o" }),
                 );
                 exe.step.dependOn(&copy_default_platform_compiler_rt.step);
+                embedded_digests.addArg(b.fmt("default_compiler_rt_{s}", .{cross_target.name}));
+                embedded_digests.addFileArg(default_platform_compiler_rt_obj.getEmittedBin());
             }
 
             const default_platform_executable_obj = b.addObject(.{
@@ -8384,6 +8347,7 @@ fn addMainExe(
             default_platform_executable_obj.root_module.addImport("roc_str_view", roc_modules.roc_str_view);
             default_platform_executable_obj.root_module.addImport("roc_args", roc_modules.roc_args);
             default_platform_executable_obj.root_module.addImport("raw_pages", roc_modules.raw_pages);
+            default_platform_executable_obj.root_module.addImport("memory_fault", roc_modules.memory_fault);
             default_platform_executable_obj.root_module.addImport("shim_symbols", roc_modules.shim_symbols);
             const default_platform_executable_options = b.addOptions();
             default_platform_executable_options.addOption(bool, "include_process_entrypoint", true);
@@ -8421,6 +8385,7 @@ fn addMainExe(
     config.addOption(bool, "binaryen", use_bundled_deps);
     exe.root_module.addOptions("config", config);
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
+    exe.root_module.addAnonymousImport("embedded_digests", .{ .root_source_file = embedded_digests_source });
 
     const llvm_paths_exe = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
     exe.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths_exe.lib });
@@ -8547,6 +8512,12 @@ fn addLlvmSupportToStep(
     });
 }
 
+/// The most recently configured compile step that links the embedded LLVM
+/// libraries, when the build host is Windows. Each such step waits for the
+/// previous one there: several of their links at once exhaust a hosted
+/// Windows runner's memory.
+var windows_llvm_link_chain: ?*Step = null;
+
 fn addLlvmLinkSupportToStep(
     b: *std.Build,
     step: *Step.Compile,
@@ -8557,6 +8528,10 @@ fn addLlvmLinkSupportToStep(
     zstd: *Dependency,
 ) !bool {
     const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return false;
+    if (b.graph.host.result.os.tag == .windows) {
+        if (windows_llvm_link_chain) |previous| step.step.dependOn(previous);
+        windows_llvm_link_chain = &step.step;
+    }
     step.root_module.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
     step.root_module.addIncludePath(.{ .cwd_relative = llvm_paths.include });
     try addStaticLlvmOptionsToModule(step.root_module);
@@ -9061,7 +9036,8 @@ fn compilerVersionForMode(b: *std.Build, mode: std.builtin.OptimizeMode, compile
 /// switches, or serialization format identity.
 fn getCompilerArtifactHash(b: *std.Build, compiler_version: []const u8) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update("roc-checked-artifact-v1");
+    // Unconditional implementations must not reuse experimental flag namespaces.
+    hasher.update("roc-checked-artifact-v2");
     hasher.update(compiler_version);
 
     // Resolve against the build root rather than cwd so the hash works both for
@@ -9103,9 +9079,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
         // Fall back to minimal ELF
         const arch = target.result.cpu.arch;
         const stub_content = if (arch == .aarch64)
-            createMinimalElfArm64()
+            createMinimalElf(0xB7)
         else if (arch == .x86_64)
-            createMinimalElfX64()
+            createMinimalElf(0x3E)
         else
             return null;
 
@@ -9149,9 +9125,9 @@ fn generateGlibcStub(b: *std.Build, target: ResolvedTarget, target_name: []const
     return copy_stubs;
 }
 
-/// Create a minimal ELF shared object for ARM64
-fn createMinimalElfArm64() []const u8 {
-    // ARM64 minimal ELF shared object
+/// Create a minimal ELF shared object for the machine with ELF id `e_machine`
+/// (`EM_AARCH64` or `EM_X86_64`).
+fn createMinimalElf(comptime e_machine: u8) []const u8 {
     return &[_]u8{
         // ELF Header (64 bytes)
         0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
@@ -9162,45 +9138,7 @@ fn createMinimalElfArm64() []const u8 {
         0, // e_ident[EI_ABIVERSION]
         0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
         0x03, 0x00, // e_type - ET_DYN (shared object)
-        0xB7, 0x00, // e_machine - EM_AARCH64
-        0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
-        0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_shoff - section header offset
-        0x00, 0x00, 0x00, 0x00, // e_flags
-        0x40, 0x00, // e_ehsize - ELF header size
-        0x38, 0x00, // e_phentsize - program header entry size
-        0x01, 0x00, // e_phnum - number of program headers
-        0x40, 0x00, // e_shentsize - section header entry size
-        0x00, 0x00, // e_shnum - number of section headers
-        0x00, 0x00, // e_shstrndx - section header string table index
-
-        // Program Header (56 bytes) - PT_LOAD
-        0x01, 0x00, 0x00, 0x00, // p_type - PT_LOAD
-        0x05, 0x00, 0x00, 0x00, // p_flags - PF_R | PF_X
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_offset
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_vaddr
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_paddr
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_filesz
-        0x78, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_memsz
-        0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // p_align
-    };
-}
-
-/// Create a minimal ELF shared object for x86-64
-fn createMinimalElfX64() []const u8 {
-    // x86-64 minimal ELF shared object
-    return &[_]u8{
-        // ELF Header (64 bytes)
-        0x7F, 'E', 'L', 'F', // e_ident[EI_MAG0..3] - ELF magic
-        2, // e_ident[EI_CLASS] - ELFCLASS64
-        1, // e_ident[EI_DATA] - ELFDATA2LSB (little endian)
-        1, // e_ident[EI_VERSION] - EV_CURRENT
-        0, // e_ident[EI_OSABI] - ELFOSABI_NONE
-        0, // e_ident[EI_ABIVERSION]
-        0, 0, 0, 0, 0, 0, 0, // e_ident[EI_PAD] - padding
-        0x03, 0x00, // e_type - ET_DYN (shared object)
-        0x3E, 0x00, // e_machine - EM_X86_64
+        e_machine, 0x00, // e_machine
         0x01, 0x00, 0x00, 0x00, // e_version - EV_CURRENT
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_entry (not used for shared obj)
         0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // e_phoff - program header offset

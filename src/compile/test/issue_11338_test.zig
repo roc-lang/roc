@@ -272,22 +272,21 @@ test "streaming recursive references consume their reserved signature" {
 
 test "specialization streaming bounds completed shards behind an unfinished predecessor" {
     const allocator = std.testing.allocator;
+    const window = 4 * @import("postcheck").Monotype.Lower.parallel_spec_jobs_per_lane;
+    const body_count = window + 24;
     var app: std.ArrayList(u8) = .empty;
     defer app.deinit(allocator);
-    for (0..40) |index| try app.print(allocator, "body{d} : U64 -> U64\nbody{d} = |value| value + {d}\n\n", .{ index, index, index });
-    try app.appendSlice(allocator, "main! : List(Str) => Try({}, [Exit(I8), ..])\nmain! = |args| {\n    runtime = args.len()\n    total = ");
-    for (0..40) |index| {
-        if (index != 0) try app.appendSlice(allocator, " + ");
-        try app.print(allocator, "body{d}(runtime)", .{index});
-    }
-    try app.appendSlice(allocator, "\n    echo!(total.to_str())\n    Ok({})\n}\n");
+    for (0..body_count) |index| try app.print(allocator, "body{d} : U64 -> U64\nbody{d} = |value| value + {d}\n\n", .{ index, index, index });
+    try app.appendSlice(allocator, "main! : List(Str) => Try({}, [Exit(I8), ..])\nmain! = |args| {\n    runtime = args.len()\n    var $total = 0\n");
+    for (0..body_count) |index| try app.print(allocator, "    $total = $total + body{d}(runtime)\n", .{index});
+    try app.appendSlice(allocator, "    echo!($total.to_str())\n    Ok({})\n}\n");
     var executor: DiscoveryExecutor = .{};
     defer executor.deinit();
     try harness.expectLowersToLirWithOptions(app.items, .{
         .specialization_workers = 4,
         .post_check_executor_override = executor.executor(),
     });
-    try std.testing.expectEqual(@as(usize, 16), executor.peak_unaccepted_while_held);
-    try std.testing.expect(executor.submitted > 40);
+    try std.testing.expectEqual(@as(usize, window), executor.peak_unaccepted_while_held);
+    try std.testing.expect(executor.submitted > body_count);
     try std.testing.expect(!executor.open);
 }

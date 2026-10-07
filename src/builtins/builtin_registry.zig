@@ -71,14 +71,21 @@ pub const BuiltinFn = enum {
     str_with_ascii_lowercased,
     str_with_ascii_uppercased,
     str_from_utf8_lossy,
+    str_from_utf8_validated,
+    str_from_utf16_le_short,
+    str_from_utf16_be_short,
+    str_from_utf32_le_short,
+    str_from_utf32_be_short,
+
     str_from_utf8,
     str_from_utf8_result,
-    str_from_utf8_parts,
     str_escape_and_quote,
     crash_str,
     dbg_str,
     debug_invalid_local,
     expect_err_str,
+    checked_error_crashed,
+    checked_error_crash_str,
     roc_expect_failed,
     roc_crashed,
     list_with_capacity,
@@ -100,14 +107,13 @@ pub const BuiltinFn = enum {
     list_set,
     list_swap,
     list_reserve,
+    list_reserve_for_append,
     list_release_excess_capacity,
     list_incref,
     list_incref_single_thread,
     list_decref_str,
-    list_decref_flat_list,
     list_decref_with,
     list_decref_with_single_thread,
-    list_free_flat_list,
     list_free_with,
     box_prepare_update,
     box_unbox_owned,
@@ -156,7 +162,6 @@ pub const BuiltinFn = enum {
     i128_to_dec_try_unsafe,
     u128_to_dec_try_unsafe,
     dec_mul,
-    dec_mul_saturated,
     dec_div,
     dec_div_trunc,
     dec_pow,
@@ -207,6 +212,12 @@ pub const BuiltinFn = enum {
     int_from_str,
     dec_from_str,
     float_from_str,
+    int_from_str_prefix,
+    int_from_utf8_prefix,
+    dec_from_str_prefix,
+    dec_from_utf8_prefix,
+    float_from_str_prefix,
+    float_from_utf8_prefix,
     list_eq,
     list_str_eq,
     list_list_eq,
@@ -278,6 +289,8 @@ pub const BuiltinFn = enum {
             .box_free_with,
             .box_prepare_update,
             .box_unbox_owned,
+            .checked_error_crash_str,
+            .checked_error_crashed,
             .crash_str,
             .dbg_str,
             .debug_invalid_local,
@@ -305,13 +318,11 @@ pub const BuiltinFn = enum {
             .list_append_sublist,
             .list_append_unsafe,
             .list_concat,
-            .list_decref_flat_list,
             .list_decref_str,
             .list_decref_with,
             .list_decref_with_single_thread,
             .list_drop_at,
             .list_eq,
-            .list_free_flat_list,
             .list_free_with,
             .list_incref,
             .list_incref_single_thread,
@@ -321,6 +332,7 @@ pub const BuiltinFn = enum {
             .list_replace,
             .list_set,
             .list_reserve,
+            .list_reserve_for_append,
             .list_reverse,
             .list_sort_with,
             .list_slack_unique,
@@ -351,7 +363,12 @@ pub const BuiltinFn = enum {
             .str_from_literal,
             .str_from_utf8,
             .str_from_utf8_lossy,
-            .str_from_utf8_parts,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+
             .str_from_utf8_result,
             .str_join_with,
             .str_release_excess_capacity,
@@ -467,23 +484,6 @@ pub const core_root_symbols: std.StaticStringMap(void) = blk: {
     }
     const frozen = kvs;
     break :blk std.StaticStringMap(void).initComptime(frozen);
-};
-
-/// Fully qualified names of annotation-only Builtin.roc declarations that are
-/// compiler intrinsics rather than low-level-op wrappers: checking and
-/// post-check lowering handle them from checked data, so canonicalization
-/// exempts them from the rule that every annotation-only builtin def must map
-/// to a low-level op.
-pub const intrinsic_annotation_names = [_][]const u8{
-    "Builtin.Str.inspect",
-    "Builtin.Str.Utf8Problem.is_eq",
-    "Builtin.Encoding.ParseTagUnionSpec.parse",
-    "Builtin.Encoding.FieldName.FieldNames.rename_fields",
-    "Builtin.Encoding.FieldName.FieldNames.shortest_name",
-    "Builtin.Encoding.FieldName.FieldNames.longest_name",
-    "Builtin.Encoding.FieldName.FieldNames.iter",
-    "Builtin.Encoding.FieldName.FieldNames.for_size",
-    "Builtin.Encoding.FieldName.name",
 };
 
 comptime {

@@ -281,8 +281,11 @@ test "non-iterator methods sharing iterator producer names remain hoistable" {
 
         try test_env.assertNoErrors();
         const roots = test_env.checker.selectedHoistedRoots();
-        try std.testing.expectEqual(@as(usize, 1), roots.len);
+        // The binding root, then the guarded `List.len` root in the branch.
+        try std.testing.expectEqual(@as(usize, 2), roots.len);
         try std.testing.expect(roots[0].pattern != null);
+        try std.testing.expect(!roots[0].guarded);
+        try std.testing.expect(roots[1].guarded);
         const root_expr = test_env.module_env.store.getExpr(roots[0].expr);
         const root_tag = std.meta.activeTag(root_expr);
         try std.testing.expect(root_tag == .e_method_call or root_tag == .e_dispatch_call);
@@ -517,6 +520,33 @@ test "hoist context matrix selects roots in unguarded eligible positions" {
             .expected_call_roots = 1,
         },
         .{
+            .name = "block_final_after_dbg",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |_| {
+            \\    dbg 0.I64
+            \\    add_one(41.I64)
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
+            .name = "statement_after_while",
+            .source =
+            \\add_one = |n| n + 1.I64
+            \\
+            \\main = |arg| {
+            \\    while arg == 0.I64 {
+            \\        break
+            \\    }
+            \\    result = add_one(41.I64)
+            \\    result + arg
+            \\}
+            ,
+            .expected_call_roots = 1,
+        },
+        .{
             .name = "dbg_operand",
             .source =
             \\add_one = |n| n + 1.I64
@@ -543,11 +573,12 @@ test "hoist context matrix selects roots in unguarded eligible positions" {
     }
 }
 
-test "hoist context matrix suppresses guarded and default-suppressed positions" {
+test "hoist context matrix marks guarded positions and suppresses default-suppressed positions" {
     const cases = [_]struct {
         name: []const u8,
         source: []const u8,
         expected_comptime_condition_warnings: usize = 0,
+        expected_guarded_roots: usize = 0,
     }{
         .{
             .name = "if_branch_body",
@@ -560,6 +591,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "later_if_condition",
@@ -574,6 +606,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
             .expected_comptime_condition_warnings = 1,
         },
         .{
@@ -586,6 +619,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    _ => arg
             \\}
             ,
+            .expected_guarded_roots = 1,
             .expected_comptime_condition_warnings = 1,
         },
         .{
@@ -601,6 +635,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    }
             \\}
             ,
+            .expected_guarded_roots = 3,
         },
         .{
             .name = "expect_body",
@@ -615,6 +650,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "lambda_inside_branch_body",
@@ -626,6 +662,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    arg
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "for_body",
@@ -639,6 +676,7 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             \\    items
             \\}
             ,
+            .expected_guarded_roots = 1,
         },
         .{
             .name = "while_body",
@@ -655,12 +693,12 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
             ,
         },
         .{
-            .name = "block_final_after_dbg",
+            .name = "block_final_after_return",
             .source =
             \\add_one = |n| n + 1.I64
             \\
-            \\main = |_| {
-            \\    dbg 0.I64
+            \\main = |arg| {
+            \\    return arg
             \\    add_one(41.I64)
             \\}
             ,
@@ -687,7 +725,9 @@ test "hoist context matrix suppresses guarded and default-suppressed positions" 
         } else {
             try expectOnlyComptimeConditionWarnings(&test_env, matrix_case.expected_comptime_condition_warnings);
         }
-        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+        const roots = test_env.checker.selectedHoistedRoots();
+        try std.testing.expectEqual(matrix_case.expected_guarded_roots, roots.len);
+        for (roots) |root| try std.testing.expect(root.guarded);
     }
 }
 
@@ -760,7 +800,7 @@ test "refutable closed destructure selects validation root without live binders"
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
@@ -779,7 +819,7 @@ test "unused concrete binder retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -811,7 +851,7 @@ test "non-concrete extraction retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -1064,7 +1104,7 @@ test "hoist roots are not selected for runtime-dependent multi-branch match" {
     try std.testing.expectEqual(@as(usize, 0), countMatchExprRoots(&test_env));
 }
 
-test "hoist roots are not selected for runtime-controlled match branch bodies" {
+test "guarded hoist roots are selected for runtime-controlled match branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    input : Try(I64, I64)
@@ -1082,7 +1122,9 @@ test "hoist roots are not selected for runtime-controlled match branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 3), roots.len);
+    for (roots) |root| try std.testing.expect(root.guarded);
 }
 
 test "hoist roots are not selected for local values depending on function arguments" {
@@ -1134,7 +1176,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error, .valueless_binding => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -1163,7 +1205,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr, .pattern_validation, .pattern_error => {},
+            .expr, .pattern_validation, .pattern_error, .valueless_binding => {},
         }
     }
     return count;
@@ -1314,19 +1356,52 @@ test "hoist roots are not selected for observable debug expressions" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected after observable effects in blocks" {
-    var test_env = try TestEnv.init("Test",
-        \\main = |_| {
+test "hoist roots selected after observable effects in blocks match those without the effect" {
+    var with_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
         \\    before = 1.I64 + 2.I64
         \\    dbg 0.I64
         \\    after = 3.I64 + 4.I64
-        \\    before + after
+        \\    before + after + arg
+        \\}
+    );
+    defer with_dbg.deinit();
+
+    var without_dbg = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    before = 1.I64 + 2.I64
+        \\    after = 3.I64 + 4.I64
+        \\    before + after + arg
+        \\}
+    );
+    defer without_dbg.deinit();
+
+    try with_dbg.assertNoErrors();
+    try without_dbg.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 3), countExprRootsByTag(&without_dbg, .e_dispatch_call));
+    try std.testing.expectEqual(
+        countExprRootsByTag(&without_dbg, .e_dispatch_call),
+        countExprRootsByTag(&with_dbg, .e_dispatch_call),
+    );
+}
+
+test "refutable destructure after an effect selects validation root" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |_| {
+        \\    dbg 0.I64
+        \\    Ok(_) = List.get([1], 0)
+        \\    Ok({})
         \\}
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_dispatch_call));
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    const validation = switch (roots[0].body) {
+        .pattern_validation => |validation| validation,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
+    };
+    try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
 
 test "hoist roots with non-concrete compile-time types are pruned" {
@@ -1465,7 +1540,7 @@ test "hoist roots are not selected inside top-level expects" {
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
 }
 
-test "hoist roots are not selected for runtime-controlled branch bodies" {
+test "guarded hoist roots are selected for runtime-controlled branch bodies" {
     var test_env = try TestEnv.init("Test",
         \\main = |arg| {
         \\    if arg == 0.I64 {
@@ -1478,7 +1553,28 @@ test "hoist roots are not selected for runtime-controlled branch bodies" {
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+    const roots = test_env.checker.selectedHoistedRoots();
+    try std.testing.expectEqual(@as(usize, 1), roots.len);
+    try std.testing.expect(roots[0].guarded);
+}
+
+test "guarded function-typed destructure binders are not selected as callable roots" {
+    var test_env = try TestEnv.init("Test",
+        \\main = |arg| {
+        \\    if arg == 0.I64 {
+        \\        (f, _) = (|n| n + 1.I64, 0.I64)
+        \\        f(arg)
+        \\    } else {
+        \\        arg
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    for (test_env.checker.selectedHoistedRoots()) |root| {
+        try std.testing.expect(root.value_kind != .callable_binding);
+    }
 }
 
 test "hoist roots selected for whole closed conditional expressions" {
@@ -1682,4 +1778,534 @@ test "hoist roots are not selected for dict pseudo-seed dependent values" {
 
     try test_env.assertNoErrors();
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.selectedHoistedRoots().len);
+}
+
+test "issue 11731 - unit closure preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |{}| Str.contains(hay, "99")
+        \\    if contains({}) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - match scrutinee preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    match contains("99") {
+        \\        True => hay
+        \\        False => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - match guard preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    match hay {
+        \\        _ if contains("99") => "full"
+        \\        _ => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - binding aliases preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    found = contains("99")
+        \\    alias = found
+        \\    if alias { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - destructured binding preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    (found, extra) = (contains("99"), "free")
+        \\    if found { hay } else { extra }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - transitive helper preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    helper = |n| contains(n)
+        \\    if helper("99") { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - recursive helper preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |n| if n == 0.U8 { Str.contains(hay, "99") } else { helper(n - 1) }
+        \\    if helper(2.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - combined helpers preserves runtime dependency" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains(hay, n)
+        \\    closed = |n| Str.contains("999", n)
+        \\    if (contains("99"), closed("99")) == (True, True) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+}
+
+test "issue 11731 - closed helper still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    if contains("99") { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper binding aliases still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    found = contains("99")
+        \\    alias = found
+        \\    if alias { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - closed helper destructure still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    (found, extra) = (contains("99"), "free")
+        \\    if found { hay } else { extra }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - closed recursive helper still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |n| if n == 0.U8 { True } else { helper(n - 1) }
+        \\    if helper(2.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper match scrutinee still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    match contains("99") {
+        \\        True => hay
+        \\        False => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - closed helper guard still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    match hay {
+        \\        _ if contains("99") => "full"
+        \\        _ => "free"
+        \\    }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - subsumed condition still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    result = if contains("99") { "full" } else { "free" }
+        \\    Str.concat(result, hay)
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&test_env, .e_if));
+}
+
+test "issue 11731 - suppressed branch condition still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    contains = |n| Str.contains("999", n)
+        \\    if hay == "runtime" {
+        \\        if contains("99") { hay } else { "free" }
+        \\    } else { hay }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - combined closed helpers still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    first = |n| Str.contains("999", n)
+        \\    second = |n| Str.contains("111", n)
+        \\    if (first("99"), second("11")) == (True, True) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11731 - independent conditions keep their own promotion proof" {
+    const source =
+        \\choose = |hay| {
+        \\    runtime = |n| Str.contains(hay, n)
+        \\    closed = |n| Str.contains("999", n)
+        \\    first = if runtime("99") { hay } else { "free" }
+        \\    if closed("99") { first } else { hay }
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    const warning = test_env.checker.problems.problems.items[0].comptime_condition;
+    try std.testing.expectEqualStrings("closed(\"99\")", source[warning.region.start.offset..warning.region.end.offset]);
+}
+
+test "issue 11731 - repeated binding dependencies share proof storage" {
+    const gpa = std.testing.allocator;
+    var small_proof_count: usize = 0;
+    for ([_]usize{ 1, 128 }) |alias_count| {
+        var source: std.ArrayList(u8) = .empty;
+        defer source.deinit(gpa);
+        try source.appendSlice(gpa,
+            \\choose = |hay| {
+            \\    runtime = |n| Str.contains(hay, n)
+            \\    closed = |n| Str.contains("999", n)
+            \\    v0 = (runtime("99"), closed("99")) == (True, True)
+            \\
+        );
+        for (0..alias_count) |i| {
+            const line = try std.fmt.allocPrint(gpa, "    v{d} = (v{d}, v{d}) == (True, True)\n", .{ i + 1, i, i });
+            defer gpa.free(line);
+            try source.appendSlice(gpa, line);
+        }
+        const ending = try std.fmt.allocPrint(gpa, "    if v{d} {{ hay }} else {{ \"free\" }}\n}}", .{alias_count});
+        defer gpa.free(ending);
+        try source.appendSlice(gpa, ending);
+        var test_env = try TestEnv.init("Test", source.items);
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        const proof_count = test_env.checker.hoist_promotion_dependencies.items.len;
+        if (alias_count == 1) {
+            small_proof_count = proof_count;
+            try std.testing.expect(small_proof_count > 0);
+        } else {
+            try std.testing.expectEqual(small_proof_count, proof_count);
+        }
+    }
+}
+
+test "issue 11731 - recursive condition inside captured helper does not warn" {
+    inline for (.{ "", "    helper : U8 -> Bool\n" }) |annotation| {
+        var test_env = try TestEnv.init("Test",
+            \\choose = |hay| {
+            \\
+        ++ annotation ++
+            \\    helper = |n| {
+            \\        if n == 0.U8 { Str.contains(hay, "99") } else {
+            \\            if helper(0.U8) { True } else { False }
+            \\        }
+            \\    }
+            \\    if helper(1.U8) { hay } else { "free" }
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertNoErrors();
+        try std.testing.expectEqual(@as(usize, 0), test_env.checker.promotedLocalProcedures().len);
+        try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+    }
+}
+
+test "issue 11731 - nested helper records reference to enclosing captured helper" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    outer = |n| {
+        \\        inner = |m| outer(m)
+        \\        if n == 0.U8 { Str.contains(hay, "99") } else {
+        \\            if inner(0.U8) { True } else { False }
+        \\        }
+        \\    }
+        \\    if outer(1.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), test_env.checker.promotedLocalProcedures().len);
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "issue 11731 - recursive condition inside closed helper still warns" {
+    inline for (.{ "", "    helper : U8 -> Bool\n" }) |annotation| {
+        var test_env = try TestEnv.init("Test",
+            \\choose = |hay| {
+            \\
+        ++ annotation ++
+            \\    helper = |n| {
+            \\        if n == 0.U8 { True } else {
+            \\            if helper(0.U8) { True } else { False }
+            \\        }
+            \\    }
+            \\    if helper(1.U8) { hay } else { "free" }
+            \\}
+        );
+        defer test_env.deinit();
+
+        try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unconditional Condition" });
+        try std.testing.expectEqual(@as(usize, 1), test_env.checker.promotedLocalProcedures().len);
+    }
+}
+
+test "issue 11731 - nested closed helpers retain recursive promotion" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    outer = |n| {
+        \\        inner = |m| outer(m)
+        \\        if n == 0.U8 { True } else {
+        \\            if inner(0.U8) { True } else { False }
+        \\        }
+        \\    }
+        \\    if outer(1.U8) { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{ "Unconditional Condition", "Unconditional Condition" });
+    try std.testing.expectEqual(@as(usize, 2), test_env.checker.promotedLocalProcedures().len);
+}
+
+test "issue 11993 - condition dispatching to a rejected capturing local method does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\    counter = Counter.{ count: 0 }
+        \\    if counter.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "issue 11993 - comparison dispatching to a rejected capturing local is_eq does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if Counter.{ count: 0 } == Counter.{ count: 1 } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "issue 11993 - condition dispatching to a promoted local method still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + 1
+        \\    }
+        \\    counter = Counter.{ count: 0 }
+        \\    if counter.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+    try std.testing.expectEqual(@as(usize, 1), test_env.checker.promotedLocalProcedures().len);
+}
+
+test "issue 11993 - condition through a helper whose evidence is a rejected capturing local method does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count + offset
+        \\    }
+        \\    get = |c| c.value()
+        \\    if get(Counter.{ count: 0 }) == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "issue 11993 - condition through a helper whose evidence is a promoted local method still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        value = |counter| counter.count
+        \\    }
+        \\    get = |c| c.value()
+        \\    if get(Counter.{ count: 0 }) == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - structural comparison whose component is_eq is a rejected capturing method does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if { c: Counter.{ count: 0 } } == { c: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "issue 11993 - structural comparison whose component is_eq is promoted still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + 1 == b.count
+        \\    }
+        \\    if { c: Counter.{ count: 0 } } == { c: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - method bound to a capturing local function is rejected and does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    helper = |c| c.count + offset
+        \\    alias = helper
+        \\    Counter := { count : U64 }.{
+        \\        value = alias
+        \\    }
+        \\    if Counter.{ count: 0 }.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
+}
+
+test "issue 11993 - method bound to a promoted local function still warns" {
+    var test_env = try TestEnv.init("Test",
+        \\choose = |hay| {
+        \\    helper = |c| c.count + 1
+        \\    alias = helper
+        \\    Counter := { count : U64 }.{
+        \\        value = alias
+        \\    }
+        \\    if Counter.{ count: 0 }.value() == 2 { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
+}
+
+test "issue 11993 - generic is_eq whose evidence is a rejected capturing local is_eq does not warn" {
+    var test_env = try TestEnv.init("Test",
+        \\Wrap(a) := { inner : a }.{
+        \\    is_eq = |x, y| x.inner == y.inner
+        \\}
+        \\
+        \\choose = |hay| {
+        \\    offset = 1
+        \\    Counter := { count : U64 }.{
+        \\        is_eq = |a, b| a.count + offset == b.count
+        \\    }
+        \\    if Wrap.{ inner: Counter.{ count: 0 } } == Wrap.{ inner: Counter.{ count: 1 } } { hay } else { "free" }
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }

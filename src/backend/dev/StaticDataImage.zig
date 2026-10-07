@@ -44,7 +44,18 @@ pub const StaticDataImage = struct {
         }
     };
 
+    /// Layout choices an in-process consumer makes for its own copy of the graph.
+    pub const Options = struct {
+        /// Bytes reserved immediately before every export that holds an erased
+        /// callable's code relocation, for the consumer's per-callable header.
+        callable_header_size: usize = 0,
+    };
+
     pub fn init(allocator: Allocator, exports: []const StaticDataExport) Error!StaticDataImage {
+        return initWithOptions(allocator, exports, .{});
+    }
+
+    pub fn initWithOptions(allocator: Allocator, exports: []const StaticDataExport, options: Options) Error!StaticDataImage {
         const symbols = try allocator.alloc(Symbol, exports.len);
         var symbols_owned = true;
         errdefer if (symbols_owned) allocator.free(symbols);
@@ -67,6 +78,10 @@ pub const StaticDataImage = struct {
 
             const alignment: usize = static_export.alignment;
             allocation_alignment = @max(allocation_alignment, alignment);
+            if (options.callable_header_size != 0 and exportHoldsCallable(static_export)) {
+                allocation_len = std.math.add(usize, allocation_len, options.callable_header_size) catch
+                    return error.InvalidStaticDataAlignment;
+            }
             allocation_len = alignForwardChecked(allocation_len, alignment) orelse
                 return error.InvalidStaticDataAlignment;
 
@@ -182,6 +197,13 @@ pub const StaticDataImage = struct {
     }
 };
 
+fn exportHoldsCallable(static_export: *const StaticDataExport) bool {
+    for (static_export.relocations) |relocation| {
+        if (relocation.kind == .function_pointer and relocation.callable_capture_offset != null) return true;
+    }
+    return false;
+}
+
 fn alignForwardChecked(value: usize, alignment: usize) ?usize {
     const mask = alignment - 1;
     const with_padding = std.math.add(usize, value, mask) catch return null;
@@ -229,7 +251,7 @@ test "static data image resolves function relocations explicitly" {
     var root_bytes = [_]u8{0} ** @sizeOf(usize);
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
-        .target_symbol_name = "roc__proc_1",
+        .target_symbol_name = "roc__p1",
         .kind = .function_pointer,
         .callable_capture_offset = 16,
         .procedure = @enumFromInt(1),
@@ -245,7 +267,7 @@ test "static data image resolves function relocations explicitly" {
     defer image.deinit();
     const Resolver = struct {
         fn resolve(_: ?*anyopaque, relocation: StaticDataRelocation) ?usize {
-            if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__proc_1")) return null;
+            if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__p1")) return null;
             if (relocation.callable_capture_offset != 16) return null;
             if (@intFromEnum(relocation.procedure orelse return null) != 1) return null;
             return 0x1234;

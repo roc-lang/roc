@@ -106,20 +106,6 @@ pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx,
     presence: SnapshotFieldPresence,
-
-    const Self = @This();
-
-    /// Returns true if field `a` should sort before field `b` by name.
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByName(ident_store, a, b) == .lt;
-    }
-
-    /// Compares two record fields by their name for ordering.
-    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 /// A snapshotted tag union type with its tags and extension variable.
@@ -847,7 +833,7 @@ pub const Store = struct {
                 .args => {
                     if (frame.idx < frame.args.len) {
                         frame.stage = .await_arg;
-                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], frame.fill.polarity.flip())) return false;
+                        if (!try self.requestVar(store, type_writer, frame.args[frame.idx], .neg)) return false;
                         continue;
                     }
                     // The argument run is committed before the return type is
@@ -858,7 +844,7 @@ pub const Store = struct {
                     );
                     self.scratch_content.clearFrom(frame.scratch_top);
                     frame.stage = .await_ret;
-                    if (!try self.requestVar(store, type_writer, frame.ret, frame.fill.polarity)) return false;
+                    if (!try self.requestVar(store, type_writer, frame.ret, .pos)) return false;
                     continue;
                 },
                 .await_arg => {

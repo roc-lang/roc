@@ -75,25 +75,69 @@ pub const Digests = struct {
         self.visiting.deinit();
     }
 
-    /// Content digest of one committed layout.
+    /// Content digest of one committed layout. A layout's digest hashes
+    /// its children's, so children are digested first; layouts wait on an
+    /// explicit stack, so layout nesting never becomes native call depth.
     pub fn get(self: *Digests, idx: Idx) Allocator.Error!Digest {
         if (self.memo.get(idx)) |digest| return digest;
-        var hasher = TypeDigestHasher.init();
-        writeBytes(&hasher, domain);
-        if (self.recursive_keys.get(idx)) |key| {
-            writeBytes(&hasher, "recursive");
-            hasher.update(&key);
-        } else {
-            const gop = try self.visiting.getOrPut(idx);
-            if (gop.found_existing) {
-                std.debug.panic("layout digest: cyclic layout {d} has no recursive-graph key", .{@intFromEnum(idx)});
+        const Pending = struct { idx: Idx, expanded: bool = false };
+        var pending: std.ArrayList(Pending) = .empty;
+        defer pending.deinit(self.allocator);
+        errdefer for (pending.items) |item| {
+            if (item.expanded) _ = self.visiting.remove(item.idx);
+        };
+        try pending.append(self.allocator, .{ .idx = idx });
+        while (pending.items.len != 0) {
+            const top = &pending.items[pending.items.len - 1];
+            const current = top.idx;
+            if (self.memo.contains(current)) {
+                _ = pending.pop();
+                continue;
             }
-            defer _ = self.visiting.remove(idx);
-            try self.writeStructural(&hasher, idx);
+            var hasher = TypeDigestHasher.init();
+            writeBytes(&hasher, domain);
+            if (self.recursive_keys.get(current)) |key| {
+                writeBytes(&hasher, "recursive");
+                hasher.update(&key);
+            } else if (!top.expanded) {
+                const gop = try self.visiting.getOrPut(current);
+                if (gop.found_existing) {
+                    base.invariant("layout digest: cyclic layout {d} has no recursive-graph key", .{@intFromEnum(current)});
+                }
+                top.expanded = true;
+                try self.pushChildren(&pending, current);
+                continue;
+            } else {
+                _ = self.visiting.remove(current);
+                try self.writeStructural(&hasher, current);
+            }
+            try self.memo.put(current, hasher.finalResult());
+            _ = pending.pop();
         }
-        const digest = hasher.finalResult();
-        try self.memo.put(idx, digest);
-        return digest;
+        return self.memo.get(idx).?;
+    }
+
+    /// Push the children of `idx` whose digests are not yet known.
+    fn pushChildren(self: *Digests, pending: anytype, idx: Idx) Allocator.Error!void {
+        const layout = self.store.getLayout(idx);
+        switch (layout.tag) {
+            .scalar, .box_of_zst, .list_of_zst, .erased_box, .erased_callable, .zst => {},
+            .box, .list, .ptr => try self.pushChild(pending, layout.getIdx()),
+            .closure => try self.pushChild(pending, layout.getClosure().captures_layout_idx),
+            .struct_ => {
+                const fields = self.store.struct_fields.sliceRange(self.store.getStructData(layout.getStruct().idx).getFields());
+                for (0..fields.len) |field_index| try self.pushChild(pending, fields.get(field_index).layout);
+            },
+            .tag_union => {
+                const variants = self.store.getTagUnionVariants(self.store.getTagUnionData(layout.getTagUnion().idx));
+                for (0..variants.len) |variant_index| try self.pushChild(pending, variants.get(variant_index).payload_layout);
+            },
+        }
+    }
+
+    fn pushChild(self: *Digests, pending: anytype, child: Idx) Allocator.Error!void {
+        if (self.memo.contains(child)) return;
+        try pending.append(self.allocator, .{ .idx = child });
     }
 
     fn writeStructural(self: *Digests, hasher: *TypeDigestHasher, idx: Idx) Allocator.Error!void {
@@ -138,9 +182,56 @@ pub const Digests = struct {
         }
     }
 
+    /// Hash a child whose digest `get` computed before its parent's.
     fn writeChild(self: *Digests, hasher: *TypeDigestHasher, child: Idx) Allocator.Error!void {
-        const digest = try self.get(child);
+        const digest = self.memo.get(child).?;
         hasher.update(&digest);
+    }
+};
+
+/// One store's content digests, memoized across every query for the store's
+/// lifetime. Code generators name a helper per layout, so per-query memos
+/// would re-digest a nested layout once per enclosing layout; this memo
+/// digests each layout once. Concurrent readers of an immutable store share
+/// it under its lock.
+pub const DigestCache = struct {
+    lock: std.atomic.Mutex = .unlocked,
+    digests: ?Digests = null,
+    /// `interned_recursive_graphs.count()` when `digests` was built. A new
+    /// recursive-graph key can name an already-digested layout, so a change
+    /// rebuilds the memo.
+    recursive_graph_count: usize = 0,
+
+    pub fn create(allocator: Allocator) Allocator.Error!*DigestCache {
+        const cache = try allocator.create(DigestCache);
+        cache.* = .{};
+        return cache;
+    }
+
+    pub fn destroy(self: *DigestCache, allocator: Allocator) void {
+        self.invalidate();
+        allocator.destroy(self);
+    }
+
+    /// Forget every memoized digest, for a store whose committed layouts changed in place.
+    pub fn invalidate(self: *DigestCache) void {
+        if (self.digests) |*digests| digests.deinit();
+        self.digests = null;
+    }
+
+    pub fn get(self: *DigestCache, store: *const Store, idx: Idx) Allocator.Error!Digest {
+        while (!self.lock.tryLock()) std.atomic.spinLoopHint();
+        defer self.lock.unlock();
+        const recursive_graph_count = store.interned_recursive_graphs.count();
+        if (self.digests != null and self.recursive_graph_count != recursive_graph_count) self.invalidate();
+        if (self.digests == null) {
+            self.digests = try Digests.init(store.allocator, store);
+            self.recursive_graph_count = recursive_graph_count;
+        }
+        const digests = &self.digests.?;
+        // The store may have moved since the memo was built.
+        digests.store = store;
+        return try digests.get(idx);
     }
 };
 

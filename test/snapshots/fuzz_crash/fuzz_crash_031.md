@@ -17,7 +17,6 @@ UNEXPECTED STATEMENT - fuzz_crash_031.md:1:6:1:7
 UNEXPECTED STATEMENT - fuzz_crash_031.md:1:7:1:8
 UNEXPECTED STATEMENT - fuzz_crash_031.md:4:1:4:6
 UNEXPECTED EXPRESSION SYNTAX - fuzz_crash_031.md:4:10:4:11
-UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 # PROBLEMS
 ~~~clojure
 (reports
@@ -154,17 +153,7 @@ UNRECOGNIZED SYNTAX - fuzz_crash_031.md:4:10:4:11
 			(text " here.")
 			(line-break)
 			(line-break)
-			(source-region (file "fuzz_crash_031.md") (start 4 10) (end 4 11) (annotation error) (line-text "vavar t= '"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 4 10) (end 4 11))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_031.md") (start 4 10) (end 4 11) (annotation error) (line-text "vavar t= '"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo."))))
+			(source-region (file "fuzz_crash_031.md") (start 4 10) (end 4 11) (annotation error) (line-text "vavar t= '")))))
 ~~~
 # TOKENS
 ~~~zig
@@ -185,19 +174,12 @@ EndOfFile,
 			(p-ident (raw "t"))
 			(e-malformed (reason "expr_unexpected_token")))))
 ~~~
-# FORMATTED
-~~~roc
-
-
-# el
-t =
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
 	(d-let
 		(p-assign (ident "t"))
-		(e-runtime-error (tag "expr_not_canonicalized"))))
+		(e-runtime-error (tag "expr_syntax_error"))))
 ~~~
 # TYPES
 ~~~clojure

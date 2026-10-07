@@ -124,7 +124,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "string_function"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "x")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))
@@ -134,7 +137,7 @@ NO CHANGE
 		(e-lambda
 			(args
 				(p-assign (ident "x")))
-			(e-dispatch-call (method "times") (constraint-fn-var 258)
+			(e-dispatch-call (method "times") (constraint-fn-var 262)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "x"))))

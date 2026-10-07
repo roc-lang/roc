@@ -39,6 +39,7 @@ pub fn writeProc(
     if (proc.tail_transform != .none) {
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
+    if (proc.tail_group) |group| try writer.print(" tail_group={d}", .{@intFromEnum(group)});
     try writer.writeAll("\n");
 
     if (proc.body) |body| {
@@ -98,8 +99,7 @@ const Printer = struct {
                 .assign_literal => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.value) {
-                        .i64_literal => |l| try writer.print("literal {d}", .{l.value}),
-                        .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        inline .i64_literal, .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
                         .f64_literal => |f| try writer.print("literal f64 {d}", .{f}),
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
@@ -108,9 +108,9 @@ const Printer = struct {
                         .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{l.dec_bits}),
                         .static_data => |id| try writer.print("literal static_data s{d}", .{@intFromEnum(id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
-                        .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
+                    if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@intFromEnum(proc)});
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -130,6 +130,16 @@ const Printer = struct {
                     }
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
+                    if (s.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
+                    }
                     try writer.writeByte('\n');
                     current = s.next;
                 },
@@ -146,6 +156,16 @@ const Printer = struct {
                     if (s.reuse_closure) try writer.writeAll(" reuse_closure");
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
+                    }
+                    if (s.deferred) try writer.writeAll(" deferred");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
                     current = s.next;
@@ -206,6 +226,11 @@ const Printer = struct {
                     try self.writeTarget(s.target, indent, writer);
                     try writer.writeAll("boxy_dict_ref ");
                     try writeBoxyDictRef(s.dict, writer);
+                    if (s.captures.len != 0) {
+                        try writer.writeAll(" captures=[");
+                        try self.writeLocals(s.captures, writer);
+                        try writer.writeAll("]");
+                    }
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -218,6 +243,17 @@ const Printer = struct {
                         try writeBoxyDescRef(desc, writer);
                     }
                     try writer.print(" mode={s}\n", .{@tagName(s.payload_mode)});
+                    current = s.next;
+                },
+                .assign_boxy_record_update => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_record_update base=l{d} desc=", .{@intFromEnum(s.base)});
+                    try writeBoxyDescRef(s.base_desc, writer);
+                    try writer.print(" fields=l{d} layout=", .{@intFromEnum(s.fields)});
+                    try writeLayout(self.layouts, s.fields_layout, writer);
+                    try writer.writeAll(" desc=");
+                    try writeBoxyDescRef(s.fields_desc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .assign_boxy_reuse_box => |s| {
@@ -266,12 +302,16 @@ const Printer = struct {
                 },
                 .assign_boxy_eq => |s| {
                     try self.writeTarget(s.target, indent, writer);
-                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{
-                        @intFromEnum(s.lhs),
-                        @intFromEnum(s.rhs),
-                    });
-                    try writeBoxyDescRef(s.source_desc, writer);
-                    try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
+                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{ @intFromEnum(s.lhs), @intFromEnum(s.rhs) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
+                .assign_boxy_hash => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_hash value=l{d} hasher=l{d} desc=", .{ @intFromEnum(s.value), @intFromEnum(s.hasher) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .assign_boxy_tag => |s| {
@@ -415,6 +455,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("incref l{d} x{d} ", .{ @intFromEnum(s.value), s.count });
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -422,6 +463,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("decref l{d} ", .{@intFromEnum(s.value)});
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -433,6 +475,7 @@ const Printer = struct {
                         @intFromEnum(s.value),
                     });
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -440,6 +483,7 @@ const Printer = struct {
                     try writeIndent(indent, writer);
                     try writer.print("free l{d} ", .{@intFromEnum(s.value)});
                     try writeRcHelper(s.rc, writer);
+                    try writeAtomicity(s.atomicity, writer);
                     try writer.writeAll("\n");
                     current = s.next;
                 },
@@ -649,6 +693,12 @@ fn writeLayout(layouts: *const layout_mod.Store, idx: layout_mod.Idx, writer: *s
     try writer.print("{s}#{d}", .{ @tagName(layouts.getLayout(idx).tag), raw });
 }
 
+/// Atomic is the default every consumer may assume, so only a
+/// single-threaded count update is marked.
+fn writeAtomicity(atomicity: LIR.RcAtomicity, writer: *std.Io.Writer) Error!void {
+    if (atomicity == .single_thread) try writer.writeAll(" single_thread");
+}
+
 fn writeRcHelper(helper: LIR.RcHelper, writer: *std.Io.Writer) Error!void {
     switch (helper) {
         .concrete => |rc| try writer.print("rc=concrete({s},{d})", .{ @tagName(rc.op), @intFromEnum(rc.layout_idx) }),
@@ -680,6 +730,7 @@ fn writeBoxyDictRef(dict: LIR.BoxyDictRef, writer: *std.Io.Writer) Error!void {
     switch (dict) {
         .static => |id| try writer.print("dict#{d}", .{@intFromEnum(id)}),
         .local => |local| try writer.print("dict=l{d}", .{@intFromEnum(local)}),
+        .runtime => |id| try writer.print("dict=runtime#{d}", .{id}),
     }
 }
 
@@ -692,6 +743,190 @@ fn fixtureTableIndex(comptime index: u32) u32 {
     return index;
 }
 
+/// A fingerprint of a proc's LIR that is the same in every program that
+/// lowers the same procedure the same way: the debug text with every
+/// program-numbered reference renamed. A referenced proc is named by its
+/// content identity; locals, joins, static data, layouts, descriptors,
+/// dictionaries, and the remaining store-numbered ids are renumbered in order
+/// of first appearance, each in its own namespace. The object cache's
+/// diagnostics compare these across programs.
+pub fn procFingerprint(
+    gpa: std.mem.Allocator,
+    store: *const LirStore,
+    layouts: *const layout_mod.Store,
+    proc_id: LIR.LirProcSpecId,
+) Error!u64 {
+    var text: std.Io.Writer.Allocating = .init(gpa);
+    defer text.deinit();
+    try writeProc(gpa, store, layouts, proc_id, &text.writer);
+    const source = text.written();
+
+    var canonical: std.Io.Writer.Allocating = .init(gpa);
+    defer canonical.deinit();
+    var names = std.StringHashMap(std.AutoHashMap(u64, u32)).init(gpa);
+    defer {
+        var iter = names.valueIterator();
+        while (iter.next()) |map| map.deinit();
+        names.deinit();
+    }
+
+    var index: usize = 0;
+    while (index < source.len) {
+        const at_boundary = index == 0 or !isIdentByte(source[index - 1]);
+        if (at_boundary) {
+            if (try canonicalReference(gpa, store, source, index, &names, &canonical.writer)) |next| {
+                index = next;
+                continue;
+            }
+        }
+        try canonical.writer.writeByte(source[index]);
+        index += 1;
+    }
+    return std.hash.Wyhash.hash(0, canonical.written());
+}
+
+fn isIdentByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
+}
+
+fn digitsEnd(source: []const u8, start: usize) usize {
+    var end = start;
+    while (end < source.len and std.ascii.isDigit(source[end])) end += 1;
+    return end;
+}
+
+/// Rewrites the program-numbered reference starting at `start`, if one does,
+/// and returns where it ends.
+fn canonicalReference(
+    gpa: std.mem.Allocator,
+    store: *const LirStore,
+    source: []const u8,
+    start: usize,
+    names: *std.StringHashMap(std.AutoHashMap(u64, u32)),
+    writer: *std.Io.Writer,
+) Error!?usize {
+    // `l12`, `j3`, `p7`, and `static_data s4`.
+    const letter = source[start];
+    if (letter == 'l' or letter == 'j' or letter == 'p' or
+        (letter == 's' and std.mem.endsWith(u8, source[0..start], "static_data ")))
+    {
+        const end = digitsEnd(source, start + 1);
+        if (end > start + 1 and (end == source.len or !isIdentByte(source[end]))) {
+            const value = std.fmt.parseInt(u64, source[start + 1 .. end], 10) catch return null;
+            if (letter == 'p') {
+                const identity = store.getProcSpec(@enumFromInt(@as(u32, @intCast(value)))).identity;
+                try writer.print("p{s}", .{&identity.symbolHex()});
+            } else {
+                try writer.print("{c}{d}", .{ letter, try canonicalId(gpa, names, source[start .. start + 1], value) });
+            }
+            return end;
+        }
+    }
+    // `list#26`, `desc#3`, `dict#1`, and `rc=concrete(decref,26)`; a
+    // `runtime#N` index is a position, not a store id.
+    var word_end = start;
+    while (word_end < source.len and isIdentByte(source[word_end])) word_end += 1;
+    const word = source[start..word_end];
+    if (word.len == 0) return null;
+    if (word_end < source.len and source[word_end] == '#' and !std.mem.eql(u8, word, "runtime")) {
+        const end = digitsEnd(source, word_end + 1);
+        if (end == word_end + 1) return null;
+        const value = std.fmt.parseInt(u64, source[word_end + 1 .. end], 10) catch return null;
+        const namespace: []const u8 = if (std.mem.eql(u8, word, "desc") or std.mem.eql(u8, word, "dict")) word else "layout";
+        try writer.print("{s}#{d}", .{ word, try canonicalId(gpa, names, namespace, value) });
+        return end;
+    }
+    if (std.mem.eql(u8, word, "concrete") and word_end < source.len and source[word_end] == '(') {
+        const comma = std.mem.findScalarPos(u8, source, word_end, ',') orelse return null;
+        const end = digitsEnd(source, comma + 1);
+        if (end == comma + 1) return null;
+        const value = std.fmt.parseInt(u64, source[comma + 1 .. end], 10) catch return null;
+        try writer.print("{s},{d}", .{ source[start..comma], try canonicalId(gpa, names, "layout", value) });
+        return end;
+    }
+    // `name=`, `adapter=`, `method=`, and `site=` carry store ids.
+    for ([_][]const u8{ "name", "adapter", "method", "site" }) |key| {
+        if (!std.mem.eql(u8, word, key) or word_end >= source.len or source[word_end] != '=') continue;
+        const end = digitsEnd(source, word_end + 1);
+        if (end == word_end + 1) return null;
+        const value = std.fmt.parseInt(u64, source[word_end + 1 .. end], 10) catch return null;
+        try writer.print("{s}={d}", .{ key, try canonicalId(gpa, names, key, value) });
+        return end;
+    }
+    return null;
+}
+
+fn canonicalId(
+    gpa: std.mem.Allocator,
+    names: *std.StringHashMap(std.AutoHashMap(u64, u32)),
+    namespace: []const u8,
+    value: u64,
+) Error!u32 {
+    const space = try names.getOrPut(namespace);
+    if (!space.found_existing) space.value_ptr.* = std.AutoHashMap(u64, u32).init(gpa);
+    const entry = try space.value_ptr.getOrPut(value);
+    if (!entry.found_existing) entry.value_ptr.* = @intCast(space.value_ptr.count() - 1);
+    return entry.value_ptr.*;
+}
+
+test "proc fingerprint ignores program numbering but not content" {
+    const allocator = std.testing.allocator;
+    var layouts = try layout_mod.Store.init(allocator, .u64);
+    defer layouts.deinit();
+
+    const Program = struct {
+        fn build(store: *LirStore, padding: usize, callee_identity: u8) std.mem.Allocator.Error!LIR.LirProcSpecId {
+            // Unrelated locals and procs first shift every program-wide number.
+            for (0..padding) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
+            for (0..padding) |index| {
+                _ = try store.addProcSpec(.{
+                    .name = .none,
+                    .identity = LIR.ProcIdentity.forTest(@intCast(100 + index)),
+                    .args = .empty(),
+                    .body = null,
+                    .ret_layout = .u64,
+                }, .none);
+            }
+            const callee = try store.addProcSpec(.{
+                .name = .none,
+                .identity = LIR.ProcIdentity.forTest(callee_identity),
+                .args = .empty(),
+                .body = null,
+                .ret_layout = .str,
+            }, .none);
+            const value = try store.addLocal(.{ .layout_idx = .str });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+            const call = try store.addCFStmt(.{ .assign_call = .{
+                .target = value,
+                .proc = callee,
+                .args = try store.addLocalSpan(&.{}),
+                .next = ret,
+            } }, .test_fixture);
+            return try store.addProcSpec(.{
+                .name = .none,
+                .identity = LIR.ProcIdentity.forTest(1),
+                .args = .empty(),
+                .body = call,
+                .ret_layout = .str,
+            }, .none);
+        }
+    };
+
+    var first = LirStore.init(allocator);
+    defer first.deinit();
+    var second = LirStore.init(allocator);
+    defer second.deinit();
+    var other_callee = LirStore.init(allocator);
+    defer other_callee.deinit();
+    const first_proc = try Program.build(&first, 0, 7);
+    const second_proc = try Program.build(&second, 3, 7);
+    const other_proc = try Program.build(&other_callee, 0, 8);
+
+    const first_print = try procFingerprint(allocator, &first, &layouts, first_proc);
+    try std.testing.expectEqual(first_print, try procFingerprint(allocator, &second, &layouts, second_proc));
+    try std.testing.expect(first_print != try procFingerprint(allocator, &other_callee, &layouts, other_proc));
+}
+
 test "debug print includes boxy RC helper descriptor references" {
     const allocator = std.testing.allocator;
 
@@ -702,19 +937,19 @@ test "debug print includes boxy RC helper descriptor references" {
     defer layouts.deinit();
 
     const value = try store.addLocal(.{ .layout_idx = .str });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const incref = try store.addCFStmt(.{ .incref = .{
         .value = value,
         .rc = .{ .boxy = .{ .static = @enumFromInt(3) } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = .none,
         .identity = LIR.ProcIdentity.forTest(2),
         .args = .empty(),
         .body = incref,
         .ret_layout = .str,
-    });
+    }, .none);
 
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();
@@ -744,7 +979,7 @@ test "debug print includes boxy statement surface" {
     const call_args = try store.addLocalSpan(&.{adapted});
     const hidden_args = try store.addLocalSpan(&.{desc});
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call_dict = .{
         .target = result,
         .dict = .{ .local = dict },
@@ -755,22 +990,14 @@ test "debug print includes boxy statement surface" {
         .result_desc = .{ .local = desc },
         .is_cold = true,
         .next = ret,
-    } });
+    } }, .test_fixture);
     const inspect = try store.addCFStmt(.{ .assign_boxy_inspect = .{
         .target = result,
         .source = adapted,
         .source_desc = .{ .local = desc },
         .source_mode = .borrow,
         .next = call,
-    } });
-    const eq = try store.addCFStmt(.{ .assign_boxy_eq = .{
-        .target = result,
-        .lhs = adapted,
-        .rhs = boxed,
-        .source_desc = .{ .local = desc },
-        .source_mode = .borrow,
-        .next = inspect,
-    } });
+    } }, .test_fixture);
     const adapt = try store.addCFStmt(.{ .assign_boxy_adapt = .{
         .target = adapted,
         .source = unboxed,
@@ -778,8 +1005,8 @@ test "debug print includes boxy statement surface" {
         .source_desc = .{ .local = desc },
         .target_desc = .{ .local = desc },
         .source_mode = .move,
-        .next = eq,
-    } });
+        .next = inspect,
+    } }, .test_fixture);
     const unbox = try store.addCFStmt(.{ .assign_boxy_unbox = .{
         .target = unboxed,
         .source = reused,
@@ -787,13 +1014,13 @@ test "debug print includes boxy statement surface" {
         .target_layout = .str,
         .source_mode = .borrow,
         .next = adapt,
-    } });
+    } }, .test_fixture);
     const reuse = try store.addCFStmt(.{ .assign_boxy_reuse_box = .{
         .target = reused,
         .source = boxed,
         .desc = .{ .local = desc },
         .next = unbox,
-    } });
+    } }, .test_fixture);
     const box = try store.addCFStmt(.{ .assign_boxy_box = .{
         .target = boxed,
         .payload = payload,
@@ -801,24 +1028,24 @@ test "debug print includes boxy statement surface" {
         .payload_desc = .{ .local = desc },
         .payload_mode = .copy,
         .next = reuse,
-    } });
+    } }, .test_fixture);
     const desc_ref = try store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = desc,
         .desc = .{ .static = @enumFromInt(4) },
         .next = box,
-    } });
+    } }, .test_fixture);
     const dict_ref = try store.addCFStmt(.{ .assign_boxy_dict_ref = .{
         .target = dict,
         .dict = .{ .static = @enumFromInt(7) },
         .next = desc_ref,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = .none,
         .identity = LIR.ProcIdentity.forTest(1),
         .args = .empty(),
         .body = dict_ref,
         .ret_layout = .u64,
-    });
+    }, .none);
 
     var buffer: std.Io.Writer.Allocating = .init(allocator);
     defer buffer.deinit();
@@ -831,7 +1058,6 @@ test "debug print includes boxy statement surface" {
     try std.testing.expect(std.mem.find(u8, printed, "l4:opaque_ptr = boxy_reuse_box source=l3 desc=desc=l1\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l5:str = boxy_unbox source=l4 desc=desc=l1 target_layout=str mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l6:opaque_ptr = boxy_adapt source=l5 adapter=5 source_desc=desc=l1 target_desc=desc=l1 mode=move\n") != null);
-    try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_eq lhs=l6 rhs=l3 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = boxy_inspect source=l6 desc=desc=l1 mode=borrow\n") != null);
     try std.testing.expect(std.mem.find(u8, printed, "l7:u64 = call_dict dict=l2 method=0 slot=2 args=[l6] arg_descs=[] hidden=[l1] result_desc=desc=l1 cold=true\n") != null);
 }

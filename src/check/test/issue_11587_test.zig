@@ -36,7 +36,7 @@ test "issue 11587 - effectful method dispatched on Client(_) receiver calling a 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("run!", "Str => Try(Str, [Refused(Str), ..others])");
+    try test_env.assertDefType("run!", "Str => Try(Str, [Refused(Str)])");
 }
 
 test "issue 11587 - pure method dispatched on Client(_) receiver calling a later top-level function" {
@@ -67,7 +67,7 @@ test "issue 11587 - pure method dispatched on Client(_) receiver calling a later
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str), ..others])");
+    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str)])");
 }
 
 test "issue 11587 - mutually recursive methods dispatched on Client(_) receiver calling a later top-level function" {
@@ -103,7 +103,7 @@ test "issue 11587 - mutually recursive methods dispatched on Client(_) receiver 
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str), ..others])");
+    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str)])");
 }
 
 test "issue 11587 - value-typed method dispatched on Client(_) receiver built from a later top-level function" {
@@ -134,7 +134,7 @@ test "issue 11587 - value-typed method dispatched on Client(_) receiver built fr
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str), ..others])");
+    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str)])");
 }
 
 test "issue 11587 - control: same program with the helper declared above the type" {
@@ -165,5 +165,5 @@ test "issue 11587 - control: same program with the helper declared above the typ
     defer test_env.deinit();
 
     try test_env.assertNoErrors();
-    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str), ..others])");
+    try test_env.assertDefType("run", "Str -> Try(Str, [Refused(Str)])");
 }

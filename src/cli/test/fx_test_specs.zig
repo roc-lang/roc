@@ -41,6 +41,11 @@ pub const host_boxed_fn_boundary_test = TestSpec{
 /// These tests work with cross-compilation because they only test
 /// the compiled binary's IO behavior, not build-time features.
 pub const io_spec_tests = [_]TestSpec{
+    .{
+        .roc_file = "test/fx/var_reassign_in_nested_block_expr.roc",
+        .io_spec = "1>in_call_arg: 8|1>in_operand: 9|1>in_record: 8|1>bound_first: 8|1>constant: 8|1>branch_constant: 9|1>list_constant: 3|1>zero_call: 1|1>zero_operand: 1|1>zero_record: 0|1>statement: 8|1>loop: 5|1>list: 3|1>left|1>right|1>ordered: 23|1>early: 7",
+        .description = "Nested mutable variable versions remain in scope through operands and compile-time evaluation (issue #11821)",
+    },
     // Basic effectful function tests
     .{
         .roc_file = "test/fx/app.roc",
@@ -169,6 +174,26 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/runtime_i128_div_rem_mod.roc",
         .io_spec = "0<3|1>unsigned: 42857142857142857142 6 6|1>signed: 42857142857142857142 6 6|1>negative: -42857142857142857142 -6 1",
         .description = "Runtime 128-bit division, remainder and modulo agree across backends and keep the operands' full width",
+    },
+    .{
+        .roc_file = "test/fx/runtime_i128_to_float.roc",
+        .io_spec = "0<3|1>unsigned: 3e20 3e20|1>signed: -3e20 -3e20|1>highest: 3.402823669209385e38 inf",
+        .description = "Runtime 128-bit integer to float conversions agree across backends and keep the operand's full width",
+    },
+    .{
+        .roc_file = "test/fx/runtime_abs_diff.roc",
+        .io_spec = "0<3|1>f64: 1.25 1.25|1>f32: 1.25 1.25|1>i128: 340282366920938463463374607431768211455 340282366920938463463374607431768211455|1>i8: 255 255",
+        .description = "Runtime abs_diff keeps a float difference's fraction and an integer difference wider than the signed operand type",
+    },
+    .{
+        .roc_file = "test/fx/runtime_float_abs_negative_zero.roc",
+        .io_spec = "0<3|1>f64: 9223372036854775808 0 0|1>f32: 2147483648 0 0|1>negative: 1.5 1.5",
+        .description = "Runtime float abs clears the sign of negative zero on every backend",
+    },
+    .{
+        .roc_file = "test/fx/runtime_float_libcalls.roc",
+        .io_spec = "0<3|1>rem: 1.5 1.5 -1.5|1>div_trunc: 3 3|1>floor: Ok(7) Ok(7)|1>ceiling: Ok(8) Ok(8)",
+        .description = "Runtime float remainder and rounding, which compiled code calls the C math library for, agree across backends",
     },
     .{
         .roc_file = "test/fx/runtime_zst_list_ownership.roc",
@@ -427,7 +452,7 @@ pub const io_spec_tests = [_]TestSpec{
     },
     .{
         .roc_file = "test/fx/issue_10368_list_map_reuse.roc",
-        .io_spec = "1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
+        .io_spec = "0<aaaaaaaaaaaaaaaaaaaa|1>one map 0803c9e914002577bbfa01bae7cf9e32a7ef9d1c9e07d19542be4df2c190cbaf|1>two maps f0e5e7a2abe3428a08147f2fbb9eaad2261990945cbfbfcaf37149c6002e215d",
         .description = "Regression test: optimized List.map reuse preserves a shared parameter-derived input",
     },
     .{
@@ -590,6 +615,11 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: F64 comparisons use float instructions, not integer bit-pattern",
     },
     .{
+        .roc_file = "test/fx/numeric_abs_runtime.roc",
+        .io_spec = "1>I128 highest abs_diff lowest: 340282366920938463463374607431768211455|1>I128 lowest abs_diff highest: 340282366920938463463374607431768211455|1>I128 highest abs_diff -1: 170141183460469231731687303715884105728|1>F64 7.5 abs_diff 2.25: 5.25|1>F64 2.25 abs_diff 7.5: 5.25|1>F64 -0.5 abs_diff 2.25: 2.75|1>F64 abs of -0: 0|1>F32 7.5 abs_diff 2.25: 5.25|1>F32 abs of -0: 0",
+        .description = "Regression test: float abs_diff keeps fractions, I128.abs_diff spans the whole range, and abs clears negative zero's sign",
+    },
+    .{
         .roc_file = "test/fx/many_args.roc",
         .io_spec = "1>36",
         .description = "Test: Function with 8 arguments exercises register spilling",
@@ -640,13 +670,18 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Regression test: transitive imports preserve nominal method owner environments for equality",
     },
     .{
+        .roc_file = "test/fx/issue_11839_untransitive_derived_codec/main.roc",
+        .io_spec = "1>\"On\" Ok(W)",
+        .description = "Regression test: a method calling a derived codec of a nominal absent from its type keeps that nominal's owner reachable from importers",
+    },
+    .{
         .roc_file = "test/fx/test_no_dbg.roc",
         .io_spec = "1>Text",
         .description = "Recursive nominal type with List and pattern matching",
     },
     .{
         .roc_file = "test/fx/keep_oks.roc",
-        .io_spec = "1>done",
+        .io_spec = "1>[1.0]",
         .description = "Regression test: Monomorphize panic when callback always returns Ok but match expects Err tag",
     },
     .{

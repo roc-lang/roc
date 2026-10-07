@@ -3,13 +3,13 @@ JsonEncodeNullContainerEdgeCases :: [].{}
 expect {
 	result : Try(Str, [InvalidJson(Str)])
 	result = Json.parse("null")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
 	result : Try(List(Str), [InvalidJson(Str)])
 	result = Json.parse("[\"a\",null]")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {
@@ -27,7 +27,7 @@ expect {
 expect {
 	result : Try({ optional : Try(Str, [Missing]) }, [InvalidJson(Str)])
 	result = Json.parse("{\"optional\":null}")
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 expect {

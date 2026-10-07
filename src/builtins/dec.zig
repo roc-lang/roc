@@ -12,6 +12,9 @@ const U256 = @import("num.zig").U256;
 const TestEnv = @import("utils.zig").TestEnv;
 const WithOverflow = @import("utils.zig").WithOverflow;
 const NumParseResult = @import("num.zig").NumParseResult;
+const NumPrefixParseResult = @import("num.zig").NumPrefixParseResult;
+const prefix_parse_not_a_number = @import("num.zig").prefix_parse_not_a_number;
+const prefix_parse_out_of_range = @import("num.zig").prefix_parse_out_of_range;
 const RocOps = @import("host_abi.zig").RocOps;
 const RocStr = @import("str.zig").RocStr;
 const mul_u128 = @import("num.zig").mul_u128;
@@ -100,36 +103,6 @@ fn scaledI128ToF32(scaled: i128) f32 {
     return @bitCast((sign_bit << 31) | (biased_exponent << 23) | fraction);
 }
 
-/// Convert an IEEE binary32 value directly to the exact Dec scale, truncating
-/// toward zero without any binary64 arithmetic.
-fn f32ToScaledI128(value: f32) ?i128 {
-    const raw: u32 = @bitCast(value);
-    const negative = (raw >> 31) != 0;
-    const raw_exponent = (raw >> 23) & 0xff;
-    if (raw_exponent == 0xff) return null;
-    if (raw_exponent == 0) return 0;
-
-    const fraction = raw & 0x007f_ffff;
-    const significand: u128 = (@as(u128, 1) << 23) | fraction;
-    const scaled_significand = i128h.mul_u128_lo(significand, @intCast(RocDec.one_point_zero_i128));
-    const shift = @as(i32, @intCast(raw_exponent)) - 127 - 23;
-    const magnitude: u128 = if (shift >= 0) blk: {
-        if (shift >= 128) return null;
-        const amount: u7 = @intCast(shift);
-        if (scaled_significand > i128h.shr(std.math.maxInt(u128), amount)) return null;
-        break :blk i128h.shl(scaled_significand, amount);
-    } else blk: {
-        const amount: u32 = @intCast(-shift);
-        break :blk if (amount >= 128) 0 else i128h.shr(scaled_significand, @intCast(amount));
-    };
-
-    const negative_limit = i128h.shl(@as(u128, 1), 127);
-    const positive_limit: u128 = @bitCast(@as(i128, std.math.maxInt(i128)));
-    if ((!negative and magnitude > positive_limit) or (negative and magnitude > negative_limit)) return null;
-    if (!negative) return @intCast(magnitude);
-    return @bitCast(0 -% magnitude);
-}
-
 /// Roc's fixed-point decimal runtime representation.
 ///
 /// `num` stores the decimal value scaled by 10^18, so `1.0` is represented as
@@ -139,7 +112,6 @@ pub const RocDec = extern struct {
     num: i128,
 
     pub const decimal_places: u5 = 18;
-    pub const whole_number_places: u5 = 21;
     pub const max_digits: u6 = 39;
     pub const max_str_length: u6 = max_digits + 2; // + 2 here to account for the sign & decimal dot
 
@@ -177,25 +149,6 @@ pub const RocDec = extern struct {
             decimal_places - @as(u5, @intCast(denominator_power));
         const scale = i128h.pow10_i128(@intCast(scale_power));
         return .{ .num = i128h.mul_i128(numerator, scale) };
-    }
-
-    pub fn fromF64(num: f64) ?RocDec {
-        const result: f64 = num * comptime @as(f64, @floatFromInt(one_point_zero_i128));
-
-        if (result > comptime @as(f64, @floatFromInt(math.maxInt(i128)))) {
-            return null;
-        }
-
-        if (result < comptime @as(f64, @floatFromInt(math.minInt(i128)))) {
-            return null;
-        }
-
-        const ret: RocDec = .{ .num = i128h.f64_to_i128(result) };
-        return ret;
-    }
-
-    pub fn fromF32(num: f32) ?RocDec {
-        return .{ .num = f32ToScaledI128(num) orelse return null };
     }
 
     pub fn toF64(dec: RocDec) f64 {
@@ -323,10 +276,6 @@ pub const RocDec = extern struct {
         return self.num;
     }
 
-    pub fn fromI128(num: i128) RocDec {
-        return .{ .num = num };
-    }
-
     /// Extract the whole number part of a Dec via truncating division.
     /// Truncates toward zero: -1.5 → -1, 1.5 → 1
     pub fn toWholeInt(self: RocDec) i128 {
@@ -376,21 +325,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal addition overflowed!");
-            unreachable; // The host should handle the crash
-        } else {
-            return answer.value;
-        }
-    }
-
-    pub fn addSaturated(self: RocDec, other: RocDec) RocDec {
-        const answer = RocDec.addWithOverflow(self, other);
-        if (answer.has_overflowed) {
-            // We can unambiguously tell which way it wrapped, because we have 129 bits including the overflow bit
-            if (answer.value.num < 0) {
-                return RocDec.max;
-            } else {
-                return RocDec.min;
-            }
         } else {
             return answer.value;
         }
@@ -411,20 +345,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal subtraction overflowed!");
-            unreachable; // The host should handle the crash
-        } else {
-            return answer.value;
-        }
-    }
-
-    pub fn subSaturated(self: RocDec, other: RocDec) RocDec {
-        const answer = RocDec.subWithOverflow(self, other);
-        if (answer.has_overflowed) {
-            if (answer.value.num < 0) {
-                return RocDec.max;
-            } else {
-                return RocDec.min;
-            }
         } else {
             return answer.value;
         }
@@ -514,37 +434,7 @@ pub const RocDec = extern struct {
     }
 
     // Returns the largest integer less than or equal to itself
-    fn floor(
-        arg1: RocDec,
-        roc_ops: *RocOps,
-    ) RocDec {
-        const tmp = arg1.trunc(roc_ops);
-
-        if (arg1.num < 0 and arg1.fract().num != 0) {
-            return RocDec.sub(tmp, RocDec.one_point_zero, roc_ops);
-        } else {
-            return tmp;
-        }
-    }
-
     // Returns the smallest integer greater than or equal to itself
-    fn ceiling(
-        arg1: RocDec,
-        roc_ops: *RocOps,
-    ) RocDec {
-        const tmp = arg1.trunc(roc_ops);
-
-        if (arg1.num > 0 and arg1.fract().num != 0) {
-            return RocDec.add(
-                tmp,
-                RocDec.one_point_zero,
-                roc_ops,
-            );
-        } else {
-            return tmp;
-        }
-    }
-
     pub fn powInt(
         base: RocDec,
         exponent: i128,
@@ -576,7 +466,6 @@ pub const RocDec = extern struct {
             );
         } else if (base.num <= 0) {
             roc_ops.crash("Decimal power is undefined for non-positive base and fractional exponent!");
-            unreachable;
         } else {
             const log_base = decLnPositive(base, roc_ops);
             const scaled_exponent = RocDec.mul(log_base, exponent, roc_ops);
@@ -591,7 +480,6 @@ pub const RocDec = extern struct {
         // sqrt(-n) is an error
         if (self.num < 0) {
             roc_ops.crash("Decimal square root of a negative number!");
-            unreachable;
         }
 
         return decSqrtNonNegative(self);
@@ -606,20 +494,6 @@ pub const RocDec = extern struct {
 
         if (answer.has_overflowed) {
             roc_ops.crash("Decimal multiplication overflowed!");
-            unreachable; // The host should handle the crash
-        } else {
-            return answer.value;
-        }
-    }
-
-    pub fn mulSaturated(self: RocDec, other: RocDec) RocDec {
-        const answer = RocDec.mulWithOverflow(self, other);
-        if (answer.has_overflowed) {
-            if (answer.value.num < 0) {
-                return RocDec.max;
-            } else {
-                return RocDec.min;
-            }
         } else {
             return answer.value;
         }
@@ -700,7 +574,6 @@ pub const RocDec = extern struct {
     pub fn asin(self: RocDec, roc_ops: *RocOps) RocDec {
         if (self.num > RocDec.one_point_zero.num or self.num < RocDec.neg_one_point_zero.num) {
             roc_ops.crash("Decimal asin input is outside [-1, 1]!");
-            unreachable;
         }
         if (self.num == RocDec.one_point_zero.num) return RocDec.half_pi;
         if (self.num == RocDec.neg_one_point_zero.num) return RocDec{ .num = -RocDec.half_pi.num };
@@ -924,7 +797,6 @@ fn decRemKnownNonZero(self: RocDec, other: RocDec) RocDec {
 fn decLnPositive(value: RocDec, roc_ops: *RocOps) RocDec {
     if (value.num <= 0) {
         roc_ops.crash("Decimal log is undefined for non-positive input!");
-        unreachable;
     }
 
     var reduced = value;
@@ -1388,6 +1260,23 @@ const expectEqualSlices = std.testing.expectEqualSlices;
 
 // exports
 
+/// Parse a Dec from the longest Dec token at the start of `bytes`.
+///
+/// A Dec token is `sign? (D+ | D+ . D* | . D+) (e sign? D (_? D)*)?` with `_`
+/// only between digits. A matched token that is not exactly representable as a
+/// Dec (out of range, or more fractional precision than Dec has) reports
+/// `prefix_parse_out_of_range`, exactly as `from_str` of that token fails.
+pub fn parsePrefix(bytes: []const u8) NumPrefixParseResult(i128) {
+    const consumed = decimal_parse.prefixLen(bytes, .dec);
+    if (consumed == 0) {
+        return .{ .value = 0, .consumed = 0, .errorcode = prefix_parse_not_a_number };
+    }
+    if (RocDec.fromNonemptySlice(bytes[0..consumed])) |dec| {
+        return .{ .value = dec.num, .consumed = consumed, .errorcode = 0 };
+    }
+    return .{ .value = 0, .consumed = consumed, .errorcode = prefix_parse_out_of_range };
+}
+
 /// C ABI parse wrapper. Returns errorcode 0 with the scaled i128 on success, or
 /// errorcode 1 with value 0 for any invalid or out-of-range decimal string.
 pub fn fromStr(arg: RocStr) callconv(.c) NumParseResult(i128) {
@@ -1404,34 +1293,6 @@ pub fn to_str(
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
     return @call(.always_inline, RocDec.to_str, .{ arg, roc_ops });
-}
-
-/// C ABI conversion wrapper from f64 to Dec. Crashes through RocOps if the
-/// scaled value is outside Dec's i128 range.
-pub fn fromF64C(
-    arg: f64,
-    roc_ops: *RocOps,
-) callconv(.c) i128 {
-    if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
-        return dec.num;
-    } else {
-        roc_ops.crash("Decimal conversion from f64 failed!");
-        unreachable;
-    }
-}
-
-/// C ABI conversion wrapper from f32 to Dec. Crashes through RocOps if the
-/// scaled value is outside Dec's i128 range.
-pub fn fromF32C(
-    arg_f32: f32,
-    roc_ops: *RocOps,
-) callconv(.c) i128 {
-    if (@call(.always_inline, RocDec.fromF32, .{arg_f32})) |dec| {
-        return dec.num;
-    } else {
-        roc_ops.crash("Decimal conversion from f32!");
-        unreachable;
-    }
 }
 
 /// C ABI conversion wrapper from Dec to f64.
@@ -1471,27 +1332,6 @@ pub fn toIntTry(comptime T: type, arg: RocDec) ?T {
     return @intCast(whole_part);
 }
 
-/// Export an integer-to-Dec conversion wrapper for type T. The generated
-/// function scales the integer by 10^18 and crashes through RocOps on overflow.
-pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(
-            self: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) i128 {
-            const this = @as(i128, @intCast(self));
-
-            const answer = @import("num.zig").mulWithOverflow(i128, this, RocDec.one_point_zero_i128);
-            if (answer.has_overflowed) {
-                roc_ops.crash("Decimal conversion from Integer failed!");
-            } else {
-                return answer.value;
-            }
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
 /// C ABI conversion wrapper from u64 to Dec. Every u64 value fits in Dec.
 pub fn fromU64C(arg: u64) callconv(.c) i128 {
     return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
@@ -1500,63 +1340,6 @@ pub fn fromU64C(arg: u64) callconv(.c) i128 {
 /// C ABI wrapper that returns the raw scaled i128 backing a Dec.
 pub fn toI128(arg: RocDec) callconv(.c) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
-}
-
-/// C ABI wrapper that builds a Dec from an already scaled i128.
-pub fn fromI128(arg: i128) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.fromI128, .{arg});
-}
-
-/// C ABI equality comparison wrapper.
-pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
-    return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
-}
-
-/// C ABI inequality comparison wrapper.
-pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.c) bool {
-    return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
-}
-
-/// C ABI negation wrapper. Crashes through RocOps when negating Dec.lowest
-/// would overflow.
-pub fn negateC(
-    arg: RocDec,
-    roc_ops: *RocOps,
-) callconv(.c) i128 {
-    return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
-        roc_ops.crash("Decimal negation overflow!");
-        unreachable;
-    };
-}
-
-/// C ABI absolute-value wrapper. Crashes through RocOps when abs(Dec.lowest)
-/// would overflow.
-pub fn absC(
-    arg: RocDec,
-    roc_ops: *RocOps,
-) callconv(.c) i128 {
-    const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
-        roc_ops.crash("Decimal absolute value overflow!");
-        unreachable;
-    };
-    return result.num;
-}
-
-/// C ABI checked-add wrapper. Returns a result value plus an overflow flag.
-pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
-    return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
-}
-
-/// C ABI checked-subtract wrapper. Returns a result value plus an overflow
-/// flag.
-pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
-    return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
-}
-
-/// C ABI checked-multiply wrapper. Returns a result value plus an overflow
-/// flag.
-pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.c) WithOverflow(RocDec) {
-    return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
 /// C ABI division wrapper. Crashes through RocOps on division by zero or
@@ -1662,34 +1445,6 @@ pub fn atan2C(y: RocDec, x: RocDec, roc_ops: *RocOps) callconv(.c) i128 {
     return RocDec.atan2(y, x, roc_ops).num;
 }
 
-/// C ABI addition wrapper that crashes through RocOps on overflow.
-pub fn addOrPanicC(
-    arg1: RocDec,
-    arg2: RocDec,
-    roc_ops: *RocOps,
-) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.add, .{ arg1, arg2, roc_ops });
-}
-
-/// C ABI saturated-add wrapper. Overflow clamps to RocDec.min or RocDec.max.
-pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
-}
-
-/// C ABI subtraction wrapper that crashes through RocOps on overflow.
-pub fn subOrPanicC(
-    arg1: RocDec,
-    arg2: RocDec,
-    roc_ops: *RocOps,
-) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.sub, .{ arg1, arg2, roc_ops });
-}
-
-/// C ABI saturated-subtract wrapper. Overflow clamps to RocDec.min or RocDec.max.
-pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
-}
-
 /// C ABI multiplication wrapper that crashes through RocOps on overflow.
 pub fn mulOrPanicC(
     arg1: RocDec,
@@ -1697,51 +1452,6 @@ pub fn mulOrPanicC(
     roc_ops: *RocOps,
 ) callconv(.c) RocDec {
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2, roc_ops });
-}
-
-/// C ABI saturated-multiply wrapper. Overflow clamps to RocDec.min or RocDec.max.
-pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.c) RocDec {
-    return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
-}
-
-/// Export a Dec rounding wrapper for integer return type T. The generated
-/// function rounds away from zero on half values and returns the whole part.
-pub fn exportRound(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(
-            input: RocDec,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            return @as(T, @intCast(i128h.divFloor_i128(input.round(roc_ops).num, RocDec.one_point_zero_i128)));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Export a Dec floor wrapper for integer return type T.
-pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(
-            input: RocDec,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            return @as(T, @intCast(i128h.divFloor_i128(input.floor(roc_ops).num, RocDec.one_point_zero_i128)));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-/// Export a Dec ceiling wrapper for integer return type T.
-pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
-    const f = struct {
-        fn func(
-            input: RocDec,
-            roc_ops: *RocOps,
-        ) callconv(.c) T {
-            return @as(T, @intCast(i128h.divFloor_i128(input.ceiling(roc_ops).num, RocDec.one_point_zero_i128)));
-        }
-    }.func;
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 fn expectRocDecConstant(actual: RocDec, expected_text: []const u8) error{ InvalidExpectedDecimal, TestExpectedEqual }!void {
@@ -1771,23 +1481,7 @@ test "fromU64" {
     try std.testing.expectEqual(RocDec{ .num = 25000000000000000000 }, dec);
 }
 
-test "fromF64" {
-    const dec = RocDec.fromF64(25.5);
-    try std.testing.expectEqual(RocDec{ .num = 25500000000000000000 }, dec.?);
-}
-
-test "fromF64 overflow" {
-    const dec = RocDec.fromF64(1e308);
-    try std.testing.expectEqual(dec, null);
-}
-
-test "F32 and Dec convert directly without binary64 intermediates" {
-    try std.testing.expectEqual(
-        RocDec{ .num = 100000001490116119 },
-        RocDec.fromF32(@bitCast(@as(u32, 0x3dcc_cccd))).?,
-    );
-    try std.testing.expectEqual(@as(?RocDec, null), RocDec.fromF32(std.math.inf(f32)));
-
+test "Dec converts to F32 directly without a binary64 intermediate" {
     // This exact Dec value lies on the side of an F32 rounding boundary that
     // a Dec -> F64 -> F32 double rounding gets wrong by one F32 ULP.
     try std.testing.expectEqual(
@@ -2943,4 +2637,74 @@ test "Dec atan2 f128 oracle within 64 attos across full coordinate range" {
     for (cases) |case| try expectDecWithin(case.expected, RocDec.atan2(.{ .num = case.y }, .{ .num = case.x }, env.getOps()), 64);
     try std.testing.expectEqual(@as(i128, 0), RocDec.atan2(.{ .num = 0 }, .{ .num = 0 }, env.getOps()).num);
     try std.testing.expectEqual(RocDec.pi.num, RocDec.atan2(.{ .num = 0 }, .{ .num = -1 }, env.getOps()).num);
+}
+
+fn expectDecPrefixOk(text: []const u8, expected_text: []const u8, consumed: usize) (@import("num.zig").PrefixTestError || error{InvalidExpectedDecimal})!void {
+    const result = parsePrefix(text);
+    try std.testing.expectEqual(@as(u8, 0), result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+    try std.testing.expectEqual(try decFromText(expected_text), RocDec{ .num = result.value });
+}
+
+fn expectDecPrefixErr(text: []const u8, errorcode: u8, consumed: usize) @import("num.zig").PrefixTestError!void {
+    const result = parsePrefix(text);
+    try std.testing.expectEqual(errorcode, result.errorcode);
+    try std.testing.expectEqual(@as(u64, consumed), result.consumed);
+}
+
+test "parsePrefix Dec mantissa and exponent forms" {
+    try expectDecPrefixOk("1.", "1", 2);
+    try expectDecPrefixOk("1.x", "1", 2);
+    try expectDecPrefixOk("-.5,", "-0.5", 3);
+    try expectDecPrefixOk("1.5e3]", "1500", 5);
+    try expectDecPrefixOk("2e-1 ", "0.2", 4);
+    try expectDecPrefixOk("2e", "2", 1);
+    try expectDecPrefixOk("2e+", "2", 1);
+    try expectDecPrefixOk("2e-", "2", 1);
+    try expectDecPrefixOk("1_000.5_0,", "1000.5", 9);
+    try expectDecPrefixOk("1_", "1", 1);
+    try expectDecPrefixOk("1._5", "1", 2);
+    try expectDecPrefixOk("1.2.3", "1.2", 3);
+    try expectDecPrefixOk("1e-18,", "0.000000000000000001", 5);
+    try expectDecPrefixOk("0x1", "0", 1);
+    try expectDecPrefixOk("170141183460469231731.687303715884105727,", "170141183460469231731.687303715884105727", 40);
+
+    try expectDecPrefixErr("", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("-", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr(".", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("inf", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr("nan", prefix_parse_not_a_number, 0);
+    try expectDecPrefixErr(" 1", prefix_parse_not_a_number, 0);
+}
+
+test "parsePrefix Dec reports inexact and out-of-range tokens as out of range" {
+    // A Dec token that is not exactly representable (more than 18 fractional
+    // digits of precision) fails `from_str` for a non-range reason. It is still
+    // a complete token, so the prefix result is `prefix_parse_out_of_range`.
+    try expectDecPrefixErr("0.1234567890123456789,", prefix_parse_out_of_range, 21);
+    try expectDecPrefixErr("1e-19,", prefix_parse_out_of_range, 5);
+    try expectDecPrefixErr("170141183460469231731.687303715884105728,", prefix_parse_out_of_range, 40);
+    try expectDecPrefixErr("1e40", prefix_parse_out_of_range, 4);
+}
+
+fn decPrefixLen(bytes: []const u8) usize {
+    return decimal_parse.prefixLen(bytes, .dec);
+}
+
+fn decWhole(bytes: []const u8) ?i128 {
+    if (bytes.len == 0) return null;
+    const parsed = RocDec.fromNonemptySlice(bytes) orelse return null;
+    return parsed.num;
+}
+
+test "parsePrefix Dec properties over generated token compositions" {
+    var prng = std.Random.DefaultPrng.init(0x7010_dec0_0001);
+    const random = prng.random();
+    var buf: [48]u8 = undefined;
+
+    var iteration: usize = 0;
+    while (iteration < 20_000) : (iteration += 1) {
+        const text = @import("num.zig").prefix_parse_testing.randomText(random, &buf);
+        try @import("num.zig").prefix_parse_testing.expectProperties(i128, text, decPrefixLen, parsePrefix, decWhole);
+    }
 }

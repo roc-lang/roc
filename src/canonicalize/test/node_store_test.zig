@@ -118,6 +118,15 @@ test "NodeStore round trip - Statements" {
 
     try statements.append(gpa, CIR.Statement{
         .s_for = .{
+            .kind = .iter,
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try statements.append(gpa, CIR.Statement{
+        .s_for = .{
+            .kind = .stream,
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
@@ -291,7 +300,7 @@ test "NodeStore round trip - Expressions" {
             .parts = CIR.Expr.Span{ .span = rand_span() },
             .method_name_region = rand_region(),
             .constraint_fn_var = rand_idx(types.Var),
-            .step_fn_var = rand_idx(types.Var),
+            .assembler_fn_var = rand_idx(types.Var),
             .dispatcher_var = rand_idx(types.Var),
         },
     });
@@ -370,7 +379,7 @@ test "NodeStore round trip - Expressions" {
         .e_if = .{
             .branches = CIR.Expr.IfBranch.Span{ .span = rand_span() },
             .final_else = rand_idx(CIR.Expr.Idx),
-            .warn_unused_branches = true,
+            .origin = .source,
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -498,7 +507,16 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_type_dispatch_call = .{
-            .type_dispatch_stmt = rand_idx(CIR.Statement.Idx),
+            .owner = .{ .statement = rand_idx(CIR.Statement.Idx) },
+            .method_name = rand_ident_idx(),
+            .method_name_region = rand_region(),
+            .args = CIR.Expr.Span{ .span = rand_span() },
+            .constraint_fn_var = rand_idx(types.Var),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_type_dispatch_call = .{
+            .owner = .{ .dispatcher = rand_idx(types.Var) },
             .method_name = rand_ident_idx(),
             .method_name_region = rand_region(),
             .args = CIR.Expr.Span{ .span = rand_span() },
@@ -567,6 +585,7 @@ test "NodeStore round trip - Expressions" {
         .e_derived_method = .{
             .ident = rand_ident_idx(),
             .kind = .encoder,
+            .owner = rand_idx(CIR.Statement.Idx),
         },
     });
     try expressions.append(gpa, CIR.Expr{
@@ -587,6 +606,15 @@ test "NodeStore round trip - Expressions" {
     });
     try expressions.append(gpa, CIR.Expr{
         .e_for = .{
+            .kind = .iter,
+            .patt = rand_idx(CIR.Pattern.Idx),
+            .expr = rand_idx(CIR.Expr.Idx),
+            .body = rand_idx(CIR.Expr.Idx),
+        },
+    });
+    try expressions.append(gpa, CIR.Expr{
+        .e_for = .{
+            .kind = .stream,
             .patt = rand_idx(CIR.Pattern.Idx),
             .expr = rand_idx(CIR.Expr.Idx),
             .body = rand_idx(CIR.Expr.Idx),
@@ -798,7 +826,7 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
-        .invalid_string_interpolation = .{
+        .expr_syntax_error = .{
             .region = rand_region(),
         },
     });
@@ -817,36 +845,6 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .pattern_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .can_lambda_not_implemented = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .lambda_body_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_condition_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_then_not_canonicalized = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .if_else_not_canonicalized = .{
             .region = rand_region(),
         },
     });
@@ -1103,6 +1101,14 @@ test "NodeStore round trip - Diagnostics" {
     });
 
     try diagnostics.append(gpa, CIR.Diagnostic{
+        .duplicate_pattern_binder = .{
+            .ident = rand_ident_idx(),
+            .duplicate_region = rand_region(),
+            .original_region = rand_region(),
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
         .duplicate_tag = .{
             .tag_name = rand_ident_idx(),
             .duplicate_region = rand_region(),
@@ -1112,22 +1118,6 @@ test "NodeStore round trip - Diagnostics" {
 
     try diagnostics.append(gpa, CIR.Diagnostic{
         .f64_pattern_literal = .{
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .unused_type_var_name = .{
-            .name = rand_ident_idx(),
-            .suggested_name = rand_ident_idx(),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .type_var_marked_unused = .{
-            .name = rand_ident_idx(),
-            .suggested_name = rand_ident_idx(),
             .region = rand_region(),
         },
     });
@@ -1150,12 +1140,6 @@ test "NodeStore round trip - Diagnostics" {
     try diagnostics.append(gpa, CIR.Diagnostic{
         .underscore_in_type_declaration = .{
             .declared = rand.random().enumValue(CIR.DeclaredTypeKind),
-            .region = rand_region(),
-        },
-    });
-
-    try diagnostics.append(gpa, CIR.Diagnostic{
-        .tuple_elem_not_canonicalized = .{
             .region = rand_region(),
         },
     });
@@ -1304,6 +1288,21 @@ test "NodeStore round trip - Diagnostics" {
         .return_outside_fn = .{
             .region = rand_region(),
             .context = .return_statement,
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .control_flow_in_expect = .{
+            .region = rand_region(),
+            .kind = .try_suffix,
+        },
+    });
+
+    try diagnostics.append(gpa, CIR.Diagnostic{
+        .var_reassigned_in_expect = .{
+            .ident = rand_ident_idx(),
+            .region = rand_region(),
+            .declaration_region = rand_region(),
         },
     });
 
@@ -1931,14 +1930,4 @@ test "write occurrences preserve binding identity and token regions across CIR c
     var mutable = try stored.deserializeWithCopy(@intFromPtr(buffer.ptr), gpa);
     defer mutable.regions.deinit(gpa);
     try testing.expectEqualDeep(original.write_occurrences.items.items, mutable.write_occurrences.items.items);
-
-    // Relocation must move the new table along with the existing CIR columns.
-    const moved_buffer = try gpa.alignedAlloc(u8, .@"16", buffer.len);
-    defer gpa.free(moved_buffer);
-    @memcpy(moved_buffer, buffer);
-    var moved = restored;
-    const delta = @as(isize, @intCast(@intFromPtr(moved_buffer.ptr))) - @as(isize, @intCast(@intFromPtr(buffer.ptr)));
-    moved.relocate(delta);
-    try testing.expectEqual(@intFromPtr(restored.write_occurrences.items.items.ptr) +% @as(usize, @bitCast(delta)), @intFromPtr(moved.write_occurrences.items.items.ptr));
-    try testing.expectEqualDeep(original.write_occurrences.items.items, moved.write_occurrences.items.items);
 }

@@ -4,7 +4,6 @@
 //! then emit a relocation to the listed `roc_builtins_*` symbol.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const WasmModule = @import("WasmModule.zig");
 const SymbolIndex = @import("index_types.zig").SymbolIndex;
 
@@ -68,6 +67,12 @@ pub const BuiltinKind = enum {
     int_from_str,
     dec_from_str,
     float_from_str,
+    int_from_str_prefix,
+    int_from_utf8_prefix,
+    dec_from_str_prefix,
+    dec_from_utf8_prefix,
+    float_from_str_prefix,
+    float_from_utf8_prefix,
     str_equal,
     str_split_first,
     str_split_last,
@@ -90,6 +95,12 @@ pub const BuiltinKind = enum {
     str_escape_and_quote,
     str_from_utf8,
     str_from_utf8_result,
+    str_from_utf8_validated,
+    str_from_utf16_le_short,
+    str_from_utf16_be_short,
+    str_from_utf32_le_short,
+    str_from_utf32_be_short,
+
     list_append_unsafe,
     list_concat,
     list_append_range_within,
@@ -100,9 +111,12 @@ pub const BuiltinKind = enum {
     list_slack_unique,
     list_owned_unique,
     list_drop_at,
+    list_prepend,
     list_reserve,
+    list_reserve_for_append,
     list_replace,
     list_set,
+    list_sublist,
     list_swap,
     list_eq,
     list_str_eq,
@@ -219,19 +233,6 @@ pub fn sigOf(kind: BuiltinKind) Sig {
 
 /// Relocation symbol table indexed by builtin kind.
 pub const SymbolTable = std.enums.EnumArray(BuiltinKind, SymbolIndex);
-
-/// Declare every builtin wrapper as an undefined function symbol in a generated
-/// relocatable wasm object.
-pub fn declareUndefinedRelocs(module: *WasmModule) Allocator.Error!SymbolTable {
-    var result = SymbolTable.initUndefined();
-    inline for (std.meta.tags(BuiltinKind)) |kind| {
-        const sig = sigOf(kind);
-        const type_idx = try module.addFuncType(sig.wasm_params, sig.wasm_results);
-        const imported = try module.addFunctionImportWithSymbol("env", sig.name, type_idx);
-        result.set(kind, imported.symbol);
-    }
-    return result;
-}
 
 /// Locate builtin function symbols in a merged wasm module.
 pub fn populateForRelocs(module: *const WasmModule) WasmModule.SymbolLookupError!SymbolTable {

@@ -31,6 +31,7 @@
 //! the matched chain is that local's only use.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -64,7 +65,7 @@ pub fn run(store: *LirStore) ResourceError!void {
         const admitted = store.getProcSpec(proc_id).shapes.str_call;
         if (!admitted and builtin.mode != .Debug) continue;
         const rewrote = try pass.transformProc(proc_id);
-        if (rewrote and !admitted) @panic("string-append pass rewrote a procedure whose shapes excluded it");
+        if (rewrote and !admitted) invariant("{s}", .{"string-append pass rewrote a procedure whose shapes excluded it"});
     }
 }
 
@@ -127,13 +128,14 @@ const StrAppendPass = struct {
             try args.append(self.store.allocator, GuardedList.at(call_args, index));
         }
 
-        self.store.getCFStmtPtr(call_stmt_id).* = .{ .assign_call = .{
+        const fused_args = try self.store.addLocalSpan(args.items);
+        try self.store.replaceCFStmt(call_stmt_id, .{ .assign_call = .{
             .target = concat_stmt.target,
             .proc = variant,
-            .args = try self.store.addLocalSpan(args.items),
+            .args = fused_args,
             .is_cold = call_stmt.is_cold,
             .next = concat_stmt.next,
-        } };
+        } }, fuseOrigin(self.store.stmtOrigin(call_stmt_id)));
 
         return true;
     }
@@ -159,6 +161,13 @@ const StrAppendPass = struct {
     }
 };
 
+/// Origin of a statement this pass produces in place of `rewritten`.
+fn fuseOrigin(rewritten: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = rewritten;
+    origin.kind = .str_append_fuse;
+    return origin;
+}
+
 fn isStrLayout(layout_idx: layout_mod.Idx) bool {
     return layout_idx == .str;
 }
@@ -169,41 +178,37 @@ fn isStrLayout(layout_idx: layout_mod.Idx) bool {
 const AppendRewriter = struct {
     accumulator: LocalId,
 
-    pub fn cloneRet(self: *AppendRewriter, cloner: anytype, value: LocalId) ResourceError!CFStmtId {
+    pub fn cloneRet(self: *AppendRewriter, cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
+        const fused = fuseOrigin(origin);
         const target = try cloner.addTemp(.str);
-        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = target } });
-        return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), ret_stmt);
+        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = target } }, fused);
+        return try self.concatInto(cloner, target, self.accumulator, try cloner.mapLocal(value), fused, ret_stmt);
     }
 
-    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt) ResourceError!?CFStmtId {
+    pub fn interceptStmt(self: *AppendRewriter, cloner: anytype, _: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         if (stmt == .assign_low_level) {
             const s = stmt.assign_low_level;
             if (s.op == .str_concat and cloner.directReturnOf(s.next, s.target)) {
-                return try self.cloneConcatReturn(cloner, s);
+                return .{ .done = try self.cloneConcatReturn(cloner, s, origin) };
             }
         }
-        return null;
+        return .none;
     }
 
-    fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype) ResourceError!CFStmtId {
+    fn cloneConcatReturn(self: *AppendRewriter, cloner: anytype, s: anytype, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const args = cloner.store.getLocalSpan(s.args);
-        if (args.len != 2) return try self.cloneRet(cloner, s.target);
+        if (args.len != 2) return try self.cloneRet(cloner, s.target, origin);
 
+        const fused = fuseOrigin(origin);
         const first_append = try cloner.addTemp(.str);
         const final = try cloner.mapLocal(s.target);
-        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = final } });
-        const second = try self.concatInto(cloner, final, first_append, try cloner.mapLocal(GuardedList.at(args, 1)), ret_stmt);
-        return try self.concatInto(cloner, first_append, self.accumulator, try cloner.mapLocal(GuardedList.at(args, 0)), second);
+        const ret_stmt = try cloner.store.addCFStmt(.{ .ret = .{ .value = final } }, fused);
+        const second = try self.concatInto(cloner, final, first_append, try cloner.mapLocal(GuardedList.at(args, 1)), fused, ret_stmt);
+        return try self.concatInto(cloner, first_append, self.accumulator, try cloner.mapLocal(GuardedList.at(args, 0)), fused, second);
     }
 
-    fn concatInto(_: *AppendRewriter, cloner: anytype, target: LocalId, left: LocalId, right: LocalId, next: CFStmtId) ResourceError!CFStmtId {
-        return try cloner.store.addCFStmt(.{ .assign_low_level = .{
-            .target = target,
-            .op = .str_concat,
-            .rc_effect = LowLevelOp.str_concat.rcEffect(),
-            .args = try cloner.store.addLocalSpan(&.{ left, right }),
-            .next = next,
-        } });
+    fn concatInto(_: *AppendRewriter, cloner: anytype, target: LocalId, left: LocalId, right: LocalId, origin: LIR.StmtOrigin, next: CFStmtId) ResourceError!CFStmtId {
+        return try cloner.store.addLowLevelStmt(target, .str_concat, &.{ left, right }, next, origin);
     }
 };
 
@@ -213,7 +218,7 @@ fn testStrLocal(store: *LirStore) ResourceError!LocalId {
 
 fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
     const arg = try testStrLocal(store);
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = arg } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = arg } }, .test_fixture);
     return try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -221,7 +226,7 @@ fn testStrCallee(store: *LirStore) ResourceError!LIR.LirProcSpecId {
         .frame_locals = try store.addLocalSpan(&.{arg}),
         .body = ret,
         .ret_layout = .str,
-    });
+    }, .none);
 }
 
 fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CFStmtId) ResourceError!CFStmtId {
@@ -231,7 +236,7 @@ fn testConcat(store: *LirStore, target: LocalId, args: []const LocalId, next: CF
         .rc_effect = LowLevelOp.str_concat.rcEffect(),
         .args = try store.addLocalSpan(args),
         .next = next,
-    } });
+    } }, .test_fixture);
 }
 
 test "str append fuses a single-use call result into a direct append call" {
@@ -246,14 +251,14 @@ test "str append fuses a single-use call result into a direct append call" {
     const result = try testStrLocal(&store);
     const out = try testStrLocal(&store);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
     const concat = try testConcat(&store, out, &.{ acc, result }, ret);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = callee,
         .args = try store.addLocalSpan(&.{x}),
         .next = concat,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -261,7 +266,7 @@ test "str append fuses a single-use call result into a direct append call" {
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, out }),
         .body = call,
         .ret_layout = .str,
-    });
+    }, .none);
 
     try run(&store);
 
@@ -294,19 +299,19 @@ test "str append fuses through a single-use alias of the call result" {
     const result_alias = try testStrLocal(&store);
     const out = try testStrLocal(&store);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = out } }, .test_fixture);
     const concat = try testConcat(&store, out, &.{ acc, result_alias }, ret);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = result_alias,
         .op = .{ .local = result },
         .next = concat,
-    } });
+    } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = callee,
         .args = try store.addLocalSpan(&.{x}),
         .next = alias,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(3),
@@ -314,7 +319,7 @@ test "str append fuses through a single-use alias of the call result" {
         .frame_locals = try store.addLocalSpan(&.{ acc, x, result, result_alias, out }),
         .body = call,
         .ret_layout = .str,
-    });
+    }, .none);
 
     try run(&store);
 
@@ -339,20 +344,20 @@ test "str append does not fuse across an alias of an unrelated local" {
     const out = try testStrLocal(&store);
     const extra = try testStrLocal(&store);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = extra } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = extra } }, .test_fixture);
     const late_use = try testConcat(&store, extra, &.{ out, unrelated_alias }, ret);
     const concat = try testConcat(&store, out, &.{ acc, result }, late_use);
     const alias = try store.addCFStmt(.{ .assign_ref = .{
         .target = unrelated_alias,
         .op = .{ .local = unrelated },
         .next = concat,
-    } });
+    } }, .test_fixture);
     const call = try store.addCFStmt(.{ .assign_call = .{
         .target = result,
         .proc = callee,
         .args = try store.addLocalSpan(&.{x}),
         .next = alias,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(4),
@@ -360,7 +365,7 @@ test "str append does not fuse across an alias of an unrelated local" {
         .frame_locals = try store.addLocalSpan(&.{ acc, x, unrelated, unrelated_alias, result, out, extra }),
         .body = call,
         .ret_layout = .str,
-    });
+    }, .none);
 
     const before_proc_count = store.procSpecCount();
     try run(&store);
@@ -385,7 +390,7 @@ test "str append does not fuse a multi-use call result" {
     const out = try testStrLocal(&store);
     const extra = try testStrLocal(&store);
 
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = extra } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = extra } }, .test_fixture);
     const concat_two = try testConcat(&store, extra, &.{ result, other }, ret);
     const concat_one = try testConcat(&store, out, &.{ acc, result }, concat_two);
     const call = try store.addCFStmt(.{ .assign_call = .{
@@ -393,7 +398,7 @@ test "str append does not fuse a multi-use call result" {
         .proc = callee,
         .args = try store.addLocalSpan(&.{x}),
         .next = concat_one,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = LIR.ProcIdentity.forTest(5),
@@ -401,7 +406,7 @@ test "str append does not fuse a multi-use call result" {
         .frame_locals = try store.addLocalSpan(&.{ acc, x, other, result, out, extra }),
         .body = call,
         .ret_layout = .str,
-    });
+    }, .none);
 
     const before_proc_count = store.procSpecCount();
     try run(&store);

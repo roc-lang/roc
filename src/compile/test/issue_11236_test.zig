@@ -39,11 +39,13 @@ fn hasTerminalCheckedError(store: *const lir.LirStore) bool {
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -232,7 +234,11 @@ test "issue 11236: rejection survives exports and serialization without callable
     const alias = build.findModuleByPath(alias_path).?.semanticData().?.checked_artifact.?;
     try std.testing.expectEqual(@as(usize, 1), alias.exported_procedure_bindings.bindings.len);
     try std.testing.expect(alias.exported_procedure_bindings.bindings[0].body == .checked_error);
-    for (alias.compile_time_roots.roots) |root| try std.testing.expect(root.request_eligibility == .ineligible);
+    // The alias's evaluation reaches the rejected binding and stores the crash.
+    for (alias.compile_time_roots.roots) |root| {
+        try std.testing.expect(root.payload == .const_node);
+        try std.testing.expect(alias.const_store.get(root.payload.const_node) == .checked_error);
+    }
     const importer = build.findModuleByPath(path).?.semanticData().?.checked_artifact.?;
     var found_use = false;
     for (importer.checked_bodies.stored_exprs.items) |expr| {

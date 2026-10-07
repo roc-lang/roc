@@ -156,7 +156,6 @@ NAME NOT IN SCOPE - fuzz_crash_019.md:72:2:72:4
 UNDECLARED TYPE - fuzz_crash_019.md:74:9:74:15
 VAR NAME MISSING `$` - fuzz_crash_019.md:77:6:77:8
 NAME NOT IN SCOPE - fuzz_crash_019.md:78:9:78:14
-UNRECOGNIZED SYNTAX - fuzz_crash_019.md:83:2:83:5
 NAME NOT IN SCOPE - fuzz_crash_019.md:86:9:86:11
 NAME NOT IN SCOPE - fuzz_crash_019.md:87:11:87:12
 NAME NOT IN SCOPE - fuzz_crash_019.md:92:11:92:15
@@ -201,12 +200,10 @@ DECLARATION HAS NO VALUE - fuzz_crash_019.md:113:1:113:7
 TOO FEW ARGS - fuzz_crash_019.md:84:2:86:3
 MISSING METHOD - fuzz_crash_019.md:86:11:86:17
 REFERENCE HAS NO VALUE - fuzz_crash_019.md:89:3:89:6
-TYPE MISMATCH - fuzz_crash_019.md:98:4:104:3
 TYPE MISMATCH - fuzz_crash_019.md:105:2:105:54
-TYPE MISMATCH - fuzz_crash_019.md:93:22:93:24
 DECLARATION HAS NO VALUE - fuzz_crash_019.md:116:1:116:13
-MISSING METHOD - fuzz_crash_019.md:105:55:105:66
-MISSING METHOD - fuzz_crash_019.md:105:55:105:72
+TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:66
+TYPE NOT DETERMINED - fuzz_crash_019.md:105:55:105:72
 # PROBLEMS
 ~~~clojure
 (reports
@@ -673,16 +670,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_019.md") (start 78 9) (end 78 14) (annotation error) (line-text "\texpect blaue"))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 83 2) (end 83 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 83 2) (end 83 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity runtime_error)
 		(title "Name Not In Scope")
@@ -1203,7 +1190,7 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 52 2) (end 69 3))
+		(region (start 58 17) (end 58 22))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -1307,7 +1294,19 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, ..], [Tb] -> Error")
+			(text "[Blue, ..f], [Tb] -> j")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    f.is_eq : f, f -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -1350,48 +1349,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 98 4) (end 104 3))
-		(headline
-			(reflow "This expression produces a value, but it's not being used."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 98 4) (end 104 3) (annotation error) (line-text "\tm (\n\t\t123,\n\t\t\"World\",ag1,\n\t\tO, # nt\n\t\t(ne, tuple),\n\t\t[1, 2, 3],\n\t)"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "(f, j, Error, [O], (Error, Error), List(l))")
-			(line-break)
-			(indent 1)
-			(text "  where [")
-			(line-break)
-			(indent 1)
-			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    j.from_quote : Str -> Try(j, [BadQuotedBytes(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "    l.from_numeral : Numeral -> Try(l, [InvalidNumeral(Str)]),")
-			(line-break)
-			(indent 1)
-			(text "  ]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "Since this expression is used as a statement, it must evaluate to")
-			(reflow " ")
-			(annotated code "{}")
-			(reflow ".")
-			(line-break)
-			(reflow "If you don't need the value, you can ignore it with")
-			(reflow " ")
-			(annotated code "_ =")
-			(reflow ".")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
 		(region (start 105 2) (end 105 54))
 		(headline
 			(reflow "This expression produces a value, but it's not being used."))
@@ -1417,31 +1374,6 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(annotated code "_ =")
 			(reflow ".")))
 	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 93 22) (end 93 24))
-		(headline
-			(reflow "This expression is used in an unexpected way."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 93 22) (end 93 24) (annotation error) (line-text "\tline!(\"Ag ${n} to ${er}\")"))
-			(line-break)
-			(reflow "It has the type:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(reflow "But you are trying to use it as:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Str")
-			(annotation-end)))
-	(report
 		(severity warning)
 		(title "Declaration Has No Value")
 		(region (start 116 1) (end 116 13))
@@ -1454,36 +1386,50 @@ MISSING METHOD - fuzz_crash_019.md:105:55:105:72
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 105 55) (end 105 66))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 66) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(annotated emphasis "Hint:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 105 55) (end 105 72))
-		(headline
-			(reflow "This is trying to dispatch a method named")
+			(annotated code "od")
 			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
-		(document
-			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
+			(reflow "method to use.")
+			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be.")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 105 55) (end 105 72))
+		(headline
+			(reflow "Nothing in this program determines the type this")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method is called on:"))
+		(document
+			(source-region (file "fuzz_crash_019.md") (start 105 55) (end 105 72) (annotation error) (line-text "\tb?? 12 > 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 e_fn(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -2038,7 +1984,7 @@ ma = |_| {
 	expect blaue
 	return
 
-	#
+		#
 		
 	me(
 		..., # r
@@ -2116,10 +2062,33 @@ expect {
 			(ty-malformed)))
 	(d-let
 		(p-assign (ident "add"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-expr
+					(e-runtime-error (tag "erroneous_value_expr")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-lookup-local
+								(p-assign (ident "num")))
+							(e-block
+								(s-dbg
+									(e-runtime-error (tag "ident_not_in_scope")))
+								(e-runtime-error (tag "ident_not_in_scope")))))
+					(if-else
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-runtime-error (tag "ident_not_in_scope"))))))))
 	(d-let
 		(p-assign (ident "me"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-applied-tag))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -2201,7 +2170,9 @@ expect {
 	(s-expect
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-runtime-error (tag "erroneous_value_expr"))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -2210,8 +2181,8 @@ expect {
 		(patt (type "()"))
 		(patt (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
-		(patt (type "Bool -> Error"))
-		(patt (type "[Blue, ..], [Tb] -> Error"))
+		(patt (type "Bool -> _ret"))
+		(patt (type "[Blue, ..f], [Tb] -> j where [f.is_eq : f, f -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(patt (type "Error"))
 		(patt (type "_arg -> Error"))
 		(patt (type "{}"))
@@ -2247,8 +2218,8 @@ expect {
 		(expr (type "()"))
 		(expr (type "Bool -> f where [f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
-		(expr (type "Bool -> Error"))
-		(expr (type "[Blue, ..], [Tb] -> Error"))
+		(expr (type "Bool -> _ret"))
+		(expr (type "[Blue, ..f], [Tb] -> j where [f.is_eq : f, f -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(expr (type "Error"))
 		(expr (type "_arg -> Error"))
 		(expr (type "{}"))

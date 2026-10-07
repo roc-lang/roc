@@ -1421,9 +1421,11 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
                 const idx = std.fmt.parseInt(usize, line, 10) catch continue;
                 if (idx >= specs.len) continue;
 
-                _ = arena.reset(.retain_capacity);
                 const result = cfg.runTest(io, arena.allocator(), specs[idx], timeoutForSpec(specs[idx], timeout_ms));
                 cfg.serializeStreamed(stdout_handle, result);
+                // Result bytes have reached the parent. Idle workers must not
+                // retain a previous test's potentially multi-GiB arena.
+                _ = arena.reset(.free_all);
             }
         }
 
@@ -1918,13 +1920,24 @@ fn installFreezeOnCrash() void {
     posix.sigaction(.BUS, &action, null);
 }
 
-fn freezeOnCrash(_: posix.SIG, _: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
+fn freezeOnCrash(sig: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) callconv(.c) void {
     const linux = std.os.linux;
     // PR_SET_PTRACER with PR_SET_PTRACER_ANY, so `gdb -p` works even when
     // Yama restricts ptrace to descendants.
     _ = linux.prctl(0x59616d61, std.math.maxInt(usize), 0, 0, 0);
-    var buf: [96]u8 = undefined;
-    const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d}\n", .{linux.getpid()}) catch "[child] frozen after crash\n";
+    // `si_code` distinguishes a page fault at `addr` (SEGV_MAPERR/ACCERR) from
+    // a general-protection fault the kernel reports with SI_KERNEL (128) and
+    // address zero. The handler runs on the CPU that took the fault.
+    var cpu: usize = 0;
+    _ = linux.getcpu(&cpu, null);
+    var buf: [192]u8 = undefined;
+    const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d} signo={d} si_code={d} addr=0x{x} cpu={d}\n", .{
+        linux.getpid(),
+        @intFromEnum(sig),
+        info.code,
+        @intFromPtr(info.fields.sigfault.addr),
+        cpu,
+    }) catch "[child] frozen after crash\n";
     _ = linux.write(posix.STDERR_FILENO, message.ptr, message.len);
     while (true) {
         const nap = linux.timespec{ .sec = 1000, .nsec = 0 };

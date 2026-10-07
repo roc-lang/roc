@@ -42,21 +42,30 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
         const inner = try store.addLocal(.{ .layout_idx = .u64 });
         const disc = try store.addLocal(.{ .layout_idx = .u16 });
         const carried = try store.addLocal(.{ .layout_idx = .u64 });
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
-        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.external } });
-        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.nested } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+        const external_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.external } }, .test_fixture);
+        const internal_jump = try store.addCFStmt(.{ .jump = .{ .target = joins.nested } }, .test_fixture);
         const initialize = try store.addCFStmt(.{ .assign_literal = .{
             .target = result,
             .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } },
             .next = internal_jump,
-        } });
+        } }, .test_fixture);
+        // Tag fusion copies only arm statements that depend on the matched
+        // union. Releasing it makes each fused variant copy the nested join;
+        // neither variant has a payload, so the copies drop the release.
+        const arm_start = if (phase == .tag_fusion) try store.addCFStmt(.{ .decref = .{
+            .value = outer,
+            .rc = core.LIR.RcHelper.fromConcrete(.{ .op = .decref, .layout_idx = .bool }),
+            .atomicity = .single_thread,
+            .next = initialize,
+        } }, .test_fixture) else initialize;
         const arm = try store.addCFStmt(.{ .join = .{
             .id = joins.nested,
             .params = try store.addLocalSpan(&.{result}),
             .body = external_jump,
-            .remainder = initialize,
-        } });
-        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } });
+            .remainder = arm_start,
+        } }, .test_fixture);
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture);
         var consumer = arm;
         var producer: core.LIR.CFStmtId = undefined;
         if (phase == .tag_fusion) {
@@ -64,63 +73,63 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .cond = disc,
                 .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = arm }}),
                 .default_branch = arm,
-            } });
+            } }, .test_fixture);
             consumer = try store.addCFStmt(.{ .assign_ref = .{
                 .target = disc,
                 .op = .{ .discriminant = .{ .source = outer } },
                 .next = choose,
-            } });
+            } }, .test_fixture);
             const first = try store.addCFStmt(.{ .assign_tag = .{
                 .target = outer,
                 .variant_index = 0,
                 .discriminant = 0,
                 .payload = null,
                 .next = jump_outer,
-            } });
+            } }, .test_fixture);
             const second = try store.addCFStmt(.{ .assign_tag = .{
                 .target = outer,
                 .variant_index = 1,
                 .discriminant = 1,
                 .payload = null,
-                .next = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }),
-            } });
+                .next = try store.addCFStmt(.{ .jump = .{ .target = joins.candidate } }, .test_fixture),
+            } }, .test_fixture);
             producer = try store.addCFStmt(.{ .switch_stmt = .{
                 .cond = selector,
                 .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = first }}),
                 .default_branch = second,
-            } });
+            } }, .test_fixture);
         } else {
             const forward = try store.addCFStmt(.{ .set_local = .{
                 .target = outer,
                 .value = inner,
                 .mode = .initialize_join_param,
                 .next = jump_outer,
-            } });
-            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = joins.forwarding } });
+            } }, .test_fixture);
+            const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = joins.forwarding } }, .test_fixture);
             const set_inner = try store.addCFStmt(.{ .set_local = .{
                 .target = inner,
                 .value = selector,
                 .mode = .initialize_join_param,
                 .next = jump_inner,
-            } });
+            } }, .test_fixture);
             producer = try store.addCFStmt(.{ .join = .{
                 .id = joins.forwarding,
                 .params = try store.addLocalSpan(&.{inner}),
                 .body = forward,
                 .remainder = set_inner,
-            } });
+            } }, .test_fixture);
         }
         const candidate = try store.addCFStmt(.{ .join = .{
             .id = joins.candidate,
             .params = try store.addLocalSpan(&.{outer}),
             .body = consumer,
             .remainder = producer,
-        } });
+        } }, .test_fixture);
         const initialize_carried = try store.addCFStmt(.{ .assign_literal = .{
             .target = carried,
             .value = .{ .i64_literal = .{ .value = 17, .layout_idx = .u64 } },
             .next = candidate,
-        } });
+        } }, .test_fixture);
         const root = try store.addCFStmt(.{
             .join = .{
                 .id = joins.external,
@@ -130,7 +139,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
                 .body = ret,
                 .remainder = initialize_carried,
             },
-        });
+        }, .test_fixture);
         _ = try store.addProcSpec(.{
             .identity = core.LIR.ProcIdentity.forTest(@intCast(index)),
             .name = store.freshSyntheticSymbol(),
@@ -139,7 +148,7 @@ fn fusionFixture(phase: passes.Phase) std.mem.Allocator.Error!Fixture {
             .body = root,
             .iterator_fusion_scope = true,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
     return fixture;
 }
@@ -200,24 +209,24 @@ const Fixture = struct {
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const wrapper = try self.store.addLocal(.{ .layout_idx = pair });
             const projected = try self.store.addLocal(.{ .layout_idx = .i64 });
-            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } });
+            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = projected } }, .test_fixture);
             const read = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = projected,
                 .op = .{ .field = .{ .source = wrapper, .field_idx = 0 } },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .assign_struct = .{
                 .target = wrapper,
                 .fields = try self.store.addLocalSpan(&.{ number, text }),
                 .next = read,
-            } });
+            } }, .test_fixture);
             _ = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{ number, text }),
                 .body = body,
                 .ret_layout = .i64,
-            });
+            }, .none);
         }
         return self;
     }
@@ -268,18 +277,18 @@ const Fixture = struct {
             const number = try self.store.addLocal(.{ .layout_idx = .i64 });
             const text = try self.store.addLocal(.{ .layout_idx = .str });
             const join_id: core.LIR.JoinPointId = @enumFromInt(index);
-            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } });
+            const ret = try self.store.addCFStmt(.{ .ret = .{ .value = number } }, .test_fixture);
             const read_text = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = text,
                 .op = .{ .field = .{ .source = state, .field_idx = 1 } },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             const read_number = try self.store.addCFStmt(.{ .assign_ref = .{
                 .target = number,
                 .op = .{ .field = .{ .source = state, .field_idx = 0 } },
                 .next = read_text,
-            } });
-            const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } });
+            } }, .test_fixture);
+            const jump = try self.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
             // A non-constructor initializer requires appended field reads and
             // assignments, rather than merely deleting an existing constructor.
             const set = try self.store.addCFStmt(.{ .set_local = .{
@@ -287,20 +296,20 @@ const Fixture = struct {
                 .value = input,
                 .mode = .initialize_join_param,
                 .next = jump,
-            } });
+            } }, .test_fixture);
             const body = try self.store.addCFStmt(.{ .join = .{
                 .id = join_id,
                 .params = try self.store.addLocalSpan(&.{state}),
                 .body = read_number,
                 .remainder = set,
-            } });
+            } }, .test_fixture);
             _ = try self.store.addProcSpec(.{
                 .identity = core.LIR.ProcIdentity.forTest(@intCast(self.store.procSpecCount())),
                 .name = self.store.freshSyntheticSymbol(),
                 .args = try self.store.addLocalSpan(&.{input}),
                 .body = body,
                 .ret_layout = .i64,
-            });
+            }, .none);
         }
         return self;
     }
@@ -446,32 +455,32 @@ fn wrapFusionInForwarder(fixture: *Fixture) std.mem.Allocator.Error!void {
         const proc = store.getProcSpec(id);
         const outer = try store.addLocal(.{ .layout_idx = .u64 });
         const inner = try store.addLocal(.{ .layout_idx = .u64 });
-        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(4) } });
+        const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(4) } }, .test_fixture);
         const forward = try store.addCFStmt(.{ .set_local = .{
             .target = outer,
             .value = inner,
             .mode = .initialize_join_param,
             .next = jump_outer,
-        } });
-        const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } });
+        } }, .test_fixture);
+        const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(3) } }, .test_fixture);
         const initialize = try store.addCFStmt(.{ .set_local = .{
             .target = inner,
             .value = core.LirStore.GuardedList.at(store.getLocalSpan(proc.args), 0),
             .mode = .initialize_join_param,
             .next = jump_inner,
-        } });
+        } }, .test_fixture);
         const inner_join = try store.addCFStmt(.{ .join = .{
             .id = @enumFromInt(3),
             .params = try store.addLocalSpan(&.{inner}),
             .body = forward,
             .remainder = initialize,
-        } });
+        } }, .test_fixture);
         const body = try store.addCFStmt(.{ .join = .{
             .id = @enumFromInt(4),
             .params = try store.addLocalSpan(&.{outer}),
             .body = proc.body.?,
             .remainder = inner_join,
-        } });
+        } }, .test_fixture);
         var frame = std.ArrayList(core.LIR.LocalId).empty;
         defer frame.deinit(testing.allocator);
         const old_frame = store.getLocalSpan(proc.frame_locals);
@@ -653,7 +662,8 @@ test "LIR proc pass no-op workers do not append duplicate source bodies" {
     var metrics: passes.ParallelMetrics = .{};
     // Constructor and field projection have no arithmetic facts to prove.
     try passes.run(testing.allocator, &fixture.store, &fixture.layouts, .range, mock.interface(), &metrics);
-    try testing.expectEqual(@as(u64, 8), metrics.tasks_submitted);
+    // Excluded bodies are checked by verification workers only in Debug.
+    try testing.expectEqual(@as(u64, if (@import("builtin").mode == .Debug) 8 else 0), metrics.tasks_submitted);
     try testing.expectEqual(metrics.tasks_submitted, metrics.tasks_committed);
     try testing.expectEqual(@as(u64, 0), metrics.changed_by_phase[@intFromEnum(passes.Phase.range)]);
     try testing.expectEqual(@as(u64, 0), metrics.appended_statements);
@@ -745,6 +755,236 @@ test "LIR proc pass sweeps output and scratch OOM through appended join rewrites
                 try testing.expect(after.cf_stmts > prefix.cf_stmts);
                 break;
             }
+        }
+    }
+}
+
+test "LIR proc pass prunes unread join parameters to a fixed point" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const outer_join = join_ids.freshJoinPoint();
+    const inner_join = join_ids.freshJoinPoint();
+
+    const flag = try store.addLocal(.{ .layout_idx = .bool });
+    const value = try store.addLocal(.{ .layout_idx = .u64 });
+    const inner_dead = try store.addLocal(.{ .layout_idx = .u64 });
+    const outer_dead = try store.addLocal(.{ .layout_idx = .u64 });
+    const outer_live = try store.addLocal(.{ .layout_idx = .u64 });
+
+    // `outer_dead` is only written; `inner_dead` is only read by a write of
+    // `outer_dead`, so it becomes unread once that write is gone.
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_join } }, .test_fixture);
+    const case_live = try store.addCFStmt(.{ .set_local = .{ .target = outer_live, .value = value, .mode = .initialize_join_param, .next = jump_outer } }, .test_fixture);
+    const case_dead = try store.addCFStmt(.{ .set_local = .{ .target = outer_dead, .value = inner_dead, .mode = .initialize_join_param, .next = case_live } }, .test_fixture);
+    const jump_outer_default = try store.addCFStmt(.{ .jump = .{ .target = outer_join } }, .test_fixture);
+    const default_live = try store.addCFStmt(.{ .set_local = .{ .target = outer_live, .value = value, .mode = .initialize_join_param, .next = jump_outer_default } }, .test_fixture);
+    const default_dead = try store.addCFStmt(.{ .set_local = .{ .target = outer_dead, .value = value, .mode = .initialize_join_param, .next = default_live } }, .test_fixture);
+    const branches = try store.addCFSwitchBranches(&.{.{ .value = 1, .body = case_dead }});
+    const inner_body = try store.addCFStmt(.{ .switch_stmt = .{ .cond = flag, .branches = branches, .default_branch = default_dead } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_join } }, .test_fixture);
+    const inner_entry = try store.addCFStmt(.{ .set_local = .{ .target = inner_dead, .value = value, .mode = .initialize_join_param, .next = jump_inner } }, .test_fixture);
+    const inner = try store.addCFStmt(.{ .join = .{
+        .id = inner_join,
+        .params = try store.addLocalSpan(&.{inner_dead}),
+        .body = inner_body,
+        .remainder = inner_entry,
+    } }, .test_fixture);
+    const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_live } }, .test_fixture);
+    const outer = try store.addCFStmt(.{ .join = .{
+        .id = outer_join,
+        .params = try store.addLocalSpan(&.{ outer_dead, outer_live }),
+        .body = outer_body,
+        .remainder = inner,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{ flag, value }),
+        .frame_locals = try store.addLocalSpan(&.{ flag, value, inner_dead, outer_dead, outer_live }),
+        .body = outer,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    var walk = try body_clone.ReachableStmts.init(&store, store.getProcSpec(proc).body.?);
+    defer walk.deinit();
+    var joins: usize = 0;
+    var live_writes: usize = 0;
+    while (try walk.next()) |stmt_id| {
+        const stmt = store.getCFStmt(stmt_id);
+        if (stmt == .set_local) {
+            try testing.expectEqual(outer_live, stmt.set_local.target);
+            live_writes += 1;
+        }
+        if (stmt != .join) continue;
+        const join = stmt.join;
+        joins += 1;
+        const params = store.getLocalSpan(join.params);
+        if (join.id == outer_join) {
+            try testing.expectEqual(@as(usize, 1), params.len);
+            try testing.expectEqual(outer_live, collections.GuardedList.at(params, 0));
+        } else {
+            try testing.expectEqual(inner_join, join.id);
+            try testing.expectEqual(@as(usize, 0), params.len);
+        }
+    }
+    try testing.expectEqual(@as(usize, 2), joins);
+    try testing.expectEqual(@as(usize, 2), live_writes);
+}
+
+test "LIR proc pass keeps join parameters that are read or are procedure arguments" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+    var join_ids = body_clone.JoinParamIndex.init(testing.allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+
+    const arg = try store.addLocal(.{ .layout_idx = .u64 });
+    const read = try store.addLocal(.{ .layout_idx = .u64 });
+
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const write_read = try store.addCFStmt(.{ .set_local = .{ .target = read, .value = arg, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+    const write_arg = try store.addCFStmt(.{ .set_local = .{ .target = arg, .value = arg, .mode = .initialize_join_param, .next = write_read } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .ret = .{ .value = read } }, .test_fixture);
+    const join = try store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try store.addLocalSpan(&.{ arg, read }),
+        .body = body,
+        .remainder = write_arg,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{arg}),
+        .frame_locals = try store.addLocalSpan(&.{ arg, read }),
+        .body = join,
+        .ret_layout = .u64,
+    }, .none);
+
+    var metrics: passes.ParallelMetrics = .{};
+    try passes.run(testing.allocator, &store, &layouts, .prune_join_params, null, &metrics);
+
+    try testing.expectEqual(join, store.getProcSpec(proc).body.?);
+    try testing.expectEqual(@as(usize, 2), store.getLocalSpan(store.getCFStmt(join).join.params).len);
+    try testing.expectEqual(write_arg, store.getCFStmt(join).join.remainder);
+}
+
+test "LIR proc pass range phase admits a body whose only provable statement is an unsigned comparison" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    // `10 == 10` with no switch and no arithmetic: the comparison alone is
+    // what the range prover decides.
+    const lhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const rhs = try store.addLocal(.{ .layout_idx = .u64 });
+    const equal = try store.addLocal(.{ .layout_idx = .bool });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = equal } }, .test_fixture);
+    const compare = try store.addLowLevelStmt(equal, .num_is_eq, &.{ lhs, rhs }, ret, .test_fixture);
+    const right = try store.addCFStmt(.{ .assign_literal = .{
+        .target = rhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = compare,
+    } }, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = lhs,
+        .value = .{ .i64_literal = .{ .value = 10, .layout_idx = .u64 } },
+        .next = right,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = .empty(),
+        .frame_locals = try store.addLocalSpan(&.{ lhs, rhs, equal }),
+        .body = body,
+        .ret_layout = .bool,
+    }, .none);
+
+    const shapes = store.getProcSpec(proc).shapes;
+    try testing.expect(shapes.unsigned_compare);
+    try testing.expect(!shapes.switch_stmt);
+    try testing.expect(!shapes.checked_arithmetic);
+
+    try passes.run(testing.allocator, &store, &layouts, .range, null, null);
+
+    const folded = store.getCFStmt(compare);
+    try testing.expect(folded == .assign_tag);
+    try testing.expectEqual(equal, folded.assign_tag.target);
+    try testing.expectEqual(@as(u16, 1), folded.assign_tag.discriminant);
+}
+
+test "LIR proc pass range phase admits a body whose only provable statement is a SIMD concat-shift" {
+    const LIR = core.LIR;
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(testing.allocator, .u64);
+    defer layouts.deinit();
+
+    const lo = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const hi = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const count = try store.addLocal(.{ .layout_idx = .u8 });
+    const shifted = try store.addLocal(.{ .layout_idx = .u8x16 });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = shifted } }, .test_fixture);
+    const shift = try store.addLowLevelStmt(shifted, .simd_concat_shift_bytes, &.{ lo, hi, count }, ret, .test_fixture);
+    const body = try store.addCFStmt(.{ .assign_literal = .{
+        .target = count,
+        .value = .{ .i64_literal = .{ .value = 3, .layout_idx = .u8 } },
+        .next = shift,
+    } }, .test_fixture);
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = LIR.ProcIdentity.forTest(0),
+        .args = try store.addLocalSpan(&.{ lo, hi }),
+        .frame_locals = try store.addLocalSpan(&.{ lo, hi, count, shifted }),
+        .body = body,
+        .ret_layout = .u8x16,
+    }, .none);
+
+    const shapes = store.getProcSpec(proc).shapes;
+    try testing.expect(shapes.simd_concat_shift);
+    try testing.expect(!shapes.switch_stmt);
+    try testing.expect(!shapes.checked_arithmetic);
+    try testing.expect(!shapes.unsigned_compare);
+
+    try passes.run(testing.allocator, &store, &layouts, .range, null, null);
+
+    try testing.expectEqual(@as(?u5, 3), store.getCFStmt(shift).assign_low_level.simd_concat_count);
+}
+
+test "LIR store records an unsigned comparison shape only for range-tracked operand layouts" {
+    var store = core.LirStore.init(testing.allocator);
+    defer store.deinit();
+
+    inline for (.{
+        .{ layout.Idx.u8, true },
+        .{ layout.Idx.u16, true },
+        .{ layout.Idx.u32, true },
+        .{ layout.Idx.u64, true },
+        .{ layout.Idx.u128, false },
+        .{ layout.Idx.i64, false },
+        .{ layout.Idx.f64, false },
+        .{ layout.Idx.dec, false },
+    }) |case| {
+        inline for (.{ .num_is_eq, .num_is_lt, .num_is_lte, .num_is_gt, .num_is_gte }) |op| {
+            store.shapes = .{};
+            const lhs = try store.addLocal(.{ .layout_idx = case[0] });
+            const rhs = try store.addLocal(.{ .layout_idx = case[0] });
+            const result = try store.addLocal(.{ .layout_idx = .bool });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
+            _ = try store.addLowLevelStmt(result, op, &.{ lhs, rhs }, ret, .test_fixture);
+            try testing.expectEqual(case[1], store.shapes.unsigned_compare);
         }
     }
 }

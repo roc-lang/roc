@@ -306,11 +306,6 @@ pub fn mul_i128(a: i128, b: i128) i128 {
     return mulX(i128, a, b);
 }
 
-/// Wrapping unsigned 128-bit multiplication (low 128 bits only).
-pub fn mul_u128_lo(a: u128, b: u128) u128 {
-    return @bitCast(mulX(i128, @bitCast(a), @bitCast(b)));
-}
-
 // Public API: 128-bit division
 
 /// Signed 128-bit truncating division.
@@ -341,17 +336,6 @@ pub fn mulWithOverflow_i128(a: i128, b: i128, overflow: *c_int) i128 {
     const min = std.math.minInt(i128);
     overflow.* = if (b != 0 and (divTrunc_i128(result, b) != a or (a == min and b == -1))) 1 else 0;
     return result;
-}
-
-/// Signed 128-bit floor division.
-pub fn divFloor_i128(a: i128, b: i128) i128 {
-    const q = divTrunc_i128(a, b);
-    const r = a -% mul_i128(q, b);
-    // If remainder is nonzero and signs of a and b differ, subtract 1
-    if (r != 0 and ((r ^ b) < 0)) {
-        return q - 1;
-    }
-    return q;
 }
 
 // Public API: 128-bit remainder / modulo

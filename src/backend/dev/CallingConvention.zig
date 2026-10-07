@@ -18,8 +18,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const target_mod = @import("roc_target");
-const RocTarget = target_mod.RocTarget;
 
 const layout = @import("layout");
 
@@ -28,152 +26,6 @@ const aarch64 = @import("aarch64/mod.zig");
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
-
-/// Calling convention configuration for a specific target
-pub const CallingConvention = struct {
-    /// Argument registers for integer/pointer arguments, tagged by architecture
-    param_regs: ParamRegs,
-    /// Number of argument registers available
-    num_param_regs: usize,
-    /// Shadow space required before calls (Windows: 32 bytes)
-    shadow_space: u8,
-    /// Threshold for return-by-pointer (struct return uses hidden first arg)
-    return_by_ptr_threshold: usize,
-    /// Threshold for pass-by-pointer (large structs passed as pointer)
-    pass_by_ptr_threshold: usize,
-    /// Whether x64 Windows ABI special rules apply.
-    /// Note: Windows aarch64 follows AAPCS64 in this backend.
-    is_windows: bool,
-    /// Whether overflow arguments pack on the stack at their natural size and
-    /// alignment instead of each taking a full eightbyte slot. Apple's arm64
-    /// ABI packs; AAPCS64 everywhere else and both x86_64 conventions do not.
-    packs_stack_args: bool,
-
-    pub const ParamReg = union(enum) {
-        x86_64: x86_64.GeneralReg,
-        aarch64: aarch64.GeneralReg,
-    };
-
-    const ParamRegs = union(enum) {
-        x86_64: []const x86_64.GeneralReg,
-        aarch64: []const aarch64.GeneralReg,
-    };
-
-    /// x86_64 System V argument registers
-    const SYSV_PARAM_REGS = [_]x86_64.GeneralReg{ .RDI, .RSI, .RDX, .RCX, .R8, .R9 };
-    /// x86_64 Windows argument registers
-    const WIN64_PARAM_REGS = [_]x86_64.GeneralReg{ .RCX, .RDX, .R8, .R9 };
-    /// aarch64 AAPCS64 argument registers
-    const AAPCS64_PARAM_REGS = [_]aarch64.GeneralReg{ .X0, .X1, .X2, .X3, .X4, .X5, .X6, .X7 };
-
-    /// Create calling convention for a given target
-    pub fn forTarget(target: RocTarget) CallingConvention {
-        return switch (target_mod.classifyCpuArch(target.toCpuArch())) {
-            .x86_64 => if (target.isWindows())
-                CallingConvention{
-                    .param_regs = .{ .x86_64 = &WIN64_PARAM_REGS },
-                    .num_param_regs = WIN64_PARAM_REGS.len,
-                    .shadow_space = 32,
-                    .return_by_ptr_threshold = 8,
-                    .pass_by_ptr_threshold = 8, // Only 1,2,4,8 byte structs by value
-                    .is_windows = true,
-                    .packs_stack_args = false,
-                }
-            else
-                CallingConvention{
-                    .param_regs = .{ .x86_64 = &SYSV_PARAM_REGS },
-                    .num_param_regs = SYSV_PARAM_REGS.len,
-                    .shadow_space = 0,
-                    .return_by_ptr_threshold = 16,
-                    .pass_by_ptr_threshold = std.math.maxInt(usize),
-                    .is_windows = false,
-                    .packs_stack_args = false,
-                },
-            .aarch64, .aarch64_be => CallingConvention{
-                .param_regs = .{ .aarch64 = &AAPCS64_PARAM_REGS },
-                .num_param_regs = AAPCS64_PARAM_REGS.len,
-                .shadow_space = 0,
-                .return_by_ptr_threshold = 16,
-                .pass_by_ptr_threshold = std.math.maxInt(usize),
-                .is_windows = false,
-                .packs_stack_args = target.isMacOS(),
-            },
-            .arm, .wasm32, .other => unsupportedArchCallingConvention(target),
-        };
-    }
-
-    fn unsupportedArchCallingConvention(target: RocTarget) CallingConvention {
-        if (std.debug.runtime_safety) {
-            std.debug.panic("CallingConvention.forTarget called for unsupported arch: {s}", .{@tagName(target.toCpuArch())});
-        }
-        unreachable;
-    }
-
-    /// Get argument register at index as an architecture-tagged register
-    pub fn getParamReg(self: CallingConvention, index: usize) ParamReg {
-        return switch (self.param_regs) {
-            .x86_64 => |regs| .{ .x86_64 = regs[index] },
-            .aarch64 => |regs| .{ .aarch64 = regs[index] },
-        };
-    }
-
-    /// Get argument register at index for x86_64 targets.
-    pub fn getX86ParamReg(self: CallingConvention, index: usize) x86_64.GeneralReg {
-        return switch (self.param_regs) {
-            .x86_64 => |regs| regs[index],
-            .aarch64 => {
-                if (std.debug.runtime_safety) {
-                    @panic("getX86ParamReg called for aarch64 calling convention");
-                }
-                unreachable;
-            },
-        };
-    }
-
-    /// Get argument register at index for aarch64 targets.
-    pub fn getAarch64ParamReg(self: CallingConvention, index: usize) aarch64.GeneralReg {
-        return switch (self.param_regs) {
-            .aarch64 => |regs| regs[index],
-            .x86_64 => {
-                if (std.debug.runtime_safety) {
-                    @panic("getAarch64ParamReg called for x86_64 calling convention");
-                }
-                unreachable;
-            },
-        };
-    }
-
-    /// Check if return type needs to use pointer (implicit first arg)
-    pub fn needsReturnByPointer(self: CallingConvention, return_size: usize) bool {
-        return return_size > self.return_by_ptr_threshold;
-    }
-
-    /// Check if a struct argument needs to be passed by pointer.
-    /// Windows x64: only structs of size 1, 2, 4, 8 bytes can be passed by value.
-    /// aarch64 and System V: no pass-by-pointer rule in this layer.
-    pub fn needsPassByPointer(self: CallingConvention, arg_size: usize) bool {
-        if (self.is_windows) {
-            // Windows: only power-of-2 sizes up to 8 can pass by value
-            return !(arg_size == 1 or arg_size == 2 or arg_size == 4 or arg_size == 8);
-        }
-        return arg_size > self.pass_by_ptr_threshold;
-    }
-
-    /// Check if a struct of the given size can be passed by value in a register.
-    pub fn canPassStructByValue(self: CallingConvention, size: usize) bool {
-        return !self.needsPassByPointer(size);
-    }
-
-    /// Returns true if i128 values must be passed by pointer (Windows x64)
-    pub fn passI128ByPointer(self: CallingConvention) bool {
-        return self.is_windows;
-    }
-
-    /// Returns true if i128 return values use hidden pointer arg (Windows x64)
-    pub fn returnI128ByPointer(self: CallingConvention) bool {
-        return self.is_windows;
-    }
-};
 
 /// The C promotion a narrow integer scalar owes the argument slot that carries
 /// it. A host compiled from the generated C signature reads the promoted width,
@@ -266,16 +118,12 @@ pub fn CallBuilder(comptime EmitType: type) type {
     // sub-word arguments at 1/2/4-byte offsets, so an abstract eightbyte slot
     // cannot represent the platform ABI.
     const StackArg = struct {
-        byte_offset: u16,
+        byte_offset: u32,
         size: u8,
         src: ArgSource,
     };
 
     const MoveStatus = enum { to_move, being_moved, moved };
-
-    // Maximum independently copied stack pieces we support. Aggregates are
-    // decomposed into naturally sized 1/2/4/8-byte copies.
-    const MAX_STACK_ARGS = 64;
 
     return struct {
         const Self = @This();
@@ -291,13 +139,14 @@ pub fn CallBuilder(comptime EmitType: type) type {
         int_arg_index: usize = 0,
         /// Float argument index (separate from int_arg_index on System V, same on Windows)
         float_arg_index: usize = 0,
-        stack_arg_count: usize = 0,
         /// Overflow arguments added one-per-parameter through
         /// `addImplicitStackArg`. Repacking to a packed-stack ABI is only
         /// defined when every stack argument was placed that way.
         implicit_stack_arg_count: usize = 0,
-        stack_arg_size: u16 = 0,
-        stack_args: [MAX_STACK_ARGS]StackArg = undefined,
+        stack_arg_size: u32 = 0,
+        /// Independently copied outgoing stack pieces. Aggregates are
+        /// decomposed into naturally sized 1/2/4/8-byte copies.
+        stack_args: std.ArrayListUnmanaged(StackArg) = .empty,
         return_by_ptr: bool = false,
         /// RBP-relative offset where R12 is saved (only used on Windows x64)
         /// Set via saveR12 before adding arguments that might clobber R12
@@ -328,18 +177,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
             return self;
         }
 
-        /// Check if return type needs to use pointer (implicit first arg)
-        pub fn needsReturnByPointer(return_size: usize) bool {
-            return return_size > CC_EMIT.RETURN_BY_PTR_THRESHOLD;
-        }
-
-        /// Check if a struct argument needs to be passed by pointer.
-        /// Windows x64: Only structs of size 1, 2, 4, 8 bytes can be passed by value.
-        /// All other sizes must be passed by pointer.
-        /// aarch64 (all OSes): Zig uses AAPCS64 for callconv(.c), no pass-by-pointer.
-        /// System V: Never uses pass-by-pointer (large structs are copied to stack).
-        pub fn needsPassByPointer(arg_size: usize) bool {
-            return CC_EMIT.needsPassByPointer(arg_size);
+        pub fn deinit(self: *Self) void {
+            self.stack_args.deinit(self.emit.allocator);
         }
 
         /// Set up return by pointer (for large return types)
@@ -355,15 +194,8 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_reg = src_reg });
             } else {
-                self.addImplicitStackArg(.{ .from_reg = src_reg });
+                try self.addImplicitStackArg(.{ .from_reg = src_reg });
             }
-        }
-
-        /// Add an integer-class argument at the register index assigned by the
-        /// ABI allocator. This is authoritative placement, not a sequential
-        /// hint: aligned multi-register values can intentionally leave holes.
-        pub fn addRegArgAt(self: *Self, register_index: u16, src_reg: GeneralReg) void {
-            self.addDeferredRegArg(register_index, .{ .from_reg = src_reg });
         }
 
         /// Add argument by loading a pointer (LEA) to a stack location
@@ -371,7 +203,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_lea = .{ .base = base_reg, .offset = offset } });
             } else {
-                self.addImplicitStackArg(.{ .from_lea = .{ .base = base_reg, .offset = offset } });
+                try self.addImplicitStackArg(.{ .from_lea = .{ .base = base_reg, .offset = offset } });
             }
         }
 
@@ -385,8 +217,24 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_mem = .{ .base = base_reg, .offset = offset } });
             } else {
-                self.addImplicitStackArg(.{ .from_mem = .{ .base = base_reg, .offset = offset } });
+                try self.addImplicitStackArg(.{ .from_mem = .{ .base = base_reg, .offset = offset } });
             }
+        }
+
+        /// Add the three machine words of a RocStr or RocList stored at `offset`
+        /// as three consecutive integer-class memory arguments.
+        pub inline fn addThreeWordMemArg(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.addMemArg(base_reg, offset);
+            try self.addMemArg(base_reg, offset + 8);
+            try self.addMemArg(base_reg, offset + 16);
+        }
+
+        /// Add the RocStr stored at `offset` as three consecutive integer-class
+        /// memory arguments in bytes, length, capacity order.
+        pub inline fn addStrBytesLenCapMemArgs(self: *Self, base_reg: GeneralReg, offset: i32) Allocator.Error!void {
+            try self.addMemArg(base_reg, offset);
+            try self.addMemArg(base_reg, offset + 16);
+            try self.addMemArg(base_reg, offset + 8);
         }
 
         /// Add an integer-class memory argument at its ABI-assigned register.
@@ -408,9 +256,9 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// eightbyte slots. This is used for x86_64 SysV memory-class
         /// aggregate arguments; Win64/AAPCS64 pass those aggregates by pointer.
         pub fn addStackMemArg(self: *Self, base_reg: GeneralReg, offset: i32, size: usize) Allocator.Error!void {
-            const start = std.mem.alignForward(u16, self.stack_arg_size, 8);
-            self.addStackMemPieces(start, base_reg, offset, size);
-            self.stack_arg_size = std.mem.alignForward(u16, @intCast(start + size), 8);
+            const start = std.mem.alignForward(u32, self.stack_arg_size, 8);
+            try self.addStackMemPieces(start, base_reg, offset, size);
+            self.stack_arg_size = std.mem.alignForward(u32, @intCast(start + size), 8);
         }
 
         /// Add a by-value argument at an ABI-assigned byte offset in the
@@ -418,43 +266,43 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// untouched because the ABI gives them no value semantics.
         pub fn addStackMemArgAt(
             self: *Self,
-            stack_byte_offset: u16,
+            stack_byte_offset: u32,
             base_reg: GeneralReg,
             source_offset: i32,
             size: usize,
             promote: Promotion,
-        ) void {
+        ) Allocator.Error!void {
             if (promote != .none) {
                 // A promoted argument's slot carries the promoted width, not
                 // the Roc value's own bytes.
-                self.addStackArg(stack_byte_offset, Promotion.promoted_stack_size, .{ .from_mem = .{
+                try self.addStackArg(stack_byte_offset, Promotion.promoted_stack_size, .{ .from_mem = .{
                     .base = base_reg,
                     .offset = source_offset,
                     .promote = promote,
                 } });
                 return;
             }
-            self.addStackMemPieces(stack_byte_offset, base_reg, source_offset, size);
+            try self.addStackMemPieces(stack_byte_offset, base_reg, source_offset, size);
         }
 
         /// Add an indirectly-passed argument pointer at an ABI-assigned stack
         /// offset. The argument's pointee remains in the caller frame.
         pub fn addStackLeaArgAt(
             self: *Self,
-            stack_byte_offset: u16,
+            stack_byte_offset: u32,
             base_reg: GeneralReg,
             source_offset: i32,
-        ) void {
-            self.addStackArg(stack_byte_offset, 8, .{ .from_lea = .{ .base = base_reg, .offset = source_offset } });
+        ) Allocator.Error!void {
+            try self.addStackArg(stack_byte_offset, 8, .{ .from_lea = .{ .base = base_reg, .offset = source_offset } });
         }
 
-        fn addStackMemPieces(self: *Self, stack_byte_offset: u16, base_reg: GeneralReg, source_offset: i32, size: usize) void {
+        fn addStackMemPieces(self: *Self, stack_byte_offset: u32, base_reg: GeneralReg, source_offset: i32, size: usize) Allocator.Error!void {
             var copied: usize = 0;
             while (copied < size) {
                 const remaining = size - copied;
                 const piece_size: u8 = if (remaining >= 8) 8 else if (remaining >= 4) 4 else if (remaining >= 2) 2 else 1;
-                self.addStackArg(
-                    stack_byte_offset + @as(u16, @intCast(copied)),
+                try self.addStackArg(
+                    stack_byte_offset + @as(u32, @intCast(copied)),
                     piece_size,
                     .{ .from_mem = .{ .base = base_reg, .offset = source_offset + @as(i32, @intCast(copied)) } },
                 );
@@ -462,17 +310,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
-        fn addStackArg(self: *Self, byte_offset: u16, size: u8, src: ArgSource) void {
+        fn addStackArg(self: *Self, byte_offset: u32, size: u8, src: ArgSource) Allocator.Error!void {
             std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
-            std.debug.assert(self.stack_arg_count < MAX_STACK_ARGS);
-            self.stack_args[self.stack_arg_count] = .{ .byte_offset = byte_offset, .size = size, .src = src };
-            self.stack_arg_count += 1;
+            try self.stack_args.append(self.emit.allocator, .{ .byte_offset = byte_offset, .size = size, .src = src });
             self.stack_arg_size = @max(self.stack_arg_size, byte_offset + size);
         }
 
-        fn addImplicitStackArg(self: *Self, src: ArgSource) void {
-            const byte_offset = std.mem.alignForward(u16, self.stack_arg_size, 8);
-            self.addStackArg(byte_offset, 8, src);
+        fn addImplicitStackArg(self: *Self, src: ArgSource) Allocator.Error!void {
+            const byte_offset = std.mem.alignForward(u32, self.stack_arg_size, 8);
+            try self.addStackArg(byte_offset, 8, src);
             self.implicit_stack_arg_count += 1;
         }
 
@@ -488,27 +334,27 @@ pub fn CallBuilder(comptime EmitType: type) type {
         /// entrypoints are.
         pub fn packStackArgsForCAbi(self: *Self, param_abi_sizes: []const u8) void {
             if (comptime !target_packs_stack_args) return;
-            if (self.stack_arg_count == 0) return;
-            std.debug.assert(self.stack_arg_count == self.implicit_stack_arg_count);
+            if (self.stack_args.items.len == 0) return;
+            std.debug.assert(self.stack_args.items.len == self.implicit_stack_arg_count);
             std.debug.assert(self.float_arg_index == 0);
 
-            const first_stack_param = param_abi_sizes.len - self.stack_arg_count;
+            const first_stack_param = param_abi_sizes.len - self.stack_args.items.len;
             std.debug.assert(first_stack_param == CC_EMIT.PARAM_REGS.len);
 
-            var cursor: u16 = 0;
-            for (self.stack_args[0..self.stack_arg_count], 0..) |*arg, i| {
+            var cursor: u32 = 0;
+            for (self.stack_args.items, 0..) |*arg, i| {
                 const size = param_abi_sizes[first_stack_param + i];
                 std.debug.assert(size == 1 or size == 2 or size == 4 or size == 8);
                 // A pointer-valued argument is always a full eightbyte, so a
                 // narrower declared size would mean the table and the emitted
                 // argument disagree about what is being passed.
                 std.debug.assert(arg.src != .from_lea or size == 8);
-                cursor = std.mem.alignForward(u16, cursor, size);
+                cursor = std.mem.alignForward(u32, cursor, size);
                 arg.byte_offset = cursor;
                 arg.size = size;
                 cursor += size;
             }
-            self.stack_arg_size = std.mem.alignForward(u16, cursor, 8);
+            self.stack_arg_size = std.mem.alignForward(u32, cursor, 8);
         }
 
         fn addDeferredRegArg(self: *Self, register_index: usize, src: ArgSource) void {
@@ -527,26 +373,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
                 self.addDeferredRegArg(self.int_arg_index, .{ .from_imm = value });
             } else {
-                self.addImplicitStackArg(.{ .from_imm = value });
-            }
-        }
-
-        /// Add a struct argument, handling pass-by-pointer per platform ABI.
-        /// Windows x64: Only 1, 2, 4, 8 byte structs pass by value; all others by pointer.
-        /// System V: Structs up to 16 bytes can be passed in registers.
-        pub fn addStructArg(self: *Self, offset: i32, size: usize) Allocator.Error!void {
-            if (CC_EMIT.canPassStructByValue(size)) {
-                // Struct can be passed by value in register(s)
-                if (size <= 8) {
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
-                } else {
-                    // System V only: 9-16 byte structs use two registers
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset);
-                    try self.addMemArg(CC_EMIT.BASE_PTR, offset + 8);
-                }
-            } else {
-                // Pass by pointer (Windows for non-power-of-2 or >8 bytes, System V for >16 bytes)
-                try self.addLeaArg(CC_EMIT.BASE_PTR, offset);
+                try self.addImplicitStackArg(.{ .from_imm = value });
             }
         }
 
@@ -681,21 +508,6 @@ pub fn CallBuilder(comptime EmitType: type) type {
             try self.addFloatMemArg(base_reg, offset, 4);
         }
 
-        /// Get the number of float argument registers available
-        pub fn getNumFloatArgRegs() usize {
-            return CC_EMIT.FLOAT_PARAM_REGS.len;
-        }
-
-        /// Get float argument register at index
-        pub fn getFloatArgReg(index: usize) FloatReg {
-            return CC_EMIT.FLOAT_PARAM_REGS[index];
-        }
-
-        /// Get the float return register (XMM0 on x86_64)
-        pub fn getFloatReturnReg() FloatReg {
-            return CC_EMIT.FLOAT_PARAM_REGS[0];
-        }
-
         /// Emit a single argument instruction: move source to destination register.
         fn emitArgInst(self: *Self, dst: GeneralReg, src: ArgSource) Allocator.Error!void {
             switch (src) {
@@ -770,6 +582,23 @@ pub fn CallBuilder(comptime EmitType: type) type {
         }
 
         /// Emit one byte-exact stack argument piece for AArch64.
+        /// Move the aarch64 stack pointer by `amount` bytes. `add` and `sub`
+        /// take a 12-bit immediate, optionally shifted left by 12, so a larger
+        /// amount is applied in chunks.
+        fn adjustStackPointerAarch64(self: *Self, comptime direction: enum { down, up }, amount: u32) Allocator.Error!void {
+            var remaining = amount;
+            while (remaining != 0) {
+                const high: u32 = @min(remaining >> 12, 4095);
+                const shifted = high != 0;
+                const imm: u12 = @intCast(if (shifted) high else remaining);
+                switch (direction) {
+                    .down => try self.emit.subRegRegImm12Shifted(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, imm, shifted),
+                    .up => try self.emit.addRegRegImm12Shifted(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, imm, shifted),
+                }
+                remaining -= if (shifted) high << 12 else remaining;
+            }
+        }
+
         fn emitStackArgAarch64(self: *Self, arg: StackArg) Allocator.Error!void {
             const stack_offset: i32 = @intCast(CC_EMIT.SHADOW_SPACE + arg.byte_offset);
             switch (arg.src) {
@@ -865,7 +694,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (comptime !is_x86_64) return;
 
             // Check if any stack arg needs SCRATCH_REG as a temp
-            const needs_scratch = for (self.stack_args[0..self.stack_arg_count]) |arg| {
+            const needs_scratch = for (self.stack_args.items) |arg| {
                 if (arg.src != .from_reg) break true;
             } else false;
             if (!needs_scratch) return;
@@ -1050,7 +879,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             // Assert stack is 16-byte aligned
             std.debug.assert(total_space % 16 == 0);
             // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
+            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
 
             if (comptime is_x86_64) {
                 // Save SCRATCH_REG if it conflicts with stack arg processing
@@ -1058,23 +887,23 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
                 // Allocate all stack space at once
                 if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 // Store stack arguments BEFORE resolving deferred register args,
                 // because the parallel move may clobber registers that stack args
                 // source from (e.g., rhs operand in RCX/RDX when those are also
                 // param register destinations for the first 4 args).
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgX86(arg);
                 }
             } else if (comptime is_aarch64) {
                 // aarch64: allocate stack space and store stack args
                 if (total_space > 0) {
-                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.down, total_space);
                 }
 
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgAarch64(arg);
                 }
             }
@@ -1103,7 +932,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (comptime is_x86_64) {
                 // Restore stack pointer
                 if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 // Restore R12 if we saved it (Windows x64 only)
@@ -1112,7 +941,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             } else if (comptime is_aarch64) {
                 if (total_space > 0) {
-                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.up, total_space);
                 }
             }
         }
@@ -1130,7 +959,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             // Assert stack is 16-byte aligned
             std.debug.assert(total_space % 16 == 0);
             // Assert shadow space is included when we have stack args
-            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
+            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
 
             if (comptime is_x86_64) {
                 // Save SCRATCH_REG if it conflicts with stack arg processing
@@ -1138,19 +967,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
                 // Allocate all stack space at once
                 if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 // Store stack arguments BEFORE resolving deferred register args
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgX86(arg);
                 }
             } else if (comptime is_aarch64) {
                 if (total_space > 0) {
-                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.down, total_space);
                 }
 
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgAarch64(arg);
                 }
             }
@@ -1170,7 +999,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             if (comptime is_x86_64) {
                 // Restore stack pointer
                 if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 // Restore R12 if we saved it (Windows x64 only)
@@ -1179,7 +1008,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             } else if (comptime is_aarch64) {
                 if (total_space > 0) {
-                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.up, total_space);
                 }
             }
         }
@@ -1205,7 +1034,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             const total_space: u32 = (total_unaligned + 15) & ~@as(u32, 15);
 
             std.debug.assert(total_space % 16 == 0);
-            std.debug.assert(self.stack_arg_count == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
+            std.debug.assert(self.stack_args.items.len == 0 or total_space >= CC_EMIT.SHADOW_SPACE + self.stack_arg_size);
 
             if (comptime is_x86_64) {
                 // Save SCRATCH_REG if it conflicts with stack arg processing
@@ -1213,19 +1042,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
 
                 // Allocate all stack space at once
                 if (total_space > 0) {
-                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.subRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 // Store stack arguments BEFORE resolving deferred register args
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgX86(arg);
                 }
             } else if (comptime is_aarch64) {
                 if (total_space > 0) {
-                    try self.emit.subRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.down, total_space);
                 }
 
-                for (self.stack_args[0..self.stack_arg_count]) |arg| {
+                for (self.stack_args.items) |arg| {
                     try self.emitStackArgAarch64(arg);
                 }
             }
@@ -1255,7 +1084,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
             // Cleanup
             if (comptime is_x86_64) {
                 if (total_space > 0) {
-                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.emit.addRegImm32(.w64, CC_EMIT.STACK_PTR, std.math.cast(i32, total_space) orelse return error.OutOfMemory);
                 }
 
                 if (self.r12_save_offset) |offset| {
@@ -1263,135 +1092,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 }
             } else if (comptime is_aarch64) {
                 if (total_space > 0) {
-                    try self.emit.addRegRegImm12(.w64, CC_EMIT.STACK_PTR, CC_EMIT.STACK_PTR, @intCast(total_space));
+                    try self.adjustStackPointerAarch64(.up, total_space);
                 }
             }
-        }
-
-        /// Get the return register for the result
-        pub fn getReturnReg() GeneralReg {
-            return CC_EMIT.RETURN_REGS[0];
-        }
-
-        /// Get the number of argument registers available
-        pub fn getNumArgRegs() usize {
-            return CC_EMIT.PARAM_REGS.len;
-        }
-
-        /// Get argument register at index (for manual setup)
-        pub fn getArgReg(index: usize) GeneralReg {
-            return CC_EMIT.PARAM_REGS[index];
         }
     };
 }
 
 // Tests
-test "CallingConvention.forTarget Windows" {
-    const cc = CallingConvention.forTarget(.x64win);
-    try std.testing.expectEqual(@as(usize, 4), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 32), cc.shadow_space);
-    try std.testing.expectEqual(@as(usize, 8), cc.return_by_ptr_threshold);
-    try std.testing.expectEqual(@as(usize, 8), cc.pass_by_ptr_threshold); // Only 1,2,4,8 by value
-    try std.testing.expect(cc.is_windows);
-
-    // Check register order: RCX, RDX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(3));
-}
-
-test "CallingConvention.forTarget Linux" {
-    const cc = CallingConvention.forTarget(.x64glibc);
-    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
-    try std.testing.expectEqual(@as(usize, 16), cc.return_by_ptr_threshold);
-    try std.testing.expectEqual(std.math.maxInt(usize), cc.pass_by_ptr_threshold);
-    try std.testing.expect(!cc.is_windows);
-
-    // Check register order: RDI, RSI, RDX, RCX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RDI, cc.getX86ParamReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RSI, cc.getX86ParamReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, cc.getX86ParamReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, cc.getX86ParamReg(3));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, cc.getX86ParamReg(4));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, cc.getX86ParamReg(5));
-}
-
-test "CallingConvention.forTarget macOS" {
-    const cc = CallingConvention.forTarget(.x64mac);
-    // macOS uses System V ABI, same as Linux
-    try std.testing.expectEqual(@as(usize, 6), cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 0), cc.shadow_space);
-    try std.testing.expect(!cc.is_windows);
-}
-
-test "CallingConvention.needsReturnByPointer" {
-    const win_cc = CallingConvention.forTarget(.x64win);
-    const sysv_cc = CallingConvention.forTarget(.x64glibc);
-
-    // Windows: threshold is 8 bytes
-    try std.testing.expect(!win_cc.needsReturnByPointer(8));
-    try std.testing.expect(win_cc.needsReturnByPointer(9));
-
-    // System V: threshold is 16 bytes
-    try std.testing.expect(!sysv_cc.needsReturnByPointer(16));
-    try std.testing.expect(sysv_cc.needsReturnByPointer(17));
-}
-
-test "CallingConvention.needsPassByPointer" {
-    const win_cc = CallingConvention.forTarget(.x64win);
-    const sysv_cc = CallingConvention.forTarget(.x64glibc);
-
-    // Windows: only 1, 2, 4, 8 byte structs can be passed by value
-    try std.testing.expect(!win_cc.needsPassByPointer(1));
-    try std.testing.expect(!win_cc.needsPassByPointer(2));
-    try std.testing.expect(!win_cc.needsPassByPointer(4));
-    try std.testing.expect(!win_cc.needsPassByPointer(8));
-    // Non-power-of-2 sizes need pointer on Windows
-    try std.testing.expect(win_cc.needsPassByPointer(3));
-    try std.testing.expect(win_cc.needsPassByPointer(5));
-    try std.testing.expect(win_cc.needsPassByPointer(6));
-    try std.testing.expect(win_cc.needsPassByPointer(7));
-    // >8 bytes needs pointer
-    try std.testing.expect(win_cc.needsPassByPointer(9));
-    try std.testing.expect(win_cc.needsPassByPointer(16));
-
-    // System V: never passes by pointer (uses stack for large structs)
-    try std.testing.expect(!sysv_cc.needsPassByPointer(1000));
-}
-
-test "CC.canPassStructByValue for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    // Windows: only power-of-2 sizes 1, 2, 4, 8 can pass by value
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(2));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(4));
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(8));
-    // Non-power-of-2 sizes must use pointer
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(3));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(5));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(6));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(7));
-    // >8 bytes must use pointer
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(9));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(16));
-}
-
-test "CC.canPassStructByValue for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    // System V: up to 16 bytes can pass by value
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-}
-
 test "CC constants for Windows x64" {
     const WinEmit = x86_64.Emit(.x64win);
     try std.testing.expect(WinEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(WinEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 32), WinEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 8), WinEmit.CC.PASS_BY_PTR_THRESHOLD);
 }
 
 test "CC constants for Linux x64" {
@@ -1399,8 +1112,6 @@ test "CC constants for Linux x64" {
     try std.testing.expect(LinuxEmit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(LinuxEmit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(std.math.maxInt(usize), LinuxEmit.CC.PASS_BY_PTR_THRESHOLD);
 }
 
 test "CC constants for aarch64" {
@@ -1408,88 +1119,6 @@ test "CC constants for aarch64" {
     try std.testing.expect(Arm64Emit.CC.PARAM_REGS.len >= 4);
     try std.testing.expect(Arm64Emit.CC.RETURN_REGS.len >= 1);
     try std.testing.expectEqual(@as(u8, 0), Arm64Emit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(@as(usize, 16), Arm64Emit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(std.math.maxInt(usize), Arm64Emit.CC.PASS_BY_PTR_THRESHOLD);
-}
-
-test "needsReturnByPointer for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Small values don't need pointer
-    try std.testing.expect(!Builder.needsReturnByPointer(1));
-    try std.testing.expect(!Builder.needsReturnByPointer(8));
-    // Windows: threshold is 8 bytes
-    try std.testing.expect(Builder.needsReturnByPointer(9));
-    try std.testing.expect(Builder.needsReturnByPointer(16));
-}
-
-test "needsReturnByPointer for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // Small values don't need pointer
-    try std.testing.expect(!Builder.needsReturnByPointer(1));
-    try std.testing.expect(!Builder.needsReturnByPointer(8));
-    // System V: threshold is 16 bytes
-    try std.testing.expect(!Builder.needsReturnByPointer(16));
-    try std.testing.expect(Builder.needsReturnByPointer(17));
-}
-
-test "needsPassByPointer for Windows x64" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Windows x64: only 1, 2, 4, 8 byte structs pass by value
-    try std.testing.expect(!Builder.needsPassByPointer(1));
-    try std.testing.expect(!Builder.needsPassByPointer(2));
-    try std.testing.expect(!Builder.needsPassByPointer(4));
-    try std.testing.expect(!Builder.needsPassByPointer(8));
-    // Non-power-of-2 sizes need pointer
-    try std.testing.expect(Builder.needsPassByPointer(3));
-    try std.testing.expect(Builder.needsPassByPointer(5));
-    try std.testing.expect(Builder.needsPassByPointer(6));
-    try std.testing.expect(Builder.needsPassByPointer(7));
-    // >8 bytes need pointer
-    try std.testing.expect(Builder.needsPassByPointer(9));
-    try std.testing.expect(Builder.needsPassByPointer(16));
-    try std.testing.expect(Builder.needsPassByPointer(24));
-}
-
-test "needsPassByPointer for Linux x64" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // System V: never uses pointer
-    try std.testing.expect(!Builder.needsPassByPointer(16));
-    try std.testing.expect(!Builder.needsPassByPointer(17));
-    try std.testing.expect(!Builder.needsPassByPointer(1000));
-}
-
-test "Windows x64 argument registers" {
-    const WinEmit = x86_64.Emit(.x64win);
-    const Builder = CallBuilder(WinEmit);
-
-    // Windows uses RCX, RDX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(3));
-    try std.testing.expectEqual(@as(usize, 4), Builder.getNumArgRegs());
-}
-
-test "Linux x64 argument registers" {
-    const LinuxEmit = x86_64.Emit(.x64glibc);
-    const Builder = CallBuilder(LinuxEmit);
-
-    // System V uses RDI, RSI, RDX, RCX, R8, R9
-    try std.testing.expectEqual(x86_64.GeneralReg.RDI, Builder.getArgReg(0));
-    try std.testing.expectEqual(x86_64.GeneralReg.RSI, Builder.getArgReg(1));
-    try std.testing.expectEqual(x86_64.GeneralReg.RDX, Builder.getArgReg(2));
-    try std.testing.expectEqual(x86_64.GeneralReg.RCX, Builder.getArgReg(3));
-    try std.testing.expectEqual(x86_64.GeneralReg.R8, Builder.getArgReg(4));
-    try std.testing.expectEqual(x86_64.GeneralReg.R9, Builder.getArgReg(5));
-    try std.testing.expectEqual(@as(usize, 6), Builder.getNumArgRegs());
 }
 
 test "CallBuilder with automatic R12 save/restore on Windows x64" {
@@ -1542,6 +1171,7 @@ test "CallBuilder call restores R12 on Windows x64" {
 
     // Initialize builder
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
     const initial_len = emit.buf.items.len;
 
     // Add a simple argument
@@ -1586,6 +1216,7 @@ test "CallBuilder 4-arg call with immediates on Linux x64" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 4 immediate arguments
     try builder.addImmArg(1);
@@ -1619,6 +1250,7 @@ test "CallBuilder 4-arg call with immediates on Windows x64" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 4 immediate arguments
     try builder.addImmArg(1);
@@ -1665,6 +1297,7 @@ test "CallBuilder 6-arg call System V - all args in registers" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 6 immediate arguments
     try builder.addImmArg(1);
@@ -1700,6 +1333,7 @@ test "CallBuilder 6-arg call Windows - 4 reg + 2 stack args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 6 immediate arguments
     try builder.addImmArg(1);
@@ -1748,6 +1382,7 @@ test "CallBuilder with register argument System V" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a register argument (RAX -> first param reg RDI on System V)
     try builder.addRegArg(.RAX);
@@ -1777,6 +1412,7 @@ test "CallBuilder with register argument Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a register argument (RAX -> first param reg RCX on Windows)
     try builder.addRegArg(.RAX);
@@ -1806,6 +1442,7 @@ test "CallBuilder with LEA argument System V" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a LEA argument (pointer to [RBP-32])
     try builder.addLeaArg(.RBP, -32);
@@ -1835,6 +1472,7 @@ test "CallBuilder with LEA argument Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a LEA argument (pointer to [RBP-32])
     try builder.addLeaArg(.RBP, -32);
@@ -1864,6 +1502,7 @@ test "CallBuilder with memory argument System V" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a memory load argument (load from [RBP-16])
     try builder.addMemArg(.RBP, -16);
@@ -1893,6 +1532,7 @@ test "CallBuilder with memory argument Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a memory load argument (load from [RBP-16])
     try builder.addMemArg(.RBP, -16);
@@ -1922,6 +1562,7 @@ test "CallBuilder stack alignment is 16-byte on Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 5 arguments on Windows (4 reg + 1 stack)
     // Stack space = 32 (shadow) + 8 (1 arg) = 40, rounded up to 48 for alignment
@@ -1956,6 +1597,7 @@ test "CallBuilder return by pointer sets up first arg System V" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Set return by pointer (output at [RBP-64])
     try builder.setReturnByPointer(-64);
@@ -1989,6 +1631,7 @@ test "CallBuilder return by pointer sets up first arg Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Set return by pointer (output at [RBP-64])
     try builder.setReturnByPointer(-64);
@@ -2022,6 +1665,7 @@ test "CallBuilder addF64RegArg uses correct XMM register" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a float argument from XMM5 -> should move to XMM0 (first float param reg)
     try builder.addF64RegArg(.XMM5);
@@ -2053,6 +1697,7 @@ test "CallBuilder addF64MemArg loads from memory to XMM" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add a float argument loaded from [RBP-48]
     try builder.addF64MemArg(.RBP, -48);
@@ -2084,6 +1729,7 @@ test "CallBuilder Windows position-based float regs" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // On Windows, args use position-based registers:
     // Position 0: RCX/XMM0, Position 1: RDX/XMM1, etc.
@@ -2116,6 +1762,7 @@ test "CallBuilder mixed int and float args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Mix of int and float args (System V uses separate counters)
     try builder.addImmArg(1); // int arg 0 -> RDI
@@ -2137,6 +1784,7 @@ test "CallBuilder callReg allocates shadow space on Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add some arguments
     try builder.addImmArg(1);
@@ -2209,6 +1857,7 @@ test "CallBuilder R12 restore emits correct MOV instruction on Windows" {
 
     var stack_offset: i32 = -16;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Make a call which should restore R12 at the end
     try builder.addImmArg(42);
@@ -2235,6 +1884,7 @@ test "CallBuilder stack args at correct offsets on Windows" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Add 5 args on Windows: 4 in registers, 1 on stack
     // Stack arg should go at [RSP+32] (after shadow space)
@@ -2256,26 +1906,6 @@ test "CallBuilder stack args at correct offsets on Windows" {
     try std.testing.expect(emit.buf.items.len > 50);
 }
 
-test "CallingConvention.forTarget for aarch64 targets" {
-    const linux_cc = CallingConvention.forTarget(.arm64linux);
-    const win_cc = CallingConvention.forTarget(.arm64win);
-    const mac_cc = CallingConvention.forTarget(.arm64mac);
-
-    // All should use AAPCS64 with same parameters
-    try std.testing.expectEqual(linux_cc.num_param_regs, win_cc.num_param_regs);
-    try std.testing.expectEqual(linux_cc.num_param_regs, mac_cc.num_param_regs);
-    try std.testing.expectEqual(@as(u8, 8), linux_cc.num_param_regs);
-
-    try std.testing.expectEqual(linux_cc.shadow_space, win_cc.shadow_space);
-    try std.testing.expectEqual(@as(u8, 0), linux_cc.shadow_space);
-
-    // Verify aarch64 register ordering (X0..X7), with no x86 placeholder.
-    try std.testing.expectEqual(aarch64.GeneralReg.X0, linux_cc.getAarch64ParamReg(0));
-    try std.testing.expectEqual(aarch64.GeneralReg.X1, linux_cc.getAarch64ParamReg(1));
-    try std.testing.expectEqual(aarch64.GeneralReg.X6, linux_cc.getAarch64ParamReg(6));
-    try std.testing.expectEqual(aarch64.GeneralReg.X7, linux_cc.getAarch64ParamReg(7));
-}
-
 test "macOS x64 CC matches Linux x64 (both System V)" {
     const LinuxEmit = x86_64.Emit(.x64glibc);
     const MacEmit = x86_64.Emit(.x64mac);
@@ -2285,14 +1915,6 @@ test "macOS x64 CC matches Linux x64 (both System V)" {
     try std.testing.expectEqual(LinuxEmit.CC.RETURN_REGS.len, MacEmit.CC.RETURN_REGS.len);
     try std.testing.expectEqual(LinuxEmit.CC.FLOAT_PARAM_REGS.len, MacEmit.CC.FLOAT_PARAM_REGS.len);
     try std.testing.expectEqual(LinuxEmit.CC.SHADOW_SPACE, MacEmit.CC.SHADOW_SPACE);
-    try std.testing.expectEqual(LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD, MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(LinuxEmit.CC.PASS_BY_PTR_THRESHOLD, MacEmit.CC.PASS_BY_PTR_THRESHOLD);
-
-    // Both should NOT be Windows
-    const linux_cc = CallingConvention.forTarget(.x64glibc);
-    const mac_cc = CallingConvention.forTarget(.x64mac);
-    try std.testing.expect(!linux_cc.is_windows);
-    try std.testing.expect(!mac_cc.is_windows);
 }
 
 test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
@@ -2304,6 +1926,7 @@ test "CallBuilder macOS 6-arg call - all args in registers (System V)" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // System V: 6 register args (RDI, RSI, RDX, RCX, R8, R9)
     try builder.addImmArg(1);
@@ -2381,6 +2004,7 @@ test "parallel move: non-conflicting reg args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RAX); // RDI ← RAX
     try builder.addRegArg(.RBX); // RSI ← RBX
@@ -2405,6 +2029,7 @@ test "parallel move: 2-element swap cycle uses scratch" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RSI); // dst=RDI, src=RSI
     try builder.addRegArg(.RDI); // dst=RSI, src=RDI
@@ -2437,6 +2062,7 @@ test "parallel move: 3-element rotation cycle" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RSI); // dst=RDI, src=RSI
     try builder.addRegArg(.RDX); // dst=RSI, src=RDX
@@ -2475,6 +2101,7 @@ test "parallel move: LEA then REG reading same dest—reordered" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addLeaArg(.RBP, -32); // dst=RDI, lea [RBP-32]
     try builder.addRegArg(.RDI); // dst=RSI, src=RDI
@@ -2504,6 +2131,7 @@ test "aarch64 parallel move: LEA then REG reading same dest—reordered" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addLeaArg(.FP, -32); // dst=X0, sub x0, x29, #32
     try builder.addRegArg(.X0); // dst=X1, src=X0
@@ -2529,6 +2157,7 @@ test "aarch64 explicit register assignments preserve ABI alignment holes" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
     builder.addMemArgAt(0, .FP, -8, .none);
     builder.addMemArgAt(2, .FP, -24, .none);
 
@@ -2549,18 +2178,19 @@ test "aarch64 outgoing stack assignments preserve compact byte offsets" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
-    builder.addStackMemArgAt(0, .FP, -8, 1, .none);
-    builder.addStackMemArgAt(2, .FP, -16, 2, .none);
-    builder.addStackMemArgAt(4, .FP, -24, 4, .none);
+    defer builder.deinit();
+    try builder.addStackMemArgAt(0, .FP, -8, 1, .none);
+    try builder.addStackMemArgAt(2, .FP, -16, 2, .none);
+    try builder.addStackMemArgAt(4, .FP, -24, 4, .none);
 
-    try std.testing.expectEqual(@as(usize, 3), builder.stack_arg_count);
-    try std.testing.expectEqual(@as(u16, 8), builder.stack_arg_size);
-    try std.testing.expectEqual(@as(u16, 0), builder.stack_args[0].byte_offset);
-    try std.testing.expectEqual(@as(u8, 1), builder.stack_args[0].size);
-    try std.testing.expectEqual(@as(u16, 2), builder.stack_args[1].byte_offset);
-    try std.testing.expectEqual(@as(u8, 2), builder.stack_args[1].size);
-    try std.testing.expectEqual(@as(u16, 4), builder.stack_args[2].byte_offset);
-    try std.testing.expectEqual(@as(u8, 4), builder.stack_args[2].size);
+    try std.testing.expectEqual(@as(usize, 3), builder.stack_args.items.len);
+    try std.testing.expectEqual(@as(u32, 8), builder.stack_arg_size);
+    try std.testing.expectEqual(@as(u32, 0), builder.stack_args.items[0].byte_offset);
+    try std.testing.expectEqual(@as(u8, 1), builder.stack_args.items[0].size);
+    try std.testing.expectEqual(@as(u32, 2), builder.stack_args.items[1].byte_offset);
+    try std.testing.expectEqual(@as(u8, 2), builder.stack_args.items[1].size);
+    try std.testing.expectEqual(@as(u32, 4), builder.stack_args.items[2].byte_offset);
+    try std.testing.expectEqual(@as(u8, 4), builder.stack_args.items[2].size);
 
     try builder.call(0x12345678);
 }
@@ -2575,6 +2205,7 @@ test "parallel move: self-move eliminated" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RDI); // dst=RDI, src=RDI → self-move, elided
 
@@ -2606,6 +2237,7 @@ test "parallel move: chain dependency without cycle" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RSI); // dst=RDI, src=RSI
     try builder.addRegArg(.RDX); // dst=RSI, src=RDX
@@ -2630,6 +2262,7 @@ test "parallel move: same source register for multiple args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RAX); // dst=RDI, src=RAX
     try builder.addRegArg(.RAX); // dst=RSI, src=RAX
@@ -2654,6 +2287,7 @@ test "parallel move: SCRATCH_REG (R11) as source without cycle" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.R11); // dst=RDI, src=R11
 
@@ -2673,6 +2307,7 @@ test "parallel move: all six System V param regs filled" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addRegArg(.RAX); // RDI ← RAX
     try builder.addRegArg(.RBX); // RSI ← RBX
@@ -2702,6 +2337,7 @@ test "parallel move: reg args + stack overflow args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // 6 register args
     try builder.addRegArg(.RAX);
@@ -2742,6 +2378,7 @@ test "parallel move: zero reg args call" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // No args at all
     try builder.call(0x12345678);
@@ -2764,6 +2401,7 @@ test "parallel move: mixed LEA, MEM, IMM, REG without conflicts" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addLeaArg(.RBP, -64); // RDI ← lea [RBP-64]
     try builder.addMemArg(.RBP, -32); // RSI ← [RBP-32]
@@ -2795,13 +2433,14 @@ test "relocatable call stabilizes memory args before clobbering base param regis
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     try builder.addMemArg(.RDI, 0); // RDI <- [old RDI]
     try builder.addMemArg(.RDI, 8); // RSI <- [old RDI + 8]
 
     var symbols: SymbolTable.Table = .{};
     defer symbols.deinit(std.testing.allocator);
-    const symbol = try symbols.intern(std.testing.allocator, "roc_test_target");
+    const symbol = try symbols.intern(std.testing.allocator, "roc_test_target", .shared);
     try builder.callRelocatable(symbol, &owner);
 
     // Without stabilization, the first argument would emit `mov rdi, [rdi]`
@@ -2827,6 +2466,7 @@ test "parallel move: swap cycle on Windows x64 (RCX/RDX)" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Swap: RCX ← RDX, RDX ← RCX
     try builder.addRegArg(.RDX); // dst=RCX, src=RDX
@@ -2865,6 +2505,7 @@ test "parallel move: callReg also resolves deferred args" {
 
     var stack_offset: i32 = 0;
     var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
 
     // Simple swap to verify deferred resolution happens
     try builder.addRegArg(.RSI); // dst=RDI, src=RSI
@@ -2886,4 +2527,41 @@ test "parallel move: callReg also resolves deferred args" {
         }
     }
     try std.testing.expect(found_call_rax);
+}
+
+test "x86_64 by-value stack arguments of any size copy every piece" {
+    const LinuxEmit = x86_64.Emit(.x64glibc);
+    const Builder = CallBuilder(LinuxEmit);
+
+    var emit = LinuxEmit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
+    // A 64 KiB aggregate passed in memory is 8,192 eightbyte copies.
+    try builder.addStackMemArg(.RBP, -65536, 65536);
+    try std.testing.expectEqual(@as(usize, 8192), builder.stack_args.items.len);
+    try std.testing.expectEqual(@as(u32, 65536), builder.stack_arg_size);
+    try builder.call(0x12345678);
+}
+
+test "aarch64 outgoing stack areas beyond 12-bit immediates adjust SP exactly" {
+    const Emit = aarch64.LinuxEmit;
+    const Builder = CallBuilder(Emit);
+
+    var emit = Emit.init(std.testing.allocator);
+    defer emit.deinit();
+
+    var stack_offset: i32 = 0;
+    var builder = try Builder.init(&emit, &stack_offset);
+    defer builder.deinit();
+    try builder.addStackMemArgAt(0, .FP, -65536, 65536, .none);
+    try std.testing.expectEqual(@as(usize, 8192), builder.stack_args.items.len);
+    try builder.call(0x12345678);
+
+    // `sub sp, sp, #16, lsl #12` reserves the 65,536-byte area in one step.
+    try std.testing.expect(findPattern4(emit.buf.items, 0xFF, 0x43, 0x40, 0xD1) != null);
+    // `add sp, sp, #16, lsl #12` releases it.
+    try std.testing.expect(findPattern4(emit.buf.items, 0xFF, 0x43, 0x40, 0x91) != null);
 }

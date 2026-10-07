@@ -130,18 +130,6 @@ pub const LookupResult = union(enum) {
     not_found: void,
 };
 
-/// Result of looking up a type declaration
-pub const TypeLookupResult = union(enum) {
-    found: CIR.Statement.Idx,
-    not_found: void,
-};
-
-/// Result of looking up a type variable
-pub const TypeVarLookupResult = union(enum) {
-    found: CIR.TypeAnno.Idx,
-    not_found: void,
-};
-
 /// Result of looking up a type variable alias
 pub const TypeVarAliasLookupResult = union(enum) {
     found: TypeVarAliasBinding,
@@ -189,6 +177,9 @@ pub const IntroduceResult = union(enum) {
     shadowing_warning: CIR.Pattern.Idx, // The pattern that was shadowed
     top_level_var_error: void,
     var_across_function_boundary: CIR.Pattern.Idx,
+    /// Reassigning a var declared outside the `expect` whose body is being
+    /// canonicalized.
+    var_reassigned_in_expect: CIR.Pattern.Idx,
     var_reassignment_ok: CIR.Pattern.Idx, // Var reassignment - return existing pattern
 };
 
@@ -212,13 +203,6 @@ pub const TypeBindingDecision = union(enum) {
     idempotent_current,
     rejected_current_conflict: TypeBinding,
     redeclared_current: TypeBinding,
-};
-
-/// Result of introducing a type variable
-pub const TypeVarIntroduceResult = union(enum) {
-    success: void,
-    shadowing_warning: CIR.TypeAnno.Idx, // The type variable that was shadowed
-    already_in_scope: CIR.TypeAnno.Idx, // The type variable already exists in this scope
 };
 
 /// Result of introducing a module alias
@@ -295,10 +279,7 @@ pub fn put(scope: *Scope, gpa: std.mem.Allocator, comptime item_kind: ItemKind, 
 /// Return the statement behind a local type binding, if it has one.
 pub fn typeBindingStatement(binding: TypeBinding) ?CIR.Statement.Idx {
     return switch (binding) {
-        .local_nominal => |stmt| stmt,
-        .local_alias => |stmt| stmt,
-        .local_where_alias => |stmt| stmt,
-        .associated_nominal => |stmt| stmt,
+        inline .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
 }
@@ -316,10 +297,7 @@ pub fn inputToBinding(input: TypeBindingInput) TypeBinding {
 
 fn inputStatement(input: TypeBindingInput) ?CIR.Statement.Idx {
     return switch (input) {
-        .local_nominal => |stmt| stmt,
-        .local_alias => |stmt| stmt,
-        .local_where_alias => |stmt| stmt,
-        .associated_nominal => |stmt| stmt,
+        inline .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt| stmt,
         .external_nominal => null,
     };
 }
@@ -407,50 +385,6 @@ pub fn introduceTypeBinding(
         return TypeBindingDecision{ .inserted_shadowing_parent = binding };
     }
     return .inserted;
-}
-
-/// Introduce a type variable into the scope
-pub fn introduceTypeVar(
-    scope: *Scope,
-    gpa: std.mem.Allocator,
-    name: Ident.Idx,
-    type_var_anno: CIR.TypeAnno.Idx,
-    parent_lookup_fn: ?fn (Ident.Idx) ?CIR.TypeAnno.Idx,
-) std.mem.Allocator.Error!TypeVarIntroduceResult {
-    // Check if already exists in current scope.
-    var iter = scope.type_vars.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            // Type variable already exists in this scope
-            return TypeVarIntroduceResult{ .already_in_scope = entry.value_ptr.* };
-        }
-    }
-
-    // Check for shadowing in parent scopes
-    var shadowed_type_var: ?CIR.TypeAnno.Idx = null;
-    if (parent_lookup_fn) |lookup_fn| {
-        shadowed_type_var = lookup_fn(name);
-    }
-
-    try scope.put(gpa, .type_var, name, type_var_anno);
-
-    if (shadowed_type_var) |anno| {
-        return TypeVarIntroduceResult{ .shadowing_warning = anno };
-    }
-
-    return TypeVarIntroduceResult{ .success = {} };
-}
-
-/// Lookup a type variable in the scope hierarchy
-pub fn lookupTypeVar(scope: *const Scope, name: Ident.Idx) TypeVarLookupResult {
-    // Search by identifier equality.
-    var iter = scope.type_vars.iterator();
-    while (iter.next()) |entry| {
-        if (name.eql(entry.key_ptr.*)) {
-            return TypeVarLookupResult{ .found = entry.value_ptr.* };
-        }
-    }
-    return TypeVarLookupResult{ .not_found = {} };
 }
 
 /// Look up a type variable alias in this scope (for static dispatch on type vars)

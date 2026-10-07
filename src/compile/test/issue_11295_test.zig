@@ -56,7 +56,7 @@ test "issue 11295: an imported nominal method keeps its edge callable in the cal
     });
     try tmp_dir.dir.writeFile(io, .{ .sub_path = "app.roc", .data =
         \\app [main!] { pf: platform "./platform.roc" }
-        \\import Bag exposing [Bag]
+        \\import Bag
         \\first : Bag(a) -> Try(a, [OutOfBounds])
         \\first = |bag| bag.peek(0)
         \\strings : Bag(Str)

@@ -57,8 +57,7 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
 }
 
 /// Binary Dec arithmetic. `dec_mul` crashes on
-/// overflow like the interpreter's Dec multiply; the saturating
-/// `dec_mul_saturated` wrapper is not the lowering of any current op.
+/// overflow like the interpreter's Dec multiply.
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
         .{ LowLevel.dec_mul, BuiltinFn.dec_mul },
@@ -155,6 +154,25 @@ pub fn numFromStr(class: NumericClass) BuiltinFn {
     };
 }
 
+/// Where a prefix-parsing op reads its text from.
+pub const PrefixParseSource = @import("numeric_conversion.zig").PrefixParseSource;
+
+/// Numeric parsing of the longest numeric prefix of a `Str` or UTF-8 list.
+pub fn numFromStrPrefix(class: NumericClass, source: PrefixParseSource) BuiltinFn {
+    return switch (source) {
+        .str => switch (class) {
+            .int => .int_from_str_prefix,
+            .float => .float_from_str_prefix,
+            .dec => .dec_from_str_prefix,
+        },
+        .utf8 => switch (class) {
+            .int => .int_from_utf8_prefix,
+            .float => .float_from_utf8_prefix,
+            .dec => .dec_from_utf8_prefix,
+        },
+    };
+}
+
 /// Checked integer narrowing. Sources up to 64 bits use the bounds-checked
 /// scalar wrappers; 128-bit sources use the range-checked i128 wrappers.
 pub fn intTryConvert(src_is_128: bool, src_is_signed: bool) BuiltinFn {
@@ -196,7 +214,13 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.str_release_excess_capacity, BuiltinFn.str_release_excess_capacity },
         .{ LowLevel.str_to_utf8, BuiltinFn.str_to_utf8 },
         .{ LowLevel.str_from_utf8_lossy, BuiltinFn.str_from_utf8_lossy },
+        .{ LowLevel.str_from_utf8_validated, BuiltinFn.str_from_utf8_validated },
+        .{ LowLevel.str_from_utf16_le_short, BuiltinFn.str_from_utf16_le_short },
+        .{ LowLevel.str_from_utf16_be_short, BuiltinFn.str_from_utf16_be_short },
+        .{ LowLevel.str_from_utf32_le_short, BuiltinFn.str_from_utf32_le_short },
+        .{ LowLevel.str_from_utf32_be_short, BuiltinFn.str_from_utf32_be_short },
         .{ LowLevel.str_from_utf8, BuiltinFn.str_from_utf8_result },
+
         .{ LowLevel.str_split_on, BuiltinFn.str_split },
         .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
         .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },
@@ -231,7 +255,9 @@ pub fn listOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.list_replace_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_set_in_place_unsafe, BuiltinFn.list_replace },
         .{ LowLevel.list_reserve, BuiltinFn.list_reserve },
+        .{ LowLevel.list_reserve_for_append, BuiltinFn.list_reserve_for_append },
         .{ LowLevel.list_release_excess_capacity, BuiltinFn.list_release_excess_capacity },
+        .{ LowLevel.list_clear, BuiltinFn.list_sublist },
         .{ LowLevel.list_reverse, BuiltinFn.list_reverse },
         .{ LowLevel.list_sort_with, BuiltinFn.list_sort_with },
         .{ LowLevel.list_map_can_reuse, BuiltinFn.list_map_can_reuse },

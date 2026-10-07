@@ -186,6 +186,15 @@ const AssociatedItemsResult = union(enum) {
     done,
     nested: AssociatedBlockState,
     decl_body: AssociatedDeclBodyWork,
+    expect_body: AssociatedExpectWork,
+};
+
+/// An associated `expect` whose body canonicalizes next.
+const AssociatedExpectWork = struct {
+    state: *AssociatedItemsState,
+    expect: std.meta.fieldInfo(AST.Statement, .expect).type,
+    owner_is_module_visible: bool,
+    block_context: ?BlockStatementContext,
 };
 
 const BlockTypeDeclStatementResult = struct {
@@ -250,10 +259,14 @@ parse_ir: *AST,
 /// Statement position: if without else is OK (default)
 /// Expression position: if without else is ERROR (explicitly set in assignments, etc.)
 in_statement_position: bool = true,
-/// Track whether we're directly inside a top-level expect (and not inside a
-/// lambda body within it). When true, the ? operator desugars to e_expect_err
-/// on Err, which fails the enclosing expect instead of returning early.
-in_expect: bool = false,
+/// The kind of `expect` body being canonicalized, if any. Lambda bodies reset
+/// this to `.none`, because control flow inside a lambda cannot escape the
+/// enclosing `expect`.
+expect_context: ExpectContext = .none,
+/// The number of scopes open when the innermost enclosing `expect` body began
+/// (zero outside any `expect`). A var whose declaring scope's index is below
+/// this was declared outside that `expect`, so the body cannot reassign it.
+expect_scope_floor: u32 = 0,
 scopes: std.ArrayList(Scope) = .empty,
 /// Set when a scope-exit (run from a `defer`, which cannot propagate an error)
 /// fails to allocate. `canonicalizeFile` re-raises it as `error.OutOfMemory`,
@@ -371,10 +384,10 @@ qualified_ident_bytes: base.Scratch(u8),
 scratch_type_paths: base.Scratch(AST.DeclIndex.TypePathIdx),
 /// Scratch associated alias sinks for nested associated source-order walks.
 scratch_assoc_alias_sinks: base.Scratch(AssociatedAliasSink),
-/// Scratch ident
-scratch_seen_record_fields: base.Scratch(SeenRecordField),
-/// Scratch tag names for duplicate detection in type annotations.
-scratch_seen_tags: base.Scratch(SeenTag),
+/// Record field names for duplicate detection.
+scratch_seen_record_fields: SeenLabels,
+/// Tag names for duplicate detection in type annotations.
+scratch_seen_tags: SeenLabels,
 /// Scratch expression ids for short-lived dynamic lists.
 scratch_expr_ids: base.Scratch(Expr.Idx),
 /// Scratch pattern ids for short-lived dynamic lists.
@@ -452,6 +465,14 @@ interp_tmp_counter: u32 = 0,
 /// Whether the current declaration-pattern canonicalization should reuse
 /// existing mutable binders when it encounters `$name` patterns.
 allow_pattern_var_reuse: bool = false,
+/// Names bound by the open pattern binder groups, innermost group last. A
+/// group is one pattern, every argument pattern of one lambda, or every part of
+/// one split destructuring declaration; a name may be bound at most once per
+/// group. Groups nest because a pattern group can enclose expressions, such as
+/// a destructured part's value, that canonicalize patterns of their own.
+pattern_binders: std.ArrayList(PatternBinder) = .empty,
+/// Start of the innermost open pattern binder group within `pattern_binders`.
+pattern_binder_group_start: usize = 0,
 /// Whether the current declaration-pattern canonicalization reused any
 /// existing mutable binder. `canonicalizeBlockDecl` uses this explicit fact to
 /// emit `s_reassign` instead of `s_decl` for mixed structural reassignments
@@ -506,9 +527,45 @@ const Diagnostic = CIR.Diagnostic;
 const DependencyGraph = @import("DependencyGraph.zig");
 const RecordField = CIR.RecordField;
 
-/// Struct to track fields that have been seen before during canonicalization
-const SeenRecordField = struct { ident: base.Ident.Idx, region: base.Region };
-const SeenTag = struct { ident: base.Ident.Idx, region: base.Region };
+/// Record field or tag labels seen so far, one contiguous run per record or
+/// tag union in flight. Each run is indexed, so a duplicate check is a single
+/// lookup however wide the record or union is.
+const SeenLabels = struct {
+    entries: std.ArrayListUnmanaged(Entry) = .empty,
+    positions: std.AutoHashMapUnmanaged(Key, u32) = .empty,
+
+    const Entry = struct { run_top: u32, ident: base.Ident.Idx, region: base.Region };
+    const Key = struct { run_top: u32, ident: base.Ident.Idx };
+
+    fn deinit(self: *SeenLabels, gpa: Allocator) void {
+        self.entries.deinit(gpa);
+        self.positions.deinit(gpa);
+    }
+
+    /// Where the next run starts.
+    fn top(self: *const SeenLabels) u32 {
+        return @intCast(self.entries.items.len);
+    }
+
+    /// Drop every label from `run_top` on.
+    fn clearFrom(self: *SeenLabels, run_top: u32) void {
+        for (self.entries.items[run_top..]) |entry| {
+            _ = self.positions.remove(.{ .run_top = entry.run_top, .ident = entry.ident });
+        }
+        self.entries.items.len = run_top;
+    }
+
+    /// Record `ident` in the run starting at `run_top`, or return the region
+    /// of the run's earlier occurrence of it.
+    fn addOrFind(self: *SeenLabels, gpa: Allocator, run_top: u32, ident: base.Ident.Idx, region: base.Region) Allocator.Error!?base.Region {
+        try self.entries.ensureUnusedCapacity(gpa, 1);
+        const gop = try self.positions.getOrPut(gpa, .{ .run_top = run_top, .ident = ident });
+        if (gop.found_existing) return self.entries.items[gop.value_ptr.*].region;
+        gop.value_ptr.* = self.top();
+        self.entries.appendAssumeCapacity(.{ .run_top = run_top, .ident = ident, .region = region });
+        return null;
+    }
+};
 const SeenTypeParameter = struct { ident: base.Ident.Idx, region: base.Region };
 
 /// The type a type name refers to, and the name the reference is recorded under.
@@ -612,6 +669,22 @@ fn clearScratchBytesFrom(self: *Self, top: u32) void {
 
 fn scratchBytesFrom(self: *Self, top: u32) []const u8 {
     return self.scratch_bytes.sliceFromStart(top);
+}
+
+/// Bytes that stay readable across appends to the scratch byte buffer, which
+/// may move the buffer: bytes inside it are re-read from their offset.
+const ScratchBytesRef = struct {
+    offset: ?usize,
+    bytes: []const u8,
+};
+
+fn scratchBytesRef(self: *const Self, bytes: []const u8) ScratchBytesRef {
+    return .{ .offset = scratchSliceOffsetIn(&self.scratch_bytes, bytes), .bytes = bytes };
+}
+
+fn scratchBytesDeref(self: *const Self, ref: ScratchBytesRef) []const u8 {
+    const offset = ref.offset orelse return ref.bytes;
+    return self.scratch_bytes.items.items[offset..][0..ref.bytes.len];
 }
 
 fn scratchSliceOffsetIn(scratch: *const base.Scratch(u8), bytes: []const u8) ?usize {
@@ -762,8 +835,8 @@ pub fn deinit(
     self.qualified_ident_bytes.deinit();
     self.scratch_type_paths.deinit();
     self.scratch_assoc_alias_sinks.deinit();
-    self.scratch_seen_record_fields.deinit();
-    self.scratch_seen_tags.deinit();
+    self.scratch_seen_record_fields.deinit(gpa);
+    self.scratch_seen_tags.deinit(gpa);
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.import_indices.deinit(gpa);
@@ -774,6 +847,7 @@ pub fn deinit(
     self.scratch_defining_bound_vars.deinit();
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
+    self.pattern_binders.deinit(gpa);
     self.scratch_block_local_defs.deinit();
     self.scratch_local_type_decls.deinit(gpa);
     self.scratch_global_value_defs.deinit(gpa);
@@ -836,8 +910,8 @@ fn initInternal(
         .qualified_ident_bytes = try base.Scratch(u8).init(gpa),
         .scratch_type_paths = try base.Scratch(AST.DeclIndex.TypePathIdx).init(gpa),
         .scratch_assoc_alias_sinks = try base.Scratch(AssociatedAliasSink).init(gpa),
-        .scratch_seen_record_fields = try base.Scratch(SeenRecordField).init(gpa),
-        .scratch_seen_tags = try base.Scratch(SeenTag).init(gpa),
+        .scratch_seen_record_fields = .{},
+        .scratch_seen_tags = .{},
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_var_scopes = .{},
@@ -941,6 +1015,10 @@ const DeferredRef = struct {
     /// Whether a single upper-case leaf may instead name a tag of the
     /// imported module's main nominal type.
     allows_nominal_tag: bool = false,
+    /// See `DeferredImportRef.Flags.allows_tag_member`.
+    allows_tag_member: bool = false,
+    /// See `DeferredImportRef.tag_receiver_end`.
+    tag_receiver_end: u32 = 0,
     /// Whether the import was written package-qualified (`pf.Stdout`).
     is_package_qualified: bool = false,
     /// Whether the reference names the import's own selected declaration
@@ -953,6 +1031,8 @@ const DeferredRef = struct {
     /// Whether an exposed-item check expects a type declaration rather than a
     /// value definition.
     selects_type: bool = false,
+    /// An exposed-item check selects constructors with `Type.*`.
+    exposes_constructors: bool = false,
     /// For a receiver-extension method registration, the method this entry
     /// registers once the receiver type resolves. `qualified_name` carries the
     /// qualified name it is registered under.
@@ -994,7 +1074,9 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
             (if (ref.is_package_qualified) ModuleEnv.DeferredImportRef.Flags.is_package_qualified else 0) |
             (if (ref.names_import_main_type) ModuleEnv.DeferredImportRef.Flags.names_import_main_type else 0) |
             (if (ref.tag_after_import_alias) ModuleEnv.DeferredImportRef.Flags.tag_after_import_alias else 0) |
+            (if (ref.allows_tag_member) ModuleEnv.DeferredImportRef.Flags.allows_tag_member else 0) |
             (if (ref.selects_type) ModuleEnv.DeferredImportRef.Flags.selects_type else 0) |
+            (if (ref.exposes_constructors) ModuleEnv.DeferredImportRef.Flags.exposes_constructors else 0) |
             (if (ref.file_import_is_bytes) ModuleEnv.DeferredImportRef.Flags.file_import_is_bytes else 0) |
             (if (ref.diagnostic_region != null) ModuleEnv.DeferredImportRef.Flags.has_diagnostic_region else 0),
         .method_binding_type_node = if (ref.method_binding) |binding|
@@ -1008,6 +1090,7 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
         .file_dependency_idx = ref.file_dependency_idx,
         .diagnostic_region_start = if (ref.diagnostic_region) |r| r.start.offset else 0,
         .diagnostic_region_end = if (ref.diagnostic_region) |r| r.end.offset else 0,
+        .tag_receiver_end = ref.tag_receiver_end,
     });
     return @enumFromInt(idx);
 }
@@ -1015,6 +1098,10 @@ fn pushDeferredRef(self: *Self, ref: DeferredRef) std.mem.Allocator.Error!Module
 /// Name the node a worklist entry resolves.
 fn setDeferredRefNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, node_idx: u32) void {
     self.env.deferred_import_refs.items.items[@intFromEnum(idx)].node_idx = node_idx;
+}
+
+fn setDeferredTagMemberAccessNode(self: *Self, idx: ModuleEnv.DeferredImportRef.Idx, expr_idx: Expr.Idx) void {
+    self.env.deferred_import_refs.items.items[@intFromEnum(idx)].tag_member_access_node = @intFromEnum(expr_idx);
 }
 
 /// The deferred reference an external type binding names. Its path is the
@@ -1041,6 +1128,42 @@ fn externalTypeBindingRef(
         .not_found_failure = .type_not_exposed,
         .names_import_main_type = external.names_import_main_type,
     };
+}
+
+/// The declaration a type name bound to an external type denotes.
+const ExternalTypeBindingTarget = union(enum) {
+    /// The binding already carries its declaration.
+    external: struct {
+        import_idx: Import.Idx,
+        target_node_idx: u32,
+    },
+    /// The declaration is settled when the deferred import worklist drains,
+    /// which reports the name if the import exposes no such type.
+    deferred: DeferredRef,
+    malformed: Diagnostic,
+};
+
+/// Resolve a type name bound to an external type. Every position that names a
+/// type through a scope binding resolves it here, so the same name denotes the
+/// same declaration, or reports the same diagnostic, in every position.
+fn resolveExternalTypeBinding(
+    external: Scope.ExternalTypeBinding,
+    item_name: Ident.Idx,
+    kind: ModuleEnv.DeferredRefKind,
+    region: Region,
+) ExternalTypeBindingTarget {
+    const import_idx = external.import_idx orelse return .{ .malformed = .{ .module_not_imported = .{
+        .module_name = external.module_ident,
+        .region = region,
+    } } };
+    if (external.target_node_idx) |target_node_idx| return .{ .external = .{
+        .import_idx = import_idx,
+        .target_node_idx = target_node_idx,
+    } };
+    // The compiler's baked Builtin module takes no part in deferred import
+    // resolution, so its bindings are installed with their declarations.
+    if (external.is_compiler_builtin) base.invariant("compiler invariant violated: compiler builtin type binding has no declaration", .{});
+    return .{ .deferred = externalTypeBindingRef(external, import_idx, item_name, kind, region) };
 }
 
 /// A value reference through an import, resolved when the worklist drains.
@@ -1096,7 +1219,7 @@ fn deferredTypeAnnoLookup(
     name: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!TypeAnno.Idx {
-    const module_idx = ref.import_idx orelse std.debug.panic(
+    const module_idx = ref.import_idx orelse base.invariant(
         "compiler invariant violated: a deferred type reference names a module import",
         .{},
     );
@@ -1334,7 +1457,7 @@ fn registerMethodForDispatchOwner(
             // The associated-value duplicate check owns this source error.
             .declaration_owner => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
+                    base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
                 }
                 unreachable;
             },
@@ -1514,9 +1637,6 @@ fn populateBuiltinAutoImportedTypes(
             .import_identity = .compiler_builtin,
         });
     }
-
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerUnmanaged(gpa, &self.builtin_auto_imported_types, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
 /// Legacy helper for caller-owned import maps.
@@ -1544,48 +1664,12 @@ pub fn populateModuleEnvs(
             .import_identity = .compiler_builtin,
         });
     }
-
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Encoding", "Builtin.Encoding");
-    try putBuiltinAutoImportedContainerManaged(module_envs_map, calling_module_env, builtin_module_env, "Json", "Builtin.Encoding.Json");
 }
 
-fn putBuiltinAutoImportedContainerUnmanaged(
-    gpa: std.mem.Allocator,
-    map: *std.AutoHashMapUnmanaged(Ident.Idx, AutoImportedType),
-    calling_module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(gpa, display_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
-        .import_identity = .compiler_builtin,
-    });
-}
-
-fn putBuiltinAutoImportedContainerManaged(
-    map: *std.AutoHashMap(Ident.Idx, AutoImportedType),
-    calling_module_env: *ModuleEnv,
-    builtin_module_env: *const ModuleEnv,
-    display_name: []const u8,
-    qualified_name: []const u8,
-) Allocator.Error!void {
-    const display_ident = try calling_module_env.insertIdent(base.Ident.for_text(display_name));
-    const qualified_ident = try calling_module_env.insertIdent(base.Ident.for_text(qualified_name));
-    try map.put(display_ident, .{
-        .env = builtin_module_env,
-        .statement_idx = null,
-        .qualified_type_ident = qualified_ident,
-        .import_identity = .compiler_builtin,
-    });
-}
-
-/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, and numeric types) from the Builtin module.
-/// Used for all modules EXCEPT Builtin itself.
+/// Set up auto-imported builtin types (Bool, Try, Dict, Set, Str, Iter, List, Box, and numeric types) from the Builtin module.
+/// Used for all modules EXCEPT Builtin itself. Each binding carries its
+/// declaration, because the compiler's baked Builtin module takes no part in
+/// deferred import resolution.
 pub fn setupAutoImportedBuiltinTypes(
     self: *Self,
     env: *ModuleEnv,
@@ -1607,14 +1691,13 @@ pub fn setupAutoImportedBuiltinTypes(
         builtin_ident,
     );
 
-    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
+    const builtin_types = [_][]const u8{ "Bool", "Json", "Encoding", "Try", "Dict", "Set", "Str", "Iter", "List", "Box", "Range", "U8", "I8", "U16", "I16", "U32", "I32", "U64", "I64", "U128", "I128", "Dec", "F32", "F64", "Numeral", "Crypto" };
     for (builtin_types) |type_name_text| {
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
-            const target_node_idx = if (type_entry.statement_idx) |stmt_idx|
-                type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx)
-            else
-                null;
+            const stmt_idx = type_entry.statement_idx orelse
+                base.invariant("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
+            const target_node_idx = type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx);
 
             // Compiler-owned builtin seed data is installed before any source
             // declaration can exist in this module scope, so this is not a
@@ -1631,25 +1714,6 @@ pub fn setupAutoImportedBuiltinTypes(
                 },
             });
         }
-    }
-
-    const primitive_builtins = [_][]const u8{ "List", "Box" };
-    for (primitive_builtins) |type_name_text| {
-        const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
-
-        // Primitive builtins are compiler-owned seed bindings installed before
-        // source declarations, so collision policy is not involved here.
-        try current_scope.type_bindings.put(gpa, type_ident, Scope.TypeBinding{
-            .external_nominal = .{
-                .module_ident = builtin_ident,
-                .original_ident = type_ident,
-                .target_node_idx = null,
-                .import_idx = builtin_import_idx,
-                .origin_region = zero_region,
-                .module_not_found = false,
-                .is_compiler_builtin = true,
-            },
-        });
     }
 }
 
@@ -1859,7 +1923,10 @@ fn parserDeclIsDefiningAssocAlias(self: *const Self, decl_idx: AST.DeclIndex.Dec
 }
 
 fn parserTypeDeclCanPrepare(self: *const Self, decl: AST.DeclIndex.Decl) bool {
-    if (declIndexTypeKind(decl.kind) == null) return false;
+    // Where aliases are preparable too: a where clause may name one before its
+    // declaration, and the placeholder arm in ensureParserTypeDeclBinding fills
+    // it in when the real declaration is canonicalized.
+    if (declIndexTypeKind(decl.kind) == null and decl.kind != .where_alias) return false;
 
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const ast_stmt = self.parse_ir.store.getStatement(ast_stmt_idx);
@@ -1979,9 +2046,7 @@ fn parserTypeDeclStatement(
 
 fn parserTypeDeclStateStatement(state: ParserTypeDeclState) ?Statement.Idx {
     return switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => null,
     };
 }
@@ -2979,10 +3044,7 @@ fn handleTypeBindingDecision(
                 try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
             }
         },
-        .rejected_current_conflict => |existing| {
-            try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
-        },
-        .redeclared_current => |existing| {
+        inline .rejected_current_conflict, .redeclared_current => |existing| {
             try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
         },
     }
@@ -3231,15 +3293,16 @@ fn ensureParserTypeDeclBinding(
     if (!self.parserTypeDeclCanPrepare(decl)) return null;
     if (!self.parserTypeDeclIsSelected(decl_idx)) return null;
     if (!try self.parserScopeCanSupplyForwardTypeDecl(decl.scope)) return null;
-    const kind = declIndexTypeKind(decl.kind) orelse return null;
+    const kind = declIndexTypeKind(decl.kind) orelse if (decl.kind == .where_alias)
+        AST.TypeDeclKind.where_alias
+    else
+        return null;
     const name_ident = decl.name_ident orelse return null;
     const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(decl.statement);
     const region = self.parserDeclRegion(decl);
 
     const stmt_idx = if (self.parser_type_decl_states.get(ast_stmt_idx)) |state| switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => return null,
     } else blk: {
         const type_path = decl.type_path;
@@ -3486,6 +3549,11 @@ fn processAssociatedBlock(
                 },
                 .decl_body => |decl_work| {
                     try self.canonicalizeAssociatedDeclBodyNow(decl_work);
+                    try next_stack.append(self.env.gpa, state);
+                    try labels.append(self.env.gpa, .next);
+                },
+                .expect_body => |expect_work| {
+                    try self.canonicalizeAssociatedExpectNow(expect_work);
                     try next_stack.append(self.env.gpa, state);
                     try labels.append(self.env.gpa, .next);
                 },
@@ -3823,7 +3891,7 @@ fn canonicalizeAssociatedDeclBodyNow(
         self.defining_bound_vars = try self.beginDefiningBoundVars(work.pattern_idx, self.scratch_reassign_targets.top());
     }
 
-    const can_expr = try self.canonicalizeExprOrMalformed(work.ast_body);
+    const can_expr = try self.canonicalizeExpr(work.ast_body);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
     try self.finishAssociatedDeclBody(work, can_expr);
@@ -3904,7 +3972,7 @@ fn localAssociatedContext(
 ) BlockStatementContext {
     return block_context orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("local associated value invariant violated: missing enclosing block context", .{});
+            base.invariant("local associated value invariant violated: missing enclosing block context", .{});
         }
         unreachable;
     };
@@ -4045,6 +4113,69 @@ fn reportInvalidAssociatedStatement(
     });
 }
 
+/// Which kind of `expect` body is currently being canonicalized (outside any
+/// lambda nested within it).
+///
+/// Optimized builds remove inline `expect`s, so their bodies must never move
+/// control flow out of the `expect`: `return`, `break`, and `?` are compile
+/// errors there. Top-level `expect`s only run as tests, so `?` in them fails the
+/// test (via `e_expect_err`) instead of returning; `return` and `break` are
+/// still compile errors.
+const ExpectContext = enum(u8) {
+    none,
+    top_level,
+    @"inline",
+};
+
+/// What `enterExpect` replaced, for `exitExpect` to restore.
+const SavedExpectState = struct {
+    expect_context: ExpectContext,
+    loop_depth: u32,
+    expect_scope_floor: u32,
+};
+
+/// Begin canonicalizing an `expect` body. Loops enclosing the `expect` are not
+/// reachable from its body, so `loop_depth` restarts at zero; a `break` inside
+/// a loop written within the `expect` stays valid. Every scope the body opens
+/// sits at or above `expect_scope_floor`, so a var found below it was declared
+/// outside the `expect`.
+fn enterExpect(self: *Self, context: ExpectContext) SavedExpectState {
+    const saved = SavedExpectState{
+        .expect_context = self.expect_context,
+        .loop_depth = self.loop_depth,
+        .expect_scope_floor = self.expect_scope_floor,
+    };
+    self.expect_context = context;
+    self.loop_depth = 0;
+    self.expect_scope_floor = @intCast(self.scopes.items.len);
+    return saved;
+}
+
+fn exitExpect(self: *Self, saved: SavedExpectState) void {
+    self.expect_context = saved.expect_context;
+    self.loop_depth = saved.loop_depth;
+    self.expect_scope_floor = saved.expect_scope_floor;
+}
+
+/// The diagnostic for reassigning `pattern_idx`, a var declared outside the
+/// innermost enclosing `expect`.
+fn varReassignedInExpectDiagnostic(self: *Self, ident: Ident.Idx, pattern_idx: Pattern.Idx, region: Region) Diagnostic {
+    return Diagnostic{ .var_reassigned_in_expect = .{
+        .ident = ident,
+        .region = region,
+        .declaration_region = self.env.store.getPatternRegion(pattern_idx),
+    } };
+}
+
+/// The diagnostic for a `break` with no loop to exit. Directly inside an
+/// `expect`, loops enclosing the `expect` are unreachable (see `enterExpect`).
+fn breakWithoutLoopDiagnostic(self: *const Self, region: Region) Diagnostic {
+    return if (self.expect_context != .none)
+        Diagnostic{ .control_flow_in_expect = .{ .region = region, .kind = .break_keyword } }
+    else
+        Diagnostic{ .break_outside_loop = .{ .region = region } };
+}
+
 /// Canonicalize an `expect` written directly inside an associated block.
 ///
 /// A module-visible type's associated block is part of the module's top-level
@@ -4053,30 +4184,25 @@ fn reportInvalidAssociatedStatement(
 /// associated block nested inside a function body belongs to that function's
 /// block instead, so its expects become statements of the enclosing block and
 /// run inline wherever the block runs.
-fn canonicalizeAssociatedExpect(
-    self: *Self,
-    expect_stmt: std.meta.fieldInfo(AST.Statement, .expect).type,
-    owner_is_module_visible: bool,
-    block_context: ?BlockStatementContext,
-) std.mem.Allocator.Error!void {
-    const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
+fn canonicalizeAssociatedExpectNow(self: *Self, work: AssociatedExpectWork) std.mem.Allocator.Error!void {
+    const saved_expect = self.enterExpect(if (work.owner_is_module_visible) .top_level else .@"inline");
+    defer self.exitExpect(saved_expect);
 
-    // Track that we're inside an expect so the ? operator fails the expect on
-    // Err instead of returning early.
-    const was_in_expect = self.in_expect;
-    self.in_expect = true;
-    defer self.in_expect = was_in_expect;
+    const body = try self.canonicalizeExpr(work.expect.body);
+    try self.finishAssociatedExpect(work, body);
+}
 
-    const body = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+fn finishAssociatedExpect(self: *Self, work: AssociatedExpectWork, body: CanonicalizedExpr) std.mem.Allocator.Error!void {
+    const region = self.parse_ir.tokenizedRegionToRegion(work.expect.region);
     const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
         .body = body.idx,
     } }, region);
 
-    if (owner_is_module_visible) {
+    if (work.owner_is_module_visible) {
         try self.env.store.addScratchStatement(stmt_idx);
     } else {
         try self.addBlockStatement(
-            self.localAssociatedContext(block_context),
+            self.localAssociatedContext(work.block_context),
             CanonicalizedStatement{ .idx = stmt_idx, .free_vars = body.free_vars },
         );
     }
@@ -4279,7 +4405,7 @@ fn canonicalizeAssociatedItems(
                     const name_text = self.env.getIdent(name_ident);
                     const annotation_expr_kind: AnnotationExprKind = if (self.env.store.getTypeAnno(type_anno_idx) == .underscore)
                         if (self.derivedMethodKind(name_ident)) |kind|
-                            .{ .derived = kind }
+                            .{ .derived = .{ .kind = kind, .owner = owner_stmt_idx } }
                         else
                             .unsupported_generated_method
                     else
@@ -4422,15 +4548,22 @@ fn canonicalizeAssociatedItems(
             },
             .crash => |crash_stmt| try self.reportInvalidAssociatedStatement("crash", crash_stmt.region),
             .dbg => |dbg_stmt| try self.reportInvalidAssociatedStatement("dbg", dbg_stmt.region),
-            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement("for", for_stmt.region),
+            .@"for" => |for_stmt| try self.reportInvalidAssociatedStatement(switch (for_stmt.kind) {
+                .iter => "for",
+                .stream => "for!",
+            }, for_stmt.region),
             .@"while" => |while_stmt| try self.reportInvalidAssociatedStatement("while", while_stmt.region),
             .@"return" => |return_stmt| try self.reportInvalidAssociatedStatement("return", return_stmt.region),
             .@"break" => |break_stmt| try self.reportInvalidAssociatedStatement("break", break_stmt.region),
-            .expect => |expect_stmt| try self.canonicalizeAssociatedExpect(
-                expect_stmt,
-                owner_is_module_visible,
-                block_context,
-            ),
+            .expect => |expect_stmt| {
+                state.next = i + 1;
+                return .{ .expect_body = .{
+                    .state = state,
+                    .expect = expect_stmt,
+                    .owner_is_module_visible = owner_is_module_visible,
+                    .block_context = block_context,
+                } };
+            },
             .@"var", .expr, .file_import, .malformed => {
                 // var, expr, file_import and malformed are already reported by the parser.
             },
@@ -4683,25 +4816,11 @@ pub fn canonicalizeFile(
                 // Top-level expect statement
                 const region = self.parse_ir.tokenizedRegionToRegion(e.region);
 
-                // Track that we're inside a top-level expect so the ? operator
-                // fails the expect on Err instead of returning early
-                const was_in_expect = self.in_expect;
-                self.in_expect = true;
-                defer self.in_expect = was_in_expect;
+                const saved_expect = self.enterExpect(.top_level);
+                defer self.exitExpect(saved_expect);
 
                 // Canonicalize the expect expression
-                const can_expect = try self.canonicalizeExpr(e.body) orelse {
-                    // If canonicalization fails, create a malformed expression
-                    const malformed = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = region,
-                    } });
-                    const expect_stmt = Statement{ .s_expect = .{
-                        .body = malformed,
-                    } };
-                    const expect_stmt_idx = try self.env.addStatement(expect_stmt, region);
-                    try self.env.store.addScratchStatement(expect_stmt_idx);
-                    continue;
-                };
+                const can_expect = try self.canonicalizeExpr(e.body);
 
                 // Create expect statement
                 const expect_stmt = Statement{ .s_expect = .{
@@ -4712,7 +4831,10 @@ pub fn canonicalizeFile(
             },
             .@"for" => |for_stmt| {
                 // Not valid at top-level
-                const string_idx = try self.env.insertString("for");
+                const string_idx = try self.env.insertString(switch (for_stmt.kind) {
+                    .iter => "for",
+                    .stream => "for!",
+                });
                 const region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region);
                 try self.env.pushDiagnostic(Diagnostic{ .invalid_top_level_statement = .{
                     .stmt = string_idx,
@@ -5124,7 +5246,10 @@ fn derivedMethodKind(self: *const Self, ident: Ident.Idx) ?CIR.DerivedMethodKind
 
 const AnnotationExprKind = union(enum) {
     ordinary,
-    derived: CIR.DerivedMethodKind,
+    derived: struct {
+        kind: CIR.DerivedMethodKind,
+        owner: Statement.Idx,
+    },
     unsupported_generated_method,
 };
 
@@ -5136,7 +5261,11 @@ fn addAnnotationExpr(
 ) std.mem.Allocator.Error!Expr.Idx {
     const expr = switch (annotation_expr_kind) {
         .ordinary => Expr{ .e_anno_only = .{ .ident = ident } },
-        .derived => |kind| Expr{ .e_derived_method = .{ .ident = ident, .kind = kind } },
+        .derived => |derived| Expr{ .e_derived_method = .{
+            .ident = ident,
+            .kind = derived.kind,
+            .owner = derived.owner,
+        } },
         .unsupported_generated_method => Expr{ .e_anno_only = .{
             .ident = ident,
             .kind = .unsupported_generated_method,
@@ -5329,7 +5458,7 @@ fn createAnnotationPattern(
                 .original_region = original_region,
             } });
         },
-        .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
+        .top_level_var_error, .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => {},
     }
     return new_pattern_idx;
 }
@@ -5455,6 +5584,9 @@ fn canonicalizeDestructuredLiteralDecl(
     var pending: std.ArrayList(PendingDestructuredLiteralPart) = .empty;
     defer pending.deinit(self.env.gpa);
     try self.pushDestructuredLiteralParts(&pending, decl.pattern, decl.body);
+    // The split parts form one binder group, so `(x, x) = (1, 2)` is rejected.
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
     while (pending.pop()) |item| {
         if (item.part == .pattern and self.destructuredLiteralShapesMatch(item.part.pattern, item.value_expr)) {
             try self.pushDestructuredLiteralParts(&pending, item.part.pattern, item.value_expr);
@@ -5650,7 +5782,8 @@ fn canonicalizeDestructuredLiteralDef(
         self.adopting_forward_decl = parser_decl_idx;
         defer self.adopting_forward_decl = saved_adopting_forward_decl;
         break :blk switch (item.part) {
-            .pattern => |sub_pattern| try self.canonicalizePatternOrMalformed(sub_pattern),
+            .pattern => |sub_pattern| try self.canonicalizePatternInGroup(sub_pattern) orelse
+                try self.pushPatternNotCanonicalized(sub_pattern),
             .name => |name| try self.bindDestructuredName(name.ident, name.region),
         };
     };
@@ -5678,7 +5811,7 @@ fn canonicalizeDestructuredLiteralDef(
     }
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
-    const can_expr = try self.canonicalizeExprOrMalformed(item.value_expr);
+    const can_expr = try self.canonicalizeExpr(item.value_expr);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
 
@@ -5750,6 +5883,7 @@ fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name:
 /// of a reference ahead of the declaration when there is one, otherwise a new
 /// binder introduced into scope like a punned record field's.
 fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
+    if (try self.claimPatternBinder(ident, region)) |duplicate| return duplicate;
     if (self.adoptForwardBinder(ident, region)) |placeholder| {
         try self.warnAboutBindingName(ident, region, .immutable);
         return placeholder;
@@ -5768,7 +5902,7 @@ fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.A
         // is_var=false
         .top_level_var_error => unreachable,
         // is_declaration=true
-        .var_across_function_boundary, .var_reassignment_ok => unreachable,
+        .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
     }
     return pattern_idx;
 }
@@ -5816,12 +5950,12 @@ const TypeAnnoIdent = struct {
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false);
 }
 
 /// Walk `pattern_idx` and append every `assign`/`as` binder it introduces to
 /// `target`, recursing through tuple/record/list/tag/nominal/str-interp shapes.
-fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx) Allocator.Error!void {
+fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool) Allocator.Error!void {
     var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
     const stack_allocator = stack_allocator_state.get();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
@@ -5832,7 +5966,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
         const pattern = self.env.store.getPattern(current_idx);
         switch (pattern) {
             .assign, .var_assign => {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
             },
             .record_destructure => |destructure| {
                 const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
@@ -5841,9 +5975,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     i -= 1;
                     const destruct = self.env.store.getRecordDestruct(destructs[i]);
                     const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
+                        inline .Required, .SubPattern, .Rest => |idx| idx,
                     };
                     try pending.append(stack_allocator, sub_pattern_idx);
                 }
@@ -5865,7 +5997,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                 }
             },
             .as => |as_pat| {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
                 try pending.append(stack_allocator, as_pat.pattern);
             },
             .list => |list| {
@@ -5881,14 +6013,8 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     try pending.append(stack_allocator, elems[i]);
                 }
             },
-            .nominal => |nom| {
+            inline .nominal, .nominal_external, .deferred_import_ref => |nom| {
                 try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
             },
             .str_interpolation => |str| {
                 var i: u32 = str.steps.span.len;
@@ -5927,7 +6053,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 /// therefore not self-referential, so it is excluded from the set.
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
-    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
     if (reassign_targets.len > 0) {
@@ -5970,100 +6096,7 @@ fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
-    var pending: std.ArrayList(Pattern.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
-
-    try pending.append(stack_allocator, pattern_idx);
-    while (pending.pop()) |current_idx| {
-        const pattern = self.env.store.getPattern(current_idx);
-        switch (pattern) {
-            .assign, .var_assign => {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-            },
-            .record_destructure => |destructure| {
-                const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
-                var i = destructs.len;
-                while (i > 0) {
-                    i -= 1;
-                    const destruct = self.env.store.getRecordDestruct(destructs[i]);
-                    const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
-                    };
-                    try pending.append(stack_allocator, sub_pattern_idx);
-                }
-            },
-            .tuple => |tuple| {
-                const elems = self.env.store.slicePatterns(tuple.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .applied_tag => |tag| {
-                const args = self.env.store.slicePatterns(tag.args);
-                var i = args.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, args[i]);
-                }
-            },
-            .as => |as_pat| {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-                try pending.append(stack_allocator, as_pat.pattern);
-            },
-            .list => |list| {
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pat_idx| {
-                        try pending.append(stack_allocator, rest_pat_idx);
-                    }
-                }
-                const elems = self.env.store.slicePatterns(list.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .nominal => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
-            },
-            .str_interpolation => |str| {
-                var i: u32 = str.steps.span.len;
-                while (i > 0) {
-                    i -= 1;
-                    const step = self.env.store.getStrPatternStep(str.steps, i);
-                    if (step.capture) |capture| {
-                        try pending.append(stack_allocator, capture);
-                    }
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, true);
 }
 
 fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
@@ -6613,28 +6646,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
     }
 }
 
-/// Map a type identifier to the builtin numeric kind it names, if any. Mirrors
-/// the type checker's resolution so the canonicalized suffix target it reads
-/// back is consistent. Compares against the module's cached numeric idents
-/// (both the bare `U8` form and the fully-qualified `Builtin.Num.U8` form).
-fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.NumKind {
-    const ids = self.env.idents;
-    if (type_ident.eql(ids.u8) or type_ident.eql(ids.u8_type)) return .u8;
-    if (type_ident.eql(ids.i8) or type_ident.eql(ids.i8_type)) return .i8;
-    if (type_ident.eql(ids.u16) or type_ident.eql(ids.u16_type)) return .u16;
-    if (type_ident.eql(ids.i16) or type_ident.eql(ids.i16_type)) return .i16;
-    if (type_ident.eql(ids.u32) or type_ident.eql(ids.u32_type)) return .u32;
-    if (type_ident.eql(ids.i32) or type_ident.eql(ids.i32_type)) return .i32;
-    if (type_ident.eql(ids.u64) or type_ident.eql(ids.u64_type)) return .u64;
-    if (type_ident.eql(ids.i64) or type_ident.eql(ids.i64_type)) return .i64;
-    if (type_ident.eql(ids.u128) or type_ident.eql(ids.u128_type)) return .u128;
-    if (type_ident.eql(ids.i128) or type_ident.eql(ids.i128_type)) return .i128;
-    if (type_ident.eql(ids.f32) or type_ident.eql(ids.f32_type)) return .f32;
-    if (type_ident.eql(ids.f64) or type_ident.eql(ids.f64_type)) return .f64;
-    if (type_ident.eql(ids.dec) or type_ident.eql(ids.dec_type)) return .dec;
-    return null;
-}
-
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
     const import_idx = external.import_idx orelse return false;
     return self.importIsCompilerBuiltin(import_idx);
@@ -6660,9 +6671,7 @@ const LiteralTypeSuffixResolution = union(enum) {
 };
 
 /// Resolve a literal's type suffix once, while the canonicalizer still owns
-/// scope information. `region` is the region of the whole literal. A resolved
-/// `.invalid` target names an incomplete external binding already diagnosed by
-/// import canonicalization.
+/// scope information. `region` is the region of the whole literal.
 fn resolveLiteralTypeSuffix(
     self: *Self,
     suffix: AST.LiteralTypeSuffix,
@@ -6687,7 +6696,7 @@ fn resolveLiteralTypeSuffix(
                 .external => |external| blk: {
                     if (self.importIsCompilerBuiltin(external.import_idx)) {
                         const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
-                        if (self.builtinNumKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
+                        if (self.env.idents.numKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                     break :blk .{ .resolved = .{ .external = .{
                         .import_idx = external.import_idx,
@@ -6726,37 +6735,27 @@ fn resolveUnqualifiedLiteralTypeSuffix(
         .region = region,
     } } };
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return undeclared;
+        const num_kind = self.env.idents.numKindFromTypeIdent(type_ident) orelse return undeclared;
         return .{ .resolved = .{ .name = type_ident, .target = .{ .resolved = .{ .builtin = num_kind } } } };
     };
     const target: LiteralSuffixTarget = switch (binding_location.binding.*) {
         .local_nominal, .local_alias, .local_where_alias, .associated_nominal => |stmt_idx| .{ .resolved = .{ .local = stmt_idx } },
         .external_nominal => |external| blk: {
-            const import_idx = external.import_idx orelse break :blk .{ .resolved = .invalid };
-            if (self.importIsCompilerBuiltin(import_idx)) {
-                if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
-                    break :blk .{ .resolved = .{ .builtin = num_kind } };
+            if (external.import_idx) |import_idx| {
+                if (self.importIsCompilerBuiltin(import_idx)) {
+                    if (self.env.idents.numKindFromTypeIdent(external.original_ident) orelse self.env.idents.numKindFromTypeIdent(type_ident)) |num_kind| {
+                        break :blk .{ .resolved = .{ .builtin = num_kind } };
+                    }
                 }
             }
-            if (!self.importIsCompilerBuiltin(import_idx)) {
-                break :blk .{ .deferred = .{
-                    .import_idx = import_idx,
-                    .kind = .numeric_suffix,
-                    .path = external.original_ident,
-                    .module_name = external.module_ident,
-                    .item_name = type_ident,
-                    .parent_name = external.original_ident,
-                    .qualified_name = type_ident,
-                    .names_import_main_type = external.names_import_main_type,
-                    .missing_module_failure = .type_from_missing_module,
-                    .not_found_failure = .type_not_exposed,
-                } };
-            }
-            const target_node_idx = external.target_node_idx orelse break :blk .{ .resolved = .invalid };
-            break :blk .{ .resolved = .{ .external = .{
-                .import_idx = import_idx,
-                .target_node_idx = target_node_idx,
-            } } };
+            break :blk switch (resolveExternalTypeBinding(external, type_ident, .numeric_suffix, region)) {
+                .external => |found| .{ .resolved = .{ .external = .{
+                    .import_idx = found.import_idx,
+                    .target_node_idx = found.target_node_idx,
+                } } },
+                .deferred => |ref| .{ .deferred = ref },
+                .malformed => |diagnostic| return .{ .malformed = diagnostic },
+            };
         },
     };
     return .{ .resolved = .{ .name = type_ident, .target = target } };
@@ -6831,29 +6830,42 @@ fn checkExposedButNotImplemented(self: *Self) std.mem.Allocator.Error!void {
         },
     }
 
-    // Check for remaining exposed identifiers
+    const unimplemented_count = self.exposed_ident_texts.count() + self.exposed_type_idents.count();
+    if (unimplemented_count == 0) return;
+
+    // Report every exposed value and type that was never defined, in the order
+    // the header lists them.
+    const Unimplemented = struct {
+        ident: Ident.Idx,
+        region: Region,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            return a.region.start.offset < b.region.start.offset;
+        }
+    };
+    const unimplemented = try self.env.gpa.alloc(Unimplemented, unimplemented_count);
+    defer self.env.gpa.free(unimplemented);
+    var len: usize = 0;
+
     var ident_iter = self.exposed_ident_texts.iterator();
     while (ident_iter.next()) |entry| {
-        const ident_text = entry.key_ptr.*;
-        const region = entry.value_ptr.*;
-        // Create an identifier for error reporting
-        const ident_idx = try self.env.insertIdent(base.Ident.for_text(ident_text));
-
-        // Report error: exposed identifier but not implemented
-        const diag = Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = ident_idx,
-            .region = region,
-        } };
-        try self.env.pushDiagnostic(diag);
+        unimplemented[len] = .{
+            .ident = try self.env.insertIdent(base.Ident.for_text(entry.key_ptr.*)),
+            .region = entry.value_ptr.*,
+        };
+        len += 1;
+    }
+    var type_iter = self.exposed_type_idents.iterator();
+    while (type_iter.next()) |entry| {
+        unimplemented[len] = .{ .ident = entry.key_ptr.*, .region = entry.value_ptr.* };
+        len += 1;
     }
 
-    // Check for remaining exposed types
-    var iter = self.exposed_type_idents.iterator();
-    while (iter.next()) |entry| {
-        // Report error: exposed type but not implemented
+    std.mem.sort(Unimplemented, unimplemented, {}, Unimplemented.lessThan);
+    for (unimplemented) |item| {
         try self.env.pushDiagnostic(Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = entry.key_ptr.*,
-            .region = entry.value_ptr.*,
+            .ident = item.ident,
+            .region = item.region,
         } });
     }
 }
@@ -7254,7 +7266,7 @@ fn importAliased(
     const alias = self.resolveModuleAlias(alias_tok, default_alias) orelse return null;
 
     // 3. Add to scope: alias -> module_name mapping (includes is_package_qualified flag)
-    const alias_outcome = try self.scopeIntroduceModuleAlias(alias, module_name, import_region, exposed_items_span, is_package_qualified);
+    const alias_outcome = try self.scopeIntroduceModuleAlias(alias, module_name, import_region, is_package_qualified);
 
     // 4. Process type imports from this module
     try self.processTypeImports(module_name, alias);
@@ -7292,7 +7304,7 @@ fn importAliased(
 
     // 9. Whether this name denotes a module at all is not a source-local
     // question, so the statement waits for import resolution's answer.
-    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span);
+    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span, alias);
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_idents so we don't report
@@ -7350,7 +7362,7 @@ fn importUnaliased(
 
     // 6. Whether this name denotes a module at all is not a source-local
     // question, so the statement waits for import resolution's answer.
-    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span);
+    try self.deferImportStatement(module_import_idx, module_name, import_idx, is_package_qualified, exposed_items_span, null);
 
     // If this import satisfies an exposed type requirement (e.g., platform re-exporting
     // an imported module), remove it from exposed_type_idents so we don't report
@@ -7371,6 +7383,7 @@ fn deferImportStatement(
     import_stmt_idx: Statement.Idx,
     is_package_qualified: bool,
     exposed_items_span: CIR.ExposedItem.Span,
+    import_alias: ?Ident.Idx,
 ) std.mem.Allocator.Error!void {
     const ref = try self.pushDeferredRef(.{
         .import_idx = module_import_idx,
@@ -7384,8 +7397,8 @@ fn deferImportStatement(
     });
     self.setDeferredRefNode(ref, @intFromEnum(import_stmt_idx));
 
-    // Whether the module exposes each named item is the import statement's
-    // own question, reported at the statement rather than at a use.
+    // Whether the module exposes each item is the import statement's own
+    // question, reported at that item's source region rather than at a use.
     for (self.env.store.sliceExposedItems(exposed_items_span)) |exposed_item_idx| {
         const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
         const local_ident = exposed_item.alias orelse exposed_item.name;
@@ -7397,11 +7410,13 @@ fn deferImportStatement(
             .path = exposed_item.name,
             .module_name = module_name,
             .item_name = exposed_item.name,
-            .parent_name = module_name,
-            .qualified_name = exposed_item.name,
+            .parent_name = import_alias orelse Ident.Idx.NONE,
+            .qualified_name = local_ident,
             .missing_module_failure = failure,
             .not_found_failure = failure,
             .selects_type = selects_type,
+            .exposes_constructors = exposed_item.is_wildcard,
+            .diagnostic_region = self.env.store.getRegionAt(@enumFromInt(@intFromEnum(exposed_item_idx))),
         });
         self.setDeferredRefNode(item_ref, @intFromEnum(import_stmt_idx));
     }
@@ -7660,7 +7675,7 @@ fn createFileImportDef(
                     .original_region = original_region,
                 } });
             },
-            .top_level_var_error, .var_across_function_boundary, .var_reassignment_ok => {},
+            .top_level_var_error, .var_across_function_boundary, .var_reassigned_in_expect, .var_reassignment_ok => {},
         }
         break :blk new_pattern_idx;
     };
@@ -7884,7 +7899,7 @@ fn canonicalizeDeclWithAnnotation(
     }
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
 
-    const can_expr = try self.canonicalizeExprOrMalformed(decl.body);
+    const can_expr = try self.canonicalizeExpr(decl.body);
 
     self.endDefiningBoundVars(saved_defining_bound_vars);
 
@@ -7939,7 +7954,7 @@ fn canonicalizeSingleQuote(
     token: Token.Idx,
     type_suffix: ?AST.LiteralTypeSuffix,
     comptime Idx: type,
-) std.mem.Allocator.Error!?Idx {
+) std.mem.Allocator.Error!Idx {
     const region = self.parse_ir.tokenizedRegionToRegion(token_region);
 
     const suffix = if (type_suffix) |suffix| switch (try self.resolveLiteralTypeSuffix(suffix, region)) {
@@ -8084,7 +8099,7 @@ fn canonicalizeNumeralPattern(
 pub fn canonicalizeExpr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!CanonicalizedExpr {
     return self.runExprKernel(ast_expr_idx);
 }
 
@@ -8208,63 +8223,147 @@ fn canonicalizedExternalAssociatedLookup(
     return .{ .idx = expr_idx, .free_vars = DataSpan.empty() };
 }
 
-fn canonicalizeIdentExpr(
+/// What a value-position identifier denotes.
+const IdentExprResolution = union(enum) {
+    expr: CanonicalizedExpr,
+    /// `Q.U.v` where `Q` names a type and `Q.U` names none: `Q.U` is a
+    /// qualified tag, and `v` is a member accessed on it.
+    tag_member: TagMemberAccess,
+    /// `Q.U.v` through an import, which only the import can say is a value or a
+    /// member accessed on a qualified tag. `expr` is the deferred reference
+    /// node and `ref` its worklist entry; the node that accesses the member is
+    /// recorded on the entry once it exists.
+    deferred_tag_member: struct {
+        expr: CanonicalizedExpr,
+        ref: ModuleEnv.DeferredImportRef.Idx,
+    },
+};
+
+const TagMemberAccess = struct {
+    receiver: CanonicalizedExpr,
+    member: Ident.Idx,
+    member_region: Region,
+};
+
+fn resolveIdentExpr(
     self: *Self,
     e: @TypeOf(@as(AST.Expr, undefined).ident),
-) std.mem.Allocator.Error!CanonicalizedExpr {
+) std.mem.Allocator.Error!IdentExprResolution {
     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
     if (self.parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
         const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
         if (qualifier_tokens.len > 0) {
-            if (try self.canonicalizeQualifiedIdentExpr(ident, region, qualifier_tokens)) |expr| {
-                return expr;
+            if (try self.canonicalizeQualifiedIdentExpr(e, ident, region, qualifier_tokens)) |resolution| {
+                return resolution;
             }
         }
 
-        return try self.canonicalizeUnqualifiedIdentExpr(ident, region);
+        return .{ .expr = try self.canonicalizeUnqualifiedIdentExpr(ident, region) };
     } else {
         const feature = try self.env.insertString("report an error when unable to resolve identifier");
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .not_implemented = .{
             .feature = feature,
             .region = region,
-        } });
+        } }) };
     }
+}
+
+/// Whether `Q.U.v` may be a member `v` accessed on the qualified tag `Q.U`:
+/// at least two qualifiers, the last spelled as a tag, and a value-spelled
+/// member.
+fn spellsQualifiedTagMember(self: *const Self, qualifier_tokens: []const u32, member: Ident.Idx) bool {
+    if (qualifier_tokens.len < 2 or self.isSourceTagIdent(member)) return false;
+    const tag_tok: Token.Idx = @intCast(qualifier_tokens[qualifier_tokens.len - 1]);
+    const tag_ident = self.parse_ir.tokens.resolveIdentifier(tag_tok) orelse return false;
+    return self.isSourceTagIdent(tag_ident);
+}
+
+/// The source region of the member `v` in `Q.U.v`, which ends the path.
+fn qualifiedMemberRegion(self: *const Self, member: Ident.Idx, region: Region) Region {
+    const len: u32 = @intCast(self.env.getIdent(member).len);
+    return .{ .start = .{ .offset = region.end.offset - len }, .end = region.end };
+}
+
+/// `Q.U.v` read as the member `v` accessed on the qualified tag `Q.U`.
+fn qualifiedTagMember(
+    self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
+    member: Ident.Idx,
+    region: Region,
+) std.mem.Allocator.Error!IdentExprResolution {
+    const qualifier_tokens = self.parse_ir.store.tokenSlice(e.qualifiers);
+    const tag_tok: Token.Idx = @intCast(qualifier_tokens[qualifier_tokens.len - 1]);
+    const receiver_region = Region{ .start = region.start, .end = self.parse_ir.tokens.resolve(tag_tok).end };
+    const receiver = try self.finishTagExprWithArgs(.{
+        .token = tag_tok,
+        .qualifiers = .{ .span = .{ .start = e.qualifiers.span.start, .len = e.qualifiers.span.len - 1 } },
+        .region = .{ .start = e.region.start, .end = tag_tok + 1 },
+    }, .{ .span = DataSpan.empty() }, receiver_region, self.scratch_free_vars.top());
+    return .{ .tag_member = .{
+        .receiver = receiver,
+        .member = member,
+        .member_region = self.qualifiedMemberRegion(member, region),
+    } };
+}
+
+/// Builds the field access `receiver.member` for a tag member that is not called.
+fn addTagMemberFieldAccess(
+    self: *Self,
+    access: TagMemberAccess,
+    region: Region,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    const path_builder = try self.env.startFieldAccessPath(1);
+    var path_finished = false;
+    errdefer if (!path_finished) self.env.rollbackFieldAccessPath(path_builder);
+    _ = self.env.appendFieldAccessPathSegmentAssumeCapacity(path_builder, .{
+        .name = access.member,
+        .mode = .required,
+    }, access.member_region);
+    const segments = self.env.finishFieldAccessPath(path_builder);
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_field_access = .{
+        .receiver = access.receiver.idx,
+        .segments = segments,
+    } }, region);
+    path_finished = true;
+    return .{ .idx = expr_idx, .free_vars = access.receiver.free_vars };
 }
 
 fn canonicalizeQualifiedIdentExpr(
     self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!?IdentExprResolution {
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
 
     switch (self.scopeLookup(.ident, qualified_ident)) {
         .found => |found_pattern_idx| {
             if (self.isDefiningBoundVar(found_pattern_idx)) {
-                return try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
+                return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .self_referential_definition = .{
                     .ident = qualified_ident,
                     .region = region,
-                } });
+                } }) };
             }
-            return try self.canonicalizedLocalLookup(found_pattern_idx, region);
+            return .{ .expr = try self.canonicalizedLocalLookup(found_pattern_idx, region) };
         },
         .not_found => {},
     }
 
-    if (try self.qualifierTypePath(qualifier_tokens)) |owner_path| {
-        if (try self.lookupOrCreateAssocValuePattern(owner_path, ident, qualified_ident, region)) |pattern_idx| {
-            return try self.canonicalizedAssociatedLookup(owner_path, qualified_ident, pattern_idx, region);
+    const owner_path = try self.qualifierTypePath(qualifier_tokens);
+    if (owner_path) |path| {
+        if (try self.lookupOrCreateAssocValuePattern(path, ident, qualified_ident, region)) |pattern_idx| {
+            return .{ .expr = try self.canonicalizedAssociatedLookup(path, qualified_ident, pattern_idx, region) };
         }
-        if (self.typeStatementForPath(owner_path)) |type_stmt_idx| {
+        if (self.typeStatementForPath(path)) |type_stmt_idx| {
             if (self.env.store.getStatement(type_stmt_idx) == .s_alias_decl) {
                 const type_ident = try self.joinedQualifierIdent(qualifier_tokens);
-                return try self.canonicalizedLocalAssociatedLookup(
+                return .{ .expr = try self.canonicalizedLocalAssociatedLookup(
                     @intFromEnum(type_stmt_idx),
                     type_ident,
                     ident,
                     region,
-                );
+                ) };
             }
         }
     }
@@ -8274,7 +8373,7 @@ fn canonicalizeQualifiedIdentExpr(
 
     if (qualifier_tokens.len == 1) {
         if (try self.canonicalizeTypeDispatchOwner(module_alias, ident, region)) |expr| {
-            return expr;
+            return .{ .expr = expr };
         }
     }
 
@@ -8291,27 +8390,33 @@ fn canonicalizeQualifiedIdentExpr(
     const module_name = if (module_info) |info| info.module_name else {
         if (qualifier_tokens.len == 1) {
             if (try self.canonicalizeTypeAssociatedLookup(module_alias, ident, region)) |expr| {
-                return expr;
+                return .{ .expr = expr };
             }
         } else if ((try self.scopeLookupOrPrepareTypeBinding(module_alias)) != null) {
+            // `Q.U` names no type but `Q` does, so `Q.U` is a qualified tag.
+            if (owner_path == null and self.spellsQualifiedTagMember(qualifier_tokens, ident) and
+                (try self.qualifierTypePath(qualifier_tokens[0 .. qualifier_tokens.len - 1])) != null)
+            {
+                return try self.qualifiedTagMember(e, ident, region);
+            }
             // A multi-segment chain rooted at a type resolved no associated
             // item; the report names the full path rather than collapsing it
             // to its first segment.
             const parent_ident = try self.joinedQualifierIdent(qualifier_tokens);
-            return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+            return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
                 .parent_name = parent_ident,
                 .nested_name = ident,
                 .region = region,
-            } });
+            } }) };
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .qualified_ident_does_not_exist = .{
             .ident = qualified_ident,
             .region = region,
-        } });
+        } }) };
     };
 
-    return try self.canonicalizeModuleQualifiedIdent(module_name, ident, region, qualifier_tokens);
+    return try self.canonicalizeModuleQualifiedIdent(e, module_name, ident, region, qualifier_tokens);
 }
 
 fn canonicalizeTypeDispatchOwner(
@@ -8493,11 +8598,12 @@ fn canonicalizeTypeAssociatedLookup(
 
 fn canonicalizeModuleQualifiedIdent(
     self: *Self,
+    e: @TypeOf(@as(AST.Expr, undefined).ident),
     module_name: Ident.Idx,
     ident: Ident.Idx,
     region: Region,
     qualifier_tokens: []const u32,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!?IdentExprResolution {
     const auto_imported_type_info = self.lookupBuiltinAutoImportedType(module_name);
 
     const import_idx = if (auto_imported_type_info) |info|
@@ -8505,10 +8611,10 @@ fn canonicalizeModuleQualifiedIdent(
     else if (self.scopeLookupImportedModule(module_name)) |explicit_import_idx|
         explicit_import_idx
     else
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .module_not_imported = .{
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .module_not_imported = .{
             .module_name = module_name,
             .region = region,
-        } });
+        } }) };
 
     const field_text = self.env.getIdent(ident);
     const lookup_scratch_top = self.scratchBytesTop();
@@ -8541,19 +8647,31 @@ fn canonicalizeModuleQualifiedIdent(
 
         if (module_env.common.findIdent(lookup_name)) |qname_ident| {
             if (module_env.getExposedValueNodeIndexById(qname_ident)) |target_node_idx| {
-                return try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region);
+                return .{ .expr = try self.canonicalizedExternalLookup(import_idx, target_node_idx, ident, region) };
             }
         }
 
         if (try self.addAutoImportedNominalTagExpr(info, import_idx, ident, region)) |expr_idx| {
-            return CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+            return .{ .expr = CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() } };
         }
 
-        return try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
-            .parent_name = module_name,
+        // `Q.U` names no builtin type but `Q` does (the auto-imported type
+        // itself when `Q` is one segment), so `Q.U` is a qualified tag.
+        if (self.spellsQualifiedTagMember(qualifier_tokens, ident) and
+            !try self.builtinNestedTypeExists(info, qualifier_tokens[1..]) and
+            (qualifier_tokens.len == 2 or try self.builtinNestedTypeExists(info, qualifier_tokens[1 .. qualifier_tokens.len - 1])))
+        {
+            return try self.qualifiedTagMember(e, ident, region);
+        }
+
+        return .{ .expr = try self.canonicalizedMalformedExpr(Diagnostic{ .nested_value_not_found = .{
+            .parent_name = if (qualifier_tokens.len > 1)
+                try self.joinedQualifierIdent(qualifier_tokens)
+            else
+                module_name,
             .nested_name = ident,
             .region = region,
-        } });
+        } }) };
     }
 
     // What an imported module exposes under this path is not a source-local
@@ -8564,7 +8682,8 @@ fn canonicalizeModuleQualifiedIdent(
     else
         module_name;
     const qualified_ident = try self.joinedQualifiedIdent(qualifier_tokens, ident);
-    return try self.deferredValueExpr(.{
+    const allows_tag_member = self.spellsQualifiedTagMember(qualifier_tokens, ident);
+    const ref = try self.pushDeferredRef(.{
         .import_idx = import_idx,
         .kind = .expr_value,
         .path = path_ident,
@@ -8577,7 +8696,34 @@ fn canonicalizeModuleQualifiedIdent(
         // Only a name spelled as a tag can name a constructor of the imported
         // module's main nominal type.
         .allows_nominal_tag = self.isSourceTagIdent(ident),
-    }, region);
+        .allows_tag_member = allows_tag_member,
+        .tag_receiver_end = if (allows_tag_member)
+            self.parse_ir.tokens.resolve(@intCast(qualifier_tokens[qualifier_tokens.len - 1])).end.offset
+        else
+            0,
+    });
+    const expr_idx = try self.env.addExpr(CIR.Expr{ .e_deferred_import_ref = .{
+        .ref = ref,
+        .backing = null,
+    } }, region);
+    self.setDeferredRefNode(ref, @intFromEnum(expr_idx));
+    const expr = CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() };
+    if (allows_tag_member) return .{ .deferred_tag_member = .{ .expr = expr, .ref = ref } };
+    return .{ .expr = expr };
+}
+
+/// Whether the qualifier tokens name a type nested inside the auto-imported
+/// builtin type `info`.
+fn builtinNestedTypeExists(self: *Self, info: AutoImportedType, segment_tokens: []const u32) std.mem.Allocator.Error!bool {
+    const top = self.qualified_ident_bytes.top();
+    defer self.qualified_ident_bytes.clearFrom(top);
+    var qualified: []const u8 = self.env.getIdent(info.qualified_type_ident);
+    for (segment_tokens) |raw_tok| {
+        const segment = self.parse_ir.tokens.resolveIdentifier(@intCast(raw_tok)) orelse return false;
+        qualified = try appendQualifiedText(&self.qualified_ident_bytes, qualified, self.env.getIdent(segment));
+    }
+    const type_ident = info.env.common.findIdent(qualified) orelse return false;
+    return info.env.getExposedTypeNodeIndexById(type_ident) != null;
 }
 
 fn canonicalizeUnqualifiedIdentExpr(
@@ -8748,10 +8894,10 @@ fn canonicalizeUnqualifiedIdentExpr(
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {
     if (self.builtin_auto_imported_types.get(self.env.idents.@"try")) |try_info| {
         const try_stmt_idx = try_info.statement_idx orelse {
-            @panic("Builtin Try had no statement during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no statement during try suffix canonicalization"});
         };
         const target_node_idx = try_info.env.getExposedNodeIndexByStatementIdx(try_stmt_idx) orelse {
-            @panic("Builtin Try had no target node during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no target node during try suffix canonicalization"});
         };
         return TryNominalTarget{ .external = .{
             .import_idx = try self.getOrCreateCompilerBuiltinAutoImport(),
@@ -8760,25 +8906,25 @@ fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.@"try")) orelse {
-        @panic("Try type binding was absent during try suffix canonicalization");
+        base.invariant("{s}", .{"Try type binding was absent during try suffix canonicalization"});
     };
 
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| TryNominalTarget{ .local = stmt },
-        .local_where_alias => @panic("Try type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Try type binding resolved to a where alias"}),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Try type binding had no import during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no import during try suffix canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Try type binding had no target node during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no target node during try suffix canonicalization"});
             };
             break :blk TryNominalTarget{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
             } };
         },
-        .local_alias => @panic("Try type binding was not a nominal type during try suffix canonicalization"),
+        .local_alias => base.invariant("{s}", .{"Try type binding was not a nominal type during try suffix canonicalization"}),
     };
 }
 
@@ -8956,18 +9102,51 @@ fn addTryReturnErr(
         } });
 }
 
+/// The value of a `?` operator's Err branch, given the Err payload it reports.
+/// Directly inside a top-level `expect` it fails the expect, reporting the
+/// payload. Directly inside an inline `expect` it is a compile error, because
+/// returning early would make the program behave differently when optimized
+/// builds remove the `expect`. Everywhere else it returns the payload as an
+/// `Err` from the enclosing function.
+fn addTryErrBranchValue(
+    self: *Self,
+    target: TryNominalTarget,
+    payload_expr: Expr.Idx,
+    region: Region,
+) std.mem.Allocator.Error!Expr.Idx {
+    return switch (self.expect_context) {
+        .top_level => try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
+            .expr = payload_expr,
+            .snippet = try self.env.insertString(self.env.getSource(region)),
+        } }, region),
+        .@"inline" => try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+            .region = region,
+            .kind = .try_suffix,
+        } }),
+        .none => try self.addTryReturnErr(target, payload_expr, region),
+    };
+}
+
 /// Warn about every `?` that produces the value a function returns. `expr_idx`
 /// is a function body or a `return` operand; its tail positions are followed
 /// through blocks and through `if` and `match` branches, and each `?` reached
 /// that way applies to the function's return value.
-fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Error!void {
-    switch (self.env.store.getExpr(expr_idx)) {
-        .e_block => |block| try self.warnTrailingTrySuffix(block.final_expr),
+fn warnTrailingTrySuffix(self: *Self, root: Expr.Idx) std.mem.Allocator.Error!void {
+    // Tail positions are visited in source order: children are pushed in
+    // reverse so the first branch is popped first.
+    var pending = std.ArrayList(Expr.Idx).empty;
+    defer pending.deinit(self.env.gpa);
+    try pending.append(self.env.gpa, root);
+    while (pending.pop()) |expr_idx| switch (self.env.store.getExpr(expr_idx)) {
+        .e_block => |block| try pending.append(self.env.gpa, block.final_expr),
         .e_if => |if_expr| {
-            for (self.env.store.sliceIfBranches(if_expr.branches)) |branch_idx| {
-                try self.warnTrailingTrySuffix(self.env.store.getIfBranch(branch_idx).body);
+            try pending.append(self.env.gpa, if_expr.final_else);
+            const branches = self.env.store.sliceIfBranches(if_expr.branches);
+            var i = branches.len;
+            while (i > 0) {
+                i -= 1;
+                try pending.append(self.env.gpa, self.env.store.getIfBranch(branches[i]).body);
             }
-            try self.warnTrailingTrySuffix(if_expr.final_else);
         },
         .e_match => |match_expr| {
             if (match_expr.is_try_suffix) {
@@ -8975,8 +9154,11 @@ fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Erro
                     .region = self.trySuffixOperatorRegion(expr_idx),
                 } });
             } else {
-                for (self.env.store.sliceMatchBranches(match_expr.branches)) |branch_idx| {
-                    try self.warnTrailingTrySuffix(self.env.store.getMatchBranch(branch_idx).value);
+                const branches = self.env.store.sliceMatchBranches(match_expr.branches);
+                var i = branches.len;
+                while (i > 0) {
+                    i -= 1;
+                    try pending.append(self.env.gpa, self.env.store.getMatchBranch(branches[i]).value);
                 }
             }
         },
@@ -9037,7 +9219,7 @@ fn warnTrailingTrySuffix(self: *Self, expr_idx: Expr.Idx) std.mem.Allocator.Erro
         .e_hosted_lambda,
         .e_run_low_level,
         => {},
-    }
+    };
 }
 
 /// The region to highlight for a `?` desugared into `expr_idx`: just the `?`
@@ -9094,12 +9276,7 @@ fn finishSuffixSingleQuestionExpr(
         } }, region);
         try self.used_patterns.put(self.env.gpa, err_assign_pattern_idx, {});
 
-        const branch_value_idx = if (self.in_expect) blk: {
-            break :blk try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
-                .expr = err_lookup_idx,
-                .snippet = try self.env.insertString(self.env.getSource(region)),
-            } }, region);
-        } else try self.addTryReturnErr(try_target, err_lookup_idx, region);
+        const branch_value_idx = try self.addTryErrBranchValue(try_target, err_lookup_idx, region);
 
         try self.appendTryMatchBranch(err_branch_pat_span, branch_value_idx, region);
     }
@@ -9181,16 +9358,7 @@ fn finishSingleQuestionBinop(
             }, region);
         };
 
-        // Build the branch body
-        const branch_value_idx = if (self.in_expect) blk: {
-            // Inside a top-level expect: there is no enclosing function to
-            // return from, so fail the entire expect at runtime, reporting the
-            // mapped err payload.
-            break :blk try self.env.addExpr(CIR.Expr{ .e_expect_err = .{
-                .expr = transformed_err_idx,
-                .snippet = try self.env.insertString(self.env.getSource(region)),
-            } }, region);
-        } else try self.addTryReturnErr(try_target, transformed_err_idx, region);
+        const branch_value_idx = try self.addTryErrBranchValue(try_target, transformed_err_idx, region);
 
         try self.appendTryMatchBranch(err_branch_pat_span, branch_value_idx, region);
     }
@@ -9200,22 +9368,6 @@ fn finishSingleQuestionBinop(
     const free_vars_span = self.scratch_free_vars.spanFrom(free_vars_start);
 
     return CanonicalizedExpr{ .idx = expr_idx, .free_vars = free_vars_span };
-}
-
-fn exprOrMalformedFromResult(
-    self: *Self,
-    maybe_expr: ?CanonicalizedExpr,
-    ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!CanonicalizedExpr {
-    return maybe_expr orelse blk: {
-        const ast_expr = self.parse_ir.store.getExpr(ast_expr_idx);
-        break :blk CanonicalizedExpr{
-            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = self.parse_ir.tokenizedRegionToRegion(ast_expr.to_tokenized_region()),
-            } }),
-            .free_vars = DataSpan.empty(),
-        };
-    };
 }
 
 fn blockContextFromState(block: BlockState) BlockStatementContext {
@@ -9345,7 +9497,10 @@ const DefiniteInitAnalyzer = struct {
         defer state.deinit(self.allocator);
         var breaks = std.ArrayList(InitState).empty;
         defer self.deinitStates(&breaks);
-        _ = try self.analyzeBlock(stmts, final_expr, &state, &breaks, true);
+        _ = try self.run(.{
+            .state = &state,
+            .job = .{ .block = .{ .stmts = stmts, .final_expr = final_expr, .track_new_vars = true } },
+        }, &breaks);
     }
 
     fn deinitStates(self: *@This(), states: *std.ArrayList(InitState)) void {
@@ -9353,136 +9508,515 @@ const DefiniteInitAnalyzer = struct {
         states.deinit(self.allocator);
     }
 
-    fn analyzeBlock(
-        self: *@This(),
-        stmts: Statement.Span,
-        final_expr: Expr.Idx,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-        track_new_vars: bool,
-    ) Allocator.Error!bool {
-        const local_start = state.vars.items.len;
-        defer state.trimTo(local_start);
-
-        const break_start = breaks.items.len;
-        errdefer trimBreakStates(breaks, break_start, local_start);
-
-        for (self.can.env.store.sliceStatements(stmts)) |stmt_idx| {
-            if (!try self.analyzeStatement(stmt_idx, state, breaks, track_new_vars)) {
-                trimBreakStates(breaks, break_start, local_start);
-                return false;
-            }
-        }
-
-        const continues = try self.analyzeExpr(final_expr, state, breaks);
-        trimBreakStates(breaks, break_start, local_start);
-        return continues;
-    }
-
     fn trimBreakStates(breaks: *std.ArrayList(InitState), start: usize, len: usize) void {
         for (breaks.items[start..]) |*break_state| break_state.trimTo(len);
     }
 
-    fn analyzeStatement(
-        self: *@This(),
-        stmt_idx: Statement.Idx,
+    const LoopKind = enum { ordinary, infinite, breakable };
+
+    /// One pending analysis. Each frame waits on at most one component at a
+    /// time; the component's answer (whether control continues normally)
+    /// resumes it, so nesting depth lives in the frame stack.
+    const Frame = struct {
         state: *InitState,
-        breaks: *std.ArrayList(InitState),
-        track_new_vars: bool,
-    ) Allocator.Error!bool {
-        return switch (self.can.env.store.getStatement(stmt_idx)) {
-            .s_decl => |decl| try self.analyzeExpr(decl.expr, state, breaks),
-            .s_var => |var_| try self.analyzeExpr(var_.expr, state, breaks),
-            .s_var_uninitialized => |var_| blk: {
-                if (track_new_vars) try state.addUninitialized(self.allocator, var_.pattern_idx);
-                break :blk true;
+        job: Job,
+        /// Applied to this frame's answer before it resumes the parent.
+        post: Post = .none,
+    };
+
+    const Post = union(enum) {
+        none,
+        /// Control never continues past this construct.
+        force_false,
+        /// A reassignment initializes its pattern when its value continues.
+        reassign: Pattern.Idx,
+    };
+
+    const Job = union(enum) {
+        expr: Expr.Idx,
+        stmt: struct { idx: Statement.Idx, track_new_vars: bool },
+        /// Resumes the parent with its single component's answer.
+        forward,
+        /// Components in order on the same state, stopping at the first that
+        /// does not continue.
+        seq: struct { head: ?Expr.Idx = null, span: Expr.Span, tail: ?Expr.Idx = null, index: usize = 0 },
+        record: struct { fields: CIR.RecordField.Span, ext: ?Expr.Idx, index: usize = 0 },
+        block: struct {
+            stmts: Statement.Span,
+            final_expr: Expr.Idx,
+            track_new_vars: bool,
+            local_start: usize = 0,
+            break_start: usize = 0,
+            index: usize = 0,
+            started: bool = false,
+        },
+        loop: struct {
+            cond: Expr.Idx,
+            body: Expr.Idx,
+            kind: LoopKind,
+            break_start: usize = 0,
+            body_state: ?*InitState = null,
+            stage: enum { start, cond, body } = .start,
+        },
+        short_circuit: struct {
+            lhs: Expr.Idx,
+            rhs: Expr.Idx,
+            skipped: ?*InitState = null,
+            rhs_state: ?*InitState = null,
+            stage: enum { start, lhs, rhs } = .start,
+        },
+        if_: struct {
+            if_: std.meta.fieldInfo(Expr, .e_if).type,
+            normal: std.ArrayList(InitState) = .empty,
+            branch_state: ?*InitState = null,
+            index: usize = 0,
+            stage: enum { next, cond, body, else_ } = .next,
+        },
+        match: struct {
+            match: Expr.Match,
+            normal: std.ArrayList(InitState) = .empty,
+            branch_state: ?*InitState = null,
+            index: usize = 0,
+            stage: enum { start, scrutinee, next, guard, value } = .start,
+        },
+    };
+
+    const Step = union(enum) {
+        push: Frame,
+        done: bool,
+    };
+
+    fn run(self: *@This(), root: Frame, breaks: *std.ArrayList(InitState)) Allocator.Error!bool {
+        var frames = std.ArrayList(Frame).empty;
+        defer {
+            for (frames.items) |*frame| self.releaseFrame(frame);
+            frames.deinit(self.allocator);
+        }
+        try frames.append(self.allocator, root);
+        var input: ?bool = null;
+        while (true) {
+            const frame = &frames.items[frames.items.len - 1];
+            switch (try self.stepFrame(frame, input, breaks)) {
+                .push => |child| {
+                    try frames.append(self.allocator, child);
+                    input = null;
+                },
+                .done => |continues| {
+                    var finished = frames.pop().?;
+                    self.releaseFrame(&finished);
+                    const answer = switch (finished.post) {
+                        .none => continues,
+                        .force_false => false,
+                        .reassign => |pattern| blk: {
+                            if (!continues) break :blk false;
+                            try self.markAssignedPattern(finished.state, pattern);
+                            break :blk true;
+                        },
+                    };
+                    if (frames.items.len == 0) return answer;
+                    input = answer;
+                },
+            }
+        }
+    }
+
+    fn releaseFrame(self: *@This(), frame: *Frame) void {
+        switch (frame.job) {
+            .loop => |*loop| if (loop.body_state) |box| self.destroyState(box),
+            .short_circuit => |*sc| {
+                if (sc.skipped) |box| self.destroyState(box);
+                if (sc.rhs_state) |box| self.destroyState(box);
             },
-            .s_reassign => |reassign| blk: {
-                if (!try self.analyzeExpr(reassign.expr, state, breaks)) break :blk false;
-                try self.markAssignedPattern(state, reassign.pattern_idx);
-                break :blk true;
+            inline .if_, .match => |*if_| {
+                if (if_.branch_state) |box| self.destroyState(box);
+                self.deinitStates(&if_.normal);
             },
-            .s_dbg => |dbg| try self.analyzeExpr(dbg.expr, state, breaks),
-            .s_expr => |expr| try self.analyzeExpr(expr.expr, state, breaks),
-            .s_expect => |expect| try self.analyzeExpr(expect.body, state, breaks),
-            .s_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
-            .s_while => |while_| try self.analyzeWhile(while_.cond, while_.body, state, breaks, .ordinary),
-            .s_infinite_loop => |loop| try self.analyzeWhile(loop.cond, loop.body, state, breaks, .infinite),
-            .s_breakable_loop => |loop| try self.analyzeWhile(loop.cond, loop.body, state, breaks, .breakable),
-            .s_return => |ret| blk: {
-                _ = try self.analyzeExpr(ret.expr, state, breaks);
-                break :blk false;
+            .expr, .stmt, .forward, .seq, .record, .block => {},
+        }
+        frame.job = .forward;
+    }
+
+    fn cloneState(self: *@This(), state: *const InitState) Allocator.Error!*InitState {
+        const box = try self.allocator.create(InitState);
+        errdefer self.allocator.destroy(box);
+        box.* = try state.clone(self.allocator);
+        return box;
+    }
+
+    fn destroyState(self: *@This(), box: *InitState) void {
+        box.deinit(self.allocator);
+        self.allocator.destroy(box);
+    }
+
+    /// Moves a branch's state into `normal` when the branch continues, and
+    /// discards it otherwise.
+    fn settleBranchState(
+        self: *@This(),
+        normal: *std.ArrayList(InitState),
+        slot: *?*InitState,
+        continues: bool,
+    ) Allocator.Error!void {
+        const box = slot.*.?;
+        if (continues) {
+            try normal.append(self.allocator, box.*);
+            self.allocator.destroy(box);
+        } else {
+            self.destroyState(box);
+        }
+        slot.* = null;
+    }
+
+    fn finishBranches(self: *@This(), state: *InitState, normal: *std.ArrayList(InitState)) Allocator.Error!Step {
+        if (normal.items.len == 0) return .{ .done = false };
+        try self.mergeStatesInto(state, normal.items);
+        for (normal.items) |*branch_state| branch_state.deinit(self.allocator);
+        normal.clearRetainingCapacity();
+        return .{ .done = true };
+    }
+
+    fn exprStep(state: *InitState, expr_idx: Expr.Idx) Step {
+        return .{ .push = .{ .state = state, .job = .{ .expr = expr_idx } } };
+    }
+
+    fn stepFrame(self: *@This(), frame: *Frame, input: ?bool, breaks: *std.ArrayList(InitState)) Allocator.Error!Step {
+        const state = frame.state;
+        var answer = input;
+        while (true) switch (frame.job) {
+            .forward => return .{ .done = answer.? },
+            .expr => |expr_idx| {
+                if (try self.expandExpr(frame, expr_idx, breaks)) |step_| return step_;
             },
-            .s_break => blk: {
+            .stmt => |stmt| {
+                if (try self.expandStatement(frame, stmt.idx, stmt.track_new_vars, breaks)) |step_| return step_;
+            },
+            .seq => |*seq| {
+                if (answer) |continues| if (!continues) return .{ .done = false };
+                const next = self.seqItem(seq.head, seq.span, seq.tail, seq.index) orelse return .{ .done = true };
+                seq.index += 1;
+                return exprStep(state, next);
+            },
+            .record => |*record| {
+                if (answer) |continues| if (!continues) return .{ .done = false };
+                const fields = self.can.env.store.sliceRecordFields(record.fields);
+                const index = record.index;
+                record.index += 1;
+                if (index < fields.len) return exprStep(state, self.can.env.store.getRecordField(fields[index]).value);
+                if (index == fields.len) if (record.ext) |ext| return exprStep(state, ext);
+                return .{ .done = true };
+            },
+            .block => |*block| {
+                if (!block.started) {
+                    block.started = true;
+                    block.local_start = state.vars.items.len;
+                    block.break_start = breaks.items.len;
+                } else if (!answer.?) {
+                    trimBreakStates(breaks, block.break_start, block.local_start);
+                    state.trimTo(block.local_start);
+                    return .{ .done = false };
+                }
+                const stmts = self.can.env.store.sliceStatements(block.stmts);
+                const index = block.index;
+                block.index += 1;
+                if (index < stmts.len) return .{ .push = .{
+                    .state = state,
+                    .job = .{ .stmt = .{ .idx = stmts[index], .track_new_vars = block.track_new_vars } },
+                } };
+                if (index == stmts.len) return exprStep(state, block.final_expr);
+                trimBreakStates(breaks, block.break_start, block.local_start);
+                state.trimTo(block.local_start);
+                return .{ .done = true };
+            },
+            .loop => |*loop| switch (loop.stage) {
+                .start => {
+                    loop.break_start = breaks.items.len;
+                    loop.stage = .cond;
+                    return exprStep(state, loop.cond);
+                },
+                .cond => {
+                    if (!answer.?) {
+                        self.consumeLoopBreaks(breaks, loop.break_start);
+                        return .{ .done = breaks.items.len > loop.break_start };
+                    }
+                    loop.body_state = try self.cloneState(state);
+                    loop.stage = .body;
+                    return exprStep(loop.body_state.?, loop.body);
+                },
+                .body => {
+                    self.destroyState(loop.body_state.?);
+                    loop.body_state = null;
+                    return .{ .done = switch (loop.kind) {
+                        .ordinary => blk: {
+                            _ = try self.mergeLoopBreaksIntoState(state, breaks, loop.break_start, true);
+                            break :blk true;
+                        },
+                        .infinite => blk: {
+                            self.consumeLoopBreaks(breaks, loop.break_start);
+                            break :blk false;
+                        },
+                        .breakable => try self.mergeLoopBreaksIntoState(state, breaks, loop.break_start, false),
+                    } };
+                },
+            },
+            .short_circuit => |*sc| switch (sc.stage) {
+                .start => {
+                    sc.stage = .lhs;
+                    return exprStep(state, sc.lhs);
+                },
+                .lhs => {
+                    if (!answer.?) return .{ .done = false };
+                    sc.skipped = try self.cloneState(state);
+                    sc.rhs_state = try self.cloneState(state);
+                    sc.stage = .rhs;
+                    return exprStep(sc.rhs_state.?, sc.rhs);
+                },
+                .rhs => {
+                    if (answer.?) {
+                        const states = [_]InitState{ sc.skipped.?.*, sc.rhs_state.?.* };
+                        try self.mergeStatesInto(state, &states);
+                    }
+                    self.destroyState(sc.skipped.?);
+                    sc.skipped = null;
+                    self.destroyState(sc.rhs_state.?);
+                    sc.rhs_state = null;
+                    return .{ .done = true };
+                },
+            },
+            .if_ => |*if_| switch (if_.stage) {
+                .next => {
+                    const branches = self.can.env.store.sliceIfBranches(if_.if_.branches);
+                    if_.branch_state = try self.cloneState(state);
+                    if (if_.index < branches.len) {
+                        if_.stage = .cond;
+                        return exprStep(if_.branch_state.?, self.can.env.store.getIfBranch(branches[if_.index]).cond);
+                    }
+                    if_.stage = .else_;
+                    return exprStep(if_.branch_state.?, if_.if_.final_else);
+                },
+                .cond => {
+                    if (answer.?) {
+                        const branches = self.can.env.store.sliceIfBranches(if_.if_.branches);
+                        if_.stage = .body;
+                        return exprStep(if_.branch_state.?, self.can.env.store.getIfBranch(branches[if_.index]).body);
+                    }
+                    try self.settleBranchState(&if_.normal, &if_.branch_state, false);
+                    if_.index += 1;
+                    if_.stage = .next;
+                    answer = null;
+                    continue;
+                },
+                .body => {
+                    try self.settleBranchState(&if_.normal, &if_.branch_state, answer.?);
+                    if_.index += 1;
+                    if_.stage = .next;
+                    answer = null;
+                    continue;
+                },
+                .else_ => {
+                    try self.settleBranchState(&if_.normal, &if_.branch_state, answer.?);
+                    return self.finishBranches(state, &if_.normal);
+                },
+            },
+            .match => |*match| switch (match.stage) {
+                .start => {
+                    match.stage = .scrutinee;
+                    return exprStep(state, match.match.cond);
+                },
+                .scrutinee => {
+                    if (!answer.?) return .{ .done = false };
+                    match.stage = .next;
+                    answer = null;
+                    continue;
+                },
+                .next => {
+                    const branches = self.can.env.store.sliceMatchBranches(match.match.branches);
+                    if (match.index == branches.len) return self.finishBranches(state, &match.normal);
+                    const branch = self.can.env.store.getMatchBranch(branches[match.index]);
+                    match.branch_state = try self.cloneState(state);
+                    if (branch.guard) |guard| {
+                        match.stage = .guard;
+                        return exprStep(match.branch_state.?, guard);
+                    }
+                    match.stage = .value;
+                    return exprStep(match.branch_state.?, branch.value);
+                },
+                .guard => {
+                    if (answer.?) {
+                        const branches = self.can.env.store.sliceMatchBranches(match.match.branches);
+                        match.stage = .value;
+                        return exprStep(match.branch_state.?, self.can.env.store.getMatchBranch(branches[match.index]).value);
+                    }
+                    try self.settleBranchState(&match.normal, &match.branch_state, false);
+                    match.index += 1;
+                    match.stage = .next;
+                    answer = null;
+                    continue;
+                },
+                .value => {
+                    try self.settleBranchState(&match.normal, &match.branch_state, answer.?);
+                    match.index += 1;
+                    match.stage = .next;
+                    answer = null;
+                    continue;
+                },
+            },
+        };
+    }
+
+    fn seqItem(self: *@This(), head: ?Expr.Idx, span: Expr.Span, tail: ?Expr.Idx, index: usize) ?Expr.Idx {
+        var i = index;
+        if (head) |expr_idx| {
+            if (i == 0) return expr_idx;
+            i -= 1;
+        }
+        const items = self.can.env.store.sliceExpr(span);
+        if (i < items.len) return items[i];
+        if (i == items.len) return tail;
+        return null;
+    }
+
+    /// Hands a construct's component answer to a `post` step on a child
+    /// frame, leaving this frame to forward the adjusted answer.
+    fn pushWithPost(frame: *Frame, job: Job, post: Post) Step {
+        frame.job = .forward;
+        return .{ .push = .{ .state = frame.state, .job = job, .post = post } };
+    }
+
+    fn seqJob(head: ?Expr.Idx, span: Expr.Span, tail: ?Expr.Idx) Job {
+        return .{ .seq = .{ .head = head, .span = span, .tail = tail } };
+    }
+
+    /// Replaces an `expr` job with the job for its construct, or answers a
+    /// leaf directly.
+    fn expandExpr(self: *@This(), frame: *Frame, expr_idx: Expr.Idx, breaks: *std.ArrayList(InitState)) Allocator.Error!?Step {
+        const state = frame.state;
+        frame.job = switch (self.can.env.store.getExpr(expr_idx)) {
+            .e_lookup_local => |lookup| {
+                if (state.isTrackedUninitialized(lookup.pattern_idx)) {
+                    try self.reportUninitializedRead(expr_idx, lookup.pattern_idx);
+                }
+                return .{ .done = true };
+            },
+            .e_lookup_external,
+            .e_lookup_associated_local,
+            .e_lookup_associated,
+            .e_lookup_associated_resolved,
+            .e_lookup_required,
+            .e_num,
+            .e_frac_f32,
+            .e_frac_f64,
+            .e_dec,
+            .e_dec_small,
+            .e_num_from_numeral,
+            .e_typed_int,
+            .e_typed_frac,
+            .e_typed_num_from_numeral,
+            .e_str_segment,
+            .e_bytes_literal,
+            .e_empty_list,
+            .e_empty_record,
+            .e_zero_argument_tag,
+            .e_runtime_error,
+            .e_ellipsis,
+            .e_anno_only,
+            .e_derived_method,
+            .e_closure,
+            .e_lambda,
+            .e_hosted_lambda,
+            => return .{ .done = true },
+            .e_crash => return .{ .done = false },
+            .e_break => {
                 try breaks.append(self.allocator, try state.clone(self.allocator));
-                break :blk false;
+                return .{ .done = false };
+            },
+            .e_str => |str| seqJob(null, str.span, null),
+            .e_list => |list| seqJob(null, list.elems, null),
+            .e_tuple => |tuple| seqJob(null, tuple.elems, null),
+            .e_tag => |tag| seqJob(null, tag.args, null),
+            .e_nominal => |nominal| .{ .expr = nominal.backing_expr },
+            .e_nominal_external => |nominal| .{ .expr = nominal.backing_expr },
+            .e_deferred_import_ref => |deferred| if (deferred.backing) |backing|
+                .{ .expr = backing.expr }
+            else
+                return .{ .done = true },
+            .e_record => |record| .{ .record = .{ .fields = record.fields, .ext = record.ext } },
+            .e_call => |call| seqJob(call.func, call.args, null),
+            .e_binop => |binop| if (binop.op == .@"and" or binop.op == .@"or")
+                .{ .short_circuit = .{ .lhs = binop.lhs, .rhs = binop.rhs } }
+            else
+                seqJob(binop.lhs, Expr.Span{ .span = DataSpan.empty() }, binop.rhs),
+            .e_unary_minus => |unary| .{ .expr = unary.expr },
+            .e_field_access => |field| .{ .expr = field.receiver },
+            .e_method_call => |call| seqJob(call.receiver, call.args, null),
+            .e_dispatch_call => |call| seqJob(call.receiver, call.args, null),
+            .e_interpolation => |interpolation| seqJob(interpolation.first, interpolation.parts, null),
+            .e_structural_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
+            .e_structural_hash => |h| seqJob(h.value, Expr.Span{ .span = DataSpan.empty() }, h.hasher),
+            .e_method_eq => |eq| seqJob(eq.lhs, Expr.Span{ .span = DataSpan.empty() }, eq.rhs),
+            .e_type_method_call => |call| seqJob(null, call.args, null),
+            .e_type_dispatch_call => |call| seqJob(null, call.args, null),
+            .e_tuple_access => |access| .{ .expr = access.tuple },
+            .e_block => |block| .{ .block = .{
+                .stmts = block.stmts,
+                .final_expr = block.final_expr,
+                .track_new_vars = false,
+            } },
+            .e_if => |if_| .{ .if_ = .{ .if_ = if_ } },
+            .e_match => |match| .{ .match = .{ .match = match } },
+            .e_dbg => |dbg| .{ .expr = dbg.expr },
+            .e_expect_err => |expect_err| .{ .expr = expect_err.expr },
+            .e_expect => |expect| .{ .expr = expect.body },
+            .e_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
+            .e_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
+            .e_run_low_level => |run_| if (run_.op == .crash)
+                return pushWithPost(frame, seqJob(null, run_.args, null), .force_false)
+            else
+                seqJob(null, run_.args, null),
+        };
+        return null;
+    }
+
+    /// Replaces a `stmt` job with the job for its statement, or answers a
+    /// statement without components directly.
+    fn expandStatement(
+        self: *@This(),
+        frame: *Frame,
+        stmt_idx: Statement.Idx,
+        track_new_vars: bool,
+        breaks: *std.ArrayList(InitState),
+    ) Allocator.Error!?Step {
+        const state = frame.state;
+        frame.job = switch (self.can.env.store.getStatement(stmt_idx)) {
+            .s_decl => |decl| .{ .expr = decl.expr },
+            .s_var => |var_| .{ .expr = var_.expr },
+            .s_var_uninitialized => |var_| {
+                if (track_new_vars) try state.addUninitialized(self.allocator, var_.pattern_idx);
+                return .{ .done = true };
+            },
+            .s_reassign => |reassign| return pushWithPost(frame, .{ .expr = reassign.expr }, .{ .reassign = reassign.pattern_idx }),
+            .s_dbg => |dbg| .{ .expr = dbg.expr },
+            .s_expr => |expr| .{ .expr = expr.expr },
+            .s_expect => |expect| .{ .expr = expect.body },
+            .s_for => |for_| .{ .loop = .{ .cond = for_.expr, .body = for_.body, .kind = .ordinary } },
+            .s_while => |while_| .{ .loop = .{ .cond = while_.cond, .body = while_.body, .kind = .ordinary } },
+            .s_infinite_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .infinite } },
+            .s_breakable_loop => |loop| .{ .loop = .{ .cond = loop.cond, .body = loop.body, .kind = .breakable } },
+            .s_return => |ret| return pushWithPost(frame, .{ .expr = ret.expr }, .force_false),
+            .s_break => {
+                try breaks.append(self.allocator, try state.clone(self.allocator));
+                return .{ .done = false };
             },
             .s_crash,
             .s_runtime_error,
-            => false,
+            => return .{ .done = false },
             .s_import,
             .s_alias_decl,
             .s_nominal_decl,
             .s_where_alias_decl,
             .s_type_anno,
             .s_type_var_alias,
-            => true,
+            => return .{ .done = true },
         };
-    }
-
-    const LoopKind = enum { ordinary, infinite, breakable };
-
-    fn analyzeWhile(
-        self: *@This(),
-        cond: Expr.Idx,
-        body: Expr.Idx,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-        kind: LoopKind,
-    ) Allocator.Error!bool {
-        const break_start = breaks.items.len;
-        if (!try self.analyzeExpr(cond, state, breaks)) {
-            self.consumeLoopBreaks(breaks, break_start);
-            return breaks.items.len > break_start;
-        }
-
-        var body_state = try state.clone(self.allocator);
-        defer body_state.deinit(self.allocator);
-        _ = try self.analyzeExpr(body, &body_state, breaks);
-
-        return switch (kind) {
-            .ordinary => blk: {
-                _ = try self.mergeLoopBreaksIntoState(state, breaks, break_start, true);
-                break :blk true;
-            },
-            .infinite => blk: {
-                self.consumeLoopBreaks(breaks, break_start);
-                break :blk false;
-            },
-            .breakable => blk: {
-                break :blk try self.mergeLoopBreaksIntoState(state, breaks, break_start, false);
-            },
-        };
-    }
-
-    fn analyzeForLike(
-        self: *@This(),
-        iter_expr: Expr.Idx,
-        body: Expr.Idx,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-    ) Allocator.Error!bool {
-        const break_start = breaks.items.len;
-        if (!try self.analyzeExpr(iter_expr, state, breaks)) {
-            self.consumeLoopBreaks(breaks, break_start);
-            return breaks.items.len > break_start;
-        }
-
-        var body_state = try state.clone(self.allocator);
-        defer body_state.deinit(self.allocator);
-        _ = try self.analyzeExpr(body, &body_state, breaks);
-        _ = try self.mergeLoopBreaksIntoState(state, breaks, break_start, true);
-        return true;
+        return null;
     }
 
     fn consumeLoopBreaks(self: *@This(), breaks: *std.ArrayList(InitState), start: usize) void {
@@ -9516,215 +10050,6 @@ const DefiniteInitAnalyzer = struct {
     fn deinitBreakRange(self: *@This(), breaks: *std.ArrayList(InitState), start: usize) void {
         for (breaks.items[start..]) |*break_state| break_state.deinit(self.allocator);
         breaks.items.len = start;
-    }
-
-    fn analyzeExpr(
-        self: *@This(),
-        expr_idx: Expr.Idx,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-    ) Allocator.Error!bool {
-        return switch (self.can.env.store.getExpr(expr_idx)) {
-            .e_lookup_local => |lookup| blk: {
-                if (state.isTrackedUninitialized(lookup.pattern_idx)) {
-                    try self.reportUninitializedRead(expr_idx, lookup.pattern_idx);
-                }
-                break :blk true;
-            },
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_num,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_num_from_numeral,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_str_segment,
-            .e_bytes_literal,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_runtime_error,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            => true,
-            .e_str => |str| try self.analyzeExprSpan(str.span, state, breaks),
-            .e_list => |list| try self.analyzeExprSpan(list.elems, state, breaks),
-            .e_tuple => |tuple| try self.analyzeExprSpan(tuple.elems, state, breaks),
-            .e_tag => |tag| try self.analyzeExprSpan(tag.args, state, breaks),
-            .e_nominal => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
-            .e_nominal_external => |nominal| try self.analyzeExpr(nominal.backing_expr, state, breaks),
-            .e_deferred_import_ref => |deferred| if (deferred.backing) |backing|
-                try self.analyzeExpr(backing.expr, state, breaks)
-            else
-                true,
-            .e_record => |record| blk: {
-                for (self.can.env.store.sliceRecordFields(record.fields)) |field_idx| {
-                    const field = self.can.env.store.getRecordField(field_idx);
-                    if (!try self.analyzeExpr(field.value, state, breaks)) break :blk false;
-                }
-                if (record.ext) |ext| {
-                    if (!try self.analyzeExpr(ext, state, breaks)) break :blk false;
-                }
-                break :blk true;
-            },
-            .e_call => |call| blk: {
-                if (!try self.analyzeExpr(call.func, state, breaks)) break :blk false;
-                break :blk try self.analyzeExprSpan(call.args, state, breaks);
-            },
-            .e_closure,
-            .e_lambda,
-            .e_hosted_lambda,
-            => true,
-            .e_binop => |binop| blk: {
-                if (binop.op == .@"and" or binop.op == .@"or") {
-                    if (!try self.analyzeExpr(binop.lhs, state, breaks)) break :blk false;
-                    var skipped_state = try state.clone(self.allocator);
-                    defer skipped_state.deinit(self.allocator);
-                    var rhs_state = try state.clone(self.allocator);
-                    defer rhs_state.deinit(self.allocator);
-                    const rhs_continues = try self.analyzeExpr(binop.rhs, &rhs_state, breaks);
-                    if (rhs_continues) {
-                        const states = [_]InitState{ skipped_state, rhs_state };
-                        try self.mergeStatesInto(state, &states);
-                    }
-                    break :blk true;
-                }
-                if (!try self.analyzeExpr(binop.lhs, state, breaks)) break :blk false;
-                break :blk try self.analyzeExpr(binop.rhs, state, breaks);
-            },
-            .e_unary_minus => |unary| try self.analyzeExpr(unary.expr, state, breaks),
-            .e_field_access => |field| try self.analyzeExpr(field.receiver, state, breaks),
-            .e_method_call => |call| blk: {
-                if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
-                break :blk try self.analyzeExprSpan(call.args, state, breaks);
-            },
-            .e_dispatch_call => |call| blk: {
-                if (!try self.analyzeExpr(call.receiver, state, breaks)) break :blk false;
-                break :blk try self.analyzeExprSpan(call.args, state, breaks);
-            },
-            .e_interpolation => |interpolation| blk: {
-                if (!try self.analyzeExpr(interpolation.first, state, breaks)) break :blk false;
-                break :blk try self.analyzeExprSpan(interpolation.parts, state, breaks);
-            },
-            .e_structural_eq => |eq| blk: {
-                if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
-                break :blk try self.analyzeExpr(eq.rhs, state, breaks);
-            },
-            .e_structural_hash => |h| blk: {
-                if (!try self.analyzeExpr(h.value, state, breaks)) break :blk false;
-                break :blk try self.analyzeExpr(h.hasher, state, breaks);
-            },
-            .e_method_eq => |eq| blk: {
-                if (!try self.analyzeExpr(eq.lhs, state, breaks)) break :blk false;
-                break :blk try self.analyzeExpr(eq.rhs, state, breaks);
-            },
-            .e_type_method_call => |call| try self.analyzeExprSpan(call.args, state, breaks),
-            .e_type_dispatch_call => |call| try self.analyzeExprSpan(call.args, state, breaks),
-            .e_tuple_access => |access| try self.analyzeExpr(access.tuple, state, breaks),
-            .e_block => |block| try self.analyzeBlock(block.stmts, block.final_expr, state, breaks, false),
-            .e_if => |if_| try self.analyzeIf(if_, state, breaks),
-            .e_match => |match| try self.analyzeMatch(match, state, breaks),
-            .e_crash => false,
-            .e_dbg => |dbg| try self.analyzeExpr(dbg.expr, state, breaks),
-            .e_expect_err => |expect_err| try self.analyzeExpr(expect_err.expr, state, breaks),
-            .e_expect => |expect| try self.analyzeExpr(expect.body, state, breaks),
-            .e_return => |ret| blk: {
-                _ = try self.analyzeExpr(ret.expr, state, breaks);
-                break :blk false;
-            },
-            .e_break => blk: {
-                try breaks.append(self.allocator, try state.clone(self.allocator));
-                break :blk false;
-            },
-            .e_for => |for_| try self.analyzeForLike(for_.expr, for_.body, state, breaks),
-            .e_run_low_level => |run| blk: {
-                if (!try self.analyzeExprSpan(run.args, state, breaks)) break :blk false;
-                break :blk run.op != .crash;
-            },
-        };
-    }
-
-    fn analyzeExprSpan(self: *@This(), span: Expr.Span, state: *InitState, breaks: *std.ArrayList(InitState)) Allocator.Error!bool {
-        for (self.can.env.store.sliceExpr(span)) |child| {
-            if (!try self.analyzeExpr(child, state, breaks)) return false;
-        }
-        return true;
-    }
-
-    fn analyzeIf(
-        self: *@This(),
-        if_: std.meta.fieldInfo(Expr, .e_if).type,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-    ) Allocator.Error!bool {
-        var normal_states = std.ArrayList(InitState).empty;
-        defer self.deinitStates(&normal_states);
-
-        for (self.can.env.store.sliceIfBranches(if_.branches)) |branch_idx| {
-            const branch = self.can.env.store.getIfBranch(branch_idx);
-            var branch_state = try state.clone(self.allocator);
-            errdefer branch_state.deinit(self.allocator);
-            if (try self.analyzeExpr(branch.cond, &branch_state, breaks)) {
-                if (try self.analyzeExpr(branch.body, &branch_state, breaks)) {
-                    try normal_states.append(self.allocator, branch_state);
-                    continue;
-                }
-            }
-            branch_state.deinit(self.allocator);
-        }
-
-        var else_state = try state.clone(self.allocator);
-        errdefer else_state.deinit(self.allocator);
-        if (try self.analyzeExpr(if_.final_else, &else_state, breaks)) {
-            try normal_states.append(self.allocator, else_state);
-        } else {
-            else_state.deinit(self.allocator);
-        }
-
-        if (normal_states.items.len == 0) return false;
-        try self.mergeStatesInto(state, normal_states.items);
-        return true;
-    }
-
-    fn analyzeMatch(
-        self: *@This(),
-        match: Expr.Match,
-        state: *InitState,
-        breaks: *std.ArrayList(InitState),
-    ) Allocator.Error!bool {
-        if (!try self.analyzeExpr(match.cond, state, breaks)) return false;
-
-        var normal_states = std.ArrayList(InitState).empty;
-        defer self.deinitStates(&normal_states);
-
-        for (self.can.env.store.sliceMatchBranches(match.branches)) |branch_idx| {
-            const branch = self.can.env.store.getMatchBranch(branch_idx);
-            var branch_state = try state.clone(self.allocator);
-            errdefer branch_state.deinit(self.allocator);
-            if (branch.guard) |guard| {
-                if (!try self.analyzeExpr(guard, &branch_state, breaks)) {
-                    branch_state.deinit(self.allocator);
-                    continue;
-                }
-            }
-            if (try self.analyzeExpr(branch.value, &branch_state, breaks)) {
-                try normal_states.append(self.allocator, branch_state);
-            } else {
-                branch_state.deinit(self.allocator);
-            }
-        }
-
-        if (normal_states.items.len == 0) return false;
-        try self.mergeStatesInto(state, normal_states.items);
-        return true;
     }
 
     fn mergeStatesInto(self: *@This(), state: *InitState, states: []const InitState) Allocator.Error!void {
@@ -9884,13 +10209,26 @@ fn scheduleBlockDeclContinuation(
                         try stacks.pushBlockNext(frame_allocator, .{ .block = block, .next = next });
                         return;
                     }
+                    if (existing_binding.scope_idx < self.expect_scope_floor) {
+                        if (type_var_scope) |scope_idx| {
+                            self.scopeExitTypeVar(scope_idx);
+                        }
+                        // No `s_reassign`: the rejected write must not appear
+                        // in CIR as a write to a var outside the `expect`.
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, ident_region));
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                            .expr = malformed_idx,
+                        } }, ident_region);
+                        try self.addBlockStatement(blockContextFromState(block), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
+                        try stacks.pushBlockNext(frame_allocator, .{ .block = block, .next = next });
+                        return;
+                    }
 
                     try stacks.pushFinishBlockReassignStmt(frame_allocator, .{
                         .block = block,
                         .next = next,
                         .region = ident_region,
                         .pattern_idx = existing_pattern_idx,
-                        .ast_expr = d.body,
                         .type_var_scope = type_var_scope,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = d.body, .target = .scratch });
@@ -9965,7 +10303,6 @@ fn scheduleBlockDeclContinuation(
         .pattern_idx = pattern_idx,
         .pattern_reused_existing_var = pattern_reused_existing_var,
         .annotation = mb_validated_anno,
-        .ast_expr = d.body,
         .saved_defining_bound_vars = saved_defining_bound_vars,
         .saved_current_local_def_ident = saved_current_local_def_ident,
         .saved_current_local_def_index = saved_current_local_def_index,
@@ -10202,7 +10539,7 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .expr => |expr_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(expr_stmt.expr);
+            const expr = try self.canonicalizeExpr(expr_stmt.expr);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
                 .expr = expr.idx,
             } }, region);
@@ -10213,7 +10550,7 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .dbg => |dbg_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(dbg_stmt.expr);
+            const expr = try self.canonicalizeExpr(dbg_stmt.expr);
             const stmt_idx = try self.env.addStatement(Statement{ .s_dbg = .{
                 .expr = expr.idx,
             } }, region);
@@ -10221,11 +10558,10 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .expect => |expect_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(expect_stmt.region);
-            const was_in_expect = self.in_expect;
-            self.in_expect = true;
-            defer self.in_expect = was_in_expect;
+            const saved_expect = self.enterExpect(.@"inline");
+            defer self.exitExpect(saved_expect);
 
-            const expr = try self.canonicalizeExprOrMalformed(expect_stmt.body);
+            const expr = try self.canonicalizeExpr(expect_stmt.body);
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
                 .body = expr.idx,
             } }, region);
@@ -10239,9 +10575,14 @@ fn canonicalizeStandaloneBlockStatement(
         },
         .@"return" => |return_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region);
-            const expr = try self.canonicalizeExprOrMalformed(return_stmt.expr);
+            const expr = try self.canonicalizeExpr(return_stmt.expr);
             try self.warnTrailingTrySuffix(expr.idx);
-            const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+            const stmt_idx = if (self.expect_context != .none)
+                try self.env.pushMalformed(Statement.Idx, Diagnostic{ .control_flow_in_expect = .{
+                    .region = region,
+                    .kind = .return_keyword,
+                } })
+            else if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addStatement(Statement{ .s_return = .{
                     .expr = expr.idx,
                     .lambda = lambda_idx,
@@ -10284,9 +10625,7 @@ fn canonicalizeStandaloneBlockStatement(
         .@"break" => |break_stmt| {
             const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
             if (self.loop_depth == 0) {
-                const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
-                    .region = region,
-                } });
+                const stmt_idx = try self.env.pushMalformed(Statement.Idx, self.breakWithoutLoopDiagnostic(region));
                 return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
             }
 
@@ -10339,8 +10678,17 @@ fn canonicalizeStandaloneBlockDecl(
                         } }, ident_region);
                         return CanonicalizedStatement{ .idx = reassign_idx, .free_vars = DataSpan.empty() };
                     }
+                    if (existing_binding.scope_idx < self.expect_scope_floor) {
+                        // No `s_reassign`: the rejected write must not appear
+                        // in CIR as a write to a var outside the `expect`.
+                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, ident_region));
+                        const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                            .expr = malformed_idx,
+                        } }, ident_region);
+                        return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() };
+                    }
 
-                    const expr = try self.canonicalizeExprOrMalformed(decl.body);
+                    const expr = try self.canonicalizeExpr(decl.body);
                     const reassign_idx = try self.env.addStatement(Statement{ .s_reassign = .{
                         .pattern_idx = existing_pattern_idx,
                         .expr = expr.idx,
@@ -10411,7 +10759,7 @@ fn canonicalizeStandaloneBlockDecl(
     self.scratch_reassign_targets.clearFrom(reassign_targets_start);
     defer self.endDefiningBoundVars(saved_defining_bound_vars);
 
-    const expr = try self.canonicalizeExprOrMalformed(decl.body);
+    const expr = try self.canonicalizeExpr(decl.body);
     const stmt_idx = if (pattern_reused_existing_var)
         try self.env.addStatement(Statement{ .s_reassign = .{
             .pattern_idx = pattern_idx,
@@ -10446,7 +10794,7 @@ fn canonicalizeStandaloneVarStatement(
     };
 
     const body = var_stmt.body orelse return try self.createUninitializedVarStatement(var_name, annotation, region, name_region);
-    const expr = try self.canonicalizeExprOrMalformed(body);
+    const expr = try self.canonicalizeExpr(body);
     const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = var_name } }, name_region);
     const introduced = try self.scopeIntroduceVar(var_name, pattern_idx, name_region, true, Pattern.Idx);
     if (introduced == pattern_idx) try self.warnAboutBindingName(var_name, name_region, .mutable);
@@ -10480,7 +10828,7 @@ fn canonicalizeStandaloneCrashStatement(
     crash_stmt: @TypeOf(@as(AST.Statement, undefined).crash),
 ) std.mem.Allocator.Error!CanonicalizedStatement {
     const region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region);
-    const msg = try self.canonicalizeExprOrMalformed(crash_stmt.expr);
+    const msg = try self.canonicalizeExpr(crash_stmt.expr);
     const crash_expr = try self.addCrashExpr(msg.idx, region);
     const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
         .expr = crash_expr,
@@ -10552,7 +10900,7 @@ fn canonicalizeStandaloneWhileStatement(
     defer self.scratch_captures.clearFrom(captures_top);
 
     const cond_free_vars_start = self.scratch_free_vars.top();
-    const cond = try self.canonicalizeExprOrMalformed(while_stmt.cond);
+    const cond = try self.canonicalizeExpr(while_stmt.cond);
     const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(cond.free_vars);
     for (cond_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVar(captures_top, fv);
@@ -10563,7 +10911,7 @@ fn canonicalizeStandaloneWhileStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExprOrMalformed(while_stmt.body);
+    const body = try self.canonicalizeExpr(while_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVar(captures_top, fv);
@@ -10629,11 +10977,13 @@ fn classifyWhileStatement(
     return Statement{ .s_infinite_loop = .{ .cond = cond, .body = body } };
 }
 
-fn isInfiniteLoopCondition(self: *const Self, expr_idx: Expr.Idx) bool {
-    const expr = self.env.store.getExpr(expr_idx);
-    if (expr == .e_block) {
+fn isInfiniteLoopCondition(self: *const Self, cond: Expr.Idx) bool {
+    var expr_idx = cond;
+    var expr = self.env.store.getExpr(expr_idx);
+    while (expr == .e_block) {
         if (self.env.store.sliceStatements(expr.e_block.stmts).len != 0) return false;
-        return self.isInfiniteLoopCondition(expr.e_block.final_expr);
+        expr_idx = expr.e_block.final_expr;
+        expr = self.env.store.getExpr(expr_idx);
     }
     if (expr == .e_tag) return self.exprIsBareTrueTag(expr_idx);
     if (expr == .e_nominal) return expr.e_nominal.backing_type == .tag and
@@ -10919,6 +11269,13 @@ fn scanLoopExitFacts(self: *Self, body: Expr.Idx) std.mem.Allocator.Error!LoopEx
     return facts;
 }
 
+fn canonicalForKind(kind: AST.ForKind) CIR.ForKind {
+    return switch (kind) {
+        .iter => .iter,
+        .stream => .stream,
+    };
+}
+
 fn canonicalizeStandaloneForStatement(
     self: *Self,
     for_stmt: @TypeOf(@as(AST.Statement, undefined).@"for"),
@@ -10939,7 +11296,7 @@ fn canonicalizeStandaloneForStatement(
     defer self.scratch_captures.clearFrom(captures_top);
 
     const list_free_vars_start = self.scratch_free_vars.top();
-    const list_expr = try self.canonicalizeExprOrMalformed(for_stmt.expr);
+    const list_expr = try self.canonicalizeExpr(for_stmt.expr);
     const list_free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
     for (list_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVarExcludingBound(captures_top, for_bound_vars_top, fv);
@@ -10956,7 +11313,7 @@ fn canonicalizeStandaloneForStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExprOrMalformed(for_stmt.body);
+    const body = try self.canonicalizeExpr(for_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVarExcludingBound(captures_top, for_bound_vars_top, fv);
@@ -10971,6 +11328,7 @@ fn canonicalizeStandaloneForStatement(
     const free_vars = self.scratch_free_vars.spanFrom(free_vars_start);
 
     const stmt_idx = try self.env.addStatement(Statement{ .s_for = .{
+        .kind = canonicalForKind(for_stmt.kind),
         .patt = ptrn,
         .expr = list_expr.idx,
         .body = body.idx,
@@ -10981,7 +11339,7 @@ fn canonicalizeStandaloneForStatement(
 fn runExprKernel(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!?CanonicalizedExpr {
+) std.mem.Allocator.Error!CanonicalizedExpr {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -11133,10 +11491,7 @@ fn runExprKernel(
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .single_quote => |e| {
-                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Expr.Idx) orelse {
-                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                        continue :expr_kernel_loop .dispatch;
-                    };
+                    const expr_idx = try self.canonicalizeSingleQuote(e.region, e.token, e.type_suffix, Expr.Idx);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
                 },
                 .string => |e| {
@@ -11242,7 +11597,15 @@ fn runExprKernel(
                     }
                 },
                 .ident => |e| {
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, try self.canonicalizeIdentExpr(e));
+                    const ident_expr = switch (try self.resolveIdentExpr(e)) {
+                        .expr => |resolved| resolved,
+                        .tag_member => |access| try self.addTagMemberFieldAccess(access, self.parse_ir.tokenizedRegionToRegion(e.region)),
+                        .deferred_tag_member => |deferred| blk: {
+                            self.setDeferredTagMemberAccessNode(deferred.ref, deferred.expr.idx);
+                            break :blk deferred.expr;
+                        },
+                    };
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, ident_expr);
                 },
                 .string_part => |sp| {
                     const region = self.parse_ir.tokenizedRegionToRegion(sp.region);
@@ -11270,9 +11633,7 @@ fn runExprKernel(
                 .@"break" => |b| {
                     const region = self.parse_ir.tokenizedRegionToRegion(b.region);
                     const break_expr = if (self.loop_depth == 0)
-                        try self.env.pushMalformed(Expr.Idx, Diagnostic{ .break_outside_loop = .{
-                            .region = region,
-                        } })
+                        try self.env.pushMalformed(Expr.Idx, self.breakWithoutLoopDiagnostic(region))
                     else
                         try self.env.addExpr(Expr{ .e_break = .{} }, region);
                     try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = break_expr, .free_vars = DataSpan.empty() });
@@ -11316,7 +11677,7 @@ fn runExprKernel(
                         try stacks.pushFinishTuple(frame_allocator, .{
                             .region = region,
                             .free_vars_start = self.scratch_free_vars.top(),
-                            .items = items_slice,
+                            .item_count = items_slice.len,
                         });
                         var i = items_slice.len;
                         while (i > 0) {
@@ -11342,24 +11703,14 @@ fn runExprKernel(
                         const field_name_ident = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse continue;
                         const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
 
-                        var found_duplicate = false;
-                        for (self.scratch_seen_record_fields.sliceFromStart(seen_fields_top)) |seen_field| {
-                            if (field_name_ident.eql(seen_field.ident)) {
-                                try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                                    .field_name = field_name_ident,
-                                    .duplicate_region = field_name_region,
-                                    .original_region = seen_field.region,
-                                } });
-                                found_duplicate = true;
-                                break;
-                            }
+                        if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, seen_fields_top, field_name_ident, field_name_region)) |original_region| {
+                            try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name_ident,
+                                .duplicate_region = field_name_region,
+                                .original_region = original_region,
+                            } });
+                            continue;
                         }
-                        if (found_duplicate) continue;
-
-                        try self.scratch_seen_record_fields.append(SeenRecordField{
-                            .ident = field_name_ident,
-                            .region = field_name_region,
-                        });
 
                         const value_expr_idx = switch (ast_field.value) {
                             .supplied => |value_idx| value_idx,
@@ -11382,6 +11733,7 @@ fn runExprKernel(
 
                         try field_work.append(frame_allocator, .{
                             .field_idx = field_idx,
+                            .name = field_name_ident,
                             .value_expr_idx = value_expr_idx,
                         });
                     }
@@ -11488,7 +11840,8 @@ fn runExprKernel(
                     var field_work: std.ArrayList(ExprRecordBuilderFieldWork) = .empty;
                     defer field_work.deinit(frame_allocator);
                     var explicit_value_count: usize = 0;
-                    for (fields_slice) |field_idx| {
+                    var last_duplicate_diag: ?CIR.Diagnostic.Idx = null;
+                    for (fields_slice, 0..) |field_idx, field_index| {
                         const field = self.parse_ir.store.getRecordField(field_idx);
                         const field_name = self.parse_ir.tokens.resolveIdentifier(field.name) orelse {
                             const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
@@ -11497,6 +11850,25 @@ fn runExprKernel(
                             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
                             continue :expr_kernel_loop .dispatch;
                         };
+                        const is_duplicate = for (field_work.items) |seen| {
+                            if (field_name.eql(seen.name)) break true;
+                        } else false;
+                        if (is_duplicate) {
+                            // Duplicate fields are reported and dropped, as in plain
+                            // record literals. Every field in `field_work` resolved, so
+                            // the first field with this name is the one it duplicates.
+                            const original_region = for (fields_slice[0..field_index]) |earlier_idx| {
+                                const earlier = self.parse_ir.store.getRecordField(earlier_idx);
+                                const earlier_name = self.parse_ir.tokens.resolveIdentifier(earlier.name).?;
+                                if (field_name.eql(earlier_name)) break self.parse_ir.tokens.resolve(earlier.name);
+                            } else unreachable;
+                            last_duplicate_diag = try self.env.addDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                                .field_name = field_name,
+                                .duplicate_region = self.parse_ir.tokens.resolve(field.name),
+                                .original_region = original_region,
+                            } });
+                            continue;
+                        }
                         if (field.value == .unset) {
                             // A builder field's value is mapped through the
                             // builder function; there is nothing to map for an
@@ -11514,6 +11886,14 @@ fn runExprKernel(
                             .name = field_name,
                             .value_expr = field.value.asSupplied(),
                         });
+                    }
+
+                    if (field_work.items.len < 2) {
+                        // Only duplicates can bring a builder below two fields here,
+                        // and those were already reported.
+                        const expr_idx = try self.env.addMalformed(last_duplicate_diag.?, region);
+                        try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = ModuleEnv.castIdx(CIR.Node.Idx, Expr.Idx, expr_idx), .free_vars = DataSpan.empty() });
+                        continue :expr_kernel_loop .dispatch;
                     }
 
                     const fields = try field_work.toOwnedSlice(frame_allocator);
@@ -11548,16 +11928,21 @@ fn runExprKernel(
                     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
 
                     const args_start = self.env.store.scratch.?.patterns.top();
-                    for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
-                        if (try self.canonicalizePattern(arg_pattern_idx)) |pattern_idx| {
-                            try self.env.store.scratch.?.patterns.append(pattern_idx);
-                        } else {
-                            const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
-                            const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
-                                .region = arg_region,
-                            } });
-                            try self.env.store.scratch.?.patterns.append(malformed_idx);
+                    {
+                        // The arguments form one binder group, so `|x, x|` is rejected.
+                        const enclosing_binder_group = self.beginPatternBinderGroup();
+                        defer self.endPatternBinderGroup(enclosing_binder_group);
+                        for (self.parse_ir.store.patternSlice(e.args)) |arg_pattern_idx| {
+                            if (try self.canonicalizePatternInGroup(arg_pattern_idx)) |pattern_idx| {
+                                try self.env.store.scratch.?.patterns.append(pattern_idx);
+                            } else {
+                                const arg = self.parse_ir.store.getPattern(arg_pattern_idx);
+                                const arg_region = self.parse_ir.tokenizedRegionToRegion(arg.to_tokenized_region());
+                                const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_arg_invalid = .{
+                                    .region = arg_region,
+                                } });
+                                try self.env.store.scratch.?.patterns.append(malformed_idx);
+                            }
                         }
                     }
                     const args_span = try self.env.store.patternSpanFrom(args_start);
@@ -11570,11 +11955,11 @@ fn runExprKernel(
                     const saved_enclosing_lambda = self.enclosing_lambda;
                     self.enclosing_lambda = lambda_idx;
 
-                    // A `?` inside a lambda body always has normal early-return
-                    // semantics, even when the lambda appears inside a
-                    // top-level expect.
-                    const saved_in_expect = self.in_expect;
-                    self.in_expect = false;
+                    // Control flow inside a lambda body cannot escape an
+                    // enclosing expect, so `return` and `?` have their normal
+                    // early-return semantics there.
+                    const saved_expect_context = self.expect_context;
+                    self.expect_context = .none;
 
                     const saved_loop_depth = self.loop_depth;
                     self.loop_depth = 0;
@@ -11586,11 +11971,10 @@ fn runExprKernel(
                         .region = region,
                         .args_span = args_span,
                         .lambda_idx = lambda_idx,
-                        .body_ast_idx = e.body,
                         .body_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .saved_enclosing_lambda = saved_enclosing_lambda,
-                        .saved_in_expect = saved_in_expect,
+                        .saved_expect_context = saved_expect_context,
                         .saved_loop_depth = saved_loop_depth,
                         .saved_defining_bound_vars = saved_defining_bound_vars,
                     });
@@ -11624,7 +12008,6 @@ fn runExprKernel(
                         .free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .branches = branches,
-                        .final_else = current_if.@"else",
                     });
 
                     try stacks.pushParse(frame_allocator, .{ .idx = current_if.@"else", .target = .scratch });
@@ -11649,8 +12032,6 @@ fn runExprKernel(
                         .region = region,
                         .free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
-                        .condition = e.condition,
-                        .then = e.then,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.then, .target = .scratch });
                     try stacks.pushParse(frame_allocator, .{ .idx = e.condition, .target = .scratch });
@@ -11664,9 +12045,9 @@ fn runExprKernel(
 
                     try stacks.pushForAfterList(frame_allocator, .{
                         .region = self.parse_ir.tokenizedRegionToRegion(e.region),
+                        .kind = canonicalForKind(e.kind),
                         .ast_patt = e.patt,
                         .ast_body = e.body,
-                        .ast_list_expr = e.expr,
                         .list_free_vars_start = self.scratch_free_vars.top(),
                         .captures_top = self.scratch_captures.top(),
                         .bound_vars_top = self.scratch_bound_vars.top(),
@@ -11893,6 +12274,14 @@ fn runExprKernel(
                                 try stacks.pushParse(frame_allocator, .{ .idx = additional_args[i], .target = .scratch });
                             }
                             try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
+                        } else if (ast_fn == .ident) {
+                            try stacks.pushArrowIdentCallee(frame_allocator, .{
+                                .region = region,
+                                .free_vars_start = free_vars_start,
+                                .callee = ast_fn.ident,
+                                .args = apply.args,
+                            });
+                            try stacks.pushParse(frame_allocator, .{ .idx = e.left, .target = .scratch });
                         } else {
                             try stacks.pushFinishArrowApply(frame_allocator, .{
                                 .region = region,
@@ -11980,9 +12369,51 @@ fn runExprKernel(
                     }
 
                     const args_slice = self.parse_ir.store.exprSlice(e.args);
+                    const free_vars_start = self.scratch_free_vars.top();
+                    if (ast_fn == .ident) {
+                        // The callee is canonicalized here rather than as a
+                        // child, because whether this is a call or a method
+                        // call on a qualified tag depends on what it names.
+                        switch (try self.resolveIdentExpr(ast_fn.ident)) {
+                            .tag_member => |access| {
+                                try stacks.pushFinishMethodCall(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .method_name = access.member,
+                                    .method_name_region = access.member_region,
+                                    .arg_count = args_slice.len,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = access.receiver });
+                            },
+                            .expr => |callee| {
+                                try stacks.pushFinishApply(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .arg_count = args_slice.len,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = callee });
+                            },
+                            .deferred_tag_member => |deferred| {
+                                try stacks.pushFinishApply(frame_allocator, .{
+                                    .region = region,
+                                    .free_vars_start = free_vars_start,
+                                    .arg_count = args_slice.len,
+                                    .tag_member_ref = deferred.ref,
+                                });
+                                try child_slots.append(frame_allocator, .{ .expr = deferred.expr });
+                            },
+                        }
+                        var i = args_slice.len;
+                        while (i > 0) {
+                            i -= 1;
+                            try stacks.pushParse(frame_allocator, .{ .idx = args_slice[i], .target = .scratch });
+                        }
+                        continue :expr_kernel_loop .dispatch;
+                    }
+
                     try stacks.pushFinishApply(frame_allocator, .{
                         .region = region,
-                        .free_vars_start = self.scratch_free_vars.top(),
+                        .free_vars_start = free_vars_start,
                         .arg_count = args_slice.len,
                     });
                     var i = args_slice.len;
@@ -11992,8 +12423,12 @@ fn runExprKernel(
                     }
                     try stacks.pushParse(frame_allocator, .{ .idx = e.@"fn", .target = .scratch });
                 },
-                .malformed => {
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
+                .malformed => |m| {
+                    // The parser already reported this expression, so the
+                    // runtime error standing in for it registers nothing new.
+                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, try self.canonicalizedRuntimeErrorExpr(Diagnostic{ .expr_syntax_error = .{
+                        .region = self.parse_ir.tokenizedRegionToRegion(m.region),
+                    } }));
                 },
             }
 
@@ -12045,12 +12480,33 @@ fn runExprKernel(
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = decl_work.ast_body, .target = .scratch });
                 },
+                .expect_body => |expect_work| {
+                    const saved_expect = self.enterExpect(if (expect_work.owner_is_module_visible) .top_level else .@"inline");
+                    errdefer self.exitExpect(saved_expect);
+                    try stacks.pushFinishAssociatedExpect(frame_allocator, .{
+                        .work = expect_work,
+                        .saved_expect = saved_expect,
+                    });
+                    try stacks.pushParse(frame_allocator, .{ .idx = expect_work.expect.body, .target = .scratch });
+                },
             }
 
             continue :expr_kernel_loop .dispatch;
         },
         .associated_exit => {
             self.exitAssociatedBlockState(stacks.takeAssociatedExit());
+
+            continue :expr_kernel_loop .dispatch;
+        },
+        .finish_associated_expect => {
+            const state = stacks.takeFinishAssociatedExpect();
+            self.exitExpect(state.saved_expect);
+
+            const result_start = child_slots.items.len - 1;
+            const body = child_slots.items[result_start].expr;
+            child_slots.shrinkRetainingCapacity(result_start);
+            try self.finishAssociatedExpect(state.work, body);
+            try stacks.pushAssociatedNext(frame_allocator, state.work.state);
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -12061,7 +12517,7 @@ fn runExprKernel(
             self.endDefiningBoundVars(state.saved_defining_bound_vars);
 
             const result_start = child_slots.items.len - 1;
-            const can_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.work.ast_body);
+            const can_expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(result_start);
             try self.finishAssociatedDeclBody(state.work, can_expr);
             try stacks.pushAssociatedNext(frame_allocator, state.work.state);
@@ -12089,7 +12545,6 @@ fn runExprKernel(
                     .expr => |expr_stmt| {
                         try stacks.pushFinishBlockFinalExpr(frame_allocator, .{
                             .block = work,
-                            .ast_expr = expr_stmt.expr,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = expr_stmt.expr, .target = .scratch });
                     },
@@ -12098,7 +12553,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(dbg_stmt.region),
-                            .ast_expr = dbg_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = dbg_stmt.expr, .target = .scratch });
@@ -12108,7 +12562,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(return_stmt.region),
-                            .ast_expr = return_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = return_stmt.expr, .target = .scratch });
@@ -12118,7 +12571,6 @@ fn runExprKernel(
                             .block = work,
                             .next = next,
                             .region = self.parse_ir.tokenizedRegionToRegion(crash_stmt.region),
-                            .ast_expr = crash_stmt.expr,
                             .final_expr = true,
                         });
                         try stacks.pushParse(frame_allocator, .{ .idx = crash_stmt.expr, .target = .scratch });
@@ -12159,7 +12611,6 @@ fn runExprKernel(
                         .name_region = self.parse_ir.tokens.resolve(v.name),
                         .var_name = var_name,
                         .annotation = null,
-                        .ast_expr = ast_expr,
                         .type_var_scope = null,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
@@ -12169,7 +12620,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(expr_stmt.region),
-                        .ast_expr = expr_stmt.expr,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = expr_stmt.expr, .target = .scratch });
                 },
@@ -12178,7 +12628,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(c.region),
-                        .ast_expr = c.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = c.expr, .target = .scratch });
@@ -12188,7 +12637,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(d.region),
-                        .ast_expr = d.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = d.expr, .target = .scratch });
@@ -12198,7 +12646,7 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(e_.region),
-                        .ast_expr = e_.body,
+                        .saved_expect = self.enterExpect(.@"inline"),
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = e_.body, .target = .scratch });
                 },
@@ -12207,7 +12655,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(r.region),
-                        .ast_expr = r.expr,
                         .final_expr = false,
                     });
                     try stacks.pushParse(frame_allocator, .{ .idx = r.expr, .target = .scratch });
@@ -12313,7 +12760,6 @@ fn runExprKernel(
                                         .name_region = self.parse_ir.tokens.resolve(var_stmt.name),
                                         .var_name = name_ident,
                                         .annotation = annotation_idx,
-                                        .ast_expr = ast_expr,
                                         .type_var_scope = type_var_scope,
                                     });
                                     try stacks.pushParse(frame_allocator, .{ .idx = ast_expr, .target = .scratch });
@@ -12367,9 +12813,9 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(for_stmt.region),
+                        .kind = canonicalForKind(for_stmt.kind),
                         .ast_patt = for_stmt.patt,
                         .ast_body = for_stmt.body,
-                        .ast_list_expr = for_stmt.expr,
                         .list_free_vars_start = list_free_vars_start,
                         .captures_top = captures_top,
                         .bound_vars_top = for_bound_vars_top,
@@ -12385,7 +12831,6 @@ fn runExprKernel(
                         .block = work,
                         .next = next,
                         .region = self.parse_ir.tokenizedRegionToRegion(while_stmt.region),
-                        .cond_ast = while_stmt.cond,
                         .body_ast = while_stmt.body,
                         .captures_top = captures_top,
                         .cond_free_vars_start = cond_free_vars_start,
@@ -12395,9 +12840,7 @@ fn runExprKernel(
                 .@"break" => |break_stmt| {
                     const region = self.parse_ir.tokenizedRegionToRegion(break_stmt.region);
                     if (self.loop_depth == 0) {
-                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, Diagnostic{ .break_outside_loop = .{
-                            .region = region,
-                        } });
+                        const stmt_idx = try self.env.pushMalformed(Statement.Idx, self.breakWithoutLoopDiagnostic(region));
                         try self.addBlockStatement(blockContextFromState(work), CanonicalizedStatement{ .idx = stmt_idx, .free_vars = DataSpan.empty() });
                         try stacks.pushBlockNext(frame_allocator, .{ .block = work, .next = next });
                         continue :expr_kernel_loop .dispatch;
@@ -12434,7 +12877,7 @@ fn runExprKernel(
         .finish_block_final_expr => {
             const state = stacks.takeFinishBlockFinalExpr();
             const result_start = child_slots.items.len - 1;
-            const final_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const final_expr = child_slots.items[result_start].expr;
             const block_expr = try self.finishBlockState(state.block, final_expr);
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
@@ -12444,7 +12887,7 @@ fn runExprKernel(
         .finish_block_expr_stmt => {
             const state = stacks.takeFinishBlockExprStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
                 .expr = expr.idx,
             } }, state.region);
@@ -12457,7 +12900,7 @@ fn runExprKernel(
         .finish_block_dbg_stmt => {
             const state = stacks.takeFinishBlockDbgStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const dbg_expr = try self.env.addExpr(Expr{ .e_dbg = .{
                 .expr = expr.idx,
             } }, state.region);
@@ -12479,7 +12922,7 @@ fn runExprKernel(
         .finish_block_crash_stmt => {
             const state = stacks.takeFinishBlockCrashStmt();
             const result_start = child_slots.items.len - 1;
-            const msg = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const msg = child_slots.items[result_start].expr;
             const crash_expr = try self.addCrashExpr(msg.idx, state.region);
             const can_crash = CanonicalizedExpr{ .idx = crash_expr, .free_vars = msg.free_vars };
             child_slots.shrinkRetainingCapacity(state.block.result_start);
@@ -12498,8 +12941,9 @@ fn runExprKernel(
         },
         .finish_block_expect_stmt => {
             const state = stacks.takeFinishBlockExpectStmt();
+            self.exitExpect(state.saved_expect);
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_expect = .{
                 .body = expr.idx,
             } }, state.region);
@@ -12512,11 +12956,16 @@ fn runExprKernel(
         .finish_block_return_stmt => {
             const state = stacks.takeFinishBlockReturnStmt();
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             child_slots.shrinkRetainingCapacity(state.block.result_start);
             try self.warnTrailingTrySuffix(expr.idx);
             if (state.final_expr) {
-                const return_expr_idx = if (self.enclosing_lambda) |lambda_idx|
+                const return_expr_idx = if (self.expect_context != .none)
+                    try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+                        .region = state.region,
+                        .kind = .return_keyword,
+                    } })
+                else if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addExpr(Expr{ .e_return = .{
                         .expr = expr.idx,
                         .lambda = lambda_idx,
@@ -12530,7 +12979,12 @@ fn runExprKernel(
                 const block_expr = try self.finishBlockState(state.block, CanonicalizedExpr{ .idx = return_expr_idx, .free_vars = expr.free_vars });
                 try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, block_expr);
             } else {
-                const stmt_idx = if (self.enclosing_lambda) |lambda_idx|
+                const stmt_idx = if (self.expect_context != .none)
+                    try self.env.pushMalformed(Statement.Idx, Diagnostic{ .control_flow_in_expect = .{
+                        .region = state.region,
+                        .kind = .return_keyword,
+                    } })
+                else if (self.enclosing_lambda) |lambda_idx|
                     try self.env.addStatement(Statement{ .s_return = .{
                         .expr = expr.idx,
                         .lambda = lambda_idx,
@@ -12550,7 +13004,7 @@ fn runExprKernel(
             const state = stacks.takeFinishBlockVarStmt();
             defer if (state.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{ .ident = state.var_name } }, state.name_region);
             const introduced = try self.scopeIntroduceVar(state.var_name, pattern_idx, state.name_region, true, Pattern.Idx);
             if (introduced == pattern_idx) try self.warnAboutBindingName(state.var_name, state.name_region, .mutable);
@@ -12569,7 +13023,7 @@ fn runExprKernel(
             const state = stacks.takeFinishBlockReassignStmt();
             defer if (state.type_var_scope) |scope_idx| self.scopeExitTypeVar(scope_idx);
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = try self.env.addStatement(Statement{ .s_reassign = .{
                 .pattern_idx = state.pattern_idx,
                 .expr = expr.idx,
@@ -12588,7 +13042,7 @@ fn runExprKernel(
             defer self.current_local_def_index = state.saved_current_local_def_index;
 
             const result_start = child_slots.items.len - 1;
-            const expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_expr);
+            const expr = child_slots.items[result_start].expr;
             const stmt_idx = if (state.pattern_reused_existing_var)
                 try self.env.addStatement(Statement{ .s_reassign = .{
                     .pattern_idx = state.pattern_idx,
@@ -12610,7 +13064,7 @@ fn runExprKernel(
             const state = stacks.takeBlockWhileAfterCond();
             errdefer self.scratch_captures.clearFrom(state.captures_top);
             const result_start = child_slots.items.len - 1;
-            const cond = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.cond_ast);
+            const cond = child_slots.items[result_start].expr;
             const free_vars_slice = self.scratch_free_vars.sliceFromSpan(cond.free_vars);
             for (free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -12625,7 +13079,6 @@ fn runExprKernel(
                 .block = state.block,
                 .next = state.next,
                 .region = state.region,
-                .body_ast = state.body_ast,
                 .cond = cond,
                 .captures_top = state.captures_top,
                 .body_free_vars_start = body_free_vars_start,
@@ -12640,7 +13093,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.body_ast);
+            const body = child_slots.items[result_start].expr;
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -12674,7 +13127,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const list_expr = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_list_expr);
+            const list_expr = child_slots.items[result_start].expr;
             const free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
             for (free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVarExcludingBound(state.captures_top, state.bound_vars_top, fv);
@@ -12696,7 +13149,7 @@ fn runExprKernel(
                 .block = state.block,
                 .next = state.next,
                 .region = state.region,
-                .ast_body = state.ast_body,
+                .kind = state.kind,
                 .list_expr = list_expr,
                 .patt = ptrn,
                 .body_free_vars_start = body_free_vars_start,
@@ -12719,7 +13172,7 @@ fn runExprKernel(
             errdefer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const body = try self.exprOrMalformedFromResult(child_slots.items[result_start].expr, state.ast_body);
+            const body = child_slots.items[result_start].expr;
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVarExcludingBound(state.captures_top, state.bound_vars_top, fv);
@@ -12735,6 +13188,7 @@ fn runExprKernel(
 
             const stmt_idx = try self.env.addStatement(Statement{
                 .s_for = .{
+                    .kind = state.kind,
                     .patt = state.patt,
                     .expr = state.list_expr.idx,
                     .body = body.idx,
@@ -12798,15 +13252,7 @@ fn runExprKernel(
                         buffer_region = null;
                         prev_was_string_part = false;
 
-                        if (interpolation_results[interpolation_i].expr) |can_expr| {
-                            try self.env.store.addScratchExpr(can_expr.idx);
-                        } else {
-                            const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
-                                .region = region,
-                            } });
-                            try self.env.store.addScratchExpr(malformed_idx);
-                        }
+                        try self.env.store.addScratchExpr(interpolation_results[interpolation_i].expr.idx);
                         interpolation_i += 1;
                     }
                 }
@@ -12826,15 +13272,7 @@ fn runExprKernel(
                         };
                         try self.addStringLiteralToScratch(processed_text, part_node.to_tokenized_region());
                     } else {
-                        if (interpolation_results[interpolation_i].expr) |can_expr| {
-                            try self.env.store.addScratchExpr(can_expr.idx);
-                        } else {
-                            const region = self.parse_ir.tokenizedRegionToRegion(part_node.to_tokenized_region());
-                            const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .invalid_string_interpolation = .{
-                                .region = region,
-                            } });
-                            try self.env.store.addScratchExpr(malformed_idx);
-                        }
+                        try self.env.store.addScratchExpr(interpolation_results[interpolation_i].expr.idx);
                         interpolation_i += 1;
                     }
                 }
@@ -12872,22 +13310,11 @@ fn runExprKernel(
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice) |maybe_item| {
-                if (maybe_item.expr) |can_item| {
-                    try self.env.store.addScratchExpr(can_item.idx);
-                }
+            for (child_slice) |item| {
+                try self.env.store.addScratchExpr(item.expr.idx);
             }
 
             const elems_span = try self.env.store.exprSpanFrom(scratch_top);
-            if (elems_span.span.len == 0) {
-                child_slots.shrinkRetainingCapacity(result_start);
-                const expr_idx = try self.env.addExpr(CIR.Expr{
-                    .e_empty_list = .{},
-                }, state.region);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = expr_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            }
-
             const expr_idx = try self.env.addExpr(CIR.Expr{
                 .e_list = .{ .elems = elems_span },
             }, state.region);
@@ -12900,20 +13327,12 @@ fn runExprKernel(
         },
         .finish_tuple => {
             const state = stacks.takeFinishTuple();
-            const result_start = child_slots.items.len - state.items.len;
+            const result_start = child_slots.items.len - state.item_count;
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice, 0..) |maybe_item, item_idx| {
-                const item_expr_idx = if (maybe_item.expr) |can_item| can_item.idx else blk: {
-                    const ast_body = self.parse_ir.store.getExpr(state.items[item_idx]);
-                    const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                    break :blk try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .tuple_elem_not_canonicalized = .{ .region = body_region },
-                    });
-                };
-
-                try self.env.store.addScratchExpr(item_expr_idx);
+            for (child_slice) |item| {
+                try self.env.store.addScratchExpr(item.expr.idx);
             }
 
             const elems_span = try self.env.store.exprSpanFrom(scratch_top);
@@ -12932,11 +13351,7 @@ fn runExprKernel(
         .finish_dbg => {
             const state = stacks.takeFinishDbg();
             const result_start = child_slots.items.len - 1;
-            const can_inner = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_inner = child_slots.items[result_start].expr;
 
             const dbg_expr = try self.env.addExpr(Expr{ .e_dbg = .{
                 .expr = can_inner.idx,
@@ -12950,11 +13365,7 @@ fn runExprKernel(
         .finish_crash => {
             const state = stacks.takeFinishCrash();
             const result_start = child_slots.items.len - 1;
-            const can_message = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_message = child_slots.items[result_start].expr;
 
             const crash_expr = try self.addCrashExpr(can_message.idx, state.region);
 
@@ -12966,14 +13377,15 @@ fn runExprKernel(
         .finish_return => {
             const state = stacks.takeFinishReturn();
             const result_start = child_slots.items.len - 1;
-            const can_inner = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_inner = child_slots.items[result_start].expr;
 
             try self.warnTrailingTrySuffix(can_inner.idx);
-            const return_expr = if (self.enclosing_lambda) |lambda_idx|
+            const return_expr = if (self.expect_context != .none)
+                try self.env.pushMalformed(Expr.Idx, Diagnostic{ .control_flow_in_expect = .{
+                    .region = state.region,
+                    .kind = .return_keyword,
+                } })
+            else if (self.enclosing_lambda) |lambda_idx|
                 try self.env.addExpr(Expr{ .e_return = .{
                     .expr = can_inner.idx,
                     .lambda = lambda_idx,
@@ -12993,11 +13405,7 @@ fn runExprKernel(
         .finish_tuple_access => {
             const state = stacks.takeFinishTupleAccess();
             const result_start = child_slots.items.len - 1;
-            const can_tuple = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_tuple = child_slots.items[result_start].expr;
 
             const elem_index_str = self.parse_ir.resolve(state.elem_token);
             const index_str = if (elem_index_str.len > 0 and elem_index_str[0] == '.') elem_index_str[1..] else elem_index_str;
@@ -13028,11 +13436,7 @@ fn runExprKernel(
         .finish_suffix_single_question => {
             const state = stacks.takeFinishSuffixSingleQuestion();
             const result_start = child_slots.items.len - 1;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
 
             const can_expr = try self.finishSuffixSingleQuestionExpr(state.region, can_cond, state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13044,22 +13448,10 @@ fn runExprKernel(
             const state = stacks.takeFinishSingleQuestionBinop();
             const child_count: usize = if (state.rhs_is_bare_tag) 1 else 2;
             const result_start = child_slots.items.len - child_count;
-            const can_lhs = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_lhs = child_slots.items[result_start].expr;
 
             const can_rhs_idx: ?Expr.Idx = if (state.rhs_is_bare_tag) null else blk: {
-                const can_rhs = child_slots.items[result_start + 1].expr orelse {
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                        .region = state.region,
-                    } });
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
-                break :blk can_rhs.idx;
+                break :blk child_slots.items[result_start + 1].expr.idx;
             };
 
             const can_expr = try self.finishSingleQuestionBinop(state.bin_op, state.region, can_lhs, can_rhs_idx, state.free_vars_start);
@@ -13071,11 +13463,7 @@ fn runExprKernel(
         .finish_unary => {
             const state = stacks.takeFinishUnary();
             const result_start = child_slots.items.len - 1;
-            const can_operand = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_operand = child_slots.items[result_start].expr;
 
             const operator_token = self.parse_ir.tokens.tokens.get(state.operator);
             const expr_idx = if (operator_token.tag == .OpUnaryMinus)
@@ -13095,16 +13483,8 @@ fn runExprKernel(
         .finish_bin_op => {
             const state = stacks.takeFinishBinOp();
             const result_start = child_slots.items.len - 2;
-            const can_lhs = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_rhs = child_slots.items[result_start + 1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_lhs = child_slots.items[result_start].expr;
+            const can_rhs = child_slots.items[result_start + 1].expr;
 
             const op_token = self.parse_ir.tokens.tokens.get(state.bin_op.operator);
             const op: Expr.Binop.Op = op_blk: {
@@ -13193,7 +13573,7 @@ fn runExprKernel(
                 const if_expr_idx = try self.env.addExpr(Expr{ .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
-                    .warn_unused_branches = false,
+                    .origin = if (op == .@"and") .short_circuit_and else .short_circuit_or,
                 } }, state.region);
 
                 const if_free_vars = self.scratch_free_vars.spanFrom(state.free_vars_start);
@@ -13220,10 +13600,8 @@ fn runExprKernel(
             var args_span = Expr.Span{ .span = DataSpan.empty() };
             if (state.arg_count > 0) {
                 const scratch_top = self.env.store.scratchExprTop();
-                for (child_slice) |maybe_arg| {
-                    if (maybe_arg.expr) |can_arg| {
-                        try self.env.store.addScratchExpr(can_arg.idx);
-                    }
+                for (child_slice) |arg| {
+                    try self.env.store.addScratchExpr(arg.expr.idx);
                 }
                 args_span = try self.env.store.exprSpanFrom(scratch_top);
             }
@@ -13240,17 +13618,11 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_receiver = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_receiver = child_slice[0].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13267,29 +13639,63 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
+        .arrow_ident_callee => {
+            // The piped argument is canonicalized; the callee comes next, as
+            // it would as a child, and selects a call or a method call.
+            const state = stacks.takeArrowIdentCallee();
+            const additional_args = self.parse_ir.store.exprSlice(state.args);
+            switch (try self.resolveIdentExpr(state.callee)) {
+                .tag_member => |access| {
+                    // A method call's receiver precedes its piped argument.
+                    const piped = child_slots.pop() orelse unreachable;
+                    try child_slots.append(frame_allocator, .{ .expr = access.receiver });
+                    try child_slots.append(frame_allocator, piped);
+                    try stacks.pushFinishMethodCall(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .method_name = access.member,
+                        .method_name_region = access.member_region,
+                        .arg_count = additional_args.len + 1,
+                    });
+                },
+                .expr => |callee| {
+                    try stacks.pushFinishArrowApply(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .arg_count = additional_args.len,
+                    });
+                    try child_slots.append(frame_allocator, .{ .expr = callee });
+                },
+                .deferred_tag_member => |deferred| {
+                    try stacks.pushFinishArrowApply(frame_allocator, .{
+                        .region = state.region,
+                        .free_vars_start = state.free_vars_start,
+                        .arg_count = additional_args.len,
+                        .tag_member_ref = deferred.ref,
+                    });
+                    try child_slots.append(frame_allocator, .{ .expr = deferred.expr });
+                },
+            }
+            var i = additional_args.len;
+            while (i > 0) {
+                i -= 1;
+                try stacks.pushParse(frame_allocator, .{ .idx = additional_args[i], .target = .scratch });
+            }
+            continue :expr_kernel_loop .dispatch;
+        },
         .finish_arrow_apply => {
             const state = stacks.takeFinishArrowApply();
             const child_count = state.arg_count + 2;
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_first_arg = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_fn_expr = child_slice[1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slice[0].expr;
+            const can_fn_expr = child_slice[1].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
-            for (child_slice[2..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[2..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13300,6 +13706,7 @@ fn runExprKernel(
                     .called_via = CalledVia.apply,
                 },
             }, state.region);
+            if (state.tag_member_ref) |ref| self.setDeferredTagMemberAccessNode(ref, expr_idx);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13313,11 +13720,7 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_first_arg = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slice[0].expr;
             const tag_name = self.parse_ir.tokens.resolveIdentifier(state.tag.token) orelse {
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                     .region = state.region,
@@ -13329,10 +13732,8 @@ fn runExprKernel(
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13352,16 +13753,8 @@ fn runExprKernel(
         .finish_arrow_call => {
             const state = stacks.takeFinishArrowCall();
             const result_start = child_slots.items.len - 2;
-            const can_first_arg = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
-            const can_fn_expr = child_slots.items[result_start + 1].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slots.items[result_start].expr;
+            const can_fn_expr = child_slots.items[result_start + 1].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
             try self.env.store.addScratchExpr(can_first_arg.idx);
@@ -13384,11 +13777,7 @@ fn runExprKernel(
         .finish_arrow_tag_single => {
             const state = stacks.takeFinishArrowTagSingle();
             const result_start = child_slots.items.len - 1;
-            const can_first_arg = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_first_arg = child_slots.items[result_start].expr;
             const tag_name = self.parse_ir.tokens.resolveIdentifier(state.tag.token) orelse {
                 const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
                     .region = state.region,
@@ -13421,9 +13810,7 @@ fn runExprKernel(
             std.debug.assert(ast_segments.len > 0);
 
             const result_start = child_slots.items.len - 1;
-            const receiver_idx = if (child_slots.items[result_start].expr) |can_receiver| can_receiver.idx else try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = state.region,
-            } });
+            const receiver_idx = child_slots.items[result_start].expr.idx;
 
             const path_builder = try self.env.startFieldAccessPath(@intCast(ast_segments.len));
             var path_finished = false;
@@ -13461,17 +13848,11 @@ fn runExprKernel(
             const result_start = child_slots.items.len - child_count;
             const child_slice = child_slots.items[result_start..];
 
-            const can_fn_expr = child_slice[0].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_fn_expr = child_slice[0].expr;
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice[1..]) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice[1..]) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
 
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
@@ -13482,6 +13863,7 @@ fn runExprKernel(
                     .called_via = CalledVia.apply,
                 },
             }, state.region);
+            if (state.tag_member_ref) |ref| self.setDeferredTagMemberAccessNode(ref, expr_idx);
 
             const free_vars_span = self.scratch_free_vars.spanFrom(state.free_vars_start);
             child_slots.shrinkRetainingCapacity(result_start);
@@ -13495,10 +13877,8 @@ fn runExprKernel(
             const child_slice = child_slots.items[result_start..];
 
             const scratch_top = self.env.store.scratchExprTop();
-            for (child_slice) |maybe_arg| {
-                if (maybe_arg.expr) |can_arg| {
-                    try self.env.store.addScratchExpr(can_arg.idx);
-                }
+            for (child_slice) |arg| {
+                try self.env.store.addScratchExpr(arg.expr.idx);
             }
             const args_span = try self.env.store.exprSpanFrom(scratch_top);
 
@@ -13526,9 +13906,9 @@ fn runExprKernel(
             var child_i: usize = 0;
 
             const ext_expr: ?Expr.Idx = if (state.ext != null) blk: {
-                const maybe_ext = child_slice[child_i];
+                const ext = child_slice[child_i];
                 child_i += 1;
-                break :blk if (maybe_ext.expr) |can_ext| can_ext.idx else null;
+                break :blk ext.expr.idx;
             } else null;
 
             if (state.fields.len == 0 and state.unsets.len == 0) {
@@ -13543,20 +13923,13 @@ fn runExprKernel(
             const scratch_top = self.env.store.scratch.?.record_fields.top();
             for (state.fields) |field_work| {
                 const ast_field = self.parse_ir.store.getRecordField(field_work.field_idx);
-                const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse {
-                    child_i += 1;
-                    continue :expr_kernel_loop .dispatch;
+                const cir_field = RecordField{
+                    .name = field_work.name,
+                    .value = child_slice[child_i].expr.idx,
                 };
-
-                if (child_slice[child_i].expr) |can_value| {
-                    const cir_field = RecordField{
-                        .name = field_name,
-                        .value = can_value.idx,
-                    };
-                    const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
-                    const can_field_idx = try self.env.addRecordField(cir_field, field_region);
-                    try self.env.store.scratch.?.record_fields.append(can_field_idx);
-                }
+                const field_region = self.parse_ir.tokenizedRegionToRegion(ast_field.region);
+                const can_field_idx = try self.env.addRecordField(cir_field, field_region);
+                try self.env.store.scratch.?.record_fields.append(can_field_idx);
                 child_i += 1;
             }
 
@@ -13588,12 +13961,7 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const backing_expr = child_slots.items[result_start].expr orelse blk: {
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = state.region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const backing_expr = child_slots.items[result_start].expr;
 
             const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, .record, state.region, backing_expr.free_vars);
 
@@ -13607,12 +13975,7 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const backing_expr = child_slots.items[result_start].expr orelse blk: {
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = state.region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const backing_expr = child_slots.items[result_start].expr;
 
             const result_expr = try self.finishNominalConstructionExpr(state.mapper, backing_expr.idx, state.backing_type, state.region, backing_expr.free_vars);
 
@@ -13639,12 +14002,7 @@ fn runExprKernel(
                 try self.scratch_idents.append(field.name);
 
                 if (field.value_expr != null) {
-                    const can_value = child_slice[child_i].expr orelse blk: {
-                        const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                            .region = state.region,
-                        } });
-                        break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-                    };
+                    const can_value = child_slice[child_i].expr;
                     child_i += 1;
                     try self.scratch_expr_ids.append(can_value.idx);
 
@@ -13711,23 +14069,13 @@ fn runExprKernel(
             const state = stacks.takeFinishLambda();
             defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
             defer self.enclosing_lambda = state.saved_enclosing_lambda;
-            defer self.in_expect = state.saved_in_expect;
+            defer self.expect_context = state.saved_expect_context;
             defer self.loop_depth = state.saved_loop_depth;
             defer self.endDefiningBoundVars(state.saved_defining_bound_vars);
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 1;
-            const can_body = child_slots.items[result_start].expr orelse {
-                const ast_body = self.parse_ir.store.getExpr(state.body_ast_idx);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .lambda_body_not_canonicalized = .{ .region = body_region },
-                });
-                self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_body = child_slots.items[result_start].expr;
 
             const bound_vars_top = self.scratch_bound_vars.top();
             defer self.scratch_bound_vars.clearFrom(bound_vars_top);
@@ -13807,34 +14155,14 @@ fn runExprKernel(
             const scratch_top = self.env.store.scratchIfBranchTop();
             var child_i: usize = 0;
             for (state.branches) |branch| {
-                const can_cond = child_slice[child_i].expr orelse {
-                    const ast_cond = self.parse_ir.store.getExpr(branch.condition);
-                    const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .if_condition_not_canonicalized = .{ .region = cond_region },
-                    });
-                    self.scratch_free_vars.clearFrom(state.free_vars_start);
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
+                const can_cond = child_slice[child_i].expr;
                 child_i += 1;
                 const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
                 for (cond_free_vars_slice) |fv| {
                     try self.appendPropagatedFreeVar(state.captures_top, fv);
                 }
 
-                const can_then = child_slice[child_i].expr orelse {
-                    const ast_then = self.parse_ir.store.getExpr(branch.then);
-                    const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
-                    const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                        .if_then_not_canonicalized = .{ .region = then_region },
-                    });
-                    self.scratch_free_vars.clearFrom(state.free_vars_start);
-                    child_slots.shrinkRetainingCapacity(result_start);
-                    try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                    continue :expr_kernel_loop .dispatch;
-                };
+                const can_then = child_slice[child_i].expr;
                 child_i += 1;
                 const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
                 for (then_free_vars_slice) |fv| {
@@ -13848,17 +14176,7 @@ fn runExprKernel(
                 try self.env.store.addScratchIfBranch(if_branch_idx);
             }
 
-            const can_else = child_slice[child_i].expr orelse {
-                const else_expr = self.parse_ir.store.getExpr(state.final_else);
-                const else_region = self.parse_ir.tokenizedRegionToRegion(else_expr.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_else_not_canonicalized = .{ .region = else_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_else = child_slice[child_i].expr;
 
             const else_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_else.free_vars);
             for (else_free_vars_slice) |fv| {
@@ -13873,7 +14191,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = can_else.idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 
@@ -13894,33 +14212,13 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 2;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                const ast_cond = self.parse_ir.store.getExpr(state.condition);
-                const cond_region = self.parse_ir.tokenizedRegionToRegion(ast_cond.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_condition_not_canonicalized = .{ .region = cond_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
             const cond_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_cond.free_vars);
             for (cond_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
             }
 
-            const can_then = child_slots.items[result_start + 1].expr orelse {
-                const ast_then = self.parse_ir.store.getExpr(state.then);
-                const then_region = self.parse_ir.tokenizedRegionToRegion(ast_then.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{
-                    .if_then_not_canonicalized = .{ .region = then_region },
-                });
-                self.scratch_free_vars.clearFrom(state.free_vars_start);
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_then = child_slots.items[result_start + 1].expr;
             const then_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_then.free_vars);
             for (then_free_vars_slice) |fv| {
                 try self.appendPropagatedFreeVar(state.captures_top, fv);
@@ -13940,7 +14238,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = empty_record_idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 
@@ -13959,15 +14257,7 @@ fn runExprKernel(
         .for_after_list => {
             const state = stacks.takeForAfterList();
             const result_start = child_slots.items.len - 1;
-            const list_expr = child_slots.items[result_start].expr orelse blk: {
-                const ast_list = self.parse_ir.store.getExpr(state.ast_list_expr);
-                const list_region = self.parse_ir.tokenizedRegionToRegion(ast_list.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = list_region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
-            child_slots.items[result_start].expr = list_expr;
+            const list_expr = child_slots.items[result_start].expr;
 
             const list_free_vars_slice = self.scratch_free_vars.sliceFromSpan(list_expr.free_vars);
             for (list_free_vars_slice) |fv| {
@@ -13986,7 +14276,7 @@ fn runExprKernel(
 
             try stacks.pushFinishForExpr(frame_allocator, .{
                 .region = state.region,
-                .ast_body = state.ast_body,
+                .kind = state.kind,
                 .patt = ptrn,
                 .body_free_vars_start = self.scratch_free_vars.top(),
                 .captures_top = state.captures_top,
@@ -14008,15 +14298,8 @@ fn runExprKernel(
             defer self.scratch_captures.clearFrom(state.captures_top);
 
             const result_start = child_slots.items.len - 2;
-            const list_expr = child_slots.items[result_start].expr.?;
-            const body = child_slots.items[result_start + 1].expr orelse blk: {
-                const ast_body = self.parse_ir.store.getExpr(state.ast_body);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(ast_body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = body_region,
-                } });
-                break :blk CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() };
-            };
+            const list_expr = child_slots.items[result_start].expr;
+            const body = child_slots.items[result_start + 1].expr;
 
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
             for (body_free_vars_slice) |fv| {
@@ -14033,6 +14316,7 @@ fn runExprKernel(
 
             const for_expr_idx = try self.env.addExpr(Expr{
                 .e_for = .{
+                    .kind = state.kind,
                     .patt = state.patt,
                     .expr = list_expr.idx,
                     .body = body.idx,
@@ -14047,11 +14331,7 @@ fn runExprKernel(
         .match_after_cond => {
             const state = stacks.takeMatchAfterCond();
             const result_start = child_slots.items.len - 1;
-            const can_cond = child_slots.items[result_start].expr orelse {
-                child_slots.shrinkRetainingCapacity(result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, null);
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_cond = child_slots.items[result_start].expr;
 
             try stacks.pushMatchNext(frame_allocator, .{
                 .region = state.region,
@@ -14203,7 +14483,6 @@ fn runExprKernel(
                     .branch_pat_span = branch_pat_span,
                     .branch_bound_vars_top = branch_bound_vars_top,
                     .body_free_vars_start_after_guard = body_free_vars_start,
-                    .body_ast = ast_branch.body,
                     .can_guard = null,
                     .saved_defining_bound_vars = saved_defining_bound_vars,
                 });
@@ -14215,27 +14494,26 @@ fn runExprKernel(
         .match_after_guard => {
             const state = stacks.takeMatchAfterGuard();
             const result_start = child_slots.items.len - 1;
-            const can_guard: ?Expr.Idx = if (child_slots.items[result_start].expr) |can_guard_result| blk: {
-                if (can_guard_result.free_vars.len > 0) {
-                    const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
-                    const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
-                    defer self.env.gpa.free(guard_free_vars_copy);
-                    @memcpy(guard_free_vars_copy, guard_fv_slice);
+            const can_guard_result = child_slots.items[result_start].expr;
+            if (can_guard_result.free_vars.len > 0) {
+                const guard_fv_slice = self.scratch_free_vars.sliceFromSpan(can_guard_result.free_vars);
+                const guard_free_vars_copy = try self.env.gpa.alloc(Pattern.Idx, guard_fv_slice.len);
+                defer self.env.gpa.free(guard_free_vars_copy);
+                @memcpy(guard_free_vars_copy, guard_fv_slice);
 
-                    self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                    var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
-                    defer bound_vars_view.deinit();
-                    for (guard_free_vars_copy) |fv| {
-                        if (!bound_vars_view.contains(fv) and
-                            !self.isGloballyResolvablePattern(fv) and
-                            !self.isLocalFunctionPattern(fv))
-                        {
-                            try self.scratch_free_vars.append(fv);
-                        }
+                self.scratch_free_vars.clearFrom(state.body_free_vars_start);
+                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
+                defer bound_vars_view.deinit();
+                for (guard_free_vars_copy) |fv| {
+                    if (!bound_vars_view.contains(fv) and
+                        !self.isGloballyResolvablePattern(fv) and
+                        !self.isLocalFunctionPattern(fv))
+                    {
+                        try self.scratch_free_vars.append(fv);
                     }
                 }
-                break :blk can_guard_result.idx;
-            } else null;
+            }
+            const can_guard = can_guard_result.idx;
 
             const body_free_vars_start_after_guard = self.scratch_free_vars.top();
             child_slots.shrinkRetainingCapacity(result_start);
@@ -14250,7 +14528,6 @@ fn runExprKernel(
                 .branch_pat_span = state.branch_pat_span,
                 .branch_bound_vars_top = state.branch_bound_vars_top,
                 .body_free_vars_start_after_guard = body_free_vars_start_after_guard,
-                .body_ast = state.body_ast,
                 .can_guard = can_guard,
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
             });
@@ -14265,16 +14542,7 @@ fn runExprKernel(
             defer self.endDefiningBoundVars(state.saved_defining_bound_vars);
 
             const result_start = child_slots.items.len - 1;
-            const can_body = child_slots.items[result_start].expr orelse {
-                const body = self.parse_ir.store.getExpr(state.body_ast);
-                const body_region = self.parse_ir.tokenizedRegionToRegion(body.to_tokenized_region());
-                const malformed_idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                    .region = body_region,
-                } });
-                child_slots.shrinkRetainingCapacity(state.result_start);
-                try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = malformed_idx, .free_vars = DataSpan.empty() });
-                continue :expr_kernel_loop .dispatch;
-            };
+            const can_body = child_slots.items[result_start].expr;
 
             if (can_body.free_vars.len > 0) {
                 const body_fv_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
@@ -14322,7 +14590,7 @@ fn runExprKernel(
     }
 
     std.debug.assert(child_slots.items.len == 0);
-    return last_expr;
+    return last_expr orelse unreachable;
 }
 
 /// Logical negation always calls the compiler-owned Bool.not, independent of
@@ -14367,10 +14635,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
 
     if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
         const bool_stmt_idx = bool_info.statement_idx orelse {
-            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no statement during boolean operator canonicalization"});
         };
         const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
-            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no target node during boolean operator canonicalization"});
         };
         const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
         const import_idx = try self.env.imports.getOrPutWithIdent(
@@ -14390,10 +14658,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
-        @panic("Bool type binding was absent during boolean operator canonicalization");
+        base.invariant("{s}", .{"Bool type binding was absent during boolean operator canonicalization"});
     };
     return switch (binding_location.binding.*) {
-        .local_where_alias => @panic("Bool type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Bool type binding resolved to a where alias"}),
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = stmt,
@@ -14403,10 +14671,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         }, region),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Bool type binding had no import during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no import during boolean operator canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Bool type binding had no target node during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no target node during boolean operator canonicalization"});
             };
             break :blk try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
@@ -14417,23 +14685,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
                 },
             }, region);
         },
-        .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
-    };
-}
-
-/// Canonicalize an expr. If it fails, convert it to a malormed expr node
-fn canonicalizeExprOrMalformed(
-    self: *Self,
-    ast_expr_idx: AST.Expr.Idx,
-) std.mem.Allocator.Error!CanonicalizedExpr {
-    return try self.canonicalizeExpr(ast_expr_idx) orelse blk: {
-        const ast_expr = self.parse_ir.store.getExpr(ast_expr_idx);
-        break :blk CanonicalizedExpr{
-            .idx = try self.env.pushMalformed(Expr.Idx, Diagnostic{ .expr_not_canonicalized = .{
-                .region = self.parse_ir.tokenizedRegionToRegion(ast_expr.to_tokenized_region()),
-            } }),
-            .free_vars = DataSpan.empty(),
-        };
+        .local_alias => base.invariant("{s}", .{"Bool type binding was not a nominal type during boolean operator canonicalization"}),
     };
 }
 
@@ -14957,6 +15209,7 @@ fn lookupImportedExposedTarget(
     const module_name_text = imported_env.module_name;
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
+    const item = self.scratchBytesRef(item_text);
     const module_qualified_text = try self.scratchQualifiedText(module_name_text, item_text);
     const module_qualified_target = lookupExposedTargetByText(imported_env, module_qualified_text);
 
@@ -14964,7 +15217,7 @@ fn lookupImportedExposedTarget(
         return target;
     }
 
-    return lookupExposedTargetByText(imported_env, item_text);
+    return lookupExposedTargetByText(imported_env, self.scratchBytesDeref(item));
 }
 
 fn lookupImportedExposedTypeNode(
@@ -14984,9 +15237,10 @@ fn lookupImportedTypeDeclNode(
     const scratch_top = self.scratchBytesTop();
     defer self.clearScratchBytesFrom(scratch_top);
 
+    const item = self.scratchBytesRef(item_text);
     const module_qualified_text = try self.scratchQualifiedText(imported_env.module_name, item_text);
     const qualified_ident = imported_env.common.findIdent(module_qualified_text) orelse
-        imported_env.common.findIdent(item_text) orelse
+        imported_env.common.findIdent(self.scratchBytesDeref(item)) orelse
         return null;
 
     for (imported_env.store.sliceStatements(imported_env.all_statements)) |stmt_idx| {
@@ -15697,7 +15951,7 @@ fn introduceStringPatternCapture(
                 .region = region,
             } });
         },
-        .var_reassignment_ok => unreachable,
+        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
     }
 
     return pattern_idx;
@@ -15928,15 +16182,15 @@ fn canonicalizePatternOrMalformed(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!Pattern.Idx {
-    if (try self.canonicalizePattern(ast_pattern_idx)) |idx| {
-        return idx;
-    } else {
-        const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
-        const malformed_idx = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
-            .region = pattern_region,
-        } });
-        return malformed_idx;
-    }
+    return try self.canonicalizePattern(ast_pattern_idx) orelse
+        try self.pushPatternNotCanonicalized(ast_pattern_idx);
+}
+
+fn pushPatternNotCanonicalized(self: *Self, ast_pattern_idx: AST.Pattern.Idx) std.mem.Allocator.Error!Pattern.Idx {
+    const pattern_region = self.parse_ir.tokenizedRegionToRegion(self.parse_ir.store.getPattern(ast_pattern_idx).to_tokenized_region());
+    return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .pattern_not_canonicalized = .{
+        .region = pattern_region,
+    } });
 }
 
 /// A declaration binding a name that was referenced ahead of it. A plainly
@@ -16381,16 +16635,9 @@ const PatternKernelWork = struct {
 
     fn deinit(self: *PatternKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.tag_next.deinit(allocator);
-        self.tag_after_arg.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.list_next.deinit(allocator);
-        self.list_after_elem.deinit(allocator);
-        self.as_after_inner.deinit(allocator);
+        inline for (@typeInfo(PatternKernelLabel).@"enum".fields) |label| {
+            if (@hasField(PatternKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *PatternKernelWork, allocator: std.mem.Allocator, item: PatternKernelParseWork) std.mem.Allocator.Error!void {
@@ -16505,6 +16752,7 @@ const ExprKernelLabel = enum {
     associated_next,
     associated_exit,
     finish_associated_decl_body,
+    finish_associated_expect,
     block_next,
     finish_block,
     finish_block_expr_stmt,
@@ -16532,6 +16780,7 @@ const ExprKernelLabel = enum {
     finish_bin_op,
     finish_single_question_binop,
     finish_method_call,
+    arrow_ident_callee,
     finish_arrow_apply,
     finish_arrow_tag_apply,
     finish_arrow_call,
@@ -16566,7 +16815,7 @@ const ExprParseWork = struct {
 };
 
 const ExprChildSlot = struct {
-    expr: ?CanonicalizedExpr,
+    expr: CanonicalizedExpr,
 };
 
 const ExprChildSlots = std.ArrayList(ExprChildSlot);
@@ -16576,13 +16825,18 @@ fn storeExprKernelOutput(
     child_slots: *ExprChildSlots,
     allocator: std.mem.Allocator,
     target: ExprResultTarget,
-    result: ?CanonicalizedExpr,
+    result: CanonicalizedExpr,
 ) std.mem.Allocator.Error!void {
     switch (target) {
         .return_value => last_expr.* = result,
         .scratch => try child_slots.append(allocator, .{ .expr = result }),
     }
 }
+
+const ExprFinishAssociatedExpectWork = struct {
+    work: AssociatedExpectWork,
+    saved_expect: SavedExpectState,
+};
 
 const ExprFinishAssociatedDeclBodyWork = struct {
     work: AssociatedDeclBodyWork,
@@ -16604,19 +16858,16 @@ const ExprFinishBlockExprStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
 };
 
 const ExprFinishBlockFinalExprWork = struct {
     block: BlockState,
-    ast_expr: AST.Expr.Idx,
 };
 
 const ExprFinishBlockDbgStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16624,7 +16875,6 @@ const ExprFinishBlockCrashStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16632,14 +16882,13 @@ const ExprFinishBlockExpectStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
+    saved_expect: SavedExpectState,
 };
 
 const ExprFinishBlockReturnStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_expr: AST.Expr.Idx,
     final_expr: bool,
 };
 
@@ -16650,7 +16899,6 @@ const ExprFinishBlockVarStmtWork = struct {
     name_region: Region,
     var_name: Ident.Idx,
     annotation: ?Annotation.Idx,
-    ast_expr: AST.Expr.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -16659,7 +16907,6 @@ const ExprFinishBlockReassignStmtWork = struct {
     next: usize,
     region: Region,
     pattern_idx: Pattern.Idx,
-    ast_expr: AST.Expr.Idx,
     type_var_scope: ?TypeVarScopeIdx,
 };
 
@@ -16670,7 +16917,6 @@ const ExprFinishBlockDeclStmtWork = struct {
     pattern_idx: Pattern.Idx,
     pattern_reused_existing_var: bool,
     annotation: ?Annotation.Idx,
-    ast_expr: AST.Expr.Idx,
     saved_defining_bound_vars: ?DataSpan,
     saved_current_local_def_ident: ?Ident.Idx,
     saved_current_local_def_index: ?usize,
@@ -16681,7 +16927,6 @@ const ExprBlockWhileAfterCondWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    cond_ast: AST.Expr.Idx,
     body_ast: AST.Expr.Idx,
     captures_top: u32,
     cond_free_vars_start: u32,
@@ -16691,7 +16936,6 @@ const ExprFinishBlockWhileStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    body_ast: AST.Expr.Idx,
     cond: CanonicalizedExpr,
     captures_top: u32,
     body_free_vars_start: u32,
@@ -16701,9 +16945,9 @@ const ExprBlockForAfterListWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
+    kind: CIR.ForKind,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
-    ast_list_expr: AST.Expr.Idx,
     list_free_vars_start: u32,
     captures_top: u32,
     bound_vars_top: u32,
@@ -16715,7 +16959,7 @@ const ExprFinishBlockForStmtWork = struct {
     block: BlockState,
     next: usize,
     region: Region,
-    ast_body: AST.Expr.Idx,
+    kind: CIR.ForKind,
     list_expr: CanonicalizedExpr,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
@@ -16745,7 +16989,7 @@ const ExprFinishListWork = struct {
 const ExprFinishTupleWork = struct {
     region: Region,
     free_vars_start: u32,
-    items: []const AST.Expr.Idx,
+    item_count: usize,
 };
 
 const ExprFinishDbgWork = struct {
@@ -16801,6 +17045,15 @@ const ExprFinishArrowApplyWork = struct {
     region: Region,
     free_vars_start: u32,
     arg_count: usize,
+    /// See `ExprFinishApplyWork.tag_member_ref`.
+    tag_member_ref: ?ModuleEnv.DeferredImportRef.Idx = null,
+};
+
+const ExprArrowIdentCalleeWork = struct {
+    region: Region,
+    free_vars_start: u32,
+    callee: @TypeOf(@as(AST.Expr, undefined).ident),
+    args: AST.Expr.Span,
 };
 
 const ExprFinishArrowTagApplyWork = struct {
@@ -16831,6 +17084,9 @@ const ExprFinishApplyWork = struct {
     region: Region,
     free_vars_start: u32,
     arg_count: usize,
+    /// The deferred reference whose callee may turn out to be a member
+    /// accessed on a qualified tag, which this call then accesses.
+    tag_member_ref: ?ModuleEnv.DeferredImportRef.Idx = null,
 };
 
 const ExprFinishTagWork = struct {
@@ -16860,11 +17116,10 @@ const ExprFinishLambdaWork = struct {
     region: Region,
     args_span: Pattern.Span,
     lambda_idx: Expr.Idx,
-    body_ast_idx: AST.Expr.Idx,
     body_free_vars_start: u32,
     captures_top: u32,
     saved_enclosing_lambda: ?Expr.Idx,
-    saved_in_expect: bool,
+    saved_expect_context: ExpectContext,
     saved_loop_depth: u32,
     saved_defining_bound_vars: ?DataSpan,
 };
@@ -16874,15 +17129,12 @@ const ExprFinishIfThenElseWork = struct {
     free_vars_start: u32,
     captures_top: u32,
     branches: []const ExprIfBranchWork,
-    final_else: AST.Expr.Idx,
 };
 
 const ExprFinishIfWithoutElseWork = struct {
     region: Region,
     free_vars_start: u32,
     captures_top: u32,
-    condition: AST.Expr.Idx,
-    then: AST.Expr.Idx,
 };
 
 const ExprFinishRecordBuilderWork = struct {
@@ -16908,9 +17160,9 @@ const ExprFinishNominalApplyWork = struct {
 
 const ExprForAfterListWork = struct {
     region: Region,
+    kind: CIR.ForKind,
     ast_patt: AST.Pattern.Idx,
     ast_body: AST.Expr.Idx,
-    ast_list_expr: AST.Expr.Idx,
     list_free_vars_start: u32,
     captures_top: u32,
     bound_vars_top: u32,
@@ -16920,7 +17172,7 @@ const ExprForAfterListWork = struct {
 
 const ExprFinishForExprWork = struct {
     region: Region,
-    ast_body: AST.Expr.Idx,
+    kind: CIR.ForKind,
     patt: Pattern.Idx,
     body_free_vars_start: u32,
     captures_top: u32,
@@ -16971,7 +17223,6 @@ const ExprMatchAfterBodyWork = struct {
     branch_pat_span: Expr.Match.BranchPattern.Span,
     branch_bound_vars_top: u32,
     body_free_vars_start_after_guard: u32,
-    body_ast: AST.Expr.Idx,
     can_guard: ?Expr.Idx,
     saved_defining_bound_vars: ?DataSpan,
 };
@@ -16988,6 +17239,7 @@ const ExprKernelWork = struct {
     associated_next: std.ArrayList(*AssociatedItemsState) = .empty,
     associated_exit: std.ArrayList(*AssociatedItemsState) = .empty,
     finish_associated_decl_body: std.ArrayList(ExprFinishAssociatedDeclBodyWork) = .empty,
+    finish_associated_expect: std.ArrayList(ExprFinishAssociatedExpectWork) = .empty,
     block_next: std.ArrayList(ExprBlockNextWork) = .empty,
     finish_block: std.ArrayList(ExprFinishBlockWork) = .empty,
     finish_block_expr_stmt: std.ArrayList(ExprFinishBlockExprStmtWork) = .empty,
@@ -17015,6 +17267,7 @@ const ExprKernelWork = struct {
     finish_bin_op: std.ArrayList(ExprFinishBinOpWork) = .empty,
     finish_single_question_binop: std.ArrayList(ExprFinishSingleQuestionBinopWork) = .empty,
     finish_method_call: std.ArrayList(ExprFinishMethodCallWork) = .empty,
+    arrow_ident_callee: std.ArrayList(ExprArrowIdentCalleeWork) = .empty,
     finish_arrow_apply: std.ArrayList(ExprFinishArrowApplyWork) = .empty,
     finish_arrow_tag_apply: std.ArrayList(ExprFinishArrowTagApplyWork) = .empty,
     finish_arrow_call: std.ArrayList(ExprFinishArrowCallWork) = .empty,
@@ -17045,6 +17298,7 @@ const ExprKernelWork = struct {
             .associated_next => _ = self.takeAssociatedNext(),
             .associated_exit => _ = self.takeAssociatedExit(),
             .finish_associated_decl_body => _ = self.takeFinishAssociatedDeclBody(),
+            .finish_associated_expect => _ = self.takeFinishAssociatedExpect(),
             .block_next => _ = self.takeBlockNext(),
             .finish_block => _ = self.takeFinishBlock(),
             .finish_block_expr_stmt => _ = self.takeFinishBlockExprStmt(),
@@ -17072,6 +17326,7 @@ const ExprKernelWork = struct {
             .finish_bin_op => _ = self.takeFinishBinOp(),
             .finish_single_question_binop => _ = self.takeFinishSingleQuestionBinop(),
             .finish_method_call => _ = self.takeFinishMethodCall(),
+            .arrow_ident_callee => _ = self.takeArrowIdentCallee(),
             .finish_arrow_apply => _ = self.takeFinishArrowApply(),
             .finish_arrow_tag_apply => _ = self.takeFinishArrowTagApply(),
             .finish_arrow_call => _ = self.takeFinishArrowCall(),
@@ -17118,6 +17373,10 @@ const ExprKernelWork = struct {
                     can.in_statement_position = finish.saved_stmt_pos;
                     continue;
                 },
+                .finish_associated_expect => {
+                    can.exitExpect(self.takeFinishAssociatedExpect().saved_expect);
+                    continue;
+                },
                 .parse,
                 .block_next,
                 .finish_block,
@@ -17146,6 +17405,7 @@ const ExprKernelWork = struct {
                 .finish_bin_op,
                 .finish_single_question_binop,
                 .finish_method_call,
+                .arrow_ident_callee,
                 .finish_arrow_apply,
                 .finish_arrow_tag_apply,
                 .finish_arrow_call,
@@ -17175,118 +17435,9 @@ const ExprKernelWork = struct {
     fn deinit(self: *ExprKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
         self.targets.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.associated_enter.deinit(allocator);
-        self.associated_next.deinit(allocator);
-        self.associated_exit.deinit(allocator);
-        self.finish_associated_decl_body.deinit(allocator);
-        self.block_next.deinit(allocator);
-        self.finish_block.deinit(allocator);
-        self.finish_block_expr_stmt.deinit(allocator);
-        self.finish_block_final_expr.deinit(allocator);
-        self.finish_block_dbg_stmt.deinit(allocator);
-        self.finish_block_crash_stmt.deinit(allocator);
-        self.finish_block_expect_stmt.deinit(allocator);
-        self.finish_block_return_stmt.deinit(allocator);
-        self.finish_block_var_stmt.deinit(allocator);
-        self.finish_block_reassign_stmt.deinit(allocator);
-        self.finish_block_decl_stmt.deinit(allocator);
-        self.block_while_after_cond.deinit(allocator);
-        self.finish_block_while_stmt.deinit(allocator);
-        self.block_for_after_list.deinit(allocator);
-        self.finish_block_for_stmt.deinit(allocator);
-        self.finish_string.deinit(allocator);
-        self.finish_list.deinit(allocator);
-        self.finish_tuple.deinit(allocator);
-        self.finish_dbg.deinit(allocator);
-        self.finish_crash.deinit(allocator);
-        self.finish_return.deinit(allocator);
-        self.finish_tuple_access.deinit(allocator);
-        self.finish_unary.deinit(allocator);
-        self.finish_suffix_single_question.deinit(allocator);
-        self.finish_bin_op.deinit(allocator);
-        self.finish_single_question_binop.deinit(allocator);
-        self.finish_method_call.deinit(allocator);
-        self.finish_arrow_apply.deinit(allocator);
-        self.finish_arrow_tag_apply.deinit(allocator);
-        self.finish_arrow_call.deinit(allocator);
-        self.finish_arrow_tag_single.deinit(allocator);
-        self.finish_field_access.deinit(allocator);
-        self.finish_apply.deinit(allocator);
-        self.finish_tag.deinit(allocator);
-        self.finish_type_dispatch_apply.deinit(allocator);
-        self.finish_record.deinit(allocator);
-        self.finish_lambda.deinit(allocator);
-        self.finish_if_then_else.deinit(allocator);
-        self.finish_if_without_else.deinit(allocator);
-        self.finish_nominal_record.deinit(allocator);
-        self.finish_nominal_apply.deinit(allocator);
-        self.finish_record_builder.deinit(allocator);
-        self.for_after_list.deinit(allocator);
-        self.finish_for_expr.deinit(allocator);
-        self.match_after_cond.deinit(allocator);
-        self.match_next.deinit(allocator);
-        self.match_after_guard.deinit(allocator);
-        self.match_after_body.deinit(allocator);
-    }
-
-    fn clearRetainingCapacity(self: *ExprKernelWork) void {
-        self.labels.clearRetainingCapacity();
-        self.targets.clearRetainingCapacity();
-        self.current_target = .return_value;
-        self.parse.clearRetainingCapacity();
-        self.associated_enter.clearRetainingCapacity();
-        self.associated_next.clearRetainingCapacity();
-        self.associated_exit.clearRetainingCapacity();
-        self.finish_associated_decl_body.clearRetainingCapacity();
-        self.block_next.clearRetainingCapacity();
-        self.finish_block.clearRetainingCapacity();
-        self.finish_block_expr_stmt.clearRetainingCapacity();
-        self.finish_block_final_expr.clearRetainingCapacity();
-        self.finish_block_dbg_stmt.clearRetainingCapacity();
-        self.finish_block_crash_stmt.clearRetainingCapacity();
-        self.finish_block_expect_stmt.clearRetainingCapacity();
-        self.finish_block_return_stmt.clearRetainingCapacity();
-        self.finish_block_var_stmt.clearRetainingCapacity();
-        self.finish_block_reassign_stmt.clearRetainingCapacity();
-        self.finish_block_decl_stmt.clearRetainingCapacity();
-        self.block_while_after_cond.clearRetainingCapacity();
-        self.finish_block_while_stmt.clearRetainingCapacity();
-        self.block_for_after_list.clearRetainingCapacity();
-        self.finish_block_for_stmt.clearRetainingCapacity();
-        self.finish_string.clearRetainingCapacity();
-        self.finish_list.clearRetainingCapacity();
-        self.finish_tuple.clearRetainingCapacity();
-        self.finish_dbg.clearRetainingCapacity();
-        self.finish_crash.clearRetainingCapacity();
-        self.finish_return.clearRetainingCapacity();
-        self.finish_tuple_access.clearRetainingCapacity();
-        self.finish_unary.clearRetainingCapacity();
-        self.finish_suffix_single_question.clearRetainingCapacity();
-        self.finish_bin_op.clearRetainingCapacity();
-        self.finish_single_question_binop.clearRetainingCapacity();
-        self.finish_method_call.clearRetainingCapacity();
-        self.finish_arrow_apply.clearRetainingCapacity();
-        self.finish_arrow_tag_apply.clearRetainingCapacity();
-        self.finish_arrow_call.clearRetainingCapacity();
-        self.finish_arrow_tag_single.clearRetainingCapacity();
-        self.finish_field_access.clearRetainingCapacity();
-        self.finish_apply.clearRetainingCapacity();
-        self.finish_tag.clearRetainingCapacity();
-        self.finish_type_dispatch_apply.clearRetainingCapacity();
-        self.finish_record.clearRetainingCapacity();
-        self.finish_lambda.clearRetainingCapacity();
-        self.finish_if_then_else.clearRetainingCapacity();
-        self.finish_if_without_else.clearRetainingCapacity();
-        self.finish_nominal_record.clearRetainingCapacity();
-        self.finish_nominal_apply.clearRetainingCapacity();
-        self.finish_record_builder.clearRetainingCapacity();
-        self.for_after_list.clearRetainingCapacity();
-        self.finish_for_expr.clearRetainingCapacity();
-        self.match_after_cond.clearRetainingCapacity();
-        self.match_next.clearRetainingCapacity();
-        self.match_after_guard.clearRetainingCapacity();
-        self.match_after_body.clearRetainingCapacity();
+        inline for (@typeInfo(ExprKernelLabel).@"enum".fields) |label| {
+            if (@hasField(ExprKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushLabel(self: *ExprKernelWork, allocator: std.mem.Allocator, label: ExprKernelLabel, target: ExprResultTarget) std.mem.Allocator.Error!void {
@@ -17317,6 +17468,12 @@ const ExprKernelWork = struct {
         try self.associated_exit.append(allocator, item);
         errdefer _ = self.associated_exit.pop();
         try self.pushLabel(allocator, .associated_exit, self.current_target);
+    }
+
+    inline fn pushFinishAssociatedExpect(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishAssociatedExpectWork) std.mem.Allocator.Error!void {
+        try self.finish_associated_expect.append(allocator, item);
+        errdefer _ = self.finish_associated_expect.pop();
+        try self.pushLabel(allocator, .finish_associated_expect, self.current_target);
     }
 
     inline fn pushFinishAssociatedDeclBody(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishAssociatedDeclBodyWork) std.mem.Allocator.Error!void {
@@ -17487,6 +17644,12 @@ const ExprKernelWork = struct {
         try self.pushLabel(allocator, .finish_method_call, self.current_target);
     }
 
+    inline fn pushArrowIdentCallee(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprArrowIdentCalleeWork) std.mem.Allocator.Error!void {
+        try self.arrow_ident_callee.append(allocator, item);
+        errdefer _ = self.arrow_ident_callee.pop();
+        try self.pushLabel(allocator, .arrow_ident_callee, self.current_target);
+    }
+
     inline fn pushFinishArrowApply(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishArrowApplyWork) std.mem.Allocator.Error!void {
         try self.finish_arrow_apply.append(allocator, item);
         errdefer _ = self.finish_arrow_apply.pop();
@@ -17635,6 +17798,10 @@ const ExprKernelWork = struct {
         return self.associated_exit.pop() orelse unreachable;
     }
 
+    inline fn takeFinishAssociatedExpect(self: *ExprKernelWork) ExprFinishAssociatedExpectWork {
+        return self.finish_associated_expect.pop() orelse unreachable;
+    }
+
     inline fn takeFinishAssociatedDeclBody(self: *ExprKernelWork) ExprFinishAssociatedDeclBodyWork {
         return self.finish_associated_decl_body.pop() orelse unreachable;
     }
@@ -17747,6 +17914,10 @@ const ExprKernelWork = struct {
         return self.finish_method_call.pop() orelse unreachable;
     }
 
+    inline fn takeArrowIdentCallee(self: *ExprKernelWork) ExprArrowIdentCalleeWork {
+        return self.arrow_ident_callee.pop() orelse unreachable;
+    }
+
     inline fn takeFinishArrowApply(self: *ExprKernelWork) ExprFinishArrowApplyWork {
         return self.finish_arrow_apply.pop() orelse unreachable;
     }
@@ -17834,6 +18005,7 @@ const ExprKernelWork = struct {
 
 const ExprRecordFieldWork = struct {
     field_idx: AST.RecordField.Idx,
+    name: base.Ident.Idx,
     value_expr_idx: AST.Expr.Idx,
 };
 
@@ -17874,6 +18046,16 @@ pub fn canonicalizePattern(
     self: *Self,
     ast_pattern_idx: AST.Pattern.Idx,
 ) std.mem.Allocator.Error!?Pattern.Idx {
+    const enclosing_binder_group = self.beginPatternBinderGroup();
+    defer self.endPatternBinderGroup(enclosing_binder_group);
+    return self.canonicalizePatternInGroup(ast_pattern_idx);
+}
+
+/// Canonicalizes a pattern whose binders join the current pattern binder group.
+fn canonicalizePatternInGroup(
+    self: *Self,
+    ast_pattern_idx: AST.Pattern.Idx,
+) std.mem.Allocator.Error!?Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -17897,6 +18079,10 @@ pub fn canonicalizePattern(
                 .ident => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
                             try self.warnAboutBindingName(ident_idx, region, .immutable);
                             last_pattern = placeholder;
@@ -17933,6 +18119,10 @@ pub fn canonicalizePattern(
                                 last_pattern = try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .var_across_function_boundary = .{
                                     .region = region,
                                 } });
+                                continue :patternkernel_loop .dispatch;
+                            },
+                            .var_reassigned_in_expect => |existing_pattern_idx| {
+                                last_pattern = try self.env.pushMalformed(Pattern.Idx, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, region));
                                 continue :patternkernel_loop .dispatch;
                             },
                             .var_reassignment_ok => |existing_pattern_idx| {
@@ -17978,6 +18168,10 @@ pub fn canonicalizePattern(
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
                     const name_region = self.parse_ir.tokens.resolve(e.ident_tok);
                     if (self.parse_ir.tokens.resolveIdentifier(e.ident_tok)) |ident_idx| {
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            last_pattern = duplicate;
+                            continue :patternkernel_loop .dispatch;
+                        }
                         // Create a Pattern node for our mutable identifier
                         const pattern_idx = try self.env.addPattern(Pattern{ .var_assign = .{
                             .ident = ident_idx,
@@ -18234,19 +18428,12 @@ pub fn canonicalizePattern(
             };
 
             const field_name_region = self.parse_ir.tokens.resolve(field.name.?);
-            var found_duplicate = false;
-            for (self.scratch_seen_record_fields.sliceFromStart(state.scratch_seen_record_fields_top)) |seen_field| {
-                if (field_name_ident.eql(seen_field.ident)) {
-                    try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                        .field_name = field_name_ident,
-                        .duplicate_region = field_name_region,
-                        .original_region = seen_field.region,
-                    } });
-                    found_duplicate = true;
-                    break;
-                }
-            }
-            if (found_duplicate) {
+            if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, state.scratch_seen_record_fields_top, field_name_ident, field_name_region)) |original_region| {
+                try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                    .field_name = field_name_ident,
+                    .duplicate_region = field_name_region,
+                    .original_region = original_region,
+                } });
                 try stacks.pushRecordNext(frame_allocator, .{
                     .fields = state.fields,
                     .region = state.region,
@@ -18256,10 +18443,6 @@ pub fn canonicalizePattern(
                 });
                 continue :patternkernel_loop .dispatch;
             }
-            try self.scratch_seen_record_fields.append(.{
-                .ident = field_name_ident,
-                .region = field_name_region,
-            });
 
             if (field.value) |sub_pattern_idx| {
                 // Handle patterns like `{ name: x }` or `{ address: { city } }` where there's a sub-pattern
@@ -18276,8 +18459,9 @@ pub fn canonicalizePattern(
                 try stacks.pushParse(frame_allocator, sub_pattern_idx);
             } else {
                 // Simple case: Create the RecordDestruct for this field
-                const adopted_binder = self.adoptForwardBinder(field_name_ident, field_region);
-                const assign_pattern_idx = adopted_binder orelse
+                const duplicate_binder = try self.claimPatternBinder(field_name_ident, field_region);
+                const adopted_binder = if (duplicate_binder == null) self.adoptForwardBinder(field_name_ident, field_region) else null;
+                const assign_pattern_idx = duplicate_binder orelse adopted_binder orelse
                     try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
                 if (adopted_binder != null) {
                     try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable);
@@ -18296,8 +18480,8 @@ pub fn canonicalizePattern(
                 try self.env.store.addScratchRecordDestruct(destruct_idx);
 
                 // Introduce the identifier into scope (an adopted binder is
-                // already there)
-                if (adopted_binder == null) {
+                // already there, and a duplicate binder binds nothing)
+                if (duplicate_binder == null and adopted_binder == null) {
                     switch (try self.scopeIntroduceInternal(self.env.gpa, .ident, field_name_ident, assign_pattern_idx, true)) {
                         .success => try self.warnAboutBindingName(field_name_ident, field_name_region, .immutable),
                         .shadowing_warning => |shadowed_pattern_idx| {
@@ -18325,7 +18509,7 @@ pub fn canonicalizePattern(
                             } });
                             continue :patternkernel_loop .dispatch;
                         },
-                        .var_reassignment_ok => unreachable, // is_declaration=true
+                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable, // is_declaration=true
                     }
                 }
 
@@ -18453,10 +18637,14 @@ pub fn canonicalizePattern(
                 // Handle named vs unnamed rest patterns
                 var current_rest_pattern: ?Pattern.Idx = null;
                 if (ast_pattern.list_rest.name) |name_tok| {
-                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| {
+                    if (self.parse_ir.tokens.resolveIdentifier(name_tok)) |ident_idx| list_rest_name: {
                         // Create an assign pattern for the rest variable
                         // Use the region of just the identifier token, not the full rest pattern
                         const name_region = self.parse_ir.tokens.resolve(name_tok);
+                        if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                            current_rest_pattern = duplicate;
+                            break :list_rest_name;
+                        }
                         const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
                         const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
@@ -18486,7 +18674,7 @@ pub fn canonicalizePattern(
                                     } });
                                 },
                                 // List rest patterns are always declarations, never reassignments
-                                .var_reassignment_ok => unreachable,
+                                .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
                             }
                         }
 
@@ -18567,6 +18755,10 @@ pub fn canonicalizePattern(
             // Resolve the identifier name
             if (self.parse_ir.tokens.resolveIdentifier(state.name)) |ident_idx| {
                 const name_region = self.parse_ir.tokens.resolve(state.name);
+                if (try self.claimPatternBinder(ident_idx, name_region)) |duplicate| {
+                    last_pattern = duplicate;
+                    continue :patternkernel_loop .dispatch;
+                }
                 // Create the as pattern
                 const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
                 const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
@@ -18609,7 +18801,7 @@ pub fn canonicalizePattern(
                             continue :patternkernel_loop .dispatch;
                         },
                         // As patterns are always declarations, never reassignments
-                        .var_reassignment_ok => unreachable,
+                        .var_reassigned_in_expect, .var_reassignment_ok => unreachable,
                     }
                 }
 
@@ -18626,6 +18818,41 @@ pub fn canonicalizePattern(
     }
 
     return last_pattern;
+}
+
+const PatternBinder = struct {
+    ident: Ident.Idx,
+    region: Region,
+};
+
+/// Opens a pattern binder group nested inside the current one. Returns the
+/// enclosing group's start, which the caller passes to `endPatternBinderGroup`.
+fn beginPatternBinderGroup(self: *Self) usize {
+    const enclosing_start = self.pattern_binder_group_start;
+    self.pattern_binder_group_start = self.pattern_binders.items.len;
+    return enclosing_start;
+}
+
+fn endPatternBinderGroup(self: *Self, enclosing_start: usize) void {
+    self.pattern_binders.shrinkRetainingCapacity(self.pattern_binder_group_start);
+    self.pattern_binder_group_start = enclosing_start;
+}
+
+/// Claims `ident` for the open pattern binder group. Returns null when the
+/// name is not yet bound in the group; otherwise reports the repetition and
+/// returns the malformed pattern that replaces the repeated binder.
+fn claimPatternBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
+    for (self.pattern_binders.items[self.pattern_binder_group_start..]) |binder| {
+        if (binder.ident.eql(ident)) {
+            return try self.env.pushMalformed(Pattern.Idx, Diagnostic{ .duplicate_pattern_binder = .{
+                .ident = ident,
+                .duplicate_region = region,
+                .original_region = binder.region,
+            } });
+        }
+    }
+    try self.pattern_binders.append(self.env.gpa, .{ .ident = ident, .region = region });
+    return null;
 }
 
 /// Check if a pattern is a var
@@ -18703,6 +18930,9 @@ fn scopeIntroduceVar(
             return try self.env.pushMalformed(T, Diagnostic{ .var_across_function_boundary = .{
                 .region = region,
             } });
+        },
+        .var_reassigned_in_expect => |existing_pattern_idx| {
+            return try self.env.pushMalformed(T, self.varReassignedInExpectDiagnostic(ident_idx, existing_pattern_idx, region));
         },
         .var_reassignment_ok => |existing_pattern_idx| {
             try self.env.store.recordWriteOccurrence(existing_pattern_idx, region);
@@ -18967,24 +19197,9 @@ const TypeAnnoKernelWork = struct {
 
     fn deinit(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.parens_after_inner.deinit(allocator);
-        self.apply_args_next.deinit(allocator);
-        self.apply_args_after.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.record_after_named_ext.deinit(allocator);
-        self.tag_union_tags_next.deinit(allocator);
-        self.tag_union_tag_after.deinit(allocator);
-        self.tag_union_after_named_ext.deinit(allocator);
-        self.tag_parse.deinit(allocator);
-        self.tag_args_next.deinit(allocator);
-        self.tag_args_after.deinit(allocator);
-        self.func_args_next.deinit(allocator);
-        self.func_args_after.deinit(allocator);
-        self.func_after_ret.deinit(allocator);
+        inline for (@typeInfo(TypeAnnoKernelLabel).@"enum".fields) |label| {
+            if (@hasField(TypeAnnoKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator, item: TypeAnnoKernelParseWork) std.mem.Allocator.Error!void {
@@ -19599,19 +19814,12 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                 const field_name = self.parse_ir.tokens.resolveIdentifier(ast_field.name) orelse try self.env.insertIdent(Ident.for_text("malformed_field"));
                 const field_name_region = self.parse_ir.tokens.resolve(ast_field.name);
                 if (!is_unnamed) {
-                    var found_duplicate = false;
-                    for (self.scratch_seen_record_fields.sliceFromStart(state.scratch_seen_record_fields_top)) |seen_field| {
-                        if (field_name.eql(seen_field.ident)) {
-                            try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
-                                .field_name = field_name,
-                                .duplicate_region = field_name_region,
-                                .original_region = seen_field.region,
-                            } });
-                            found_duplicate = true;
-                            break;
-                        }
-                    }
-                    if (found_duplicate) {
+                    if (try self.scratch_seen_record_fields.addOrFind(self.env.gpa, state.scratch_seen_record_fields_top, field_name, field_name_region)) |original_region| {
+                        try self.env.pushDiagnostic(Diagnostic{ .duplicate_record_field = .{
+                            .field_name = field_name,
+                            .duplicate_region = field_name_region,
+                            .original_region = original_region,
+                        } });
                         try stacks.pushRecordNext(frame_allocator, .{
                             .record = state.record,
                             .region = state.region,
@@ -19622,10 +19830,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         });
                         continue :typeannokernel_loop .dispatch;
                     }
-                    try self.scratch_seen_record_fields.append(SeenRecordField{
-                        .ident = field_name,
-                        .region = field_name_region,
-                    });
                 }
                 // A default combines with neither `?:` (a default makes the
                 // field never missing, so the tagged slot and `.?` would be
@@ -19698,10 +19902,10 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             // type and rejects effectful defaults; the end-of-module cycle
             // pass rejects name-resolvable materialization cycles
             // (design.md "Defaulted Fields").
-            const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default| blk: {
-                const can_default = (try self.canonicalizeExpr(ast_default)) orelse break :blk null;
-                break :blk can_default.idx;
-            } else null;
+            const default_value: ?CIR.Expr.Idx = if (state.ast_default_value) |ast_default|
+                (try self.canonicalizeExpr(ast_default)).idx
+            else
+                null;
             const field_cir_idx = try self.env.addAnnoRecordField(.{
                 .name = state.field_name,
                 .ty = canonicalized_ty,
@@ -19780,22 +19984,13 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
             if (tag_anno == .tag) {
                 const tag = tag_anno.tag;
                 const tag_region = self.env.store.getTypeAnnoRegion(tag_idx);
-                for (self.scratch_seen_tags.sliceFromStart(state.scratch_seen_tags_top)) |seen_tag| {
-                    if (tag.name.eql(seen_tag.ident)) {
-                        try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
-                            .tag_name = tag.name,
-                            .duplicate_region = tag_region,
-                            .original_region = seen_tag.region,
-                        } });
-                        found_duplicate = true;
-                        break;
-                    }
-                }
-                if (!found_duplicate) {
-                    try self.scratch_seen_tags.append(SeenTag{
-                        .ident = tag.name,
-                        .region = tag_region,
-                    });
+                if (try self.scratch_seen_tags.addOrFind(self.env.gpa, state.scratch_seen_tags_top, tag.name, tag_region)) |original_region| {
+                    try self.env.pushDiagnostic(Diagnostic{ .duplicate_tag = .{
+                        .tag_name = tag.name,
+                        .duplicate_region = tag_region,
+                        .original_region = original_region,
+                    } });
+                    found_duplicate = true;
                 }
             }
             if (!found_duplicate) {
@@ -20039,29 +20234,23 @@ fn resolveTypePath(
                     .local_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
                     .local_alias, .local_where_alias => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
                     .associated_nominal => |stmt| .{ .name = type_name_ident, .target = .{ .local = stmt } },
-                    .external_nominal => |external| blk: {
-                        const import_idx = external.import_idx orelse {
-                            break :blk .{ .name = type_name_ident, .target = .{ .malformed = .{ .module_not_imported = .{
-                                .module_name = external.module_ident,
-                                .region = type_name_region,
-                            } } } };
-                        };
-
-                        // A binding the compiler installed for its own baked
-                        // Builtin module already carries its target.
-                        if (external.target_node_idx) |target_node_idx| {
-                            const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
-                                self.lookupBuiltinAutoImportedType(external.original_ident);
-                            break :blk .{ .name = type_name_ident, .target = .{ .external = .{
-                                .import_idx = import_idx,
-                                .target_node_idx = target_node_idx,
-                                .env = if (builtin_type) |info| info.env else null,
-                            } } };
-                        }
-
-                        break :blk .{ .name = type_name_ident, .target = .{
-                            .deferred = externalTypeBindingRef(external, import_idx, type_name_ident, .type_anno_lookup, type_name_region),
-                        } };
+                    .external_nominal => |external| .{
+                        .name = type_name_ident,
+                        .target = switch (resolveExternalTypeBinding(external, type_name_ident, .type_anno_lookup, type_name_region)) {
+                            // A binding the compiler installed for its own baked
+                            // Builtin module already carries its target.
+                            .external => |found| ext: {
+                                const builtin_type = self.lookupBuiltinAutoImportedType(external.module_ident) orelse
+                                    self.lookupBuiltinAutoImportedType(external.original_ident);
+                                break :ext .{ .external = .{
+                                    .import_idx = found.import_idx,
+                                    .target_node_idx = found.target_node_idx,
+                                    .env = if (builtin_type) |info| info.env else null,
+                                } };
+                            },
+                            .deferred => |ref| .{ .deferred = ref },
+                            .malformed => |diagnostic| .{ .malformed = diagnostic },
+                        },
                     },
                 };
             }
@@ -20948,6 +21137,8 @@ fn currentScopeIdx(self: *Self) usize {
 const ScopeBindingLookup = struct {
     pattern_idx: Pattern.Idx,
     crosses_function_boundary: bool,
+    /// Index into `scopes` of the scope that declares the binding.
+    scope_idx: u32,
 };
 
 /// Find an identifier and report whether reaching its declaration crossed a
@@ -20968,6 +21159,7 @@ fn scopeFindBinding(
             return .{
                 .pattern_idx = pattern_idx,
                 .crosses_function_boundary = crosses_function_boundary,
+                .scope_idx = @intCast(scope_idx),
             };
         }
 
@@ -21050,6 +21242,11 @@ pub fn scopeIntroduceInternal(
         if (!is_declaration and self.isVarPattern(existing)) {
             if (existing_binding.crosses_function_boundary) {
                 return Scope.IntroduceResult{ .var_across_function_boundary = existing };
+            }
+            // Only a block declaration's pattern writes the var it reuses; a
+            // `for` or `match` binder that reuses one leaves its value alone.
+            if (self.allow_pattern_var_reuse and existing_binding.scope_idx < self.expect_scope_floor) {
+                return Scope.IntroduceResult{ .var_reassigned_in_expect = existing };
             }
 
             // Reuse the declaration's pattern so all references identify the
@@ -21196,7 +21393,7 @@ pub fn introduceType(
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
-        => std.debug.panic("introduceType requires a type declaration statement", .{}),
+        => base.invariant("introduceType requires a type declaration statement", .{}),
     };
 
     const decision = try Scope.introduceTypeBinding(
@@ -21318,14 +21515,11 @@ fn ensureParserImportAlias(self: *Self, alias_name: Ident.Idx) std.mem.Allocator
     if (!resolved_alias.eql(alias_name)) return;
 
     const import_region = self.parse_ir.tokenizedRegionToRegion(import_stmt.region);
-    const exposed_items_start = self.env.store.scratchExposedItemTop();
-    const empty_exposes = try self.env.store.exposedItemSpanFrom(exposed_items_start);
     _ = try self.scopeIntroduceModuleAliasAt(
         entry.binding.canonical_scope,
         alias_name,
         module_name,
         import_region,
-        empty_exposes,
         import_stmt.target.origin == .package,
         false,
     );
@@ -21363,14 +21557,11 @@ fn ensureHeaderExposedModule(self: *Self, module_name: Ident.Idx) std.mem.Alloca
     );
     try self.import_indices.put(self.env.gpa, module_name, module_import_idx);
 
-    const exposed_items_start = self.env.store.scratchExposedItemTop();
-    const empty_exposes = try self.env.store.exposedItemSpanFrom(exposed_items_start);
     _ = try self.scopeIntroduceModuleAliasAt(
         0,
         module_name,
         module_name,
         region,
-        empty_exposes,
         false,
         false,
     );
@@ -21403,13 +21594,12 @@ const ImportAliasOutcome = enum {
 };
 
 /// Introduce a module alias into scope
-fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, exposed_items_span: CIR.ExposedItem.Span, is_package_qualified: bool) std.mem.Allocator.Error!ImportAliasOutcome {
+fn scopeIntroduceModuleAlias(self: *Self, alias_name: Ident.Idx, module_name: Ident.Idx, import_region: Region, is_package_qualified: bool) std.mem.Allocator.Error!ImportAliasOutcome {
     return self.scopeIntroduceModuleAliasAt(
         self.currentScopeIdx(),
         alias_name,
         module_name,
         import_region,
-        exposed_items_span,
         is_package_qualified,
         true,
     );
@@ -21421,7 +21611,6 @@ fn scopeIntroduceModuleAliasAt(
     alias_name: Ident.Idx,
     module_name: Ident.Idx,
     import_region: Region,
-    exposed_items_span: CIR.ExposedItem.Span,
     is_package_qualified: bool,
     report_diagnostics: bool,
 ) std.mem.Allocator.Error!ImportAliasOutcome {
@@ -21432,20 +21621,6 @@ fn scopeIntroduceModuleAliasAt(
     // Check if this alias conflicts with an existing type binding (e.g., auto-imported type or primitive builtin)
     // Primitive builtins (Str, List, Box) are now added to type_bindings in setupAutoImportedBuiltinTypes
     if (target_scope.type_bindings.get(alias_name)) |existing_binding| {
-        // Check if any exposed items have the same name as the alias
-        // If so, skip the error here and let introduceItemsAliased handle it
-        const exposed_items_slice = self.env.store.sliceExposedItems(exposed_items_span);
-        for (exposed_items_slice) |exposed_item_idx| {
-            const exposed_item = self.env.store.getExposedItem(exposed_item_idx);
-            const local_ident = exposed_item.alias orelse exposed_item.name;
-
-            if (local_ident.eql(alias_name)) {
-                // The alias has the same name as an exposed item, which is
-                // the binding that decides what the name denotes.
-                return .bound;
-            }
-        }
-
         // A binding that already denotes this very module is not a shadow of
         // it: a header's `exposes` list names the module before the file's own
         // `import` statement reaches it.
@@ -22180,7 +22355,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
     }
     // This should not happen for builtin types like Str/Try—if it does,
     // it indicates a missing type binding in the scope or module_envs.
-    @panic("getExternalTypeBase: type not found in scope or auto-imports");
+    base.invariant("{s}", .{"getExternalTypeBase: type not found in scope or auto-imports"});
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };
@@ -22273,7 +22448,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
         const stmt_id: AST.Statement.Idx = @enumFromInt(decl.statement);
         const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
+                base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
             }
             unreachable;
         };

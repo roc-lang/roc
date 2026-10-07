@@ -24,11 +24,6 @@ pub const Value = struct {
     /// Sentinel value for zero-sized types.
     pub const zst: Value = .{ .ptr = @ptrFromInt(0xDEAD_BEEF) };
 
-    /// Create a Value from a typed pointer.
-    pub fn fromPtr(ptr: *anyopaque) Value {
-        return .{ .ptr = @ptrCast(ptr) };
-    }
-
     /// Create a Value from a byte slice.
     pub fn fromSlice(slice: []u8) Value {
         return .{ .ptr = slice.ptr };
@@ -79,11 +74,6 @@ pub const Value = struct {
         return .{ .ptr = self.ptr + n };
     }
 
-    /// Get a usize-aligned pointer (for RocStr/RocList field access).
-    pub fn asOpaquePtr(self: Value) *anyopaque {
-        return @ptrCast(self.ptr);
-    }
-
     /// Check if this is the ZST sentinel.
     pub fn isZst(self: Value) bool {
         return @intFromPtr(self.ptr) == 0xDEAD_BEEF;
@@ -118,20 +108,14 @@ pub const LayoutHelper = struct {
         return self.sizeOf(idx) == 0;
     }
 
-    /// Offset of a struct field (by sorted field index).
-    pub fn structFieldOffset(self: LayoutHelper, idx: layout_mod.Idx, sorted_field_idx: u32) u32 {
-        const l = self.store.getLayout(idx);
-        return self.store.getStructFieldOffset(l.getStruct().idx, sorted_field_idx);
-    }
-
     /// Offset of the discriminant in a tag union.
-    pub fn tagDiscriminantOffset(self: LayoutHelper, idx: layout_mod.Idx) u16 {
+    pub fn tagDiscriminantOffset(self: LayoutHelper, idx: layout_mod.Idx) u32 {
         const l = self.store.getLayout(idx);
         return self.store.getTagUnionDiscriminantOffset(l.getTagUnion().idx);
     }
 
     /// Read the discriminant value from a tag union value.
-    pub fn readTagDiscriminant(self: LayoutHelper, val: Value, union_layout: layout_mod.Idx) u16 {
+    pub fn readTagDiscriminant(self: LayoutHelper, val: Value, union_layout: layout_mod.Idx) u32 {
         if (val.isZst()) return 0;
         const disc_offset = self.tagDiscriminantOffset(union_layout);
         const at_disc = val.offset(disc_offset);
@@ -141,12 +125,13 @@ pub const LayoutHelper = struct {
             0 => 0, // Single-variant unions have implicit discriminant 0
             1 => at_disc.read(u8),
             2 => at_disc.read(u16),
+            4 => at_disc.read(u32),
             else => unreachable,
         };
     }
 
     /// Write the discriminant value into a tag union value.
-    pub fn writeTagDiscriminant(self: LayoutHelper, val: Value, union_layout: layout_mod.Idx, disc: u16) void {
+    pub fn writeTagDiscriminant(self: LayoutHelper, val: Value, union_layout: layout_mod.Idx, disc: u32) void {
         const disc_offset = self.tagDiscriminantOffset(union_layout);
         const at_disc = val.offset(disc_offset);
         const l = self.store.getLayout(union_layout);
@@ -154,15 +139,10 @@ pub const LayoutHelper = struct {
         switch (tu_data.discriminant_size) {
             0 => {}, // Single-variant—no discriminant to write
             1 => at_disc.write(u8, @intCast(disc)),
-            2 => at_disc.write(u16, disc),
+            2 => at_disc.write(u16, @intCast(disc)),
+            4 => at_disc.write(u32, disc),
             else => unreachable,
         }
-    }
-
-    /// Whether the given layout contains refcounted data.
-    pub fn containsRefcounted(self: LayoutHelper, idx: layout_mod.Idx) bool {
-        const l = self.store.getLayout(idx);
-        return self.store.layoutContainsRefcounted(l);
     }
 };
 
@@ -173,10 +153,4 @@ pub fn allocValue(allocator: Allocator, size: u32) Allocator.Error!Value {
     const slice = try allocator.alloc(u8, size);
     @memset(slice, 0);
     return Value.fromSlice(slice);
-}
-
-/// Free a value's memory allocated with `allocValue`.
-pub fn freeValue(allocator: Allocator, val: Value, size: u32) void {
-    if (val.isZst() or size == 0) return;
-    allocator.free(val.ptr[0..size]);
 }

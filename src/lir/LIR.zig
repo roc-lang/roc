@@ -64,7 +64,7 @@ pub const ProcIdentity = struct {
     }
 
     /// Bytes that every procedure symbol name begins with.
-    pub const symbol_name_prefix = "roc__proc_";
+    pub const symbol_name_prefix = "roc__p";
 
     /// Length of a procedure symbol name. The identity encoding fixes it: the
     /// prefix plus the hex of the leading 128 bits.
@@ -178,10 +178,13 @@ pub const BoxyDescRef = union(enum) {
 pub const BoxyDictRef = union(enum) {
     static: BoxyDictId,
     local: LocalId,
+    /// A dictionary the runtime materialized from a template; only runtime
+    /// tables hold it.
+    runtime: u32,
 
     pub fn localOrNull(self: BoxyDictRef) ?LocalId {
         return switch (self) {
-            .static => null,
+            .static, .runtime => null,
             .local => |local| local,
         };
     }
@@ -207,6 +210,200 @@ pub const InlineScope = extern struct {
     call_site: base.SourceLoc,
     parent: InlineScopeId,
 };
+
+/// Complete provenance of one stored statement. Every statement-creating call
+/// states this explicitly; the store keeps no ambient provenance.
+///
+/// A pass that rewrites or copies an existing statement passes that
+/// statement's origin (`LirStore.stmtOrigin(old)`), changing only what it
+/// explicitly changes (inlining replaces `inline_scope`). Origins are copied by
+/// value and never reference other statement ids, so statement compaction and
+/// body-shard relocation cannot leave an origin dangling.
+pub const StmtOrigin = struct {
+    loc: base.SourceLoc,
+    region: base.Region,
+    inline_scope: InlineScopeId,
+    kind: OriginKind,
+
+    /// Origin of a statement a unit test builds by hand: scaffolding with no
+    /// source construct. Production producers never use it.
+    pub const test_fixture: StmtOrigin = .{
+        .loc = base.SourceLoc.none,
+        .region = base.Region.zero(),
+        .inline_scope = InlineScopeId.none,
+        .kind = .scaffold,
+    };
+};
+
+/// Why a statement exists. Variants are derived from the statement-creating
+/// sites that exist in the post-check lowerings and LIR passes; a pass that
+/// only mutates a statement in place keeps that statement's existing kind.
+pub const OriginKind = union(enum(u8)) {
+    /// Lowered directly from the checked source construct named by the
+    /// origin's `loc`/`region` (expression, statement, pattern, match arm).
+    source,
+    /// Control flow or representation glue that lowering introduces to realize
+    /// the semantics of the source construct named by `loc`/`region`: joins and
+    /// jumps for `if`/`match`/`?`, pattern-miss edges, discriminant switches,
+    /// representation boundaries, iterator-loop glue.
+    lowering_glue,
+    /// Body of compiler-derived code with no user-written node of its own
+    /// (derived equality, hashing, inspect, generated encoders/decoders).
+    /// `loc`/`region` name the construct whose type demanded the derivation.
+    derived,
+    /// Procedure scaffolding with no source construct: host wrappers, callable
+    /// and static-method adapters, workers, cached-proc forwarders, compile-time
+    /// root accessors, static-initializer bodies, and compile-time constant
+    /// value reconstruction.
+    scaffold,
+    /// ARC-inserted `incref` of `subject_local` for `reason`.
+    arc_incref: ArcRc,
+    /// ARC-inserted `decref`, `decref_if_initialized`, or `free` of
+    /// `subject_local` for `reason`.
+    arc_decref: ArcRc,
+    /// Non-RC statement ARC synthesizes while dismantling `subject_local`
+    /// (field loads and the tag-dispatch switch of a residual release).
+    arc_dismantle: ArcLocal,
+    /// `scalarize_joins`: field seeding and forwarding for a scalarized join
+    /// parameter.
+    join_scalarize,
+    /// `box_reuse`: load and cast that replace a box allocation.
+    box_reuse,
+    /// `return_slot`: stores into, and the return of, a caller-provided slot.
+    return_slot,
+    /// `str_append`: fused in-place string-append rewrite.
+    str_append_fuse,
+    /// `loop_append_promote`: loop versioning, capacity seeding, and promoted
+    /// append/set rewrites.
+    loop_append_promote,
+    /// `tag_case_fusion`: fused join and redirected producer edges.
+    tag_case_fusion,
+    /// `forwarding_join_inline`: statement produced when inlining a forwarding
+    /// join body.
+    forwarding_join_inline,
+    /// `comptime_value_guards`: failure guard wrapped around a compile-time
+    /// value use.
+    comptime_value_guard,
+    /// `trmc`: tail-call and tail-recursion-modulo-cons loop scaffolding (the
+    /// loop join and its entry, parameter moves, hole cell allocation and
+    /// stores) at the origin of the recursive site or body it replaces.
+    trmc,
+    /// `range_prove`: per-arm joins and per-site jumps that split a join over
+    /// a proven boolean parameter, at the origin of the join or jump split.
+    range_prove,
+
+    /// True for statements ARC inserted (`arc_incref`, `arc_decref`,
+    /// `arc_dismantle`). Their origin carries the location of the statement
+    /// whose ownership decision produced them, but backends do not attribute
+    /// them to a source line for debugger stepping: LLVM gives them line 0
+    /// (compiler-generated) and the dev backend emits no line-table row for
+    /// them. The decision is read from the stated origin kind only.
+    pub fn isArcInserted(self: OriginKind) bool {
+        return switch (self) {
+            .arc_incref, .arc_decref, .arc_dismantle => true,
+            .source, .lowering_glue, .derived, .scaffold, .join_scalarize, .box_reuse, .return_slot, .str_append_fuse, .loop_append_promote, .tag_case_fusion, .forwarding_join_inline, .comptime_value_guard, .trmc, .range_prove => false,
+        };
+    }
+
+    /// Subject of an ARC-inserted RC statement and the solver decision that
+    /// produced it.
+    pub const ArcRc = struct {
+        /// Local whose ownership decision caused the statement. For a
+        /// dismantled residual release this is the container, not the field
+        /// load the statement operates on.
+        subject_local: LocalId,
+        reason: RcReason,
+    };
+
+    /// Subject of ARC-synthesized non-RC glue.
+    pub const ArcLocal = struct {
+        subject_local: LocalId,
+    };
+};
+
+/// Solver decision that produced an ARC RC statement. Every value names the
+/// planned-emission datum in `arc.zig` (`ArcPlanStep`, `ArcPlanTerminal`,
+/// `ReleaseDecision`) that the emitter already holds when it emits the
+/// statement; no reason is reconstructed after the fact.
+pub const RcReason = enum(u8) {
+    // -- increfs --
+    /// `ArcPlanStep.retain_assign_ref_target` / `retain_set_target`
+    /// (`AliasBindTransfer.retain_target`): an alias binding whose source
+    /// remains owned elsewhere.
+    alias_bind,
+    /// `ArcPlanStep.retain_call_result`: the callee's solved `RcSig.ret_mode`
+    /// returns a borrow the caller must own.
+    borrowed_call_result,
+    /// `ArcPlanStep.pre_retain` from `transfer.args.retain_args`: the callee
+    /// signature (`RcSig` param mode owned) demands ownership of an argument
+    /// that stays live after the call.
+    owned_param_demand,
+    /// `ArcPlanStep.pre_retain` of the closure when `reuse_closure` is false.
+    closure_call_capture,
+    /// `ArcPlanStep.pre_retain` of a reuse source that must survive
+    /// (`preserve_reuse_source` / `transfer.preserve_reuse`).
+    reuse_source_preserved,
+    /// `ArcPlanStep.preserve_consumed_args`: a low-level op consumes an
+    /// argument that is still live afterwards.
+    low_level_consumed_arg_live,
+    /// `LowLevel.RcEffect.retain_args` minus `transfer_mask`.
+    low_level_arg_effect,
+    /// `LowLevel.RcEffect.retain_result` without `skip_result_retain`.
+    low_level_result_effect,
+    /// `assign_call_dict` argument outside `ArcPlanStep.transfer_mask`: the
+    /// dictionary method takes ownership of an argument the caller keeps.
+    dict_call_arg,
+    /// `box_unbox` normalization to `box_unbox_borrowed`: the payload retain
+    /// paired with the `consumed_box` release of the outer box.
+    box_unbox_normalize,
+    /// `transfer_mask`/`transfer_positions` complement: an element stored into
+    /// a newly built list, struct, or tag while still owned elsewhere.
+    stored_in_aggregate,
+    /// `transfer_single` false: a payload or capture stored while still owned
+    /// elsewhere.
+    stored_payload,
+    /// `ArcPlanTerminal.str_match{,_set}.capture_retain_count(s)`.
+    str_match_capture,
+    /// `ArcPlanTerminal.terminal.retain_value`: a returned, crashed, or
+    /// `expect_err` value that is borrowed at the terminal.
+    terminal_value_borrowed,
+
+    // -- decrefs --
+    /// `ArcPlanStep.pre_release` (`release_old_target` / fresh-bind transfer):
+    /// the previous owned value of a rebound target.
+    rebind_old_value,
+    /// `ArcPlanStep.post_release` (`postStmtDeaths` / unused call result): the
+    /// value's last use is this statement.
+    dead_after_stmt,
+    /// `ArcPlanStep.pre_release_extra` of an `assign_boxy_desc_ref`
+    /// (`planValuesInvalidatedByDescriptorUpdate`): owned values whose
+    /// descriptor the statement rebinds.
+    descriptor_invalidated,
+    /// `ArcPlanStep.pre_release_extra` (`releaseTailCallerFrame`): owned state
+    /// of a frame that a tail call replaces.
+    tail_call_frame,
+    /// Closure released after a call that did not reuse it (`reuse_closure`
+    /// false).
+    closure_after_call,
+    /// Boxed value released after a consuming unbox.
+    consumed_box,
+    /// `ArcPlanTerminal.stop.releases`: owned state minus the switch
+    /// summary's common keep set.
+    switch_branch_balance,
+    /// `ArcPlanTerminal.jump.releases`: owned state minus the join body keep
+    /// set (including restitution keeps).
+    jump_balance,
+    /// `ArcPlanTerminal.join.releases`: owned state minus the join entry keep.
+    join_entry_balance,
+    /// `ArcPlanTerminal.terminal.releases`: owned state not kept past a
+    /// terminal statement.
+    scope_exit,
+};
+
+comptime {
+    std.debug.assert(@sizeOf(RcReason) == 1);
+    std.debug.assert(@sizeOf(OriginKind) == 12);
+}
 
 /// Identifier of a compile-time-observed control-flow site.
 pub const ComptimeSiteId = enum(u32) {
@@ -247,6 +444,58 @@ pub const LoweringModuleId = enum(u32) {
     /// The first row of a lowering's module table.
     first = 0,
     _,
+};
+
+/// The kind of literal whose checked conversion rejected it.
+pub const LiteralRejectionKind = enum(u8) {
+    numeral,
+    quote,
+    /// An interpolated string literal, whose conversion sees only the
+    /// literal's segments.
+    interpolation,
+};
+
+/// The source literal a literal-rejection crash reports: the checked
+/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// `from_interpolation` conversion returned `Err`.
+pub const LiteralRejectionSite = struct {
+    owner: LoweringModuleId,
+    /// The literal's `CheckedExprId` in `owner`.
+    checked_expr: u32,
+    kind: LiteralRejectionKind,
+};
+
+/// Program-local index of one literal root: a custom literal's conversion at
+/// one specialization's concrete type, which only post-check lowering can name.
+pub const LiteralRootId = enum(u32) { _ };
+
+/// The producer of one compile-time value: a checked compile-time root of its
+/// module, or a literal root of the lowered program.
+pub const ComptimeProducer = union(enum) {
+    checked: check.CheckedModule.ComptimeRootId,
+    literal: LiteralRootId,
+
+    pub fn eql(a: ComptimeProducer, b: ComptimeProducer) bool {
+        return switch (a) {
+            .checked => |root| switch (b) {
+                .checked => |other| root == other,
+                .literal => false,
+            },
+            .literal => |root| switch (b) {
+                .checked => false,
+                .literal => |other| root == other,
+            },
+        };
+    }
+
+    /// Feed this producer's tag and index to `hasher`.
+    pub fn hash(self: ComptimeProducer, hasher: anytype) void {
+        const tag: u8, const index: u32 = switch (self) {
+            .checked => |root| .{ 0, @intFromEnum(root) },
+            .literal => |root| .{ 1, @intFromEnum(root) },
+        };
+        hasher.update(&[_]u8{ tag, @truncate(index), @truncate(index >> 8), @truncate(index >> 16), @truncate(index >> 24) });
+    }
 };
 
 /// Source control-flow construct observed during compile-time finalization.
@@ -300,7 +549,7 @@ pub const LocalSpan = extern struct {
 /// Span into flat u64 storage.
 pub const U64Span = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty u64 span.
     pub fn empty() U64Span {
@@ -336,8 +585,8 @@ pub const BoxyTagPayloadRead = struct {
 /// is the pre-order position among descriptor requirements rooted at the
 /// explicit argument.
 pub const ErasedArgDescKey = extern struct {
-    arg_index: u16,
-    descriptor_index: u16,
+    arg_index: u32,
+    descriptor_index: u32,
 };
 
 /// Capture-storage destination for one keyed erased-call argument descriptor.
@@ -346,17 +595,34 @@ pub const ErasedArgDescOffset = extern struct {
     offset: u32,
 };
 
+/// How an erased-procedure descriptor parameter is initialized.
+pub const ErasedArgDescRead = enum(u8) {
+    /// The parameter consumes its exact call-site key.
+    call_key,
+    /// The parameter reads nested descriptor `source_nested_index` of its
+    /// parent.
+    nested,
+    /// The parameter reads payload `source_nested_index` of tag
+    /// `source_tag_name` in its parent's tag variants.
+    tag_payload,
+};
+
 /// Hidden erased-procedure parameter initialized from one keyed call-site
 /// descriptor operand.
 pub const ErasedArgDescParam = extern struct {
     key: ErasedArgDescKey,
     local: LocalId,
-    /// For a projected parameter, the descriptor index of its already-bound
-    /// parent within the same explicit argument.
-    source_descriptor_index: u16,
-    /// Nested descriptor slot read from the parent. `maxInt(u16)` means the
-    /// parameter consumes its exact call-site key directly.
-    source_nested_index: u16,
+    /// For a parameter read from its parent, the descriptor index of that
+    /// already-bound parent within the same explicit argument.
+    source_descriptor_index: u32,
+    /// Nested descriptor slot or tag payload position read from the parent.
+    source_nested_index: u32,
+    /// Tag whose payload a `tag_payload` read names.
+    source_tag_name: BoxyNameId,
+    read: ErasedArgDescRead,
+    /// The bytes alignment adds after `read`, declared so that every byte of
+    /// the struct is defined wherever its raw bytes are persisted.
+    _padding: [3]u8 = [_]u8{0} ** 3,
 };
 
 /// How a boxy operation observes or transfers its source value.
@@ -439,6 +705,19 @@ pub const U32Span = extern struct {
     pub fn empty() U32Span {
         return .{ .start = 0, .len = 0 };
     }
+};
+
+/// One conditionally unique part of a proc's returned value, as stored in a
+/// `LirProcSpec.rc_ret_conditions` span: the whole return when `field` is
+/// `whole_value`, otherwise original struct field `field` (or bit 0 for a
+/// tag union's single payload), unique whenever every argument position in
+/// `params` was passed a unique value as its caller's last use.
+pub const RcRetCondition = packed struct(u32) {
+    field: u8,
+    params: u16,
+    reserved: u8 = 0,
+
+    pub const whole_value: u8 = 255;
 };
 
 /// Identifier of one interned erased-call argument layout plan.
@@ -544,7 +823,7 @@ fn strMatchDelimiter(source: []const u8, cursor: usize, delimiter: []const u8) ?
 /// Span into flat string-match-step storage.
 pub const StrMatchStepSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchStepSpan {
         return .{ .start = 0, .len = 0 };
@@ -569,7 +848,7 @@ pub const StrMatchArm = struct {
 /// Span into flat string-match-arm storage.
 pub const StrMatchArmSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() StrMatchArmSpan {
         return .{ .start = 0, .len = 0 };
@@ -626,7 +905,6 @@ pub const LiteralValue = union(enum) {
     },
     static_data: StaticDataId,
     bytes_literal: ListLiteral,
-    null_ptr,
     proc_ref: LirProcSpecId,
 };
 
@@ -651,18 +929,18 @@ pub const RefOp = union(enum) {
     },
     field: struct {
         source: LocalId,
-        field_idx: u16,
+        field_idx: u32,
     },
     tag_payload: struct {
         source: LocalId,
-        payload_idx: u16,
-        variant_index: u16,
-        tag_discriminant: u16,
+        payload_idx: u32,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     tag_payload_struct: struct {
         source: LocalId,
-        variant_index: u16,
-        tag_discriminant: u16,
+        variant_index: u32,
+        tag_discriminant: u32,
     },
     list_reinterpret: struct {
         backing_ref: LocalId,
@@ -684,7 +962,7 @@ pub const CFSwitchBranch = struct {
 /// Span into flat switch-branch storage.
 pub const CFSwitchBranchSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty switch-branch span.
     pub fn empty() CFSwitchBranchSpan {
@@ -702,7 +980,7 @@ pub const JoinPoint = extern struct {
 /// Span into flat join-point storage.
 pub const JoinPointSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     /// Returns an empty join-point span.
     pub fn empty() JoinPointSpan {
@@ -745,7 +1023,6 @@ pub const ErasedCallableOnDrop = union(enum) {
         capture_layout: layout.Idx,
         desc_field_offset: u32,
     },
-    interpreter_context_drop,
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -753,6 +1030,61 @@ pub const ProcAbi = enum {
     roc,
     erased_callable,
 };
+
+/// Where the erased calls a callee left pending are run. A tail call through
+/// an erased function value cannot replace its caller's frame, because the
+/// erased-call runtime sits between the two and the callee returns its result
+/// differently. Instead the call is recorded as pending and its procedure
+/// returns; whoever is waiting on that procedure's result then makes the
+/// pending call, and repeats while that call leaves another pending.
+pub const PendingDrive = enum(u8) {
+    /// Nothing can be pending after this statement.
+    none,
+    /// A call can be pending, and this procedure returns to a caller that
+    /// makes it. While one is, the statement's target holds no value.
+    handed_up,
+    /// Every pending call is run here, and the last one's result replaces
+    /// this statement's.
+    always,
+    /// In an erased-callable procedure: as `always` when the procedure was
+    /// entered by anything but the erased-call runtime, which runs pending
+    /// calls itself, and as `handed_up` otherwise.
+    unless_caller_drives,
+
+    /// Whether a call can still be pending once the statement has finished,
+    /// leaving its target without a value.
+    pub fn canLeavePending(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .always => false,
+            .handed_up, .unless_caller_drives => true,
+        };
+    }
+
+    /// Whether the statement makes pending calls itself in some invocation of
+    /// its procedure, which needs the procedure's frame afterwards.
+    pub fn canDriveHere(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .handed_up => false,
+            .always, .unless_caller_drives => true,
+        };
+    }
+};
+
+/// What a procedure does when it returns early because a call is pending.
+/// Whoever makes that call converts its result to this procedure's return
+/// layout in the procedure's place.
+pub const PendingReturn = struct {
+    /// The descriptor the last skipped conversion would have stored the
+    /// result as, when it is one the procedure holds before the call.
+    result_desc: ?BoxyDescRef,
+    /// The last skipped conversion stores the result under the descriptor
+    /// the value arrives with, so `result_desc` names none.
+    keeps_own_desc: bool = false,
+};
+
+/// Identity shared by procedures that reach one another through
+/// frame-replacing calls. It names the group only; it is not a procedure id.
+pub const TailGroupId = enum(u32) { _ };
 
 /// Producer-proven sites and their reserved loop identity, consumed before ARC.
 pub const TailCalls = struct {
@@ -822,6 +1154,14 @@ pub const CFStmt = union(enum) {
     assign_literal: struct {
         target: LocalId,
         value: LiteralValue,
+        /// For a read of a compile-time list of copies of one value, held as
+        /// static data in `value`: the argument-free procedure that builds
+        /// the same list fresh. ARC chooses one form per read—the static
+        /// datum when nothing the value reaches needs it unique, the fresh
+        /// build when its birth lets ARC prove a mutating consumer's
+        /// argument unique—and clears this, so no consumer after ARC sees
+        /// it set.
+        fresh_alternative: ?LirProcSpecId = null,
         next: CFStmtId,
     },
     assign_call: struct {
@@ -837,6 +1177,20 @@ pub const CFStmt = union(enum) {
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
         tail_call: ?struct { next: ?CFStmtId } = null,
+        /// Set by ARC emission on a call to a procedure in the caller's own
+        /// call-graph SCC whose next statement returns `target`: the caller
+        /// frame owns nothing afterwards, so every backend must replace that
+        /// frame with the callee's instead of growing the stack.
+        replaces_frame: bool = false,
+        /// Set by the tail-drive pass on a call whose callee can return with
+        /// an erased call pending.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a call whose value reaches the
+        /// procedure's return only through representation conversions. When
+        /// a call is still pending after this statement, the procedure
+        /// returns at once without a value: the caller that makes the pending
+        /// call stores its result in the representation that caller reads.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -870,6 +1224,20 @@ pub const CFStmt = union(enum) {
         /// unit. Debug certification proves that allocation identity through
         /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
+        /// Set by ARC emission on an erased call whose value the procedure
+        /// returns, as it is or after representation conversions only: the
+        /// call is left pending instead of made. The pending call owns the
+        /// reference to `closure` this statement was given, and whoever runs
+        /// it releases that reference afterwards. `target` holds no value
+        /// until a `drive` replaces it.
+        deferred: bool = false,
+        /// Set by the tail-drive pass: where calls pending after this
+        /// statement are run.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a deferred call whose value is
+        /// converted before the procedure returns it. When the call is still
+        /// pending after this statement, the procedure returns at once.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -912,6 +1280,9 @@ pub const CFStmt = union(enum) {
     assign_boxy_dict_ref: struct {
         target: LocalId,
         dict: BoxyDictRef,
+        /// The frame locals a template dictionary's method slots name; the
+        /// assignment materializes the template with their values.
+        captures: LocalSpan = .{ .start = 0, .len = 0 },
         next: CFStmtId,
     },
     assign_boxy_box: struct {
@@ -921,6 +1292,20 @@ pub const CFStmt = union(enum) {
         source_desc: ?BoxyDescRef = null,
         payload_desc: ?BoxyDescRef = null,
         payload_mode: BoxyTransferMode = .move,
+        next: CFStmtId,
+    },
+    /// Box a copy of the record `base`, whose layout only `base_desc`
+    /// knows, in which every field `fields_desc` names takes its value from
+    /// the `fields` record payload instead. A record update never changes a
+    /// field's type, so the result has `base`'s exact runtime representation
+    /// and descriptor. `base` is borrowed and `fields` is consumed.
+    assign_boxy_record_update: struct {
+        target: LocalId,
+        base: LocalId,
+        base_desc: BoxyDescRef,
+        fields: LocalId,
+        fields_layout: layout.Idx,
+        fields_desc: BoxyDescRef,
         next: CFStmtId,
     },
     assign_boxy_reuse_box: struct {
@@ -954,12 +1339,26 @@ pub const CFStmt = union(enum) {
         source_mode: BoxyTransferMode = .borrow,
         next: CFStmtId,
     },
+    /// `target` (a Bool) is whether the borrowed `lhs` and `rhs`, both stored
+    /// as `desc` describes, are equal under derived `is_eq`: each component
+    /// whose type declares its own `is_eq` compares with that method, named
+    /// by the descriptor's equality method slot.
     assign_boxy_eq: struct {
         target: LocalId,
         lhs: LocalId,
         rhs: LocalId,
-        source_desc: BoxyDescRef,
-        source_mode: BoxyTransferMode = .borrow,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    /// `target` (a Hasher) is `hasher` fed the borrowed `value`, stored as
+    /// `desc` describes, under derived `to_hash`: each component whose type
+    /// declares its own `to_hash` hashes with that method, named by the
+    /// descriptor's hash method slot.
+    assign_boxy_hash: struct {
+        target: LocalId,
+        value: LocalId,
+        hasher: LocalId,
+        desc: BoxyDescRef,
         next: CFStmtId,
     },
     assign_boxy_tag: struct {
@@ -1047,8 +1446,8 @@ pub const CFStmt = union(enum) {
     assign_tag: struct {
         target: LocalId,
         target_desc: ?BoxyDescRef = null,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1061,8 +1460,8 @@ pub const CFStmt = union(enum) {
     store_tag: struct {
         dest: LocalId,
         tag_layout: layout.Idx,
-        variant_index: u16,
-        discriminant: u16,
+        variant_index: u32,
+        discriminant: u32,
         payload: ?LocalId,
         next: CFStmtId,
     },
@@ -1107,7 +1506,7 @@ pub const CFStmt = union(enum) {
     incref: struct {
         value: LocalId,
         rc: RcHelper,
-        count: u16 = 1,
+        count: u32 = 1,
         atomicity: RcAtomicity = .atomic,
         next: CFStmtId,
     },
@@ -1216,6 +1615,14 @@ pub const CFStmt = union(enum) {
     },
     crash: struct {
         msg: CrashMessage,
+        /// Set when this crash is a literal conversion rejecting its literal:
+        /// compile-time evaluation reports the literal's own diagnostic with
+        /// `msg`, the conversion's error message.
+        literal_rejection: ?LiteralRejectionSite = null,
+        /// Set when this crash is code checking rejected and already
+        /// reported: compile-time evaluation that reaches it discards the
+        /// result instead of reporting the problem a second time.
+        checked_error: bool = false,
     },
 };
 
@@ -1264,7 +1671,12 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    _padding: u4 = 0,
+    /// An equality or ordering comparison of fixed-width unsigned integers of
+    /// at most 64 bits, the only comparison a value-range proof can decide.
+    unsigned_compare: bool = false,
+    /// A SIMD byte concat-shift, whose count a value-range proof can fix.
+    simd_concat_shift: bool = false,
+    _padding: u2 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
@@ -1319,6 +1731,11 @@ pub const LirProcSpec = struct {
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
+    /// Capture layout of this erased worker's callable values that compile-time
+    /// evaluation froze into static data. No packing statement builds those
+    /// values, so backends register the worker with the Boxy runtime at
+    /// startup, for the capture this layout describes.
+    static_erased_capture_layout: ?layout.Idx = null,
     abi: ProcAbi = .roc,
     /// This callable can be invoked as an external function pointer before a
     /// normal Roc root runs, so its entry must initialize the embedded Boxy
@@ -1336,8 +1753,18 @@ pub const LirProcSpec = struct {
     external: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
+    /// Set by the tail-drive pass on an erased-callable procedure with an
+    /// `unless_caller_drives` statement: its entry records whether the
+    /// erased-call runtime made the call.
+    reads_caller_drives: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Set by ARC on every procedure that makes or receives a same-SCC tail
+    /// call; procedures connected by such calls share one identity. A value
+    /// passed in memory to a frame-replacing call cannot live in the frame
+    /// being replaced, so a backend that passes arguments that way gives
+    /// every member of a group one storage contract for them.
+    tail_group: ?TailGroupId = null,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.
@@ -1348,6 +1775,31 @@ pub const LirProcSpec = struct {
     rc_borrowed_params: u64 = 0,
     rc_ret_borrowed: bool = false,
     rc_ret_lenders: u64 = 0,
+    /// The uniqueness facts ARC solved for a base proc, which its callers'
+    /// uniqueness inference reads: borrowed positions the body only reads,
+    /// a return (or returned fields) whose allocation has count 1, and the
+    /// parts of the return that are unique when particular arguments were
+    /// passed unique dying values (each entry an `RcRetCondition`). An
+    /// object-cache entry carries them, and a body-less `external` proc gets
+    /// them back, so callers of a cached proc compile as they would against
+    /// its body.
+    rc_read_only_params: u64 = 0,
+    rc_ret_unique: bool = false,
+    rc_ret_unique_fields: u64 = 0,
+    rc_ret_conditions: U32Span = U32Span.empty(),
+    /// The inline plan inlines this proc's body at its direct calls, so it has
+    /// a procedure only where a call could not inline it or it is a value. A
+    /// program that takes a cache hit for it before inlining (a pack program
+    /// takes hits during specialization) could not inline it, so the object
+    /// cache never offers it.
+    inlined_at_calls: bool = false,
+    /// Set by ARC on a solved base proc when a call to it may demand an
+    /// ownership variant emitted from its body (an owned field take, outcome
+    /// restitution, a same-SCC tail transfer, or, under mode specialization,
+    /// a born-unique seed or an owned return). An object-cache entry carries
+    /// only the base signature and no body, so a proc with this bit set is
+    /// never offered as one.
+    rc_variant_demandable: bool = false,
 };
 
 /// Identifier of a stored LirPattern.
@@ -1364,7 +1816,7 @@ pub const LirPatternId = enum(u32) {
 /// Span into flat pattern-id storage.
 pub const LirPatternSpan = extern struct {
     start: u32,
-    len: u16,
+    len: u32,
 
     pub fn empty() LirPatternSpan {
         return .{ .start = 0, .len = 0 };
@@ -1395,7 +1847,7 @@ pub const LirPattern = union(enum) {
     },
     str_literal: StringLiteral.Idx,
     tag: struct {
-        discriminant: u16,
+        discriminant: u32,
         union_layout: layout.Idx,
         args: LirPatternSpan,
     },

@@ -37,9 +37,7 @@ const MethodOwnerLookup = struct {
 
 fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     return switch (pattern) {
-        .assign => |p| p.ident,
-        .var_assign => |p| p.ident,
-        .as => |p| p.ident,
+        inline .assign, .var_assign, .as => |p| p.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -57,42 +55,13 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-    };
-}
-
-fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
-    return switch (statement) {
-        .s_decl => |decl| decl.pattern,
-        .s_var => |var_stmt| var_stmt.pattern_idx,
-        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
 fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
     return switch (statement) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -135,10 +104,8 @@ pub const CompletionBuilder = struct {
     log_file: ?std.Io.File = null,
     /// Lazily-built scope map, shared across methods that need scope info.
     cached_scope: ?scope_map.ScopeMap = null,
-    /// The qualified module ident idx the cached scope was built for (to detect
-    /// mismatches). Uses qualified_module_ident so modules with the same bare
-    /// name in different packages don't collide.
-    cached_scope_module_ident: base.Ident.Idx = base.Ident.Idx.NONE,
+    /// The module env the cached scope was built from.
+    cached_scope_env: ?*const ModuleEnv = null,
 
     /// Initialize a new CompletionBuilder.
     pub fn init(allocator: Allocator, std_io: std.Io, items: *std.ArrayList(CompletionItem), builtin_module_env: ?*ModuleEnv) CompletionBuilder {
@@ -171,13 +138,9 @@ pub const CompletionBuilder = struct {
     }
 
     /// Get or build the scope map for the given module env.
-    /// Reuses a previously built scope if the module's qualified ident idx matches.
+    /// Reuses a previously built scope if it was built from the same env.
     fn getOrBuildScope(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!*scope_map.ScopeMap {
-        const module_ident = module_env.qualified_module_ident;
-        if (self.cached_scope != null and
-            !self.cached_scope_module_ident.isNone() and
-            self.cached_scope_module_ident.eql(module_ident))
-        {
+        if (self.cached_scope != null and self.cached_scope_env == module_env) {
             return &self.cached_scope.?;
         }
         // Dispose of stale scope if the module changed.
@@ -187,7 +150,7 @@ pub const CompletionBuilder = struct {
         errdefer scope.deinit();
         try scope.build(module_env);
         self.cached_scope = scope;
-        self.cached_scope_module_ident = module_ident;
+        self.cached_scope_env = module_env;
         return &self.cached_scope.?;
     }
 
@@ -287,7 +250,7 @@ pub const CompletionBuilder = struct {
         // Add imported module names from import statements
         const import_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (import_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (stmt == .s_import) {
                 const import_stmt = stmt.s_import;
                 // Use alias if available, otherwise use the module name
@@ -462,7 +425,7 @@ pub const CompletionBuilder = struct {
         // Statement-bound defs (app-style declarations).
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const parts = getStatementParts(stmt);
             const pattern_idx = parts.pattern orelse continue;
             const ident_idx = module_lookup.extractIdentFromPattern(&module_env.store, pattern_idx) orelse continue;
@@ -508,7 +471,7 @@ pub const CompletionBuilder = struct {
     fn addTypeNamesFromModuleEnv(self: *CompletionBuilder, module_env: *ModuleEnv) Allocator.Error!void {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const header_idx = statementTypeHeader(stmt) orelse continue;
             const header = module_env.store.getTypeHeader(header_idx);
             const name = module_env.getIdentText(header.name);
@@ -588,7 +551,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -597,7 +560,7 @@ pub const CompletionBuilder = struct {
             if (std.mem.findScalar(u8, name, '.') != null) continue;
 
             // Determine completion kind based on the expression type
-            const expr = module_env.store.getExpr(def.expr);
+            const expr = module_env.store.getSourceExpr(def.expr);
             const kind = completionKindForExpr(expr);
 
             // Get type information for the definition
@@ -634,11 +597,11 @@ pub const CompletionBuilder = struct {
         // Also check statements (apps use statements for definitions)
         const local_statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (local_statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_parts = getStatementParts(stmt);
 
             if (stmt_parts.pattern) |pattern_idx| {
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -649,7 +612,7 @@ pub const CompletionBuilder = struct {
                 // Determine completion kind
                 var kind: u32 = @intFromEnum(CompletionItemKind.variable);
                 if (stmt_parts.expr) |expr_idx| {
-                    const expr = module_env.store.getExpr(expr_idx);
+                    const expr = module_env.store.getSourceExpr(expr_idx);
                     kind = completionKindForExpr(expr);
                 }
 
@@ -709,7 +672,7 @@ pub const CompletionBuilder = struct {
 
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -730,10 +693,10 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             const name = module_env.getIdentText(ident_idx);
@@ -859,21 +822,6 @@ pub const CompletionBuilder = struct {
             }
             break;
         }
-    }
-
-    /// Add record field completions for a named definition in a specific module.
-    ///
-    /// This is used for module member accesses (e.g., Module.value.) where the
-    /// member is a record. We resolve the member's type from the module's
-    /// definition table, then extract its record fields.
-    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) Allocator.Error!bool {
-        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
-            const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
-            try self.addFieldsFromTypeVar(module_env, type_var);
-            return true;
-        }
-
-        return false;
     }
 
     /// Resolve a record field's type variable from a receiver type.
@@ -1072,7 +1020,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} top-level defs", .{defs_slice.len});
             for (defs_slice) |def_idx| {
                 const def = module_env.store.getDef(def_idx);
-                const pattern = module_env.store.getPattern(def.pattern);
+                const pattern = module_env.store.getSourcePattern(def.pattern);
 
                 const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1092,10 +1040,10 @@ pub const CompletionBuilder = struct {
             const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
-                const stmt = module_env.store.getStatement(stmt_idx);
-                const pattern_idx = statementPattern(stmt) orelse continue;
+                const stmt = module_env.store.getSourceStatement(stmt_idx);
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
-                const pattern = module_env.store.getPattern(pattern_idx);
+                const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
 
                 const name = module_env.getIdentText(ident_idx);
@@ -1168,16 +1116,10 @@ pub const CompletionBuilder = struct {
             }
 
             switch (content) {
-                .flex => |flex| {
+                inline .flex, .rigid => |flex| {
                     self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(module_env, flex.constraints);
-                    break;
-                },
-                .rigid => |rigid| {
-                    self.logDebug("addMethodsFromTypeVar: rigid constraints", .{});
-                    // Extract method names from rigid constraints
-                    try self.addMethodsFromConstraints(module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {
@@ -1250,7 +1192,7 @@ pub const CompletionBuilder = struct {
 
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             const stmt_parts = getStatementParts(stmt);
             if (stmt_parts.pattern) |stmt_pattern_idx| {
                 if (stmt_pattern_idx == pattern_idx) {
@@ -1334,7 +1276,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1351,10 +1293,10 @@ pub const CompletionBuilder = struct {
         // Fall back to statements (apps use s_decl/s_var for definitions).
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
@@ -1377,7 +1319,7 @@ pub const CompletionBuilder = struct {
         const defs_slice = module_env.store.sliceDefs(module_env.all_defs);
         for (defs_slice) |def_idx| {
             const def = module_env.store.getDef(def_idx);
-            const pattern = module_env.store.getPattern(def.pattern);
+            const pattern = module_env.store.getSourcePattern(def.pattern);
 
             const ident_idx = patternIdent(pattern) orelse continue;
 
@@ -1389,10 +1331,10 @@ pub const CompletionBuilder = struct {
         // Also check statements
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
-            const pattern = module_env.store.getPattern(pattern_idx);
+            const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
 
             if (ident_idx.eql(qualified_ident)) {
@@ -1418,7 +1360,7 @@ pub const CompletionBuilder = struct {
         // Search all_statements for s_nominal_decl matching type_name
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
-            const stmt = module_env.store.getStatement(stmt_idx);
+            const stmt = module_env.store.getSourceStatement(stmt_idx);
             if (std.meta.activeTag(stmt) != .s_nominal_decl) continue;
             const nom_decl = stmt.s_nominal_decl;
             const header = module_env.store.getTypeHeader(nom_decl.header);

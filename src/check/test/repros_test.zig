@@ -4,6 +4,51 @@ const std = @import("std");
 const CIR = @import("can").CIR;
 const TestEnv = @import("./TestEnv.zig");
 
+// https://github.com/roc-lang/roc/issues/11938
+test "check - repro - issue 11938 - undeclared local annotation becomes a runtime error" {
+    const src =
+        \\main! = |_| {
+        \\    users : ThisTypeDoesNotExist
+        \\    users = ["ada", "grace"]
+        \\
+        \\    Ok({})
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    const diagnostics = try test_env.module_env.getDiagnostics();
+    defer std.testing.allocator.free(diagnostics);
+    var undeclared_types: usize = 0;
+    for (diagnostics) |diagnostic| {
+        if (diagnostic == .undeclared_type) {
+            try std.testing.expectEqualStrings("ThisTypeDoesNotExist", test_env.module_env.getIdent(diagnostic.undeclared_type.name));
+            undeclared_types += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), undeclared_types);
+
+    var found_users = false;
+    var raw_node_idx: u32 = 0;
+    while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
+        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const region = test_env.module_env.store.getNodeRegion(node_idx);
+        const source = src[region.start.offset..region.end.offset];
+        if (!std.mem.eql(u8, source, "users : ThisTypeDoesNotExist\n    users = [\"ada\", \"grace\"]")) continue;
+        const node = test_env.module_env.store.nodes.get(node_idx);
+        try std.testing.expectEqual(.malformed, node.tag);
+        const stmt = test_env.module_env.store.getSourceStatement(@enumFromInt(raw_node_idx)).s_decl;
+        const pattern = test_env.module_env.store.getPattern(stmt.pattern);
+        try std.testing.expectEqualStrings("users", test_env.module_env.getIdent(pattern.assign.ident));
+        found_users = true;
+        const initializer = test_env.module_env.store.getExpr(stmt.expr);
+        try std.testing.expectEqual(std.meta.Tag(CIR.Expr).e_runtime_error, std.meta.activeTag(initializer));
+        try std.testing.expectEqual(node.getPayload().malformed.diagnostic, @intFromEnum(initializer.e_runtime_error.diagnostic));
+    }
+    try std.testing.expect(found_users);
+}
+
 test "check - mismatched reassignment becomes a runtime error statement" {
     const src =
         \\main! = |_| {
@@ -24,12 +69,12 @@ test "check - mismatched reassignment becomes a runtime error statement" {
         const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
         const node = test_env.module_env.store.nodes.get(node_idx);
         if (node.tag != .malformed) continue;
-        const diagnostic = node.getPayload().diag_single_value.value;
+        const diagnostic = node.getPayload().malformed.diagnostic;
         var same_diagnostic_count: usize = 0;
         var other_raw_node_idx: u32 = 0;
         while (other_raw_node_idx < test_env.module_env.store.nodes.len()) : (other_raw_node_idx += 1) {
             const other_node = test_env.module_env.store.nodes.get(@enumFromInt(other_raw_node_idx));
-            if (other_node.tag == .malformed and other_node.getPayload().diag_single_value.value == diagnostic) {
+            if (other_node.tag == .malformed and other_node.getPayload().malformed.diagnostic == diagnostic) {
                 same_diagnostic_count += 1;
             }
         }
@@ -1344,4 +1389,185 @@ test "check - branch whose type contains an already-reported error adds no type 
 
     try test_env.assertOneCanError("Name Not In Scope");
     try std.testing.expectEqual(@as(usize, 0), test_env.checker.problems.problems.items.len);
+}
+
+// Regression for https://github.com/roc-lang/roc/issues/11940.
+// A pure annotation must reject effects reached through an inferred method helper.
+test "check - repro - issue 11940 - pure annotation rejects effectful for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize : List(Str) -> U64
+        \\summarize = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - effectful annotation accepts for_each helper" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\summarize! : List(Str) => U64
+        \\summarize! = |lines| {
+        \\    print_all!(lines)
+        \\    lines.len()
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - a literal-free boundary settles its own instantiated relations before a later definition's literals" {
+    // `rec` has no literals, so its boundary skips literal defaulting. Its
+    // instantiated `Set.insert` relations must still settle at that boundary;
+    // left queued, `run`'s literal defaulting would resolve them and judge the
+    // variables they instantiate as `run`'s own unpinnable receivers.
+    const src =
+        \\rec : Set({ a : x, b : List(x) }), x -> U64
+        \\    where [x.is_eq : x, x -> Bool, x.to_hash : x, Hasher -> Hasher]
+        \\rec = |s, x| s.insert({ a: x, b: [x] }).len()
+        \\
+        \\run : {} -> U64
+        \\run = |_| Set.empty().insert("a").len()
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - deferred method helper has independent pure and effectful uses" {
+    const src =
+        \\Pure := {}.{
+        \\    run! : Pure -> U64
+        \\    run! = |_| 7
+        \\}
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\apply = |value| value.run!()
+        \\
+        \\pure_result : Pure -> U64
+        \\pure_result = |value| apply(value)
+        \\effectful_result! : Effectful => U64
+        \\effectful_result! = |value| apply(value)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "check - issue 11940 - imported deferred method helper rejects a pure annotation" {
+    var helper = try TestEnv.init("Helper",
+        \\Helper :: [].{
+        \\    apply = |value| value.run!()
+        \\}
+    );
+    defer helper.deinit();
+    try helper.assertNoErrors();
+
+    var test_env = try TestEnv.initWithImport("Test",
+        \\import Helper
+        \\Effectful := {}.{
+        \\    run! : Effectful => U64
+        \\    run! = |_| 7
+        \\}
+        \\result : Effectful -> U64
+        \\result = |value| Helper.apply(value)
+    , "Helper", &helper);
+    defer test_env.deinit();
+    try test_env.assertCanErrors(&.{});
+    try test_env.assertOneTypeError("Type Mismatch");
+}
+
+test "check - issue 11940 - creating an effectful callback leaves its enclosing function pure" {
+    const src =
+        \\echo! : Str => {}
+        \\echo! = |_| {}
+        \\print_all! = |lines| lines.for_each!(|line| echo!(line))
+        \\
+        \\make_callback : List(Str) -> (() => {})
+        \\make_callback = |lines| || print_all!(lines)
+    ;
+    var test_env = try TestEnv.init("Test", src);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "codec row equality - derived parser error row satisfies equality" {
+    const source =
+        \\main = || {
+        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    v = Json.parse("{\"a\":\"x\"}")
+        \\    v == Err(MissingRequiredField("b"))
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "codec row equality - derived encoder settles a hashed dictionary key row" {
+    const source =
+        \\main = || Json.to_str(Dict.from_list([(Red, 1.U64)]))
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "codec row equality - expect parser error row satisfies equality" {
+    const source =
+        \\expect {
+        \\    v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\    v = Json.parse("{\"a\":\"x\"}")
+        \\    v == Err(MissingRequiredField("b"))
+        \\}
+    ;
+    var test_env = try TestEnv.init("Test", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+}
+
+test "codec row equality - independent expect parser and function error rows" {
+    const source =
+        \\CodecParts :: [].{}
+        \\expect {
+        \\  v : Try({ a : Str, b : Str }, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\  v = Json.parse("{\"a\":\"x\"}")
+        \\  v == Err(MissingRequiredField("b"))
+        \\}
+        \\
+        \\run : (Str -> Try(U64, [Bad, ..errs])), Str -> Try(U64, [Bad, ..errs])
+        \\run = |f, s| {
+        \\  n = f(s)?
+        \\  Ok(n + 1)
+        \\}
+        \\
+        \\expect {
+        \\  g : Str -> Try(U64, [Bad, Other(Str)])
+        \\  g = |s| Err(Other(s))
+        \\  r : Try(U64, [Bad, Other(Str)])
+        \\  r = run(g, "x")
+        \\  r == Err(Other("x"))
+        \\}
+        \\
+    ;
+    var test_env = try TestEnv.init("CodecParts", source);
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
 }

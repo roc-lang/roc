@@ -1,3 +1,5 @@
+//! Cache persistence, concurrent publication, and failure reporting tests.
+
 const std = @import("std");
 const ctx_mod = @import("ctx");
 
@@ -20,6 +22,40 @@ fn captureStderr(ctx: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioEr
     capture.stderr.appendSlice(capture.allocator, bytes) catch return error.IoError;
 }
 
+const CacheWriteBarrier = struct {
+    base: CoreCtx,
+    mutex: std.Io.Mutex = .init,
+    condition: std.Io.Condition = .init,
+    writes: usize = 0,
+
+    fn writeFile(ctx: ?*anyopaque, io: std.Io, path: []const u8, data: []const u8) CoreCtx.WriteError!void {
+        const self: *CacheWriteBarrier = @ptrCast(@alignCast(ctx.?));
+        try self.base.writeFile(path, data);
+
+        // Both publishers finish staging before either can rename. A shared
+        // temp filename makes the second rename fail with FileNotFound.
+        self.mutex.lockUncancelable(io);
+        defer self.mutex.unlock(io);
+        self.writes += 1;
+        if (self.writes == 2) {
+            self.condition.broadcast(io);
+        } else {
+            while (self.writes < 2) self.condition.waitUncancelable(io, &self.mutex);
+        }
+    }
+};
+
+const CacheStoreTask = struct {
+    manager: *CacheManager,
+    directory: []const u8,
+    key: [32]u8,
+    data: []const u8,
+
+    fn run(self: *CacheStoreTask) void {
+        self.manager.storeRawBytes(self.key, self.data, self.directory, "Test");
+    }
+};
+
 test "getTestCacheDir returns test subdirectory" {
     const allocator = testing.allocator;
     // Use an explicit cache_dir so the test does not depend on HOME/XDG env vars
@@ -40,6 +76,24 @@ test "getTestCacheDir returns test subdirectory" {
 
     // Should start with the version cache dir
     try testing.expect(std.mem.startsWith(u8, test_dir, version_dir));
+}
+
+test "getScratchDir is the version cache dir's scratch subdirectory" {
+    const allocator = testing.allocator;
+    const config = CacheConfig{
+        .cache_dir = "/home/user/.cache/roc",
+        .roc_ctx = CoreCtx.testing(testing.allocator, testing.allocator),
+    };
+
+    const version_dir = try config.getVersionCacheDir(allocator);
+    defer allocator.free(version_dir);
+
+    const scratch_dir = try config.getScratchDir(allocator);
+    defer allocator.free(scratch_dir);
+
+    const expected = try std.fs.path.join(allocator, &.{ version_dir, "tmp" });
+    defer allocator.free(expected);
+    try testing.expectEqualStrings(expected, scratch_dir);
 }
 
 test "computeCacheFilePath uses subdirectory splitting" {
@@ -85,7 +139,7 @@ test "storeRawBytes and loadRawBytes round-trip" {
     const cache_key = [_]u8{0x42} ** 32;
 
     // Store raw bytes
-    manager.storeRawBytes(cache_key, test_data, tmp_path);
+    manager.storeRawBytes(cache_key, test_data, tmp_path, "Test");
 
     // Load raw bytes back
     const loaded = manager.loadRawBytes(cache_key, tmp_path);
@@ -94,6 +148,39 @@ test "storeRawBytes and loadRawBytes round-trip" {
 
     // Verify they match
     try testing.expectEqualStrings(test_data, loaded.?);
+}
+
+test "concurrent cache stores of one key use separate staging files" {
+    const allocator = testing.allocator;
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+
+    var barrier = CacheWriteBarrier{ .base = CoreCtx.os(std.heap.page_allocator, std.heap.page_allocator, std.testing.io) };
+    var filesystem = barrier.base;
+    filesystem.ctx = &barrier;
+    filesystem.vtable.writeFile = &CacheWriteBarrier.writeFile;
+    const config = CacheConfig{ .roc_ctx = filesystem };
+    var first = CacheManager.init(std.heap.page_allocator, config, filesystem);
+    var second = CacheManager.init(std.heap.page_allocator, config, filesystem);
+
+    const key = [_]u8{0x51} ** 32;
+    const data = "same checked artifact";
+    var first_task = CacheStoreTask{ .manager = &first, .directory = tmp_path, .key = key, .data = data };
+    var second_task = CacheStoreTask{ .manager = &second, .directory = tmp_path, .key = key, .data = data };
+    const first_thread = try std.Thread.spawn(.{}, CacheStoreTask.run, .{&first_task});
+    const second_thread = try std.Thread.spawn(.{}, CacheStoreTask.run, .{&second_task});
+    first_thread.join();
+    second_thread.join();
+
+    try testing.expectEqual(@as(u64, 1), first.stats.stores);
+    try testing.expectEqual(@as(u64, 1), second.stats.stores);
+    try testing.expectEqual(@as(u64, 0), first.stats.store_failures);
+    try testing.expectEqual(@as(u64, 0), second.stats.store_failures);
+    const loaded = first.loadRawBytes(key, tmp_path).?;
+    defer std.heap.page_allocator.free(loaded);
+    try testing.expectEqualStrings(data, loaded);
 }
 
 test "loadRawBytes returns null on miss" {
@@ -137,4 +224,88 @@ test "recordStoreFailure prints non-verbose warning once" {
 
     try testing.expectEqual(@as(u64, 2), manager.stats.store_failures);
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, capture.stderr.items, "Roc cache writes are failing"));
+}
+
+const FailingCacheFilesystem = struct {
+    capture: WarningCapture,
+    stage: enum { directory, write, rename },
+
+    fn makePath(ctx: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.MakePathError!void {
+        const self: *FailingCacheFilesystem = @ptrCast(@alignCast(ctx.?));
+        if (self.stage == .directory) return error.ReadOnlyFileSystem;
+    }
+
+    fn writeFile(ctx: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.WriteError!void {
+        const self: *FailingCacheFilesystem = @ptrCast(@alignCast(ctx.?));
+        if (self.stage == .write) return error.FileTooBig;
+    }
+
+    fn rename(ctx: ?*anyopaque, _: std.Io, _: []const u8, _: []const u8) CoreCtx.RenameError!void {
+        const self: *FailingCacheFilesystem = @ptrCast(@alignCast(ctx.?));
+        if (self.stage == .rename) return error.DiskQuota;
+    }
+
+    fn deleteFile(_: ?*anyopaque, _: std.Io, _: []const u8) CoreCtx.DeleteError!void {
+        return error.AccessDenied;
+    }
+
+    fn writeStderr(ctx: ?*anyopaque, _: std.Io, bytes: []const u8) CoreCtx.StdioError!void {
+        const self: *FailingCacheFilesystem = @ptrCast(@alignCast(ctx.?));
+        self.capture.stderr.appendSlice(self.capture.allocator, bytes) catch return error.IoError;
+    }
+};
+
+test "cache write failures report every operation only in verbose mode" {
+    const allocator = testing.allocator;
+    const warning = "warning: Roc cache writes are failing; compilation will continue without updating the cache. Run with --verbose for details.\n";
+    // Long diagnostic context must not silently discard a failure report.
+    const source_name = "package." ++ "LongModuleName" ** 100;
+    const key = [_]u8{0x42} ** 32;
+    const expected_path = try CacheManager.computeCacheFilePathIn(allocator, key, "cache");
+    defer allocator.free(expected_path);
+    for ([_]bool{ false, true }) |verbose| {
+        for (std.enums.values(@FieldType(FailingCacheFilesystem, "stage"))) |stage| {
+            var capture = FailingCacheFilesystem{
+                .capture = .{ .allocator = allocator },
+                .stage = stage,
+            };
+            defer capture.capture.deinit();
+            var filesystem = CoreCtx.testing(allocator, allocator);
+            filesystem.std_io = testing.io;
+            filesystem.ctx = &capture;
+            filesystem.vtable.makePath = &FailingCacheFilesystem.makePath;
+            filesystem.vtable.writeFile = &FailingCacheFilesystem.writeFile;
+            filesystem.vtable.rename = &FailingCacheFilesystem.rename;
+            filesystem.vtable.deleteFile = &FailingCacheFilesystem.deleteFile;
+            filesystem.vtable.writeStderr = &FailingCacheFilesystem.writeStderr;
+            var manager = CacheManager.init(allocator, .{ .verbose = verbose }, filesystem);
+            for ([_]CacheManager.Kind{ .checked, .canonicalized }) |kind| {
+                manager.storeRawBytesIn(allocator, kind, key, "cache data", "cache", source_name);
+            }
+            const output = capture.capture.stderr.items;
+            try testing.expectEqual(@as(u64, 1), manager.stats.store_failures);
+            try testing.expectEqual(@as(u64, 1), manager.stats.canonicalized_store_failures);
+            if (!verbose) {
+                try testing.expectEqualStrings(warning, output);
+                continue;
+            }
+            const cause = switch (stage) {
+                .directory => "error.ReadOnlyFileSystem",
+                .write => "error.FileTooBig",
+                .rename => "error.DiskQuota",
+            };
+            try testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, cause));
+            try testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, source_name));
+            try testing.expectEqual(@as(usize, 1), std.mem.count(u8, output, warning));
+            try testing.expect(std.mem.containsAtLeast(u8, output, 1, "checked cache"));
+            try testing.expect(std.mem.containsAtLeast(u8, output, 1, "canonicalized cache"));
+            if (stage == .directory) {
+                try testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "in cache for "));
+            } else {
+                try testing.expect(std.mem.containsAtLeast(u8, output, 2, expected_path));
+                try testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "(10 bytes)"));
+                try testing.expectEqual(@as(usize, 2), std.mem.count(u8, output, "Failed to remove cache temp file"));
+            }
+        }
+    }
 }

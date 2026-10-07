@@ -10,16 +10,7 @@ const integration_spec = @import("integration_spec.zig");
 const test_env = @import("integration_env.zig");
 
 fn platformPath(allocator: std.mem.Allocator) integration_spec.SpecError![]u8 {
-    // Resolve from repo root to ensure absolute path
-    const repo_root = try std.Io.Dir.cwd().realPathFileAlloc(test_env.io, ".", allocator);
-    defer allocator.free(repo_root);
-    const path = try std.fs.path.join(allocator, &.{ repo_root, "test", "str", "platform", "main.roc" });
-    // Convert backslashes to forward slashes for cross-platform Roc source compatibility
-    // Roc interprets backslashes as escape sequences in string literals
-    for (path) |*c| {
-        if (c.* == '\\') c.* = '/';
-    }
-    return path;
+    return allocator.dupe(u8, test_env.tmp_dir_platform_path);
 }
 
 // Test Harness
@@ -131,6 +122,7 @@ const TestHarness = struct {
 
 /// Syntax integration specs exported to the LSP harness.
 pub const specs = [_]integration_spec.Spec{
+    .{ .name = "issue 11775: diagnostics focus on match keywords, patterns, and function headers", .run = focusedExpressionDiagnostics },
     .{ .name = "syntax checker skips rebuild when content unchanged", .run = syntaxCheckerSkipsRebuildWhenContentUnchanged },
     .{ .name = "syntax checker rebuilds when content changes", .run = syntaxCheckerRebuildsWhenContentChanges },
     .{ .name = "syntax checker reports diagnostics for invalid source", .run = syntaxCheckerReportsDiagnosticsForInvalidSource },
@@ -1072,5 +1064,121 @@ pub fn hoverWithoutDocumentationShowsOnlyType() integration_spec.SpecError!void 
         try std.testing.expect(std.mem.find(u8, text, "##") == null);
     } else {
         return error.TestUnexpectedResult;
+    }
+}
+
+/// Exercise the shared report regions through the diagnostics sent to editors.
+fn focusedExpressionDiagnostics() integration_spec.SpecError!void {
+    const cases = .{
+        .{
+            \\Focused := []
+            \\main = |value| {
+            \\    match value {
+            \\        A => Ok({})
+            \\        B => Ok({})
+            \\    }
+            \\    {}
+            \\}
+            ,
+            "not being used",
+            "match",
+        },
+        .{
+            \\Focused := []
+            \\main : [A, B] -> U8
+            \\main = |value| match value {
+            \\    A(_) => 1
+            \\    B => 2
+            \\}
+            ,
+            "incompatible",
+            "A(_)",
+        },
+        .{
+            \\Focused := []
+            \\main : [A, B] -> U8
+            \\main = |value| match value {
+            \\    A => 1
+            \\}
+            ,
+            "doesn't cover all possible cases",
+            "match",
+        },
+        .{
+            \\Focused := []
+            \\main : U8
+            \\main = |value| {
+            \\    value
+            \\}
+            ,
+            "type mismatch",
+            "|value|",
+        },
+        .{
+            \\Focused := []
+            \\main : U8
+            \\main = || {
+            \\    1
+            \\}
+            ,
+            "type mismatch",
+            "||",
+        },
+        .{
+            \\Focused := []
+            \\main : U8
+            \\main = |"|"| {
+            \\    1
+            \\}
+            ,
+            "type mismatch",
+            "|\"|\"|",
+        },
+        .{
+            \\Focused := []
+            \\main = || {
+            \\    match"A" {
+            \\        "A" => Ok({})
+            \\        _ => Ok({})
+            \\    }
+            \\    {}
+            \\}
+            ,
+            "not being used",
+            "match",
+        },
+    };
+    inline for (cases) |case| {
+        var h = try TestHarness.init();
+        defer h.deinit();
+        const source = case[0];
+        try h.writeFile("Focused.roc", source);
+        const publish_sets = try h.checker.check(h.uri.?, null, null);
+        defer {
+            for (publish_sets) |*set| set.deinit(h.allocator);
+            h.allocator.free(publish_sets);
+        }
+        const offset = std.mem.find(u8, source, case[2]).?;
+        const line: u32 = @intCast(std.mem.count(u8, source[0..offset], "\n"));
+        const line_start = if (std.mem.findScalarLast(u8, source[0..offset], '\n')) |i| i + 1 else 0;
+        const column: u32 = @intCast(offset - line_start);
+        var found = false;
+        for (publish_sets) |set| {
+            for (set.diagnostics) |diagnostic| {
+                if (std.mem.find(u8, diagnostic.message, case[1]) == null) continue;
+                found = true;
+                try std.testing.expectEqual(line, diagnostic.range.start.line);
+                try std.testing.expectEqual(column, diagnostic.range.start.character);
+                try std.testing.expectEqual(line, diagnostic.range.end.line);
+                try std.testing.expectEqual(column + case[2].len, diagnostic.range.end.character);
+            }
+        }
+        if (!found) {
+            std.debug.print("Missing diagnostic containing '{s}' for:\n{s}\n", .{ case[1], source });
+            for (publish_sets) |set| {
+                for (set.diagnostics) |diagnostic| std.debug.print("{s}\n", .{diagnostic.message});
+            }
+        }
+        try std.testing.expect(found);
     }
 }

@@ -235,7 +235,7 @@ wrapped = |s| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-call (constraint-fn-var 331)
+						(e-call (constraint-fn-var 330)
 							(e-lookup-external
 								(builtin))
 							(e-lookup-local
@@ -259,7 +259,39 @@ wrapped = |s| {
 						(ty-tag-name (name "Bad")))))))
 	(d-let
 		(p-assign (ident "plain"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "s")))
+			(e-block
+				(s-let
+					(p-assign (ident "x"))
+					(e-match
+						(match
+							(cond
+								(e-call (constraint-fn-var 348)
+									(e-lookup-local
+										(p-assign (ident "parse")))
+									(e-lookup-local
+										(p-assign (ident "s")))))
+							(branches
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-lookup-local
+											(p-assign (ident "#ok")))))
+								(branch
+									(patterns
+										(pattern (degenerate false)
+											(p-nominal-external (builtin)
+												(p-applied-tag))))
+									(value
+										(e-return
+											(e-runtime-error (tag "erroneous_value_expr")))))))))
+				(e-lookup-local
+					(p-assign (ident "x")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

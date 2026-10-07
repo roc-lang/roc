@@ -113,46 +113,6 @@ test "shared expect lowering retains the continuation of a returning condition" 
     , .{ .shared_comptime_reads = true, .prepared_inspect = neitherConsumerDiverges });
 }
 
-fn inspectMutation(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
-    var solved = try lir.CheckedPipeline.prepareMonotypeToSolved(try prepared.forkForConsumer(prepared.target.target_usize, .run));
-    defer solved.deinit();
-    for ([_]lir.CheckedPipeline.InlineExpectMode{ .run, .omit }, [_]i8{ 8, 7 }) |mode, expected_exit| {
-        var lowered = try lir.CheckedPipeline.lowerConsumerToLir(&solved, consumerFor(&solved, mode));
-        defer lowered.deinit();
-        runConsumer(&lowered, false, expected_exit) catch return error.TestUnexpectedResult;
-    }
-}
-
-test "shared expect lowering preserves consumer-specific outer variable mutation" {
-    try harness.expectLowersToLirWithOptions(
-        \\main! = |args| {
-        \\    var code = 7
-        \\    expect {
-        \\        code = 8
-        \\        List.is_empty(args)
-        \\    }
-        \\    Err(Exit(code))
-        \\}
-    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
-}
-
-test "shared expect lowering merges callable identities assigned by the condition" {
-    try harness.expectLowersToLirWithOptions(
-        \\main! = |args| {
-        \\    seven : {} -> I8
-        \\    seven = |_| 7
-        \\    eight : {} -> I8
-        \\    eight = |_| 8
-        \\    var decide = seven
-        \\    expect {
-        \\        decide = eight
-        \\        List.is_empty(args)
-        \\    }
-        \\    Err(Exit(decide({})))
-        \\}
-    , .{ .shared_comptime_reads = true, .prepared_inspect = inspectMutation });
-}
-
 /// A copy of the producer program, owned by `allocator`, for an entrance that
 /// consumes what it is given.
 fn preparedCopy(
@@ -202,4 +162,36 @@ test "a consumed producer program is released whether its continuation succeeds 
     try harness.expectLowersToLirWithOptions(
         \\main! = |_args| Ok({})
     , .{ .prepared_inspect = inspectConsumedOwnership });
+}
+
+/// Solving consumes the producer program, so an allocation failure at any
+/// point in preparation must release every byte exactly once.
+fn inspectSolvedPreparationOwnership(prepared: *const lir.CheckedPipeline.PreparedMonotype) harness.LowerToLirHarnessError!void {
+    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const counted_copy = try preparedCopy(counting.allocator(), prepared);
+    const copy_allocations = counting.alloc_index;
+    var complete = try lir.CheckedPipeline.prepareMonotypeToSolved(counted_copy);
+    complete.deinit();
+    const preparation_allocations = counting.alloc_index - copy_allocations;
+
+    var fail_offset: usize = 0;
+    while (fail_offset < preparation_allocations) : (fail_offset += 1) {
+        var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+        const copy = try preparedCopy(failing.allocator(), prepared);
+        failing.fail_index = failing.alloc_index + fail_offset;
+        if (lir.CheckedPipeline.prepareMonotypeToSolved(copy)) |solved| {
+            var owned = solved;
+            owned.deinit();
+            return error.TestUnexpectedResult;
+        } else |err| switch (err) {
+            error.OutOfMemory => {},
+        }
+        try std.testing.expectEqual(failing.allocated_bytes, failing.freed_bytes);
+    }
+}
+
+test "a consumed producer program is released once when solved preparation runs out of memory" {
+    try harness.expectLowersToLirWithOptions(
+        \\main! = |_args| Ok({})
+    , .{ .prepared_inspect = inspectSolvedPreparationOwnership });
 }

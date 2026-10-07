@@ -56,16 +56,6 @@ EndOfFile,
 							(p-tuple))))
 				(e-int (raw "0"))))))
 ~~~
-# FORMATTED
-~~~roc
-t = |
-	(
-		0
-		| ( #
-		),
-	),
-| 0
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir

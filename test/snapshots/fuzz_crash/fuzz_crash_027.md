@@ -245,9 +245,7 @@ NAME NOT IN SCOPE - fuzz_crash_027.md:97:2:97:6
 UNDECLARED TYPE - fuzz_crash_027.md:99:14:99:20
 VAR NAME MISSING `$` - fuzz_crash_027.md:102:6:102:12
 NAME NOT IN SCOPE - fuzz_crash_027.md:103:9:103:13
-UNRECOGNIZED SYNTAX - fuzz_crash_027.md:110:2:110:5
 NAME NOT IN SCOPE - fuzz_crash_027.md:114:2:114:11
-UNRECOGNIZED SYNTAX - fuzz_crash_027.md:1:1:1:1
 UNUSED VARIABLE - fuzz_crash_027.md:104:2:104:5
 UNUSED VARIABLE - fuzz_crash_027.md:119:2:119:10
 UNUSED VARIABLE - fuzz_crash_027.md:120:2:120:6
@@ -1948,16 +1946,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(source-region (file "fuzz_crash_027.md") (start 103 9) (end 103 13) (annotation error) (line-text "\texpect blah == 1"))))
 	(report
 		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 110 2) (end 110 5))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 110 2) (end 110 5) (annotation error) (line-text "\t..."))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
-	(report
-		(severity runtime_error)
 		(title "Name Not In Scope")
 		(region (start 114 2) (end 114 11))
 		(headline
@@ -1969,16 +1957,6 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(line-break)
 			(source-region (file "fuzz_crash_027.md") (start 114 2) (end 114 11) (annotation error) (line-text "\tsome_func("))))
-	(report
-		(severity runtime_error)
-		(title "Unrecognized Syntax")
-		(region (start 1 1) (end 1 1))
-		(headline
-			(reflow "I don't recognize this syntax."))
-		(document
-			(source-region (file "fuzz_crash_027.md") (start 1 1) (end 1 1) (annotation error) (line-text "# Thnt!"))
-			(line-break)
-			(reflow "This might be a syntax error, an unsupported language feature, or a typo.")))
 	(report
 		(severity warning)
 		(title "Unused Variable")
@@ -2220,7 +2198,7 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
-		(region (start 64 2) (end 94 3))
+		(region (start 70 22) (end 70 43))
 		(headline
 			(reflow "The")
 			(reflow " ")
@@ -2302,7 +2280,19 @@ TOO FEW ARGS - fuzz_crash_027.md:111:2:113:3
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..], _arg -> Error")
+			(text "[Blue, Red, ..d], _arg -> f")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2765,133 +2755,6 @@ EndOfFile,
 							(p-ident (raw "list"))
 							(e-malformed (reason "expected_expr_close_square_or_comma")))))))))
 ~~~
-# FORMATTED
-~~~roc
-# Thnt!
-app [main!] { pf: platform "c" }
-
-import pf.Stdout exposing [line!, e!]
-
-import Stdot # Cose
-
-import pkg.S exposing [func as fry, Custom.*]
-
-import Bae as Gooe
-import
-	Ba
-Map(a, b) : List(a), (a -> b) -> List(b)
-
-MapML( # Cere
-	a, # Anre
-	b,
-) # Ag
-	: # Aon
-		List( # rg
-		),
-		(a -> b) -> # row
-			List(b) #
-
-Foo : (Bar, Baz)
-
-line : ( # Cpen
-	Bar, #
-	Baz, # m
-) # Co
-
-Some(a) : { foo : Ok(a), bar : g }
-
-Ml(a) : { # d
-	bar : Som, # Afld
-}
-
-Soine(a) : { # d
-	bar : Som,
-}
-#
-# se
-
-Func(a) : Maybe(a), a -> Maybe(a)
-
-ane = |num| if num 2 else 5
-
-add_one : U64 -> U64
-add_one = |num| {
-	other = 1
-	if num {
-		dbg # bug
-			() # r
-		0
-	} else {
-		dbg 123
-		other
-	}
-}
-
-match_time = |
-	a, # rg
-	b,
-| # As
-	match a {
-		lue | Red => {
-			x
-			x
-		}
-		Blue => 1
-		"foo" => # ent
-			00
-		"foo" | "bar" => 20
-		[1, 2, 3, .. as rest] # Aftet
-			=> ment
-
-		[1, 2 | 5, 3, .. as rest] => 123
-		[ist] => 123
-		3.14 => 314
-		3.14 | 6.28 => 314
-		(1, 2, 3) => 123
-		(1, 2 | 5, 3) => 123
-		{ foo: 1, bar: 2, ..rest } => 12 |> add(34)
-		{ # Afrd open
-			foo #
-				: # ue
-					1, # Aftd field
-			bar: 2,
-			..,
-		} => 12
-		{ foo: 1, bar: 2 | 7 } => 12
-		{
-			foo: 1,
-		} => 12
-		Ok(123) => 121000
-	}
-
-expect # Commeneyword
-	blah == 1 # Commnt
-
-main! : List(String) -> Try({}, _)
-main! = |_| { # Yeah Ie
-	world = "World"
-	var number = 123
-	expect blah == 1
-	tag = Blue
-	return
-
-	# Jusnt!
-
-		
-	match_time(
-		..., #
-	)
-	some_func(
-		dbg # bug
-			42, # Aft expr
-	)
-	crash "Unreachtement"
-	tag_with = Ok(number)
-	ited = "Hello, ${world}"
-	list =
-		
-}
-~~~
 # CANONICALIZE
 ~~~clojure
 (can-ir
@@ -2917,14 +2780,38 @@ main! = |_| { # Yeah Ie
 					(e-num (value "5"))))))
 	(d-let
 		(p-assign (ident "add_one"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "num")))
+			(e-block
+				(s-let
+					(p-assign (ident "other"))
+					(e-num (value "1")))
+				(e-if
+					(if-branches
+						(if-branch
+							(e-runtime-error (tag "erroneous_value_expr"))
+							(e-block
+								(s-dbg
+									(e-runtime-error (tag "empty_tuple")))
+								(e-num (value "0")))))
+					(if-else
+						(e-block
+							(s-dbg
+								(e-num (value "123")))
+							(e-lookup-local
+								(p-assign (ident "other"))))))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "U64") (builtin))
 				(ty-lookup (name "U64") (builtin)))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -3022,7 +2909,7 @@ main! = |_| { # Yeah Ie
 		(patt (type "(Error, Error)"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(patt (type "List(Error) -> Try({}, _d)")))
 	(type_decls
 		(alias (type "Map(a, b)")
@@ -3057,6 +2944,6 @@ main! = |_| { # Yeah Ie
 		(expr (type "(Error, Error)"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..d], _arg -> f where [d.is_eq : d, d -> Bool, f.from_numeral : Numeral -> Try(f, [InvalidNumeral(Str)])]"))
 		(expr (type "List(Error) -> Try({}, _d)"))))
 ~~~

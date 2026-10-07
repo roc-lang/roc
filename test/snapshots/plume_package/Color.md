@@ -764,7 +764,6 @@ rgba = |r, g, b, a| {
 
 hex : Str -> Try(Color, [InvalidHex(Str)])
 hex = |str| {
-
 	bytes = str.to_utf8()
 	is_char_in_hex_range = |b| (b >= '0' and b <= '9') or (b >= 'a' and b <= 'f') or (b >= 'A' and b <= 'F')
 
@@ -845,9 +844,11 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "rounded"))
-					(e-dispatch-call (method "div_by") (constraint-fn-var 696)
+					(e-dispatch-call (method "div_by") (constraint-fn-var 660)
 						(receiver
-							(e-runtime-error (tag "erroneous_value_expr")))
+							(e-runtime-error (tag "erroneous_value_expr")
+								(e-lookup-local
+									(p-assign (ident "a")))))
 						(args
 							(e-dec-small (numerator "255") (denominator-power-of-ten "0") (value "255")))))
 				(e-nominal (nominal "Color")
@@ -876,7 +877,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "bytes"))
-					(e-dispatch-call (method "to_utf8") (constraint-fn-var 760)
+					(e-dispatch-call (method "to_utf8") (constraint-fn-var 690)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "str"))))
@@ -892,13 +893,13 @@ is_named_color = |str| {
 									(e-if
 										(if-branches
 											(if-branch
-												(e-dispatch-call (method "is_gte") (constraint-fn-var 778)
+												(e-dispatch-call (method "is_gte") (constraint-fn-var 708)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "b"))))
 													(args
 														(e-num (value "48"))))
-												(e-dispatch-call (method "is_lte") (constraint-fn-var 789)
+												(e-dispatch-call (method "is_lte") (constraint-fn-var 719)
 													(receiver
 														(e-lookup-local
 															(p-assign (ident "b"))))
@@ -918,13 +919,13 @@ is_named_color = |str| {
 											(e-if
 												(if-branches
 													(if-branch
-														(e-dispatch-call (method "is_gte") (constraint-fn-var 811)
+														(e-dispatch-call (method "is_gte") (constraint-fn-var 743)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
 															(args
 																(e-num (value "97"))))
-														(e-dispatch-call (method "is_lte") (constraint-fn-var 822)
+														(e-dispatch-call (method "is_lte") (constraint-fn-var 754)
 															(receiver
 																(e-lookup-local
 																	(p-assign (ident "b"))))
@@ -941,13 +942,13 @@ is_named_color = |str| {
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 843)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 777)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
 														(args
 															(e-num (value "65"))))
-													(e-dispatch-call (method "is_lte") (constraint-fn-var 854)
+													(e-dispatch-call (method "is_lte") (constraint-fn-var 788)
 														(receiver
 															(e-lookup-local
 																(p-assign (ident "b"))))
@@ -982,24 +983,36 @@ is_named_color = |str| {
 											(e-if
 												(if-branches
 													(if-branch
-														(e-runtime-error (tag "erroneous_value_expr"))
+														(e-runtime-error (tag "erroneous_value_expr")
+															(e-lookup-local
+																(p-assign (ident "a"))))
 														(e-if
 															(if-branches
 																(if-branch
-																	(e-runtime-error (tag "erroneous_value_expr"))
+																	(e-runtime-error (tag "erroneous_value_expr")
+																		(e-lookup-local
+																			(p-assign (ident "b"))))
 																	(e-if
 																		(if-branches
 																			(if-branch
-																				(e-runtime-error (tag "erroneous_value_expr"))
+																				(e-runtime-error (tag "erroneous_value_expr")
+																					(e-lookup-local
+																						(p-assign (ident "c"))))
 																				(e-if
 																					(if-branches
 																						(if-branch
-																							(e-runtime-error (tag "erroneous_value_expr"))
+																							(e-runtime-error (tag "erroneous_value_expr")
+																								(e-lookup-local
+																									(p-assign (ident "d"))))
 																							(e-if
 																								(if-branches
 																									(if-branch
-																										(e-runtime-error (tag "erroneous_value_expr"))
-																										(e-runtime-error (tag "erroneous_value_expr"))))
+																										(e-runtime-error (tag "erroneous_value_expr")
+																											(e-lookup-local
+																												(p-assign (ident "e"))))
+																										(e-runtime-error (tag "erroneous_value_expr")
+																											(e-lookup-local
+																												(p-assign (ident "f"))))))
 																								(if-else
 																									(e-nominal-external
 																										(builtin)
@@ -1042,7 +1055,7 @@ is_named_color = |str| {
 																		(p-assign (ident "#interp_0"))
 																		(e-lookup-local
 																			(p-assign (ident "str"))))
-																	(e-interpolation (constraint-fn-var 979) (dispatcher-var 173)
+																	(e-interpolation (constraint-fn-var 909) (dispatcher-var 173)
 																		(first
 																			(e-literal (string "Expected Hex to be in the range 0-9, a-f, A-F, got ")))
 																		(parts
@@ -1063,7 +1076,7 @@ is_named_color = |str| {
 															(p-assign (ident "#interp_1"))
 															(e-lookup-local
 																(p-assign (ident "str"))))
-														(e-interpolation (constraint-fn-var 1003) (dispatcher-var 189)
+														(e-interpolation (constraint-fn-var 929) (dispatcher-var 189)
 															(first
 																(e-literal (string "Expected Hex must start with # and be 7 characters long, got ")))
 															(parts
@@ -1095,14 +1108,27 @@ is_named_color = |str| {
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
+								(e-block
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(e-runtime-error (tag "erroneous_value_expr")
+										(e-literal (string "rgb("))
+										(e-runtime-error (tag "erroneous_value_expr"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
 									(p-nominal
 										(p-applied-tag))))
 							(value
-								(e-runtime-error (tag "erroneous_value_expr"))))
+								(e-block
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(s-runtime-error (tag "erroneous_value_expr"))
+									(e-runtime-error (tag "erroneous_value_expr")
+										(e-literal (string "rgba("))
+										(e-runtime-error (tag "erroneous_value_expr"))))))
 						(branch
 							(patterns
 								(pattern (degenerate false)
@@ -1131,7 +1157,9 @@ is_named_color = |str| {
 			(e-if
 				(if-branches
 					(if-branch
-						(e-runtime-error (tag "erroneous_value_expr"))
+						(e-runtime-error (tag "erroneous_value_expr")
+							(e-lookup-local
+								(p-assign (ident "str"))))
 						(e-tag (name "Ok")
 							(args
 								(e-nominal (nominal "Color")
@@ -1149,7 +1177,7 @@ is_named_color = |str| {
 											(p-assign (ident "#interp_9"))
 											(e-lookup-local
 												(p-assign (ident "str"))))
-										(e-interpolation (constraint-fn-var 1219) (dispatcher-var 353)
+										(e-interpolation (constraint-fn-var 1055) (dispatcher-var 353)
 											(first
 												(e-literal (string "Unknown color ")))
 											(parts
@@ -1172,7 +1200,7 @@ is_named_color = |str| {
 			(e-block
 				(s-let
 					(p-assign (ident "colors"))
-					(e-call (constraint-fn-var 1275)
+					(e-call (constraint-fn-var 1109)
 						(e-lookup-external
 							(builtin))
 						(e-list
@@ -1183,7 +1211,7 @@ is_named_color = |str| {
 									(e-literal (string "AntiqueWhite")))
 								(e-string
 									(e-literal (string "Aqua")))))))
-				(e-dispatch-call (method "contains") (constraint-fn-var 1277)
+				(e-dispatch-call (method "contains") (constraint-fn-var 1112)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "colors"))))
@@ -1209,23 +1237,36 @@ is_named_color = |str| {
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-call (constraint-fn-var 1156)
+						(e-lookup-local
+							(p-assign (ident "rgb")))
+						(e-num (value "124"))
+						(e-num (value "56"))
+						(e-num (value "245")))))
 			(rhs
 				(e-string
 					(e-literal (string "rgb(124, 56, 245)"))))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-runtime-error (tag "erroneous_value_expr")))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-call (constraint-fn-var 1206)
+						(e-lookup-local
+							(p-assign (ident "rgba")))
+						(e-num (value "124"))
+						(e-num (value "56"))
+						(e-num (value "245"))
+						(e-num (value "255")))))
 			(rhs
 				(e-string
 					(e-literal (string "rgba(124, 56, 245, 1.0)"))))))
 	(s-expect
 		(e-method-eq (negated "false")
 			(lhs
-				(e-dispatch-call (method "map_ok") (constraint-fn-var 1401)
+				(e-dispatch-call (method "map_ok") (constraint-fn-var 1237)
 					(receiver
-						(e-call (constraint-fn-var 1399)
+						(e-call (constraint-fn-var 1234)
 							(e-lookup-local
 								(p-assign (ident "hex")))
 							(e-string

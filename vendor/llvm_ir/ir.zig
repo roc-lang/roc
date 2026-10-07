@@ -1631,7 +1631,8 @@ pub const ModuleBlock = struct {
             pub const ops = [_]AbbrevOp{
                 .{ .literal = @intFromEnum(ModuleBlock.MetadataBlock.Code.COMPILE_UNIT) },
                 .{ .literal = 1 }, // is distinct
-                .{ .literal = std.dwarf.LANG.C99 }, // source language
+                // TODO: When vendored LLVM version supports DW_LANG_Roc, use that instead.
+                .{ .literal = 0x49 }, // source language (DW_LANG_Roc)
                 MetadataAbbrev, // file
                 MetadataAbbrev, // producer
                 .{ .fixed = 1 }, // isOptimized

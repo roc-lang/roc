@@ -92,8 +92,28 @@ const fx_open_tests = [_]SimpleTestSpec{
         .description = "Regression test: a bare and a tag-wrapped ? on one callee cross the return boundary into the composed row (issue 11097)",
     },
     .{
+        .roc_file = "test/fx-open/issue_11626_polymorphic_try.roc",
+        .description = "Regression test: polymorphic ? payloads keep a shared tail callee's result independent (issue 11626)",
+    },
+    .{
         .roc_file = "test/fx-open/issue_11469_higher_order_try_error_row.roc",
         .description = "Regression test: a callback's narrower Try crosses a ?-composed return boundary into the wider row (issue 11469)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11621_recursive_try.roc",
+        .description = "Regression test: a ?-composed error row includes a repeated or self-referential tail (issue 11621)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11723_dead_literal_read_after_question.roc",
+        .description = "Regression test: an optimized runtime program that never reads a completed compile-time literal still builds (issue 11723)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11767_nominal_match_after_flex_dispatch.roc",
+        .description = "Regression test: a structural value lifted into a nominal never shares a cell with an imported nominal's backing (issue 11767)",
+    },
+    .{
+        .roc_file = "test/fx-open/issue_11764_same_name_method_relations.roc",
+        .description = "Regression test: a method selected through evidence relates its target to every same-name call on one receiver (issue 11764)",
     },
     .{
         .roc_file = "test/fx-open/issue_10270_named_map_err_closure.roc",

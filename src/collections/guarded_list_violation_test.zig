@@ -183,9 +183,9 @@ fn lirProcSpecs() ViolationError!void {
     defer store.deinit();
 
     try store.proc_specs.ensureTotalCapacityPrecise(allocator, 1);
-    _ = try store.addProcSpec(dummyProcSpec(1));
+    _ = try store.addProcSpec(dummyProcSpec(1), .none);
     const borrow = store.proc_specs.borrowPtr(0);
-    _ = try store.addProcSpec(dummyProcSpec(2));
+    _ = try store.addProcSpec(dummyProcSpec(2), .none);
     _ = GuardedList.ptrGet(borrow);
     return error.ExpectedGuardedListPanic;
 }

@@ -9,6 +9,7 @@
 //! finishes. They never appear in LirImage or any later stage.
 
 const std = @import("std");
+const base = @import("base");
 const core = @import("lir_core");
 
 const LIR = core.LIR;
@@ -38,7 +39,7 @@ pub const Mode = enum(u1) {
 /// ARC-stage-local calling-convention facts; no runtime representation is
 /// added to the source result.
 pub const Outcome = struct {
-    discriminant: u16,
+    discriminant: u32,
     restituted_params: ParamMask,
 };
 
@@ -54,22 +55,11 @@ pub const OutcomeSpan = extern struct {
     }
 };
 
-/// One conditionally unique part of a proc's returned value.
-///
-/// The part is the whole return when `field` is `whole_value`, otherwise
-/// original struct field `field` of a returned aggregate (or bit 0 for a tag
-/// union's single payload). Its allocation has count 1 on return whenever
-/// every argument position in `params` was passed a unique value as its
-/// caller's last use, because the proc returns those parameters' allocations
-/// there without adding a holder. A part whose uniqueness holds
-/// unconditionally is stated by `RcSig.ret_unique` or
+/// One conditionally unique part of a proc's returned value
+/// (`LIR.RcRetCondition`, the form a proc spec persists). A part whose
+/// uniqueness holds unconditionally is stated by `RcSig.ret_unique` or
 /// `RcSig.ret_unique_fields` instead and never has a row.
-pub const RetCondition = struct {
-    field: u8,
-    params: ParamMask,
-
-    pub const whole_value: u8 = 255;
-};
+pub const RetCondition = LIR.RcRetCondition;
 
 /// Span of `RetCondition` rows in `SigTable.ret_conditions`.
 pub const RetConditionSpan = extern struct {
@@ -99,24 +89,26 @@ pub const RcSig = struct {
     /// The returned value's outermost allocation has count 1 on return:
     /// every `ret` in the proc returns a born-unique value that survives to
     /// the return with no other holder, so the return is the value's single
-    /// consuming use. Pinned signatures never claim a unique return.
+    /// consuming use. ABI-pinned signatures never claim a unique return; an
+    /// external (object-cache) proc claims what its entry's producer solved,
+    /// as it does for the three facts below.
     ret_unique: bool = false,
     /// For a returned aggregate, the refcounted fields whose stored
     /// allocation has count 1 on return: every `ret` returns a value whose
     /// field was stored from a born-unique local as that local's single
     /// consuming use. Bit i names original struct field i, or the single
     /// payload of a tag union at bit 0. A caller that takes such a field out
-    /// of the dying result holds a born-unique value. Pinned signatures
+    /// of the dying result holds a born-unique value. ABI-pinned signatures
     /// claim none.
     ret_unique_fields: u64 = 0,
     /// Parts of the returned value that are unique on the condition that
     /// particular argument positions were passed unique dying values.
-    /// Pinned signatures claim none.
+    /// ABI-pinned signatures claim none.
     ret_conditions: RetConditionSpan = .empty,
     /// Bit i set means borrowed argument position i is only read by the
     /// proc: no consuming use and no holder-adding occurrence, so a call
     /// leaves the caller's argument with exactly the holders it had.
-    /// Pinned signatures claim none.
+    /// ABI-pinned signatures claim none.
     read_only_params: ParamMask = 0,
     /// Bit i set means argument position i is treated as born-unique inside
     /// the proc body: the call site proved its dying argument unique, so
@@ -164,15 +156,11 @@ pub const SigTable = struct {
         const len: usize = @intCast(sig.outcomes.len);
         if (start > self.outcomes.len or len > self.outcomes.len - start) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("ARC signature outcome span exceeded its table", .{});
+                base.invariant("ARC signature outcome span exceeded its table", .{});
             }
             unreachable;
         }
         return self.outcomes[start..][0..len];
-    }
-
-    pub fn outcomesForProc(self: SigTable, proc: LIR.LirProcSpecId) []const Outcome {
-        return self.outcomesOf(self.get(proc));
     }
 
     pub fn retConditionsOf(self: SigTable, sig: RcSig) []const RetCondition {
@@ -180,7 +168,7 @@ pub const SigTable = struct {
         const len: usize = @intCast(sig.ret_conditions.len);
         if (start > self.ret_conditions.len or len > self.ret_conditions.len - start) {
             if (@import("builtin").mode == .Debug) {
-                std.debug.panic("ARC signature return-condition span exceeded its table", .{});
+                base.invariant("ARC signature return-condition span exceeded its table", .{});
             }
             unreachable;
         }
@@ -229,9 +217,9 @@ test "outcome spans expose exact restitution rows" {
     const table = SigTable{ .sigs = &sigs, .outcomes = &outcomes };
     const rows = table.outcomesOf(sigs[0]);
     try std.testing.expectEqual(@as(usize, 2), rows.len);
-    try std.testing.expectEqual(@as(u16, 0), rows[0].discriminant);
+    try std.testing.expectEqual(@as(u32, 0), rows[0].discriminant);
     try std.testing.expectEqual(@as(ParamMask, 1), rows[0].restituted_params);
-    try std.testing.expectEqual(@as(u16, 1), rows[1].discriminant);
+    try std.testing.expectEqual(@as(u32, 1), rows[1].discriminant);
 }
 
 test "return-condition spans expose their rows" {

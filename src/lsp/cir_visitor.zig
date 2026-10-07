@@ -107,7 +107,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkExpr(self: *Self, store: *const NodeStore, expr_idx: CIR.Expr.Idx) void {
             if (self.stopped) return;
 
-            const expr = store.getExpr(expr_idx);
+            const expr = store.getSourceExpr(expr_idx);
 
             // Pre-visit callback
             if (self.visit_expr_pre) |hook| {
@@ -193,15 +193,7 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, field_access.receiver);
                     if (self.stopped) return;
                 },
-                .e_method_call => |method_call| {
-                    self.walkExpr(store, method_call.receiver);
-                    if (self.stopped) return;
-                    for (store.sliceExpr(method_call.args)) |arg| {
-                        self.walkExpr(store, arg);
-                        if (self.stopped) return;
-                    }
-                },
-                .e_dispatch_call => |method_call| {
+                inline .e_method_call, .e_dispatch_call => |method_call| {
                     self.walkExpr(store, method_call.receiver);
                     if (self.stopped) return;
                     for (store.sliceExpr(method_call.args)) |arg| {
@@ -235,13 +227,7 @@ pub fn CirVisitor(comptime Context: type) type {
                     self.walkExpr(store, eq.rhs);
                     if (self.stopped) return;
                 },
-                .e_type_method_call => |method_call| {
-                    for (store.sliceExpr(method_call.args)) |arg| {
-                        self.walkExpr(store, arg);
-                        if (self.stopped) return;
-                    }
-                },
-                .e_type_dispatch_call => |method_call| {
+                inline .e_type_method_call, .e_type_dispatch_call => |method_call| {
                     for (store.sliceExpr(method_call.args)) |arg| {
                         self.walkExpr(store, arg);
                         if (self.stopped) return;
@@ -250,14 +236,8 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_tuple_access => |ta| {
                     self.walkExpr(store, ta.tuple);
                 },
-                .e_list => |list| {
+                inline .e_list, .e_tuple => |list| {
                     for (store.sliceExpr(list.elems)) |elem| {
-                        self.walkExpr(store, elem);
-                        if (self.stopped) return;
-                    }
-                },
-                .e_tuple => |tuple| {
-                    for (store.sliceExpr(tuple.elems)) |elem| {
                         self.walkExpr(store, elem);
                         if (self.stopped) return;
                     }
@@ -284,17 +264,11 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
-                .e_nominal => |nom| {
+                inline .e_nominal, .e_nominal_external => |nom| {
                     self.walkExpr(store, nom.backing_expr);
                 },
-                .e_nominal_external => |nom| {
-                    self.walkExpr(store, nom.backing_expr);
-                },
-                .e_dbg => |dbg| {
+                inline .e_dbg, .e_expect_err => |dbg| {
                     self.walkExpr(store, dbg.expr);
-                },
-                .e_expect_err => |expect_err| {
-                    self.walkExpr(store, expect_err.expr);
                 },
                 .e_expect => |exp| {
                     self.walkExpr(store, exp.body);
@@ -349,7 +323,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .e_break,
                 .e_bytes_literal,
                 => {},
-                .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+                .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
             }
 
             if (self.stopped) return;
@@ -362,7 +336,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkStatement(self: *Self, store: *const NodeStore, stmt_idx: CIR.Statement.Idx) void {
             if (self.stopped) return;
 
-            const stmt = store.getStatement(stmt_idx);
+            const stmt = store.getSourceStatement(stmt_idx);
 
             // Pre-visit callback
             if (self.visit_stmt_pre) |hook| {
@@ -412,17 +386,7 @@ pub fn CirVisitor(comptime Context: type) type {
                     if (self.stopped) return;
                     self.walkExpr(store, f.body);
                 },
-                .s_while => |w| {
-                    self.walkExpr(store, w.cond);
-                    if (self.stopped) return;
-                    self.walkExpr(store, w.body);
-                },
-                .s_infinite_loop => |w| {
-                    self.walkExpr(store, w.cond);
-                    if (self.stopped) return;
-                    self.walkExpr(store, w.body);
-                },
-                .s_breakable_loop => |w| {
+                inline .s_while, .s_infinite_loop, .s_breakable_loop => |w| {
                     self.walkExpr(store, w.cond);
                     if (self.stopped) return;
                     self.walkExpr(store, w.body);
@@ -433,11 +397,8 @@ pub fn CirVisitor(comptime Context: type) type {
                 .s_expect => |e| {
                     self.walkExpr(store, e.body);
                 },
-                .s_dbg => |d| {
+                inline .s_dbg, .s_return => |d| {
                     self.walkExpr(store, d.expr);
-                },
-                .s_return => |r| {
-                    self.walkExpr(store, r.expr);
                 },
                 .s_type_anno => |t| {
                     self.walkTypeAnno(store, t.anno);
@@ -446,11 +407,8 @@ pub fn CirVisitor(comptime Context: type) type {
                         self.walkWhereClauses(store, where_span);
                     }
                 },
-                .s_alias_decl => |a| {
+                inline .s_alias_decl, .s_nominal_decl => |a| {
                     self.walkTypeAnno(store, a.anno);
-                },
-                .s_nominal_decl => |n| {
-                    self.walkTypeAnno(store, n.anno);
                 },
                 .s_where_alias_decl => |w| {
                     self.walkTypeAnno(store, w.receiver);
@@ -476,7 +434,7 @@ pub fn CirVisitor(comptime Context: type) type {
         pub fn walkPattern(self: *Self, store: *const NodeStore, pattern_idx: CIR.Pattern.Idx) void {
             if (self.stopped) return;
 
-            const pattern = store.getPattern(pattern_idx);
+            const pattern = store.getSourcePattern(pattern_idx);
 
             // Pre-visit callback
             if (self.visit_pattern_pre) |hook| {
@@ -504,10 +462,7 @@ pub fn CirVisitor(comptime Context: type) type {
                         if (self.stopped) return;
                     }
                 },
-                .nominal => |n| {
-                    self.walkPattern(store, n.backing_pattern);
-                },
-                .nominal_external => |n| {
+                inline .nominal, .nominal_external => |n| {
                     self.walkPattern(store, n.backing_pattern);
                 },
                 .record_destructure => |r| {
@@ -557,7 +512,7 @@ pub fn CirVisitor(comptime Context: type) type {
                 .underscore,
                 .runtime_error,
                 => {},
-                .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+                .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
             }
 
             if (self.stopped) return;
@@ -695,20 +650,6 @@ pub fn CirVisitor(comptime Context: type) type {
             for (store.sliceStatements(stmts)) |stmt_idx| {
                 self.walkStatement(store, stmt_idx);
                 if (self.stopped) return;
-            }
-        }
-
-        /// Walk all definitions in a module (Def contains pattern, expr, and optional annotation).
-        pub fn walkDefs(self: *Self, store: *const NodeStore, defs: []const CIR.Def) void {
-            for (defs) |def| {
-                self.walkPattern(store, def.pattern);
-                if (self.stopped) return;
-                self.walkExpr(store, def.expr);
-                if (self.stopped) return;
-                if (def.annotation) |anno| {
-                    self.walkAnnotation(store, anno);
-                    if (self.stopped) return;
-                }
             }
         }
     };

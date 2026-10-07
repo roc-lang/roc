@@ -222,8 +222,13 @@ test "cpulist parsing" {
     try std.testing.expectEqual(@as(usize, 0x0F0F), set[0]);
     try std.testing.expectEqual(@as(?usize, 3), parseCpuList("0,2,4", &set));
     try std.testing.expectEqual(@as(usize, 0b10101), set[0]);
-    try std.testing.expectEqual(@as(?usize, 2), parseCpuList("63-64", &set));
-    try std.testing.expectEqual(@as(usize, 1) << 63, set[0]);
+    // A range spanning the first word boundary sets the last bit of word 0 and
+    // the first bit of word 1, whatever the target's word width.
+    const word_bits = @bitSizeOf(usize);
+    var boundary_buf: [32]u8 = undefined;
+    const boundary = try std.fmt.bufPrint(&boundary_buf, "{d}-{d}", .{ word_bits - 1, word_bits });
+    try std.testing.expectEqual(@as(?usize, 2), parseCpuList(boundary, &set));
+    try std.testing.expectEqual(@as(usize, 1) << (word_bits - 1), set[0]);
     try std.testing.expectEqual(@as(usize, 1), set[1]);
     try std.testing.expectEqual(@as(?usize, null), parseCpuList("", &set));
     try std.testing.expectEqual(@as(?usize, null), parseCpuList("5-2", &set));

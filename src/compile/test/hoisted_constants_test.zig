@@ -879,7 +879,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
         switch (stmt.assign_literal.value) {
             .i128_literal => |literal| if (literal.value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return error.StaticDataLiteralNotFound;
@@ -1767,6 +1767,170 @@ test "issue 10721: compile-time validation reports a known failing destructure" 
     try std.testing.expect(found_non_exhaustive);
 }
 
+test "issue 10892: effects and dbg before a destructure do not block compile-time validation" {
+    const ok = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Echo.line!("before")
+        \\    dbg 1.I64
+        \\    Ok(byte) = (0xFF.U32).to_u8_try()
+        \\    Echo.line!(byte.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{}, ok);
+
+    const failing = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |_| {
+        \\    Echo.line!("before")
+        \\    dbg 1.I64
+        \\    Ok(byte) = (0x1FF.U32).to_u8_try()
+        \\    Echo.line!(byte.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .empirical = true }, failing);
+}
+
+test "guarded roots validate destructures inside runtime-controlled branches" {
+    const ok = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(byte) = (0xFF.U32).to_u8_try()
+        \\        Echo.line!(byte.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{}, ok);
+
+    const failing = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(byte) = (0x1FF.U32).to_u8_try()
+        \\        Echo.line!(byte.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .empirical = true, .has_runtime_roots = true }, failing);
+}
+
+test "a guarded root that crashes at compile time is left to runtime" {
+    const crash_helper = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\unreachable : Str -> U64
+        \\unreachable = |msg| crash msg
+        \\
+        \\main! = |args| {
+        \\    n = if List.is_empty(args) { 1 } else { unreachable("args are not supported") }
+        \\    Echo.line!(n.to_str())
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_runtime_roots = true }, crash_helper);
+
+    // The destructure's diagnostic is decided statically, exactly as when its
+    // right-hand side is not compile-time known.
+    const crashing_rhs = try checkEchoApp(std.testing.allocator,
+        \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+        \\
+        \\import pf.Echo
+        \\
+        \\bad : U64 -> Try(U64, [Zero])
+        \\bad = |_| crash "bad"
+        \\
+        \\main! = |args| {
+        \\    if List.is_empty(args) {
+        \\        Echo.line!("none")
+        \\    } else {
+        \\        Ok(n) = bad(1)
+        \\        Echo.line!(n.to_str())
+        \\    }
+        \\    Ok({})
+        \\}
+    );
+    try std.testing.expectEqual(EchoAppCheck{ .has_errors = true, .non_exhaustive = true, .has_runtime_roots = true }, crashing_rhs);
+}
+
+const EchoAppCheck = struct {
+    has_errors: bool = false,
+    non_exhaustive: bool = false,
+    empirical: bool = false,
+    comptime_crash: bool = false,
+    has_runtime_roots: bool = false,
+};
+
+fn checkEchoApp(gpa: std.mem.Allocator, source: []const u8) HoistedConstantsTestError!EchoAppCheck {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    try writeEchoPlatform(tmp_dir.dir);
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "main.roc", .data = source });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
+    defer gpa.free(app_path);
+
+    var arena_impl = collections.SingleThreadArena.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const builtin_modules = try sharedBuiltinModules();
+
+    var coord = try Coordinator.init(
+        gpa,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        builtin_modules,
+        build_options.compiler_version,
+        null,
+        CoreCtx.default(gpa, arena, std.testing.io),
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena, .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
+
+    var result = EchoAppCheck{ .has_errors = coord.hasUserErrors() };
+    var report_iter = coord.iterReports();
+    while (report_iter.next()) |entry| {
+        if (std.mem.eql(u8, entry.report.title, "Non Exhaustive Destructure")) {
+            result.non_exhaustive = true;
+            if (try reportContains(gpa, entry.report, "empirically during compile-time evaluation")) result.empirical = true;
+        }
+        if (std.mem.eql(u8, entry.report.title, "Compile Time Crash")) result.comptime_crash = true;
+    }
+    for (coord.appRootCheckedArtifact().compile_time_roots.roots) |root| {
+        if (root.payload == .runtime) result.has_runtime_roots = true;
+    }
+    return result;
+}
+
 test "issue 10721: runtime-dependent callable use keeps one validating extraction root" {
     const gpa = std.testing.allocator;
 
@@ -2201,7 +2365,7 @@ fn expectPatternExtractionSyntheticRegions(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation, .pattern_error => continue,
+            .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         extraction_count += 1;
 
@@ -2391,6 +2555,14 @@ fn expectReportDoesNotContain(
     report: *const @import("reporting").Report,
     needle: []const u8,
 ) HoistedConstantsTestError!void {
+    try std.testing.expect(!try reportContains(allocator, report, needle));
+}
+
+fn reportContains(
+    allocator: std.mem.Allocator,
+    report: *const @import("reporting").Report,
+    needle: []const u8,
+) HoistedConstantsTestError!bool {
     var rendered = std.array_list.Managed(u8).init(allocator);
     defer rendered.deinit();
 
@@ -2406,7 +2578,7 @@ fn expectReportDoesNotContain(
         => return error.OutOfMemory,
     };
 
-    try std.testing.expect(std.mem.find(u8, writer_alloc.written(), needle) == null);
+    return std.mem.find(u8, writer_alloc.written(), needle) != null;
 }
 
 fn findStoredCompileTimeRootI64(
@@ -2486,7 +2658,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
-                .null_ptr,
                 .proc_ref,
                 => {},
             },
@@ -2498,11 +2669,13 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -2559,6 +2732,7 @@ fn storedI64(
         .fn_value,
         .discarded,
         .expect,
+        .runtime,
         => return error.HoistedRootDidNotStoreConstNode,
     };
     const template = artifact.const_templates.get(entry.const_ref);
@@ -2584,6 +2758,7 @@ fn rootStoredI64(
         .fn_value,
         .discarded,
         .expect,
+        .runtime,
         => return error.RootDidNotStoreConstNode,
     };
     return scalarConstNodeI64(artifact, node);
@@ -2619,6 +2794,7 @@ fn scalarConstNodeI64(
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,

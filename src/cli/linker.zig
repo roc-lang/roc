@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
+const base = @import("base");
 const collections = @import("collections");
 const build_options = @import("build_options");
 const embedded_lld = @import("embedded_lld");
@@ -13,6 +14,7 @@ const AdHocResign = @import("macho/AdHocResign.zig");
 const DwarfSplice = @import("macho/DwarfSplice.zig");
 const backend = @import("backend");
 const roc_target = @import("roc_target");
+const shim_symbols = @import("builtins").shim_symbols;
 const RocTarget = roc_target.RocTarget;
 const cli_ctx = @import("CliCtx.zig");
 const CliCtx = cli_ctx.CliCtx;
@@ -479,6 +481,13 @@ fn buildLinkArgs(ctx: *CliCtx, config: LinkConfig) LinkError!std.array_list.Mana
 
             // Link against system libraries on macOS
             try args.append("-lSystem");
+
+            // ELF resolves an undefined weak reference to null; Mach-O needs
+            // each one the executable leaves undefined named explicitly.
+            for (shim_symbols.in_process_recorder_set) |symbol| {
+                try args.append("-U");
+                try args.append(std.fmt.allocPrint(ctx.arena, "_{s}", .{symbol}) catch return LinkError.OutOfMemory);
+            }
 
             // Link C++ standard library if Tracy is enabled
             if (build_options.enable_tracy) {
@@ -1044,40 +1053,9 @@ fn optimizeWasmOutput(ctx: *CliCtx, config: LinkConfig) LinkError!void {
         return;
     }
 
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (err) {
-        error.OutOfMemory => return LinkError.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return LinkError.LinkFailed,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, config.output_path, ctx.gpa, .limited(std.math.maxInt(u32))) catch |err| switch (base.read_file_failure.kind(err)) {
+        .out_of_memory => return LinkError.OutOfMemory,
+        .file_not_found, .other => return LinkError.LinkFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -1154,34 +1132,6 @@ fn hasArgPair(args: []const []const u8, flag: []const u8, value: []const u8) boo
         if (std.mem.eql(u8, arg, flag) and std.mem.eql(u8, args[i + 1], value)) return true;
     }
     return false;
-}
-
-/// Convenience function to link two object files into an executable
-pub fn linkTwoObjects(ctx: *CliCtx, obj1: []const u8, obj2: []const u8, output: []const u8) LinkError!void {
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
-    const config = LinkConfig{
-        .output_path = output,
-        .object_files = &.{ obj1, obj2 },
-    };
-
-    return link(ctx, config);
-}
-
-/// Convenience function to link multiple object files into an executable
-pub fn linkObjects(ctx: *CliCtx, object_files: []const []const u8, output: []const u8) LinkError!void {
-    if (comptime !llvm_available) {
-        return LinkError.LLVMNotAvailable;
-    }
-
-    const config = LinkConfig{
-        .output_path = output,
-        .object_files = object_files,
-    };
-
-    return link(ctx, config);
 }
 
 test "size wasm strips final target feature metadata" {
@@ -1479,6 +1429,33 @@ test "macOS non-archive platform files are passed directly" {
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-all_load"));
     try std.testing.expectEqual(@as(?usize, null), findArg(args.items, "-force_load"));
     _ = findArg(args.items, object_path) orelse return error.MissingObjectFile;
+}
+
+test "macOS executables leave the in-process recorders undefined" {
+    var arena_instance = collections.SingleThreadArena.init(std.testing.allocator);
+    defer arena_instance.deinit();
+
+    var io = Io.create(std.testing.io);
+    var ctx = CliCtx.init(std.testing.allocator, arena_instance.allocator(), &io, .build);
+    ctx.initIo();
+    defer ctx.deinit();
+
+    const config = LinkConfig{
+        .target_format = .macho,
+        .target_os = .macos,
+        .target_arch = .aarch64,
+        .output_path = "test_output",
+        .object_files = &.{"app.o"},
+    };
+
+    const args = try buildLinkArgs(&ctx, config);
+
+    for (shim_symbols.in_process_recorder_set) |symbol| {
+        const mangled = try std.fmt.allocPrint(arena_instance.allocator(), "_{s}", .{symbol});
+        const at = findArg(args.items, mangled) orelse return error.MissingUndefinedRecorder;
+        try std.testing.expect(at > 0);
+        try std.testing.expectEqualStrings("-U", args.items[at - 1]);
+    }
 }
 
 test "native glibc executables name the canonical program interpreter" {

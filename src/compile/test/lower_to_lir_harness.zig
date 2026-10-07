@@ -190,6 +190,10 @@ pub const LirLoweringOptions = struct {
     dump_proc_identities: bool = false,
     prove_ranges: bool = false,
     allow_user_errors: bool = false,
+    /// Require a report with this title once checking finishes. A rejected
+    /// program uses this to pin that it reports its diagnostic and still
+    /// lowers to a checked crash.
+    expected_report_title: ?[]const u8 = null,
     /// Receives the expression count of the lifted program handed to lambda-set
     /// solving, for tests that assert on post-check program growth.
     lifted_expr_count_out: ?*usize = null,
@@ -272,6 +276,13 @@ pub fn runAppPathLoweredInspection(
 /// a focused invariant check against the actual lowered store and layout store.
 pub fn runAppPathLirInspection(app_path: []const u8, opts: LirLoweringOptions, inspect: LirInspectFn) LowerToLirHarnessError!void {
     try lowerAppPathToLir(std.testing.allocator, app_path, null, opts, inspect, null);
+}
+
+/// Lower an app whose body is `app_body` to LIR with explicit lowering
+/// options, then run a focused check against the whole lowered program, for
+/// tests that drive a backend over the result.
+pub fn runLoweredInspection(app_body: []const u8, opts: LirLoweringOptions, inspect: LoweredInspectFn) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, null, opts, null, inspect);
 }
 
 /// Lower an app whose body is `app_body` to LIR, then run a focused invariant
@@ -699,7 +710,7 @@ pub const prepared_finite_capture_free_direct_call_fixture =
 pub fn expectPreparedFiniteCaptureFreeDirectCallsParallelismDeterministicLir() LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     const cap = 1 << 22;
-    const max_retained_specialization_shards_per_lane = 4;
+    const max_retained_specialization_shards_per_lane = postcheck.Monotype.Lower.parallel_spec_jobs_per_lane;
     const reference = try gpa.alloc(u8, cap);
     defer gpa.free(reference);
     var reference_writer = std.Io.Writer.fixed(reference);
@@ -979,6 +990,16 @@ fn runToLir(
     opts: LirLoweringOptions,
     inspect: ?LirInspectFn,
 ) LowerToLirHarnessError!void {
+    try runToLirInspected(app_body, dump, opts, inspect, null);
+}
+
+fn runToLirInspected(
+    app_body: []const u8,
+    dump: ?*std.Io.Writer,
+    opts: LirLoweringOptions,
+    inspect: ?LirInspectFn,
+    inspect_lowered: ?LoweredInspectFn,
+) LowerToLirHarnessError!void {
     const gpa = std.testing.allocator;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -1100,7 +1121,7 @@ fn runToLir(
     const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "main.roc", gpa);
     defer gpa.free(app_path);
 
-    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, null);
+    try lowerAppPathToLir(gpa, app_path, dump, opts, inspect, inspect_lowered);
 }
 
 fn lowerAppPathToLir(
@@ -1149,6 +1170,14 @@ fn lowerAppPathToLir(
     try coord.finishCheckedProgram(.executable_artifacts);
     if (!opts.allow_user_errors) {
         try std.testing.expect(!coord.hasUserErrors());
+    }
+    if (opts.expected_report_title) |title| {
+        var found = false;
+        var reports = coord.iterReports();
+        while (reports.next()) |entry| {
+            if (std.mem.eql(u8, entry.report.title, title)) found = true;
+        }
+        try std.testing.expect(found);
     }
 
     const root = coord.executableRootCheckedArtifact();

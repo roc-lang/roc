@@ -57,6 +57,7 @@
 //! - `-Dprint-ir-after-trmc=true`: full IR dump of each transformed proc.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
@@ -201,17 +202,17 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .args = args,
             .frame_locals = frame,
             .ret_layout = .u64,
-        });
+        }, .none);
         var builder = core.TailCallBuilder.init(allocator, proc_id);
         defer builder.deinit();
         store.tail_call_builder = &builder;
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, .test_fixture);
         const call = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = proc_id,
             .args = args,
             .next = ret,
-        } });
+        } }, .test_fixture);
         store.getProcSpecPtr(proc_id).body = call;
         const sites = try builder.finish(&store);
         store.getProcSpecPtr(proc_id).tail_calls = sites;
@@ -223,7 +224,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
             .frame_locals = frame,
             .body = ret,
             .ret_layout = .u64,
-        });
+        }, .none);
         const untouched_before = store.getProcSpec(untouched);
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
@@ -263,7 +264,7 @@ const Edge = union(enum) {
     stmt_next: CFStmtId,
     join_body: CFStmtId,
     join_remainder: CFStmtId,
-    switch_branch: struct { stmt: CFStmtId, index: u16 },
+    switch_branch: struct { stmt: CFStmtId, index: u32 },
     switch_default: CFStmtId,
     switch_continuation: CFStmtId,
     boxy_tag_on_match: CFStmtId,
@@ -557,7 +558,7 @@ const Detection = struct {
                     try work.append(gpa, .{ .stmt = s.on_match, .edge = .{ .boxy_tag_on_match = item.stmt } });
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try work.append(gpa, .{ .stmt = s.next, .edge = .{ .stmt_next = item.stmt } });
                 },
             }
@@ -612,7 +613,7 @@ const Detection = struct {
                 try self.appendSharedSuccessor(work, s.initialized_branch);
                 try self.appendSharedSuccessor(work, s.uninitialized_branch);
             },
-            .str_match => |s| {
+            inline .str_match, .boxy_tag_match => |s| {
                 try self.appendSharedSuccessor(work, s.on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
@@ -621,12 +622,8 @@ const Detection = struct {
                 for (0..arms.len) |index| try self.appendSharedSuccessor(work, GuardedList.at(arms, index).on_match);
                 try self.appendSharedSuccessor(work, s.on_miss);
             },
-            .boxy_tag_match => |s| {
-                try self.appendSharedSuccessor(work, s.on_match);
-                try self.appendSharedSuccessor(work, s.on_miss);
-            },
             .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                 try self.appendSharedSuccessor(work, s.next);
             },
         }
@@ -771,11 +768,13 @@ const Detection = struct {
             .assign_boxy_desc_ref,
             .assign_boxy_dict_ref,
             .assign_boxy_box,
+            .assign_boxy_record_update,
             .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -853,8 +852,7 @@ const Detection = struct {
                 .local => |src| c.chainContains(src),
                 .discriminant => |d| c.chainContains(d.source),
                 .field => |f| c.chainContains(f.source),
-                .tag_payload => |t| c.chainContains(t.source),
-                .tag_payload_struct => |t| c.chainContains(t.source),
+                inline .tag_payload, .tag_payload_struct => |t| c.chainContains(t.source),
                 .list_reinterpret => |l| c.chainContains(l.backing_ref),
                 .nominal => |n| c.chainContains(n.backing_ref),
             },
@@ -863,15 +861,17 @@ const Detection = struct {
                 (s.reuse != null and c.chainContains(s.reuse.?)) or
                 (s.result_desc != null and self.descRefTouchesChain(s.result_desc.?, c)),
             .init_uninitialized => |s| c.chainContains(s.target),
-            .assign_call => |s| self.spanTouchesChain(s.args, c),
+            inline .assign_call, .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_call_erased => |s| c.chainContains(s.closure) or
                 (s.reuse_source != null and c.chainContains(s.reuse_source.?)) or
                 self.spanTouchesChain(s.args, c),
             .assign_boxy_desc_ref => |s| self.descRefTouchesChain(s.desc, c) or
                 (s.tag_residual_for != null and self.descRefTouchesChain(s.tag_residual_for.?, c)) or
                 self.spanTouchesChain(s.captures, c),
-            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c),
+            .assign_boxy_dict_ref => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.captures, c),
             .assign_boxy_box => |s| c.chainContains(s.payload) or if (s.payload_desc) |desc| self.descRefTouchesChain(desc, c) else false,
+            .assign_boxy_record_update => |s| c.chainContains(s.base) or c.chainContains(s.fields) or
+                self.descRefTouchesChain(s.base_desc, c) or self.descRefTouchesChain(s.fields_desc, c),
             .assign_boxy_reuse_box => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.desc, c),
             .assign_boxy_unbox => |s| c.chainContains(s.source) or
                 self.descRefTouchesChain(s.source_desc, c) or
@@ -880,14 +880,14 @@ const Detection = struct {
                 (s.source_desc != null and self.descRefTouchesChain(s.source_desc.?, c)) or
                 (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)),
             .assign_boxy_inspect => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
-            .assign_boxy_eq => |s| c.chainContains(s.lhs) or c.chainContains(s.rhs) or self.descRefTouchesChain(s.source_desc, c),
+            .assign_boxy_eq => |s| c.chainContains(s.lhs) or c.chainContains(s.rhs) or self.descRefTouchesChain(s.desc, c),
+            .assign_boxy_hash => |s| c.chainContains(s.value) or c.chainContains(s.hasher) or self.descRefTouchesChain(s.desc, c),
             .assign_boxy_tag => |s| self.descRefTouchesChain(s.target_desc, c) or
                 (s.payload != null and c.chainContains(s.payload.?)) or
                 (s.payload_desc != null and self.descRefTouchesChain(s.payload_desc.?, c)),
             .assign_boxy_tag_payload => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
             .boxy_tag_match => |s| c.chainContains(s.source) or self.descRefTouchesChain(s.source_desc, c),
             .assign_call_dict => |s| self.dictRefTouchesChain(s.dict, c) or self.spanTouchesChain(s.args, c) or self.spanTouchesChain(s.arg_descs, c) or self.spanTouchesChain(s.hidden_args, c),
-            .assign_low_level => |s| self.spanTouchesChain(s.args, c),
             .assign_list => |s| self.spanTouchesChain(s.elems, c),
             .assign_struct => |s| self.spanTouchesChain(s.fields, c),
             .assign_tag => |s| (s.target_desc != null and self.descRefTouchesChain(s.target_desc.?, c)) or
@@ -897,18 +897,13 @@ const Detection = struct {
             // Reading the value is a use; overwriting a tracked local would
             // corrupt the chain, so treat that as disqualifying too.
             .set_local => |s| c.chainContains(s.value) or c.chainContains(s.target),
-            .debug => |s| c.chainContains(s.message),
+            inline .debug, .expect_err => |s| c.chainContains(s.message),
             .expect => |s| c.chainContains(s.condition),
-            .incref => |s| c.chainContains(s.value),
-            .decref => |s| c.chainContains(s.value),
+            inline .incref, .decref, .free, .ret => |s| c.chainContains(s.value),
             .decref_if_initialized => |s| c.chainContains(s.cond) or c.chainContains(s.value),
-            .free => |s| c.chainContains(s.value),
             .switch_stmt => |s| c.chainContains(s.cond),
             .switch_initialized_payload => |s| c.chainContains(s.cond) or c.chainContains(s.payload),
-            .str_match => true,
-            .str_match_set => true,
-            .ret => |s| c.chainContains(s.value),
-            .expect_err => |s| c.chainContains(s.message),
+            .str_match, .str_match_set => true,
             .crash => |s| if (s.msg.localId()) |message| c.chainContains(message) else false,
             .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break, .join => false,
         };
@@ -967,12 +962,11 @@ const Detection = struct {
             .stmt_next => |stmt| self.isSharedPath(stmt),
             .join_body => |stmt| self.isSharedPath(stmt),
             .join_remainder => |stmt| self.isSharedPath(stmt),
-            .switch_branch => |info| self.isSharedPath(info.stmt),
+            inline .switch_branch, .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
             .switch_default => |stmt| self.isSharedPath(stmt),
             .switch_continuation => |stmt| self.isSharedPath(stmt),
             .boxy_tag_on_match => |stmt| self.isSharedPath(stmt),
             .boxy_tag_on_miss => |stmt| self.isSharedPath(stmt),
-            .initialized_payload_branch => |info| self.isSharedPath(info.stmt),
         };
     }
 
@@ -991,7 +985,7 @@ const Detection = struct {
                 .active, .boxed, .in_struct, .tagged, .invalid => continue,
             }
             if (self.candidateTouchesSharedRewritePath(&candidate)) {
-                std.debug.panic(
+                invariant(
                     "TRMC invariant violated: candidate reached transform after touching a shared rewrite path",
                     .{},
                 );
@@ -1003,6 +997,13 @@ const Detection = struct {
 // ═══════════════════════════════════════════════════════════════════════════
 // Transform
 // ═══════════════════════════════════════════════════════════════════════════
+
+/// Origin of a statement this pass produces for, or in place of, `anchor`.
+fn trmcOrigin(anchor: LIR.StmtOrigin) LIR.StmtOrigin {
+    var origin = anchor;
+    origin.kind = .trmc;
+    return origin;
+}
 
 const Transform = struct {
     gpa: Allocator,
@@ -1115,25 +1116,20 @@ const Transform = struct {
     /// `ret v` becomes: write v through the hole, load the head, return it.
     fn rewriteRetEpilogue(self: *Transform, ret_stmt: CFStmtId, ret_layout: layout_mod.Idx) ResourceError!void {
         const value = self.store.getCFStmt(ret_stmt).ret.value;
+        const origin = trmcOrigin(self.store.stmtOrigin(ret_stmt));
 
         const final = try self.addLocal(ret_layout);
         const st = try self.addLocal(.zst);
-        const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } });
-        const load = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = final,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{self.head}),
-            .next = ret_final,
-        } });
+        const ret_final = try self.store.addCFStmt(.{ .ret = .{ .value = final } }, origin);
+        const load = try self.store.addLowLevelStmt(final, .ptr_load, &.{self.head}, ret_final, origin);
         const store_args = try self.store.addLocalSpan(&.{ self.hole, value });
-        self.store.getCFStmtPtr(ret_stmt).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(ret_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = store_args,
             .next = load,
-        } };
+        } }, origin);
     }
 
     fn rewriteConstructSite(self: *Transform, candidate: *const Candidate, ptr_ret: layout_mod.Idx) ResourceError!void {
@@ -1143,12 +1139,14 @@ const Transform = struct {
         // 2. The heap cell is now allocated empty (and zeroed, so its own box
         //    fields read as null holes) instead of copying the call result in.
         const empty_args = try self.store.addLocalSpan(&.{});
+        const box_origin = trmcOrigin(self.store.stmtOrigin(candidate.box_stmt));
         const cell = blk: {
-            const box_ptr = self.store.getCFStmtPtr(candidate.box_stmt);
-            box_ptr.assign_low_level.op = .box_alloc_zeroed;
-            box_ptr.assign_low_level.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
-            box_ptr.assign_low_level.args = empty_args;
-            break :blk box_ptr.assign_low_level.target;
+            var alloc = self.store.getCFStmt(candidate.box_stmt).assign_low_level;
+            alloc.op = .box_alloc_zeroed;
+            alloc.rc_effect = LowLevelOp.box_alloc_zeroed.rcEffect();
+            alloc.args = empty_args;
+            try self.store.replaceCFStmt(candidate.box_stmt, .{ .assign_low_level = alloc }, box_origin);
+            break :blk alloc.target;
         };
 
         // 3. Peephole: take the next hole pointer right after the allocation
@@ -1161,7 +1159,7 @@ const Transform = struct {
             .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
             .args = try self.store.addLocalSpan(&.{cell}),
             .next = self.nextOf(candidate.box_stmt),
-        } });
+        } }, box_origin);
         self.setNext(candidate.box_stmt, cast);
 
         // 4. Unlink the alias hops on this path: the store below uses the
@@ -1177,15 +1175,16 @@ const Transform = struct {
         // 5. The terminal becomes: fill the current hole with the node value,
         //    thread the args + new hole, and loop.
         const st = try self.addLocal(.zst);
-        const loop_back = try self.buildLoopBack(candidate.call_args, .{ .target = self.hole, .value = next_hole }, null);
+        const terminal_origin = trmcOrigin(self.store.stmtOrigin(candidate.terminal_stmt));
+        const loop_back = try self.buildLoopBack(candidate.call_args, .{ .target = self.hole, .value = next_hole }, null, trmcOrigin(self.store.stmtOrigin(candidate.call_stmt)));
         const store_args = try self.store.addLocalSpan(&.{ self.hole, candidate.head_local });
-        self.store.getCFStmtPtr(candidate.terminal_stmt).* = .{ .assign_low_level = .{
+        try self.store.replaceCFStmt(candidate.terminal_stmt, .{ .assign_low_level = .{
             .target = st,
             .op = .ptr_store,
             .rc_effect = LowLevelOp.ptr_store.rcEffect(),
             .args = store_args,
             .next = loop_back,
-        } };
+        } }, terminal_origin);
     }
 
     fn rewriteTailSites(self: *Transform) ResourceError!void {
@@ -1195,7 +1194,7 @@ const Transform = struct {
             site = call.tail_call.?.next;
             // Every incoming reference reaches the same replacement. The
             // shared return continuation remains available to other paths.
-            const loop_back = try self.buildLoopBack(call.args, null, id);
+            const loop_back = try self.buildLoopBack(call.args, null, id, trmcOrigin(self.store.stmtOrigin(id)));
             std.debug.assert(loop_back == id);
         }
     }
@@ -1219,7 +1218,7 @@ const Transform = struct {
     /// drain, the remaining components are disjoint cycles, each requiring
     /// just one temporary. Identity writes are omitted, including the hole
     /// preserved by an ordinary tail site inside a TRMC procedure.
-    fn buildLoopBack(self: *Transform, call_args: LIR.LocalSpan, extra: ?ExtraParamWrite, reuse_head: ?CFStmtId) ResourceError!CFStmtId {
+    fn buildLoopBack(self: *Transform, call_args: LIR.LocalSpan, extra: ?ExtraParamWrite, reuse_head: ?CFStmtId, origin: LIR.StmtOrigin) ResourceError!CFStmtId {
         const args = self.store.getLocalSpan(call_args);
         std.debug.assert(args.len == self.old_args.len);
         const moves = self.moves.items;
@@ -1253,7 +1252,7 @@ const Transform = struct {
         var last: ?CFStmtId = null;
         while (self.ready_moves.pop()) |index| {
             const move = &moves[index];
-            try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+            try self.appendLoopBackStmt(&first, &last, origin, .{ .set_local = .{
                 .target = move.target,
                 .value = move.source,
                 .mode = .initialize_join_param,
@@ -1270,7 +1269,7 @@ const Transform = struct {
         for (moves, 0..) |move, start| {
             if (!move.pending) continue;
             const tmp = try self.addLocal(self.store.getLocal(move.target).layout_idx);
-            try self.appendLoopBackStmt(&first, &last, .{ .assign_ref = .{
+            try self.appendLoopBackStmt(&first, &last, origin, .{ .assign_ref = .{
                 .target = tmp,
                 .op = .{ .local = move.target },
                 .next = undefined,
@@ -1280,7 +1279,7 @@ const Transform = struct {
                 const cycle_move = &moves[index];
                 std.debug.assert(cycle_move.pending and cycle_move.readers == 1);
                 const source_index = cycle_move.source_index.?;
-                try self.appendLoopBackStmt(&first, &last, .{ .set_local = .{
+                try self.appendLoopBackStmt(&first, &last, origin, .{ .set_local = .{
                     .target = cycle_move.target,
                     .value = if (source_index == start) tmp else cycle_move.source,
                     .mode = .initialize_join_param,
@@ -1291,21 +1290,21 @@ const Transform = struct {
                 index = source_index;
             }
         }
-        try self.appendLoopBackStmt(&first, &last, .{ .jump = .{ .target = self.join_id } });
+        try self.appendLoopBackStmt(&first, &last, origin, .{ .jump = .{ .target = self.join_id } });
         return first.?;
     }
 
-    fn appendLoopBackStmt(self: *Transform, first: *?CFStmtId, last: *?CFStmtId, stmt: LIR.CFStmt) ResourceError!void {
+    fn appendLoopBackStmt(self: *Transform, first: *?CFStmtId, last: *?CFStmtId, origin: LIR.StmtOrigin, stmt: LIR.CFStmt) ResourceError!void {
         // Ordinary tail sites already own a head row. Emit into it directly,
-        // preserving its source metadata and avoiding an unreachable copy.
+        // avoiding an unreachable copy.
         if (last.* == null) {
             if (first.*) |id| {
-                self.store.getCFStmtPtr(id).* = stmt;
+                try self.store.replaceCFStmt(id, stmt, origin);
                 last.* = id;
                 return;
             }
         }
-        const id = try self.store.addCFStmt(stmt);
+        const id = try self.store.addCFStmt(stmt, origin);
         if (last.*) |previous| self.setNext(previous, id) else first.* = id;
         last.* = id;
     }
@@ -1314,6 +1313,7 @@ const Transform = struct {
     /// fresh argument locals; the original args become the join params.
     fn installWrapper(self: *Transform, comptime is_trmc: bool, initial: LocalId) ResourceError!void {
         const old_body = self.store.getProcSpec(self.proc_id).body.?;
+        const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
         const fresh = try self.gpa.alloc(LocalId, self.old_args.len);
         defer self.gpa.free(fresh);
@@ -1322,20 +1322,20 @@ const Transform = struct {
         }
 
         // Entry chain (built backward): [alloca initial;] set params; jump J.
-        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        var current = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
         if (is_trmc) {
             current = try self.store.addCFStmt(.{ .set_local = .{
                 .target = self.head,
                 .value = initial,
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
             current = try self.store.addCFStmt(.{ .set_local = .{
                 .target = self.hole,
                 .value = initial,
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
         }
         var i = self.old_args.len;
         while (i > 0) {
@@ -1345,16 +1345,10 @@ const Transform = struct {
                 .value = fresh[i],
                 .mode = .initialize_join_param,
                 .next = current,
-            } });
+            } }, origin);
         }
         if (is_trmc) {
-            current = try self.store.addCFStmt(.{ .assign_low_level = .{
-                .target = initial,
-                .op = .ptr_alloca,
-                .rc_effect = LowLevelOp.ptr_alloca.rcEffect(),
-                .args = try self.store.addLocalSpan(&.{}),
-                .next = current,
-            } });
+            current = try self.store.addLowLevelStmt(initial, .ptr_alloca, &.{}, current, origin);
         }
 
         const param_count = self.old_args.len + if (is_trmc) @as(usize, 2) else 0;
@@ -1371,7 +1365,7 @@ const Transform = struct {
             .params = try self.store.addLocalSpan(params),
             .body = old_body,
             .remainder = current,
-        } });
+        } }, origin);
 
         const fresh_span = try self.store.addLocalSpan(fresh);
         const frame_locals = try self.rebuildFrameLocals();
@@ -1388,14 +1382,15 @@ const Transform = struct {
     fn installTceLoop(self: *Transform) ResourceError!void {
         const proc_ptr = self.store.getProcSpecPtr(self.proc_id);
         const old_body = proc_ptr.body.?;
+        const origin = trmcOrigin(self.store.stmtOrigin(old_body));
 
-        const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } });
+        const entry_jump = try self.store.addCFStmt(.{ .jump = .{ .target = self.join_id } }, origin);
         const join_stmt = try self.store.addCFStmt(.{ .join = .{
             .id = self.join_id,
             .params = proc_ptr.args,
             .body = old_body,
             .remainder = entry_jump,
-        } });
+        } }, origin);
 
         proc_ptr.body = join_stmt;
         proc_ptr.frame_locals = try self.rebuildFrameLocals();
@@ -1443,7 +1438,7 @@ const Transform = struct {
 
     fn nextOf(self: *const Transform, stmt_id: CFStmtId) CFStmtId {
         return switch (self.store.getCFStmt(stmt_id)) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| s.next,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
@@ -1466,7 +1461,7 @@ const Transform = struct {
     fn setNext(self: *Transform, stmt_id: CFStmtId, next: CFStmtId) void {
         const ptr = self.store.getCFStmtPtr(stmt_id);
         switch (ptr.*) {
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |*s| s.next = next,
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,

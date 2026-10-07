@@ -28,6 +28,49 @@ pub const ExtraStringIdx = ByteListRange;
 /// A range of patterns
 pub const MissingPatternsRange = struct { start: usize, count: usize };
 
+/// The checker relation that recorded a problem, or whose unification queued
+/// a dispatch obligation whose problems then belong to it (design.md "Every
+/// Rejection Is Explicit Recovery"). A relation is void at the settled state
+/// when it read an erroneous value, and a void relation's problems are
+/// withdrawn: an erroneous value relates to nothing. `kind` says which
+/// values the relation read.
+pub const RelationOwner = struct {
+    kind: Kind = .none,
+    /// The raw `CIR.Expr.Idx` of the expression that owns the relation.
+    expr: u32 = 0,
+    /// The item or branch position, for `list_prefix` and `branch`.
+    index: u32 = 0,
+
+    pub const Kind = enum(u8) {
+        /// Not a relation over values: its problems are never withdrawn.
+        none,
+        /// The expression's evaluation operands, all read by one relation.
+        operands,
+        /// The expression's own value.
+        value,
+        /// A list literal's items up to and including `index`: an item
+        /// relates to the item type its earlier items determined.
+        list_prefix,
+        /// A conditional's or match's branch at `index`, related to the
+        /// result its earlier branches determined.
+        branch,
+    };
+
+    pub const none: RelationOwner = .{};
+
+    pub fn of(kind: Kind, expr: CIR.Expr.Idx, index: u32) RelationOwner {
+        return .{ .kind = kind, .expr = @intFromEnum(expr), .index = index };
+    }
+
+    pub fn exprIdx(self: RelationOwner) CIR.Expr.Idx {
+        return @enumFromInt(self.expr);
+    }
+
+    pub fn eql(a: RelationOwner, b: RelationOwner) bool {
+        return a.kind == b.kind and a.expr == b.expr and a.index == b.index;
+    }
+};
+
 /// The kind of problem we're dealing with
 pub const Problem = union(enum) {
     type_mismatch: TypeMismatch,
@@ -44,14 +87,18 @@ pub const Problem = union(enum) {
     invalid_nominal_decl_recursion: InvalidNominalDeclRecursion,
     infinite_recursion: VarWithSnapshot,
     anonymous_recursion: VarWithSnapshot,
+    row_label_conflict: RowLabelConflict,
     polymorphic_value: VarWithSnapshot,
     polymorphic_var_annotation: PolymorphicVarAnnotation,
+    polymorphic_value_annotation: PolymorphicValueAnnotation,
     effectful_top_level: EffectfulTopLevel,
     effectful_comptime_expression: EffectfulComptimeExpression,
     effectful_expect: EffectfulExpect,
     effectful_function_name: EffectfulFunctionName,
     annotation_only_value: AnnotationOnlyValue,
     annotation_only_value_use: AnnotationOnlyValueUse,
+    derived_method_value_use: DerivedMethodValueUse,
+    capturing_method: CapturingMethod,
     unsupported_generated_method: UnsupportedGeneratedMethod,
     associated_item_not_found: AssociatedItemNotFound,
     hosted_unboxed_function: HostedUnboxedFunction,
@@ -65,6 +112,7 @@ pub const Problem = union(enum) {
     comptime_crash: ComptimeCrash,
     comptime_invalid_numeral: ComptimeInvalidNumeral,
     comptime_invalid_quote: ComptimeInvalidQuote,
+    comptime_invalid_interpolation: ComptimeInvalidInterpolation,
     comptime_expect_failed: ComptimeExpectFailed,
     comptime_eval_error: ComptimeEvalError,
     invalid_numeric_literal: InvalidNumericLiteral,
@@ -86,6 +134,8 @@ pub const Problem = union(enum) {
     unreachable_code: UnreachableCode,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
+    derived_parser_error_row: DerivedParserErrorRow,
+    derived_codec_open_record: DerivedCodecOpenRecord,
 
     pub const Idx = enum(u32) { _ };
     pub const Tag = std.meta.Tag(@This());
@@ -172,6 +222,27 @@ pub const AnnotationOnlyValueUse = struct {
     region: base.Region,
 };
 
+/// A compiler-derived associated method was used as a value instead of being
+/// called. A derived method is a dispatch on its owner type, and only a call
+/// dispatches.
+pub const DerivedMethodValueUse = struct {
+    method_name: Ident.Idx,
+    region: base.Region,
+};
+
+/// A method of a type declared in a function body refers to a value bound in
+/// that function body, directly or through a local function that does.
+/// Methods never capture values.
+pub const CapturingMethod = struct {
+    method_name: Ident.Idx,
+    /// The name the method refers to at `region`.
+    referenced_name: Ident.Idx,
+    /// The value of the enclosing function body that the reference reaches:
+    /// `referenced_name` itself, or a value a local function it names uses.
+    captured_name: Ident.Idx,
+    region: base.Region,
+};
+
 /// A bare underscore requested compiler generation for an unsupported associated method.
 pub const UnsupportedGeneratedMethod = struct {
     method_name: Ident.Idx,
@@ -191,6 +262,36 @@ pub const AssociatedItemNotFound = struct {
 /// bound—the variable must have a concrete type.
 pub const PolymorphicVarAnnotation = struct {
     region: base.Region,
+};
+
+/// A value binding whose annotation introduces a type variable. Only a binding
+/// whose right-hand side is a function (or a value alias) generalizes, so this
+/// binding has exactly one type and cannot quantify the variable.
+pub const PolymorphicValueAnnotation = struct {
+    /// The binding's name as written, when its pattern is a plain identifier.
+    name_region: ?base.Region,
+    /// The whole annotation, name included.
+    region: base.Region,
+    /// The annotated type alone, for the suggested thunk signature.
+    type_region: base.Region,
+    /// The annotation's where clause, from the end of its type through the
+    /// end of its last clause (the closing `]` is not included), for the
+    /// suggested thunk signature.
+    where_region: ?base.Region,
+    /// Whether the annotated type is itself a function type, which the
+    /// suggested thunk signature must parenthesize.
+    type_is_function: bool,
+    /// The binding's right-hand side, for the suggested thunk body.
+    rhs_region: base.Region,
+    /// The annotated function type's arity, when the right-hand side is a
+    /// placeholder (`...` or a `crash`) for a function that is not
+    /// implemented yet; the report then suggests writing the placeholder
+    /// inside a lambda of that arity.
+    stub_arity: ?u32,
+    /// Whether the annotation writes an anonymous `..` extension.
+    writes_open_extension: bool,
+    /// Whether the annotation writes a named type variable.
+    writes_named_variable: bool,
 };
 
 /// A top-level value definition performs effects while initializing.
@@ -262,6 +363,17 @@ pub const ComptimeInvalidQuote = struct {
     origin: ?ComptimeOrigin = null,
 };
 
+/// An interpolated string literal that a custom `from_interpolation`
+/// implementation rejected during compile-time evaluation
+pub const ComptimeInvalidInterpolation = struct {
+    message: ExtraStringIdx,
+    region: base.Region,
+    /// See `ComptimeOrigin`. Reachable cross-module: an interpolation inside
+    /// an imported function rejects while the consuming module's compile-time
+    /// root evaluates it.
+    origin: ?ComptimeOrigin = null,
+};
+
 /// An expect that failed during compile-time evaluation
 pub const ComptimeExpectFailed = struct {
     message: ExtraStringIdx,
@@ -311,6 +423,23 @@ pub const VarWithSnapshot = struct {
     def_name: ?Ident.Idx,
 };
 
+/// One label repeated along a row's extension chain, whose occurrences cannot
+/// be the same tag or field (design.md "Row Union Normalization").
+pub const RowLabelConflict = struct {
+    row_kind: enum { tag_union, record },
+    label: Ident.Idx,
+    /// The outer occurrence, as a closed single-label row, and the source of
+    /// the row part that holds it.
+    outer_snapshot: SnapshotContentIdx,
+    outer_region: base.Region,
+    /// The inner occurrence, likewise.
+    inner_snapshot: SnapshotContentIdx,
+    inner_region: base.Region,
+    /// The value whose type holds the row, when the settled row walk reached
+    /// it from one.
+    value_region: ?base.Region,
+};
+
 // number problems //
 
 /// Number literal doesn't fit in the expected type
@@ -354,6 +483,44 @@ pub const OptionalAccessOfRequiredField = struct {
 pub const UnsetOfRequiredField = struct {
     region: base.Region,
     field_name: Ident.Idx,
+};
+
+/// A derived parser's error-row demand failed against a closed row. The
+/// program is correctly rejected, but the diagnostic must point at the
+/// expression that introduced the parser relation (the call that fixes the
+/// record type), not at the unified variables' regions inside the generic
+/// helper (design.md "Derived Parser Required-Field Error Composition").
+pub const DerivedParserErrorRow = struct {
+    region: base.Region,
+    reason: enum {
+        /// The record has required fields, so its compiler-derived parser can
+        /// fail with `MissingRequiredField(Str)`, which the row does not list.
+        required_field,
+        /// A nested custom parser's error tags do not fit the enclosing row.
+        nested_row,
+    },
+    /// Snapshot of the record type whose derived parser needs the tag
+    /// (`required_field` only).
+    record_snapshot: ?SnapshotContentIdx,
+    /// Snapshot of the tags the parser can produce (`nested_row` only).
+    tags_snapshot: ?SnapshotContentIdx,
+    /// Snapshot of the closed error row the tags had to fit in.
+    row_snapshot: SnapshotContentIdx,
+    /// Comma-joined names of the required fields (`required_field` only).
+    required_fields: ?ExtraStringIdx,
+    /// How many required fields `required_fields` joins.
+    required_field_count: u32,
+};
+
+/// A compiler-derived parser or encoder was requested for a record inferred
+/// from field uses whose row is still open in its definition's type (a record
+/// parameter, or a returned record). Callers may use that record with more
+/// fields, so the derived codec's exact field set is not known.
+pub const DerivedCodecOpenRecord = struct {
+    region: base.Region,
+    direction: enum { parse, encode },
+    /// Snapshot of the value type the codec was requested for.
+    record_snapshot: SnapshotContentIdx,
 };
 
 /// Unset (`x: _`) of a field whose presence resolved to `defaulted`: the
@@ -579,8 +746,48 @@ pub const StaticDispatch = union(enum) {
     dispatcher_does_not_impl_method: DispatcherDoesNotImplMethod,
     type_does_not_support_equality: TypeDoesNotSupportEquality,
     type_does_not_support_map: TypeDoesNotSupportMap,
+    undetermined_codec_type: UndeterminedCodecType,
     unresolved_dispatcher: UnresolvedDispatcher,
     recursive_dispatch: RecursiveDispatch,
+    undetermined_type: UndeterminedType,
+};
+
+/// A requirement failed on a type that nothing in the program determined: a
+/// defaulting decision chose the type, and the chosen default cannot satisfy
+/// every requirement on it. Reported once per defaulted type, in terms of the
+/// type as the program wrote it—never the default the checker chose, which
+/// the user did not write.
+pub const UndeterminedType = struct {
+    /// Where the undetermined type comes from: the literal itself, or the
+    /// expression that owns the failed requirement.
+    region: base.Region,
+    subject: Subject,
+    /// The type before the default was committed, listing every requirement
+    /// on it. Absent for a shared-literal conflict, whose only requirements
+    /// are the two literals themselves.
+    requirements_snapshot: ?SnapshotContentIdx,
+    /// The requirement whose failure was observed first.
+    method_name: Ident.Idx,
+    /// The requirement came from a desugared operator, which the report names
+    /// instead of its method.
+    is_binop: bool,
+    /// For a literal subject: none of the built-in types the literal's kind
+    /// can default to has `method_name`, so an annotation naming a built-in
+    /// type cannot help. Always false for other subjects.
+    builtin_candidates_lack_method: bool = false,
+
+    pub const Subject = enum {
+        number_literal,
+        string_literal,
+        value,
+        /// A string literal and a number literal share the type, and the
+        /// failed requirement is the string literal's own conversion; the
+        /// region is that string literal.
+        string_literal_shared_with_number,
+        /// The mirror case: the failed requirement is a number literal's own
+        /// conversion, and the type is shared with a string literal.
+        number_literal_shared_with_string,
+    };
 };
 
 /// Error when a static dispatch method is called on a receiver whose type is an
@@ -646,12 +853,22 @@ pub const DispatcherDoesNotImplMethod = struct {
     num_literal: ?types_mod.NumeralInfo = null,
     /// Source region of the string literal for `from_literal` constraints of kind `quote`
     quote_region: ?base.Region = null,
-    /// True when the dispatcher was a numeric literal that was defaulted to Dec
-    /// because no type annotation was given. Used to add explanatory text in errors.
-    defaulted_from_numeric_literal: bool = false,
+    /// Set when the dispatcher is a record's or tag union's `..` extension,
+    /// whose obligation came from deriving the method for that whole type.
+    row_extension_of: ?RowExtension = null,
 
     /// Type of the dispatcher
     pub const DispatcherType = enum { nominal, rigid };
+
+    pub const RowExtension = struct {
+        /// The record or tag union the extension belongs to.
+        row_snapshot: SnapshotContentIdx,
+        /// The extension's written name; null for an anonymous `..`.
+        ext_name: ?Ident.Idx,
+        kind: Kind,
+
+        pub const Kind = enum { record, tag_union };
+    };
 };
 
 /// Error when an anonymous type (record, tuple, tag union) doesn't support equality
@@ -669,6 +886,19 @@ pub const TypeDoesNotSupportEquality = struct {
 /// Error when compiler-derived `map`/`map!` cannot select one direct tag
 /// payload to transform under the language's zero-sized-payload rules.
 pub const TypeDoesNotSupportMap = struct {
+    dispatcher_snapshot: SnapshotContentIdx,
+    fn_var: Var,
+    method_name: Ident.Idx,
+    /// Region of the expression that owns the failed obligation (see
+    /// `DispatcherDoesNotImplMethod.owner_region`).
+    owner_region: ?base.Region = null,
+};
+
+/// Error when a compiler-derived `parser_for` or `encoder_for` is used at a type
+/// that nothing in the program ever determines fully (for example the element
+/// type of `List.parser_for(format)` when the parsed list is never used), so
+/// there is no single codec to derive.
+pub const UndeterminedCodecType = struct {
     dispatcher_snapshot: SnapshotContentIdx,
     fn_var: Var,
     method_name: Ident.Idx,

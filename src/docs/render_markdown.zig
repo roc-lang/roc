@@ -1238,7 +1238,14 @@ fn slugify(gpa: Allocator, plain: []const u8) Allocator.Error![]u8 {
 // Small helpers
 
 fn writeEscaped(w: Writer, text: []const u8) error{WriteFailed}!void {
-    for (text) |c| {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        if (@import("base").bidi.at(text[i..])) |control| {
+            try writeEscaped(w, control.visible);
+            i += control.utf8.len - 1;
+            continue;
+        }
+        const c = text[i];
         switch (c) {
             '<' => try w.writeAll("&lt;"),
             '>' => try w.writeAll("&gt;"),
@@ -1579,4 +1586,18 @@ test "renderDocComment passes link URLs through and hands brackets to the hook" 
 
     // A bracket the hook declines stays literal text.
     try expectDocComment(gpa, "An [unclosed bracket.\n", "<p>An [unclosed bracket.</p>");
+}
+
+test "bidi controls render as visible text in documentation" {
+    var output = std.Io.Writer.Allocating.init(std.testing.allocator);
+    defer output.deinit();
+    for (@import("base").bidi.controls) |control| {
+        try writeEscaped(&output.writer, control.utf8);
+    }
+    var iter = @import("base").bidi.Iterator{ .bytes = output.written() };
+    try std.testing.expect(iter.next() == null);
+    try std.testing.expect(std.mem.find(u8, output.written(), "&lt;U+202E RLO&gt;") != null);
+    const start = output.written().len;
+    try writeEscaped(&output.writer, "שלום مرحبا");
+    try std.testing.expectEqualStrings("שלום مرحبا", output.written()[start..]);
 }

@@ -122,11 +122,13 @@ to the nearest boundary, an edit refuses it.
 
 Rename edits only the document it was asked about. It rewrites the binding, the name on
 its type annotation, and every reference, taking the occurrences from the CIR so shadowing
-is respected.
+is respected. Type errors do not stop it: checking replaces rejected code with runtime errors,
+and every query here reads through those replacements to the code as written, so occurrences
+inside rejected code are renamed, listed, and highlighted like any other.
 
 It refuses rather than producing a partial rewrite, because editing every occurrence but one
 silently breaks the program. It refuses when:
-- the document does not compile, so there is no CIR to read occurrences from
+- the document could not be built, so there is no CIR to read occurrences from
 - the position names something other than a plain local binding—a type, a tag, a record
   field, or a destructuring pattern
 - the new name is not a single Roc identifier
@@ -186,11 +188,13 @@ Because the LSP takes control of the standard input and output, an optional flag
 roc experimental-lsp --debug-transport
 ```
 
-Passing the `--debug-transport` flag will create a log file in your OS tmp folder (`/tmp` on Unix
-systems). A mirror of the raw JSON-RPC traffic will be appended to the log file. Watching the file 
-will allow a user to see incoming and outgoing message between the server and the editor
+Passing the `--debug-transport` flag will create a fresh `lsp-debug-<random>.log` in your Roc cache directory
+(`~/.cache/roc` on Linux, `~/Library/Caches/roc` on macOS, `%APPDATA%\Roc` on Windows; the server
+prints the exact path to stderr on startup). A mirror of the raw JSON-RPC traffic will be appended
+to the log file. Watching the file will allow a user to see incoming and outgoing message between
+the server and the editor
 ```bash
-tail -f /tmp/roc-lsp-debug.log 
+tail -f /path/printed/by/the/server
 ---
 [1763992681773] OUT (128 bytes)
 {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"positionEncoding":"utf-16"},"serverInfo":{"name":"roc-lsp","version":"0.1"}}}
@@ -202,7 +206,27 @@ tail -f /tmp/roc-lsp-debug.log
 
 Additional debug channels can be enabled with `--debug-build`, `--debug-syntax`, and `--debug-server`
 which log build environment activity, syntax/type checking, and server lifecycle details respectively
-to the same temporary log file.
+to the same session log file. Logs are created exclusively with owner-only permissions
+on Unix; existing files and symlinks are never reopened. Transport logs contain
+full document contents.
+
+## Workspace trust
+
+By default, opening or changing a document does not compile it. Formatting,
+folding ranges, and selection ranges remain available; diagnostics and semantic
+features require the client to send this in its `initialize` params:
+
+```json
+"initializationOptions": { "trustedWorkspace": true }
+```
+
+Enable this only after the user trusts the workspace: checking can download URL
+packages and execute compile-time Roc code inside the server. Clients must derive
+trust from their own user-controlled trust mechanism, never repository settings.
+Restart the server when trust changes. Trust applies to the entire server session,
+including every opened document and transitive dependency; use separate sessions
+for untrusted folders. Clients without a trust integration remain in syntax-only
+mode. Semantic requests return a trust-required error in that mode.
 
 ## Editor examples
 

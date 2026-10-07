@@ -19,17 +19,25 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 3;
+pub const format_version: u32 = 6;
 
 /// One specialization the pack can serve: its reservation-time key, the
-/// artifact holding its procedure, and the ownership signature ARC solved
-/// for that procedure, which the linking program adopts as fixed.
+/// artifact holding its procedure, and the ownership signature and
+/// uniqueness facts ARC solved for that procedure, which the linking program
+/// adopts as fixed.
 pub const SpecEntry = struct {
     key: [32]u8,
     artifact: u32,
+    /// Null is an authoritative independent summary, not missing metadata.
+    platform_requirement_relation: ?[32]u8 = null,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
+    rc_read_only_params: u64,
+    rc_ret_unique: bool,
+    rc_ret_unique_fields: u64,
+    /// Each entry an `lir.LIR.RcRetCondition`.
+    rc_ret_conditions: []const u32,
 };
 
 /// A pack read back from its bytes.
@@ -48,8 +56,12 @@ pub const ReadError = Allocator.Error || error{
     UnsupportedPackVersion,
 };
 
-/// Encode an artifact set and its spec table.
+/// Encode an artifact set and its spec table. Every carried constant the
+/// set's program named for itself is written under its content name, and so
+/// is every relocation to it, so the pack links into any program.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) Allocator.Error![]u8 {
+    var names = try ProcArtifact.ContentNames.init(allocator, set);
+    defer names.deinit();
     var bytes = std.ArrayList(u8).empty;
     errdefer bytes.deinit(allocator);
     var writer = Writer{ .allocator = allocator, .bytes = &bytes };
@@ -146,11 +158,14 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                     try writer.byte(@intFromEnum(data_kind));
                 },
             }
-            try writer.str(relocation.name);
+            try writer.str(names.of(relocation.name));
+            // A reference to carried program data now names it by content.
+            const scope: ProcArtifact.SymbolScope = if (names.renames(relocation.name)) .shared else relocation.scope;
+            try writer.byte(@intFromEnum(scope));
         }
         try writer.word(@intCast(artifact.data.len));
         for (artifact.data) |item| {
-            try writer.str(item.name);
+            try writer.str(names.of(item.name));
             try writer.str(item.bytes);
             try writer.word(item.alignment);
             try writer.word(item.symbol_offset);
@@ -160,7 +175,8 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 try writer.wide(@bitCast(relocation.addend));
                 try writer.byte(@intFromBool(relocation.function));
                 try writer.byte(@intFromBool(relocation.external));
-                try writer.str(relocation.name);
+                // An external binding names the linking image's symbol.
+                try writer.str(if (relocation.external) relocation.name else names.of(relocation.name));
             }
         }
     }
@@ -168,9 +184,16 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
     for (specs) |spec| {
         try writer.raw(&spec.key);
         try writer.word(spec.artifact);
+        try writer.byte(@intFromBool(spec.platform_requirement_relation != null));
+        if (spec.platform_requirement_relation) |relation| try writer.raw(&relation);
         try writer.wide(spec.rc_borrowed_params);
         try writer.byte(@intFromBool(spec.rc_ret_borrowed));
         try writer.wide(spec.rc_ret_lenders);
+        try writer.wide(spec.rc_read_only_params);
+        try writer.byte(@intFromBool(spec.rc_ret_unique));
+        try writer.wide(spec.rc_ret_unique_fields);
+        try writer.word(@intCast(spec.rc_ret_conditions.len));
+        for (spec.rc_ret_conditions) |condition| try writer.word(condition);
     }
 
     return try bytes.toOwnedSlice(allocator);
@@ -271,9 +294,11 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
             const kind_tag = try reader.byte();
             const data_kind_raw = try reader.byte();
             const name = try reader.strOwned(arena_allocator);
+            const scope = std.enums.fromInt(ProcArtifact.SymbolScope, try reader.byte()) orelse return error.MalformedPack;
             relocation.* = .{
                 .offset = offset,
                 .name = name,
+                .scope = scope,
                 .kind = switch (kind_tag) {
                     0 => .function,
                     1 => .{ .data = std.enums.fromInt(RelocationMod.DataRelocationKind, data_kind_raw) orelse return error.MalformedPack },
@@ -338,6 +363,11 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         spec.* = .{
             .key = (try reader.raw(32))[0..32].*,
             .artifact = try reader.word(),
+            .platform_requirement_relation = switch (try reader.byte()) {
+                0 => null,
+                1 => (try reader.raw(32))[0..32].*,
+                else => return error.MalformedPack,
+            },
             .rc_borrowed_params = try reader.wide(),
             .rc_ret_borrowed = switch (try reader.byte()) {
                 0 => false,
@@ -345,7 +375,18 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                 else => return error.MalformedPack,
             },
             .rc_ret_lenders = try reader.wide(),
+            .rc_read_only_params = try reader.wide(),
+            .rc_ret_unique = switch (try reader.byte()) {
+                0 => false,
+                1 => true,
+                else => return error.MalformedPack,
+            },
+            .rc_ret_unique_fields = try reader.wide(),
+            .rc_ret_conditions = &.{},
         };
+        const conditions = try arena_allocator.alloc(u32, try reader.word());
+        for (conditions) |*condition| condition.* = try reader.word();
+        spec.rc_ret_conditions = conditions;
         if (spec.artifact >= artifact_count) return error.MalformedPack;
     }
     if (reader.offset != bytes.len) return error.MalformedPack;
@@ -430,7 +471,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
             .refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0, .veneer = 3 }},
             .symbolic_refs = &.{.{ .site = 1, .form = .call, .target = .{ .rc_helper = "external" } }},
             .lines = &.{.{ .offset = 0, .loc = .{ .file = 2, .line = 10, .column = 8 } }},
-            .relocations = &.{.{ .offset = 0, .name = "builtin", .kind = .function }},
+            .relocations = &.{.{ .offset = 0, .name = "builtin", .scope = .shared, .kind = .function }},
             .data = &.{.{
                 .name = "datum",
                 .bytes = "bytes",
@@ -459,8 +500,8 @@ test "pack bytes round-trip every artifact field and spec entry" {
         .{ .site = 12, .form = .addr, .target = 0, .delta = 0 },
     });
     const relocations = try a.dupe(ProcArtifact.NamedRelocation, &.{
-        .{ .offset = 3, .name = try a.dupe(u8, "roc_builtins_str_concat"), .kind = .function },
-        .{ .offset = 9, .name = try a.dupe(u8, "roc__static_1"), .kind = .{ .data = .rel32 } },
+        .{ .offset = 3, .name = try a.dupe(u8, "roc_builtins_str_concat"), .scope = .shared, .kind = .function },
+        .{ .offset = 9, .name = try a.dupe(u8, "roc__d1"), .scope = .program, .kind = .{ .data = .rel32 } },
     });
     const artifacts = try a.dupe(ProcArtifact.Artifact, &.{
         .{
@@ -480,14 +521,14 @@ test "pack bytes round-trip every artifact field and spec entry" {
             },
             .relocations = relocations,
             .data = try a.dupe(ProcArtifact.DataItem, &.{
-                .{ .name = try a.dupe(u8, "roc__static_str_ab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
+                .{ .name = try a.dupe(u8, "roc__hab"), .bytes = try a.dupe(u8, "\x00\x00hi"), .alignment = 8, .symbol_offset = 2 },
                 .{
-                    .name = try a.dupe(u8, "roc__static_data_cd"),
+                    .name = try a.dupe(u8, "roc__hcd"),
                     .bytes = try a.dupe(u8, "\x00" ** 16),
                     .alignment = 8,
                     .symbol_offset = 0,
                     .relocations = try a.dupe(ProcArtifact.DataRelocation, &.{
-                        .{ .offset = 0, .name = try a.dupe(u8, "roc__static_str_ab"), .addend = 2, .function = false },
+                        .{ .offset = 0, .name = try a.dupe(u8, "roc__hab"), .addend = 2, .function = false },
                         .{ .offset = 8, .name = try a.dupe(u8, "roc__rc_decref_abc"), .addend = -1, .function = true },
                     }),
                 },
@@ -507,7 +548,17 @@ test "pack bytes round-trip every artifact field and spec entry" {
     var set = ProcArtifact.Set{ .arena = arena, .artifacts = artifacts };
     defer set.deinit();
     const specs = [_]SpecEntry{
-        .{ .key = [_]u8{0xab} ** 32, .artifact = 0, .rc_borrowed_params = 0b101, .rc_ret_borrowed = true, .rc_ret_lenders = 1 },
+        .{
+            .key = [_]u8{0xab} ** 32,
+            .artifact = 0,
+            .rc_borrowed_params = 0b101,
+            .rc_ret_borrowed = true,
+            .rc_ret_lenders = 1,
+            .rc_read_only_params = 0b100,
+            .rc_ret_unique = true,
+            .rc_ret_unique_fields = 0b10,
+            .rc_ret_conditions = &.{ 0x0001_02ff, 0x0000_0403 },
+        },
     };
 
     const bytes = try write(testing.allocator, &set, &specs);
@@ -523,6 +574,10 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, &specs[0].key, &pack.specs[0].key);
     try testing.expectEqual(specs[0].rc_borrowed_params, pack.specs[0].rc_borrowed_params);
     try testing.expect(pack.specs[0].rc_ret_borrowed);
+    try testing.expectEqual(specs[0].rc_read_only_params, pack.specs[0].rc_read_only_params);
+    try testing.expect(pack.specs[0].rc_ret_unique);
+    try testing.expectEqual(specs[0].rc_ret_unique_fields, pack.specs[0].rc_ret_unique_fields);
+    try testing.expectEqualSlices(u32, specs[0].rc_ret_conditions, pack.specs[0].rc_ret_conditions);
     const proc = pack.set.artifacts[0];
     try testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(7).bytes, &proc.kind.proc.bytes);
     try testing.expectEqualSlices(u8, artifacts[0].code, proc.code);
@@ -532,14 +587,16 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualDeep(artifacts[0].lines, proc.lines);
     try testing.expectEqual(ProcArtifact.Form.addr, proc.refs[1].form);
     try testing.expectEqual(@as(u32, 9), proc.relocations[1].offset);
-    try testing.expectEqualStrings("roc__static_1", proc.relocations[1].name);
+    try testing.expectEqualStrings("roc__d1", proc.relocations[1].name);
+    try testing.expectEqual(ProcArtifact.SymbolScope.program, proc.relocations[1].scope);
+    try testing.expectEqual(ProcArtifact.SymbolScope.shared, proc.relocations[0].scope);
     try testing.expectEqual(RelocationMod.DataRelocationKind.rel32, proc.relocations[1].kind.data);
     try testing.expectEqual(@as(u32, 0x1000), proc.frame.?.callee_saved_mask);
     try testing.expectEqual(@as(usize, 2), proc.data.len);
-    try testing.expectEqualStrings("roc__static_str_ab", proc.data[0].name);
+    try testing.expectEqualStrings("roc__hab", proc.data[0].name);
     try testing.expectEqual(@as(u32, 2), proc.data[0].symbol_offset);
     try testing.expectEqual(@as(usize, 0), proc.data[0].relocations.len);
-    try testing.expectEqualStrings("roc__static_data_cd", proc.data[1].name);
+    try testing.expectEqualStrings("roc__hcd", proc.data[1].name);
     try testing.expectEqual(@as(usize, 2), proc.data[1].relocations.len);
     try testing.expectEqual(@as(u32, 8), proc.data[1].relocations[1].offset);
     try testing.expectEqual(@as(i64, -1), proc.data[1].relocations[1].addend);
@@ -556,4 +613,108 @@ test "pack bytes round-trip every artifact field and spec entry" {
     try testing.expectEqualSlices(u8, bytes, rewritten);
 
     try testing.expectError(error.MalformedPack, read(testing.allocator, bytes[0 .. bytes.len - 1]));
+}
+
+test "pack preserves independent and relation-dependent semantic summaries" {
+    const Attempt = struct {
+        fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
+            const set = ProcArtifact.Set{
+                .arena = std.heap.ArenaAllocator.init(allocator),
+                .artifacts = &.{.{
+                    .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+                    .code = "code",
+                    .entry = 0,
+                    .frame = null,
+                    .refs = &.{},
+                    .relocations = &.{},
+                    .data = &.{},
+                }},
+            };
+            const bytes = try write(allocator, &set, &.{.{
+                .key = [_]u8{7} ** 32,
+                .artifact = 0,
+                .platform_requirement_relation = relation,
+                .rc_borrowed_params = 1,
+                .rc_ret_borrowed = true,
+                .rc_ret_lenders = 1,
+                .rc_read_only_params = 1,
+                .rc_ret_unique = true,
+                .rc_ret_unique_fields = 2,
+                .rc_ret_conditions = &.{0x0001_02ff},
+            }});
+            defer allocator.free(bytes);
+            var pack = try read(allocator, bytes);
+            defer pack.deinit();
+            try std.testing.expectEqualDeep(relation, pack.specs[0].platform_requirement_relation);
+            const rewritten = try write(allocator, &pack.set, pack.specs);
+            defer allocator.free(rewritten);
+            try std.testing.expectEqualSlices(u8, bytes, rewritten);
+            // A previous contract must decline before admitting any summary.
+            const old = try allocator.dupe(u8, bytes);
+            defer allocator.free(old);
+            std.mem.writeInt(u32, old[4..8], format_version - 1, .little);
+            try std.testing.expectError(error.UnsupportedPackVersion, read(allocator, old));
+        }
+    };
+    for ([_]?[32]u8{ null, [_]u8{0} ** 32, [_]u8{9} ** 32 }) |relation| {
+        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{relation});
+    }
+}
+
+test "pack writes program-local constants and every reference to them under content names" {
+    const testing = std.testing;
+    // Two programs gave one program-local name to different constants.
+    const names = [_][]const u8{ "first", "second" };
+    var packed_names: [names.len][]const u8 = undefined;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    for (names, 0..) |bytes, index| {
+        const set = ProcArtifact.Set{
+            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .artifacts = &.{.{
+                .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+                .code = "code",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{},
+                .relocations = &.{.{ .offset = 0, .name = "roc__d1", .scope = .program, .kind = .{ .data = .rel32 } }},
+                .data = &.{
+                    .{
+                        .name = "roc__d1",
+                        .bytes = "\x00" ** 8,
+                        .alignment = 8,
+                        .symbol_offset = 0,
+                        .relocations = &.{.{ .offset = 0, .name = "roc__d1_1", .addend = 16, .function = false }},
+                        .program_local_name = true,
+                    },
+                    .{
+                        .name = "roc__d1_1",
+                        .bytes = bytes,
+                        .alignment = 8,
+                        .symbol_offset = 0,
+                        .relocations = &.{.{ .offset = 0, .name = "roc__d1_1", .addend = 0, .function = false, .external = true }},
+                        .program_local_name = true,
+                    },
+                },
+            }},
+        };
+        const encoded = try write(testing.allocator, &set, &.{});
+        defer testing.allocator.free(encoded);
+        var pack = try read(testing.allocator, encoded);
+        defer pack.deinit();
+        const artifact = pack.set.artifacts[0];
+        const root = artifact.data[0];
+        const node = artifact.data[1];
+        try testing.expect(std.mem.startsWith(u8, root.name, ProcArtifact.content_data_prefix));
+        try testing.expect(std.mem.startsWith(u8, node.name, ProcArtifact.content_data_prefix));
+        try testing.expectEqualStrings(root.name, artifact.relocations[0].name);
+        // Named by content, the reference means the same in every program.
+        try testing.expectEqual(ProcArtifact.SymbolScope.shared, artifact.relocations[0].scope);
+        try testing.expectEqualStrings(node.name, root.relocations[0].name);
+        // An external binding keeps the linking image's name, even one the
+        // set also carries a datum under.
+        try testing.expectEqualStrings("roc__d1_1", node.relocations[0].name);
+        packed_names[index] = try arena.allocator().dupe(u8, node.name);
+    }
+    try testing.expect(!std.mem.eql(u8, packed_names[0], packed_names[1]));
 }

@@ -104,10 +104,21 @@ cd "$repo_root"
 # List.repeat allocation setup calls the runtime allocator symbol directly, so
 # no adapter address is materialized and no allocator callback is loaded. The
 # compare, byte-tail, and fill loops keep their load, load, compare, advance
-# shape. Combined with the padding change above, the counts stay 97 and 100.
+# shape.
+# Emitting unchecked list append directly in LLVM exposes the List.repeat
+# stores without the builtin call boundary. With bool_likely on List.get's
+# successful bounds checks, the combined pipeline emits 94 instructions on
+# each target. Both retain the guarded eight-byte load/compare loop, the
+# guarded byte tail, and the first-difference bit count. The byte tail's
+# out-of-bounds branches leave the hot loop.
+# A crash exit now ends in a trap after the call to the host's crash handler,
+# because a host must never return from `roc_crashed`. On x64musl that is one
+# `ud2`, 94 to 95. On arm64musl the crash exit used to return a zeroed result
+# to the caller, which needed its own epilogue; it is now the call and a `brk`,
+# 94 to 90. The compare, byte-tail, and fill loops are unchanged.
 expectations=(
-    "x64musl:97"
-    "arm64musl:100"
+    "x64musl:95"
+    "arm64musl:90"
 )
 
 failed=0

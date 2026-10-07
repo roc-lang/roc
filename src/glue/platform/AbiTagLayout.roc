@@ -1,4 +1,4 @@
-import AbiFieldLayout exposing [AbiFieldLayout]
+import AbiFieldLayout
 
 ## Exact committed layout for one tag-union variant payload.
 ##

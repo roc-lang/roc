@@ -29,7 +29,6 @@ pub const LambdaMono = struct {
     pub const Ast = @import("lambda_mono/ast.zig");
     pub const Type = @import("lambda_mono/type.zig");
     pub const Lower = @import("lambda_mono/lower.zig");
-    pub const Specialize = @import("lambda_mono/specialize.zig");
     pub const Eval = @import("lambda_mono/eval.zig");
 };
 /// Decision-tree match compiler used by the direct solved-to-LIR lowering.
@@ -54,6 +53,7 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("monotype/solve.zig"));
     std.testing.refAllDecls(@import("monotype/specialize.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/ast.zig"));
+    std.testing.refAllDecls(@import("monotype_lifted/body_shard_test.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/lift.zig"));
     std.testing.refAllDecls(@import("monotype_lifted/spec_constr.zig"));
     std.testing.refAllDecls(@import("lambda_solved/ast.zig"));
@@ -62,11 +62,11 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("lambda_mono/ast.zig"));
     std.testing.refAllDecls(@import("lambda_mono/type.zig"));
     std.testing.refAllDecls(@import("lambda_mono/lower.zig"));
-    std.testing.refAllDecls(@import("lambda_mono/specialize.zig"));
     std.testing.refAllDecls(@import("lambda_mono/eval.zig"));
     std.testing.refAllDecls(@import("match_tree.zig"));
     std.testing.refAllDecls(@import("solved_inline.zig"));
     std.testing.refAllDecls(@import("solved_lir_lower.zig"));
+    std.testing.refAllDecls(@import("proc_identity.zig"));
     std.testing.refAllDecls(@import("structural_test.zig"));
 }
 

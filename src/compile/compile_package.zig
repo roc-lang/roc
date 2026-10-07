@@ -24,7 +24,18 @@ pub const TimingInfo = struct {
     canonicalize_diagnostics_ns: u64 = 0,
     type_checking_ns: u64 = 0,
     check_diagnostics_ns: u64 = 0,
+    /// Compile-time evaluation run inside individual module checks, summed
+    /// across the worker threads that ran those checks.
+    module_compile_time_evaluation_ns: u64 = 0,
+    /// Wall time of whole-program finalization, which runs after every module
+    /// has been checked.
+    program_finalization_ns: u64 = 0,
+    /// Compile-time evaluation and shared lowering performed by whole-program
+    /// finalization.
     compile_time_evaluation: eval.CompileTimeFinalization.TimingSnapshot = .{},
+    /// Deterministic lowering and emission counters from all compile-time
+    /// evaluation, whether run inside module checks or program finalization.
+    compile_time_counters: eval.CompileTimeFinalization.TimingSnapshot = .{},
 };
 const Allocator = std.mem.Allocator;
 
@@ -105,6 +116,7 @@ pub const ArtifactPublicationInputs = struct {
     platform_requirement_solutions: []const check.RequirementSolution.SolutionInput = &.{},
     explicit_roots: []const CheckedArtifact.ExplicitRootRequestInput = &.{},
     hoisted_roots: []const check.HoistRoots.SelectedHoistedRoot = &.{},
+    promoted_local_procedures: []const check.HoistRoots.PromotedLocalProcedure = &.{},
     problem_store: ?*check.problem.Store = null,
     ctfe_options: eval.CompileTimeFinalization.Options = .{},
     evaluation_phase: @FieldType(CheckedArtifact.PublishInputs, "evaluation_phase") = .immediate,
@@ -181,7 +193,7 @@ fn appendCheckOwnerEnvPublicDependencies(
         entry.value_ptr.* = {};
 
         const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
-            std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+            base.invariant("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
         };
         try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
         try appendCheckOwnerEnvPublicDependencies(
@@ -451,7 +463,7 @@ pub fn typeCheckModule(
     module_envs_map.deinit();
 
     if (!importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts)) {
-        std.debug.panic("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
+        base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(
@@ -465,6 +477,7 @@ pub fn typeCheckModule(
             .platform_requirement_solutions = checker.platformRequirementSolutions(),
             .explicit_roots = explicit_roots,
             .hoisted_roots = checker.selectedHoistedRoots(),
+            .promoted_local_procedures = checker.promotedLocalProcedures(),
             .available_artifacts = available_artifacts,
             .problem_store = &checker.problems,
             .ctfe_options = ctfe_options,
@@ -539,6 +552,7 @@ pub fn publishFromPrebuiltModules(
             .platform_requirement_solutions = publication.platform_requirement_solutions,
             .explicit_roots = publication.explicit_roots,
             .hoisted_roots = publication.hoisted_roots,
+            .promoted_local_procedures = publication.promoted_local_procedures,
             .compile_time_finalizer = eval.CompileTimeFinalization.finalizerWithOptions(&ctfe_options),
             .evaluation_phase = publication.evaluation_phase,
             .problem_store = publication.problem_store,

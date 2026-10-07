@@ -10,26 +10,33 @@ poly = || { crash "x" }
 result = poly().to_i128()
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_unresolved_method.md:3:10:3:16
+TYPE NOT DETERMINED - static_dispatch_unresolved_method.md:3:10:3:16
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 3 10) (end 3 16))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "static_dispatch_unresolved_method.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly().to_i128()"))
 			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "to_i128")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -81,7 +88,7 @@ result = poly().to_i128()
 							(e-literal (string "x"))))))))
 	(d-let
 		(p-assign (ident "result"))
-		(e-dispatch-call (method "to_i128") (constraint-fn-var 224)
+		(e-dispatch-call (method "to_i128") (constraint-fn-var 229)
 			(receiver
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(args))))

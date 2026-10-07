@@ -87,7 +87,6 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Put the other module in the env map using module_env's ident store
@@ -261,7 +260,6 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     // Parse the AST
@@ -368,7 +366,6 @@ pub fn countModuleNotFoundDiagnosticsAfterCanonicalization(module_name: []const 
     module_env.common.source = source;
     module_env.module_name = module_name;
     module_env.display_module_name_idx = try module_env.insertIdent(base.Ident.for_text(module_name));
-    module_env.qualified_module_ident = module_env.display_module_name_idx;
     try module_env.common.calcLineStarts(gpa);
 
     const parse_ast = try parse.file(gpa, &module_env.common);
@@ -501,10 +498,7 @@ pub fn typeProblemCount(self: *TestEnv) TestEnvError!usize {
     for (self.checker.problems.problems.items) |problem| {
         var report = try report_builder.build(problem);
         defer report.deinit();
-        switch (report.severity) {
-            .runtime_error, .fatal => count += 1,
-            .warning => {},
-        }
+        count += @intFromBool(report.severity.isError());
     }
     return count;
 }
@@ -530,6 +524,44 @@ pub fn assertDefTypeOptions(self: *TestEnv, target_def_name: []const u8, expecte
     const def_var = try self.findDefVar(target_def_name);
     try self.type_writer.write(def_var, .wrap);
     try testing.expectEqualStrings(expected, self.type_writer.get());
+}
+
+/// The body of the named top-level definition whose pattern is a plain name.
+/// Recovery tests navigate from it to observe what checking left in a
+/// rejected program.
+pub fn defExpr(self: *const TestEnv, target_def_name: []const u8) TestEnvError!CIR.Expr.Idx {
+    const idents = self.module_env.getIdentStoreConst();
+    for (self.module_env.store.sliceDefs(self.module_env.all_defs)) |def_idx| {
+        const def = self.module_env.store.getDef(def_idx);
+        const pattern = self.module_env.store.getPattern(def.pattern);
+        if (pattern != .assign) continue;
+        if (std.mem.eql(u8, target_def_name, idents.getText(pattern.assign.ident))) return def.expr;
+    }
+    std.debug.print("Expected a top-level def named '{s}'\n", .{target_def_name});
+    return error.TestUnexpectedResult;
+}
+
+/// The statement at `stmt_index` in the block body of the named top-level
+/// lambda definition.
+pub fn lambdaBodyStatement(self: *const TestEnv, target_def_name: []const u8, stmt_index: usize) TestEnvError!CIR.Statement {
+    const store = &self.module_env.store;
+    const lambda = store.getExpr(try self.defExpr(target_def_name));
+    try testing.expect(lambda == .e_lambda);
+    const body = store.getExpr(lambda.e_lambda.body);
+    try testing.expect(body == .e_block);
+    const stmts = store.sliceStatements(body.e_block.stmts);
+    try testing.expect(stmt_index < stmts.len);
+    return store.getStatement(stmts[stmt_index]);
+}
+
+/// The final expression of the block that is a top-level lambda's body.
+pub fn lambdaBodyFinalExpr(self: *const TestEnv, target_def_name: []const u8) TestEnvError!CIR.Expr {
+    const store = &self.module_env.store;
+    const lambda = store.getExpr(try self.defExpr(target_def_name));
+    try testing.expect(lambda == .e_lambda);
+    const body = store.getExpr(lambda.e_lambda.body);
+    try testing.expect(body == .e_block);
+    return store.getExpr(body.e_block.final_expr);
 }
 
 fn findDefVar(self: *const TestEnv, target_def_name: []const u8) TestEnvError!Var {
@@ -887,6 +919,40 @@ pub fn assertTypeErrorTitles(self: *TestEnv, expected: []const []const u8) TestE
 
         try testing.expectEqualStrings(expected_title, report.title);
     }
+}
+
+/// Assert that no type problem's rendered report prints the erroneous type,
+/// which renders as the word `Error`. An erroneous value already owns its
+/// report, so no report relates it to anything else.
+pub fn assertNoReportRendersErrorType(self: *TestEnv) TestEnvError!void {
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    for (self.checker.problems.problems.items) |problem| {
+        var report = try report_builder.build(problem);
+        defer report.deinit();
+        try renderReportToMarkdownBuffer(&report_buf, &report);
+
+        const text = report_buf.items;
+        var start: usize = 0;
+        while (std.mem.findPos(u8, text, start, "Error")) |at| {
+            const end = at + "Error".len;
+            const before_ok = at == 0 or !isIdentByte(text[at - 1]);
+            const after_ok = end == text.len or !isIdentByte(text[end]);
+            if (before_ok and after_ok) {
+                std.debug.print("report renders the erroneous type:\n{s}\n", .{text});
+                return error.TestUnexpectedResult;
+            }
+            start = end;
+        }
+    }
+}
+
+fn isIdentByte(byte: u8) bool {
+    return std.ascii.isAlphanumeric(byte) or byte == '_';
 }
 
 /// Assert that canonicalization produced exactly one diagnostic with the expected title.

@@ -137,7 +137,7 @@ use warnings;
 no warnings 'portable';
 
 my @targets = (
-    [roc => qr/^_(?:main|host\.cMain|roc_main|roc__proc_[A-Za-z0-9_]+)$/],
+    [roc => qr/^_(?:main|host\.cMain|roc_main|roc__p[A-Za-z0-9_]+)$/],
     [pico => qr/^_(?:phr_parse_request|phr_parse_headers|parse_headers|parse_request)$/],
     [may => qr/^(?:__ZN8httparse25parse_headers_iter_uninit|__ZN8httparse7Request36parse_with_config_and_uninit_headers|__ZN12may_minihttp8response6encode|__ZN11roc_compare4main|_main|__ZN9generator5stack17StackBox.*call_once)/],
 );
@@ -252,7 +252,7 @@ print_hot_call_counts() {
             "roc_builtins_str_equal" \
             "roc_builtins_str_caseless_ascii_equals" \
             "roc_builtins_roc_crashed" \
-            "roc__proc_" \
+            "roc__p" \
             "parse_headers" \
             "parse_with_config_and_uninit_headers"
         do

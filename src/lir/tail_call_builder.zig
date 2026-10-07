@@ -1,6 +1,6 @@
 //! Procedure-local return-continuation proofs owned by LIR construction.
 //!
-//! Statement emission records self calls and join definitions. Finalization
+//! Statement emission records direct calls and join definitions. Finalization
 //! resolves only those calls' forwarding continuations, memoizing shared
 //! suffixes. No control-flow walk, path enumeration, or proof budget is needed.
 const std = @import("std");
@@ -61,28 +61,26 @@ pub fn reset(self: *Self, proc: LIR.LirProcSpecId) void {
 /// Called by the statement producer, including when filling a placeholder.
 pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator.Error!void {
     std.debug.assert(!self.published);
-    const proc = self.proc.?;
     switch (stmt) {
         .join => |join| {
             try self.joins.put(join.id, join.body);
             self.next_join = @max(self.next_join, @intFromEnum(join.id) + 1);
         },
-        .assign_call => |call| if (call.proc == proc) {
-            try self.calls.append(self.allocator, id);
-        },
+        .assign_call, .assign_call_erased => try self.calls.append(self.allocator, id),
         .init_uninitialized,
         .assign_ref,
         .assign_literal,
-        .assign_call_erased,
         .assign_packed_erased_fn,
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .boxy_tag_match,
@@ -117,30 +115,60 @@ pub fn record(self: *Self, id: LIR.CFStmtId, stmt: LIR.CFStmt) std.mem.Allocator
     }
 }
 
-/// Publish the exact self-tail sites after all producer fixups are complete.
-/// The linked list lives in the call nodes, so body-shard relocation carries
-/// the proof along with the calls without another store-wide side table.
+/// Publish the exact tail sites after all producer fixups are complete.
+/// Self-tail sites are linked through the call nodes, so body-shard relocation
+/// carries the proof along with the calls without another store-wide side
+/// table. A proven tail call to any other procedure, or through an erased
+/// function value, returns its value directly: its continuation is replaced
+/// by a `ret` of the call target, which is the form ARC's tail rules read.
 pub fn finish(self: *Self, store: anytype) std.mem.Allocator.Error!?LIR.TailCalls {
     std.debug.assert(!self.published);
     const proc = self.proc.?;
-    self.published = true;
+    const ret_layout = store.getProcSpec(proc).ret_layout;
     var head: ?LIR.CFStmtId = null;
     for (self.calls.items) |id| {
         const stmt = store.getCFStmt(id);
+        if (stmt == .assign_call_erased) {
+            const erased = stmt.assign_call_erased;
+            // A descriptor output is returned with the value only when it is
+            // the descriptor local of the value itself.
+            if (erased.out_desc) |out_desc| {
+                const target_desc = store.getLocal(erased.target).boxy_desc orelse continue;
+                if (target_desc.localOrNull() != out_desc) continue;
+            }
+            if (store.getCFStmt(erased.next) == .ret) continue;
+            if (store.getLocal(erased.target).layout_idx != ret_layout) continue;
+            const returned = try self.returnedLocal(store, erased.next) orelse continue;
+            if (returned != erased.target) continue;
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = erased.target } }, store.stmtOrigin(id));
+            store.getCFStmtPtr(id).assign_call_erased.next = ret;
+            continue;
+        }
         // A producer can move a provisional call and retire its old node.
         if (stmt != .assign_call) continue;
         const call = stmt.assign_call;
-        std.debug.assert(call.proc == proc);
         if (call.tail_call != null) continue;
-        // A runtime result descriptor is another call output; forwarding the
-        // value alone does not establish that descriptor's return contract.
-        if (call.out_desc != null) continue;
-        if (try self.returnedLocal(store, call.next)) |returned| {
-            if (returned != call.target) continue;
+        // A runtime result descriptor is another call output. It is returned
+        // with the value only when the callee writes it to the descriptor
+        // local this procedure returns, which is the value's own.
+        if (call.out_desc) |out_desc| {
+            if (store.getProcSpec(proc).runtime_ret_desc != out_desc) continue;
+            const target_desc = store.getLocal(call.target).boxy_desc orelse continue;
+            if (target_desc.localOrNull() != out_desc) continue;
+        }
+        const returned = try self.returnedLocal(store, call.next) orelse continue;
+        if (returned != call.target) continue;
+        // A self-call that returns a descriptor replaces its frame like a
+        // call to any other procedure; the loop form carries only the value.
+        if (call.proc == proc and call.out_desc == null) {
             store.getCFStmtPtr(id).assign_call.tail_call = .{ .next = head };
             head = id;
+        } else if (store.getCFStmt(call.next) != .ret and store.getLocal(call.target).layout_idx == ret_layout) {
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = call.target } }, store.stmtOrigin(id));
+            store.getCFStmtPtr(id).assign_call.next = ret;
         }
     }
+    self.published = true;
     return if (head) |first| .{ .head = first, .loop = @enumFromInt(self.next_join) } else null;
 }
 
@@ -170,10 +198,12 @@ fn successor(self: *const Self, stmt: LIR.CFStmt) ?LIR.CFStmtId {
         .assign_boxy_desc_ref,
         .assign_boxy_dict_ref,
         .assign_boxy_box,
+        .assign_boxy_record_update,
         .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_inspect,
         .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .boxy_tag_match,
@@ -248,10 +278,12 @@ fn returnedLocal(self: *Self, store: anytype, start: LIR.CFStmtId) std.mem.Alloc
                 .assign_boxy_desc_ref,
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
+                .assign_boxy_record_update,
                 .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_inspect,
                 .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,

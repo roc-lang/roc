@@ -6,7 +6,7 @@
 //! belong to later target-specific caches only.
 
 const std = @import("std");
-const Allocator = std.mem.Allocator;
+const Sha256 = @import("base").Sha256;
 const can = @import("can");
 const check = @import("check");
 
@@ -48,7 +48,7 @@ pub const CanonicalizedCacheKeyInput = struct {
 
 /// Compute the canonicalized-module cache key for one module.
 pub fn canonicalizedModuleCacheKey(input: CanonicalizedCacheKeyInput) CanonicalizedModuleCacheKey {
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    var hasher = Sha256.init(.{});
     hasher.update("roc-canonicalized-module-key-v1");
     hasher.update(&input.entry_version_hash);
     hashLengthPrefixed(&hasher, input.compiler_version);
@@ -70,7 +70,7 @@ pub fn canonicalizedKeyEql(a: CanonicalizedModuleCacheKey, b: CanonicalizedModul
 
 /// Feed `bytes` with an explicit length, so no two different field splits
 /// produce the same hash input.
-fn hashLengthPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) void {
+fn hashLengthPrefixed(hasher: *Sha256, bytes: []const u8) void {
     var len_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &len_bytes, bytes.len, .little);
     hasher.update(&len_bytes);
@@ -79,12 +79,6 @@ fn hashLengthPrefixed(hasher: *std.crypto.hash.sha2.Sha256, bytes: []const u8) v
 
 /// Public `CheckedModuleArtifactKey` declaration.
 pub const CheckedModuleArtifactKey = CheckedArtifact.CheckedModuleArtifactKey;
-
-/// Public `DirectImportArtifactKey` declaration.
-pub const DirectImportArtifactKey = struct {
-    import_order: u32,
-    key: CheckedModuleArtifactKey,
-};
 
 /// Public `CacheKeyInput` declaration.
 pub const CacheKeyInput = struct {
@@ -104,13 +98,6 @@ pub fn checkedModuleArtifactKey(input: CacheKeyInput) CheckedModuleArtifactKey {
     );
 }
 
-/// Public `cacheFileName` function.
-pub fn cacheFileName(allocator: std.mem.Allocator, key: CheckedModuleArtifactKey) std.mem.Allocator.Error![]u8 {
-    const filename = try allocator.alloc(u8, key.bytes.len * 2);
-    _ = std.fmt.bufPrint(filename, "{x}", .{&key.bytes}) catch unreachable;
-    return filename;
-}
-
 /// Public `eql` function.
 pub fn eql(a: CheckedModuleArtifactKey, b: CheckedModuleArtifactKey) bool {
     return std.mem.eql(u8, &a.bytes, &b.bytes);
@@ -126,7 +113,6 @@ fn moduleIdentity(byte: u8) CheckedArtifact.ModuleIdentity {
         .module_idx = byte,
         .module_name = @enumFromInt(@as(u32, byte)),
         .display_module_name = @enumFromInt(@as(u32, byte + 1)),
-        .qualified_module_name = @enumFromInt(@as(u32, byte + 2)),
         .kind = .app,
     };
 }

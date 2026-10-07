@@ -12,6 +12,7 @@
 //! ```
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 
@@ -387,6 +388,7 @@ fn compileWithCodeGen(
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
     defer rodata_relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
 
     var owned_proc_symbol_names = std.ArrayList([]u8).empty;
     defer {
@@ -400,8 +402,8 @@ fn compileWithCodeGen(
     var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
     defer seen_proc_symbol_names.deinit();
 
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &rodata_relocations, &symbols);
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     {
         // Readonly data named by native artifacts or spliced object-cache code
         // that this program did not define itself.
@@ -441,7 +443,7 @@ fn compileWithCodeGen(
                 .relocations = relocations,
             }) catch return CompilationError.OutOfMemory;
         }
-        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &rodata_relocations, &symbols);
+        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     }
 
     for (proc_specs, 0..) |_, i| {
@@ -449,13 +451,13 @@ fn compileWithCodeGen(
         if (proc_specs[i].is_static_initializer) continue;
         const proc_symbol = codegen.compiledProcSymbol(proc_id) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
+                invariant("ObjectFileCompiler invariant violated: LIR proc {d} was not compiled before symbol publication", .{i});
             }
             unreachable;
         };
         const symbol_name = static_data_export.procSymbolName(allocator, proc_specs[i].identity) catch return CompilationError.OutOfMemory;
         if (seen_proc_symbol_names.contains(symbol_name)) {
-            std.debug.panic("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
+            invariant("ObjectFileCompiler invariant violated: two LIR procs share the symbol {s}", .{symbol_name});
         }
         seen_proc_symbol_names.putNoClobber(symbol_name, {}) catch return CompilationError.OutOfMemory;
         owned_proc_symbol_names.append(allocator, symbol_name) catch {
@@ -487,7 +489,7 @@ fn compileWithCodeGen(
     for (static_rc_helpers) |helper_key| {
         const helper = codegen.compiledStaticDataRcHelperInfo(helper_key) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic(
+                invariant(
                     "ObjectFileCompiler invariant violated: static RC helper {x} was not compiled before symbol publication",
                     .{helper_key.encode()},
                 );
@@ -627,7 +629,7 @@ fn compileWithCodeGen(
             error.UnknownProcIdentity,
             error.UnknownRcHelper,
             error.RoundTripMismatch,
-            => std.debug.panic("dev artifact round trip failed: {s}", .{@errorName(err)}),
+            => invariant("dev artifact round trip failed: {s}", .{@errorName(err)}),
         };
     }
     const code = codegen.getGeneratedCode();
@@ -668,6 +670,7 @@ fn compileWithCodeGen(
         target,
         code,
         rodata.items,
+        zero_fill_size,
         resolved.symbols,
         relocations,
         rodata_relocations.items,
@@ -692,7 +695,7 @@ fn compileWithCodeGen(
     if (pack_mode or capture_artifacts) {
         artifacts = ProcArtifact.extract(CodeGen, allocator, &codegen, proc_specs, layout_store, static_strings.exports, static_data_exports, spliced_data.items) catch |err| switch (err) {
             error.OutOfMemory => return CompilationError.OutOfMemory,
-            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => std.debug.panic("pack artifact extraction failed: {s}", .{@errorName(err)}),
+            error.NestedCodeRegion, error.UncoveredCode, error.DanglingReference, error.UnsupportedRelocation => invariant("pack artifact extraction failed: {s}", .{@errorName(err)}),
         };
     }
 
@@ -753,10 +756,10 @@ pub fn spliceExternalProcs(
 
     for (external_procs) |proc_id| {
         const proc = proc_specs[@intFromEnum(proc_id)];
-        if (!proc.external) std.debug.panic("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
+        if (!proc.external) invariant("procedure {d} was offered for splicing but is not an object-cache entry", .{@intFromEnum(proc_id)});
         const located = source.find(source.context, proc.identity) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
+                invariant("object cache served a specialization whose artifact {s} is not in any loaded pack", .{&proc.identity.symbolHex()});
             }
             unreachable;
         };
@@ -772,7 +775,7 @@ fn appendDefinition(
     definitions: *std.ArrayList(SymbolDefinition),
     symbol: ObjectWriter.Symbol,
 ) Allocator.Error!void {
-    const id = try table.intern(allocator, symbol.name);
+    const id = try table.internEmitted(allocator, symbol.name);
     try definitions.append(allocator, .{ .id = id, .symbol = symbol });
 }
 
@@ -823,19 +826,22 @@ fn appendStaticDataExports(
     table: *SymbolTable.Table,
     exports: []const StaticDataExport,
     rodata: *std.ArrayList(u8),
+    zero_fill_size: *u64,
     relocations: *std.ArrayList(ObjectWriter.IndexedDataRelocation),
     symbols: *std.ArrayList(SymbolDefinition),
 ) CompilationError!void {
     const data_symbols = allocator.alloc(SymbolTable.Id, exports.len) catch return CompilationError.OutOfMemory;
     defer allocator.free(data_symbols);
-    for (exports, data_symbols) |data_export, *id| id.* = table.intern(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
+    for (exports, data_symbols) |data_export, *id| id.* = table.internEmitted(allocator, data_export.symbol_name) catch return CompilationError.OutOfMemory;
     var functions = collections.DenseMap(lir.LIR.LirProcSpecId, SymbolTable.Id).init(allocator);
     defer functions.deinit();
     var helpers = std.AutoHashMap(layout.RcHelperKey, SymbolTable.Id).init(allocator);
     defer helpers.deinit();
     for (exports, data_symbols) |data_export, definition_id| {
         const start = rodata.items.len;
-        try appendStaticDataExport(allocator, data_export, definition_id, rodata, symbols);
+        try appendStaticDataExport(allocator, data_export, definition_id, rodata, zero_fill_size, symbols);
+        // A zero-fill export has no relocations, so this offset is only ever
+        // used for exports placed in readonly data.
         const aligned_offset = std.mem.alignForward(usize, start, @intCast(data_export.alignment));
         for (data_export.relocations) |relocation| {
             const id = switch (relocation.target) {
@@ -843,17 +849,17 @@ fn appendStaticDataExports(
                 .named => blk: {
                     if (relocation.procedure) |proc| {
                         if (functions.get(proc)) |id| break :blk id;
-                        const id = table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                        const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         functions.put(proc, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
                     if (relocation.rc_helper) |helper| {
                         if (helpers.get(helper)) |id| break :blk id;
-                        const id = table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                        const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         helpers.put(helper, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
-                    break :blk table.intern(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
+                    break :blk table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                 },
             };
             relocations.append(allocator, .{
@@ -865,14 +871,47 @@ fn appendStaticDataExports(
     }
 }
 
+/// Whether an export is stored as zero-fill: bytes that are all zero and stay
+/// zero after linking, which excludes anything a relocation writes into.
+pub fn isZeroFillExport(data_export: StaticDataExport) bool {
+    if (data_export.bytes.len == 0 or data_export.relocations.len != 0) return false;
+    return std.mem.allEqual(u8, data_export.bytes, 0);
+}
+
 fn appendStaticDataExport(
     allocator: Allocator,
     data_export: StaticDataExport,
     id: SymbolTable.Id,
     rodata: *std.ArrayList(u8),
+    zero_fill_size: *u64,
     static_data_symbols: *std.ArrayList(SymbolDefinition),
 ) CompilationError!void {
     const alignment = @as(usize, @intCast(data_export.alignment));
+    const symbol_offset: usize = @intCast(data_export.symbol_offset);
+    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
+        invariant(
+            "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
+            .{ data_export.symbol_offset, data_export.bytes.len },
+        );
+    }
+    if (isZeroFillExport(data_export)) {
+        // The object declares the extent and stores none of the zeros.
+        const zero_fill_offset = std.mem.alignForward(u64, zero_fill_size.*, alignment);
+        zero_fill_size.* = zero_fill_offset + data_export.bytes.len;
+        static_data_symbols.append(allocator, .{ .id = id, .symbol = .{
+            .name = data_export.symbol_name,
+            .offset = zero_fill_offset + symbol_offset,
+            .size = data_export.bytes.len - symbol_offset,
+            .is_global = data_export.is_global,
+            .is_function = false,
+            .is_external = false,
+            .is_hidden = !data_export.is_exported,
+            .section = .zero_fill,
+        } }) catch {
+            return CompilationError.OutOfMemory;
+        };
+        return;
+    }
     const aligned_offset = std.mem.alignForward(usize, rodata.items.len, alignment);
     rodata.appendNTimes(allocator, 0, aligned_offset - rodata.items.len) catch {
         return CompilationError.OutOfMemory;
@@ -880,14 +919,6 @@ fn appendStaticDataExport(
     rodata.appendSlice(allocator, data_export.bytes) catch {
         return CompilationError.OutOfMemory;
     };
-
-    const symbol_offset: usize = @intCast(data_export.symbol_offset);
-    if (builtin.mode == .Debug and symbol_offset > data_export.bytes.len) {
-        std.debug.panic(
-            "ObjectFileCompiler invariant violated: static data symbol offset {d} exceeds byte length {d}",
-            .{ data_export.symbol_offset, data_export.bytes.len },
-        );
-    }
 
     static_data_symbols.append(allocator, .{ .id = id, .symbol = .{
         .name = data_export.symbol_name,
@@ -923,8 +954,9 @@ fn compileStaticDataObjectBytes(
 
     var rodata_relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
     defer rodata_relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
 
-    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
 
     // This object is linked separately from generated code. LLVM constant
     // expressions can reference any backing named by a frozen relocation,
@@ -944,6 +976,7 @@ fn compileStaticDataObjectBytes(
         target,
         &.{},
         rodata.items,
+        zero_fill_size,
         resolved.symbols,
         &.{},
         rodata_relocations.items,
@@ -1040,19 +1073,19 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
     var layouts = try layout.Store.init(allocator, @import("base").target.TargetUsize.native);
     defer layouts.deinit();
     const result_local = try store.addLocal(.{ .layout_idx = .i64 });
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } });
+    const ret = try store.addCFStmt(.{ .ret = .{ .value = result_local } }, .test_fixture);
     const body = try store.addCFStmt(.{ .assign_literal = .{
         .target = result_local,
         .value = .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } },
         .next = ret,
-    } });
+    } }, .test_fixture);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(1),
         .args = lir.LIR.LocalSpan.empty(),
         .body = body,
         .ret_layout = .i64,
-    });
+    }, .none);
     _ = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = lir.LIR.ProcIdentity.forTest(2),
@@ -1060,7 +1093,7 @@ test "ObjectFileCompiler native emission skips static initializers and captures 
         .body = body,
         .ret_layout = .i64,
         .is_static_initializer = true,
-    });
+    }, .none);
 
     var timing = ObjectFileCompiler.Timing.init(std.testing.io);
     var compiler = ObjectFileCompiler.initForPack(allocator);
@@ -1095,7 +1128,9 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
     const PackFile = @import("PackFile.zig");
     const text = "immutable runtime data survives its producer";
     const identity = lir.ProcIdentity.forTest(717);
-    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux, comptime RocTarget.detectNative() }) |target| {
+    // The native target joins the fixed ones only where native LIR codegen exists.
+    const native_targets = if (LirCodeGenMod.host_lir_codegen_available) .{comptime RocTarget.detectNative()} else .{};
+    inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| {
         var result = producer: {
             var arena = std.heap.ArenaAllocator.init(allocator);
             defer arena.deinit();
@@ -1105,19 +1140,19 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             var layouts = try layout.Store.init(a, .u64);
             defer layouts.deinit();
             const local = try store.addLocal(.{ .layout_idx = .str });
-            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } });
+            const ret = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);
             const body = try store.addCFStmt(.{ .assign_literal = .{
                 .target = local,
                 .value = .{ .static_data = @enumFromInt(7) },
                 .next = ret,
-            } });
+            } }, .test_fixture);
             _ = try store.addProcSpec(.{
                 .name = store.freshSyntheticSymbol(),
                 .identity = identity,
                 .args = .empty(),
                 .body = body,
                 .ret_layout = .str,
-            });
+            }, .none);
             const descriptor = try a.alloc(u8, 24);
             @memset(descriptor, 0);
             std.mem.writeInt(u64, descriptor[8..16], text.len << 1, .little);
@@ -1129,12 +1164,12 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
             const relocation = try a.alloc(StaticDataRelocation, 1);
             relocation[0] = .{
                 .offset = 0,
-                .target_symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .target_symbol_name = try a.dupe(u8, "roc__d7_1"),
                 .target = .{ .data_symbol = @enumFromInt(1) },
                 .addend = 8,
             };
             exports[0] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_producer_root"),
+                .symbol_name = try a.dupe(u8, "roc__d7"),
                 .value_id = @enumFromInt(7),
                 .bytes = descriptor,
                 .alignment = 8,
@@ -1142,14 +1177,14 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
                 .relocations = relocation,
             };
             exports[1] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_producer_leaf"),
+                .symbol_name = try a.dupe(u8, "roc__d7_1"),
                 .bytes = backing,
                 .symbol_offset = 8,
                 .alignment = 8,
                 .is_exported = false,
             };
             exports[2] = .{
-                .symbol_name = try a.dupe(u8, "roc__static_unreachable"),
+                .symbol_name = try a.dupe(u8, "roc__d8"),
                 .bytes = try a.dupe(u8, "must not travel in the pack"),
                 .alignment = 1,
                 .is_exported = false,
@@ -1170,8 +1205,8 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         try std.testing.expectEqual(@as(usize, 2), artifact.data.len);
         for (artifact.data) |item| {
             try std.testing.expect(std.mem.startsWith(u8, item.name, ProcArtifact.content_data_prefix));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_root"));
-            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__static_producer_leaf"));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7"));
+            try std.testing.expect(!std.mem.eql(u8, item.name, "roc__d7_1"));
             for (item.relocations) |relocation| {
                 try std.testing.expect(!relocation.external);
                 try std.testing.expect(std.mem.startsWith(u8, relocation.name, ProcArtifact.content_data_prefix));
@@ -1200,7 +1235,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
         defer data.deinit(allocator);
         try ProcArtifact.splice(CG, allocator, &receiver, &pack.set, &.{0}, &procs, &placed, &data);
         try receiver.finishImage();
-        if (comptime target == RocTarget.detectNative() and LirCodeGenMod.host_lir_codegen_available) {
+        if (comptime target == RocTarget.detectNative()) {
             var splice = @import("HostSplice.zig").HostSplice.init(allocator);
             defer splice.deinit();
             try splice.addDataItems(data.items);

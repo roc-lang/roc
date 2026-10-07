@@ -8,25 +8,6 @@
 
 const std = @import("std");
 
-/// Value location - where a computed value is stored
-pub const ValueLoc = union(enum) {
-    /// Value is in a general-purpose register
-    general_reg: u8,
-    /// Value is in a floating-point register
-    float_reg: u8,
-    /// Value is on the stack at offset from frame pointer
-    stack: i32,
-    /// Value is an immediate constant
-    immediate: i64,
-    /// Value is a floating-point immediate
-    float_immediate: f64,
-    /// Value is at a memory address (for large values)
-    memory: struct {
-        base_reg: u8,
-        offset: i32,
-    },
-};
-
 /// Numeric type kinds (matches CIR.NumKind)
 pub const NumKind = enum {
     u8,

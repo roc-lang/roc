@@ -67,7 +67,9 @@ a = () |> b()()()
 (can-ir
 	(d-let
 		(p-assign (ident "a"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure

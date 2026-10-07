@@ -20,6 +20,7 @@
 //! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -241,9 +242,6 @@ const Policy = struct {
     pub fn count(self: *const SerialStringInterner) u32 {
         return @intCast(self.ranges.items.items.len);
     }
-    pub fn entryCount(self: *const SerialStringInterner, _: *const Index) u32 {
-        return @intCast(self.ranges.items.items.len);
-    }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
     }
@@ -255,10 +253,16 @@ const Policy = struct {
     }
     pub fn appendEntry(self: *SerialStringInterner, gpa: Allocator, string: []const u8) Allocator.Error!Id {
         assertSupportsInserts(self.supports_inserts);
-        const id: u32 = @intCast(self.ranges.items.items.len);
-        const start: u32 = @intCast(self.bytes.items.items.len);
+        // Ids, byte offsets, and lengths are 32-bit, and index cells store
+        // `id + 1`; an interner past that range has exhausted the
+        // representable memory.
+        const id = std.math.cast(u32, self.ranges.items.items.len) orelse return error.OutOfMemory;
+        if (id == std.math.maxInt(u32)) return error.OutOfMemory;
+        const start = std.math.cast(u32, self.bytes.items.items.len) orelse return error.OutOfMemory;
+        const len = std.math.cast(u32, string.len) orelse return error.OutOfMemory;
+        _ = std.math.add(u32, start, len) catch return error.OutOfMemory;
         _ = try self.bytes.appendSlice(gpa, string);
-        _ = try self.ranges.append(gpa, .{ .start = start, .len = @intCast(string.len) });
+        _ = try self.ranges.append(gpa, .{ .start = start, .len = len });
         return id;
     }
     pub fn hash(string: []const u8) u64 {
@@ -270,7 +274,7 @@ fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
     if (comptime builtin.mode == .Debug) {
-        std.debug.panic("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
+        invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
 }
@@ -290,15 +294,6 @@ pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) A
         self.index = index.cells;
     }
     return index.insert(self, gpa, string);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// Used by serialized compiler artifacts whose internal pointers are stored
-/// relative to the artifact buffer.
-pub fn relocate(self: *SerialStringInterner, offset: isize) void {
-    self.bytes.relocate(offset);
-    self.ranges.relocate(offset);
-    self.index.relocate(offset);
 }
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,

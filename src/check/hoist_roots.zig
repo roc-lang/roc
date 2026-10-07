@@ -6,14 +6,6 @@ const can = @import("can");
 const CIR = can.CIR;
 const Allocator = std.mem.Allocator;
 
-/// Version tag for the checked-stage hoisted-root selection algorithm.
-pub const selection_algorithm_version: u64 = 6;
-
-/// Collection of hoisted roots selected for a checked module.
-pub const SelectedHoistedRootSet = struct {
-    roots: []const SelectedHoistedRoot,
-};
-
 /// Body metadata for a root that extracts a value from a pattern match.
 pub const PatternExtraction = struct {
     base_expr: CIR.Expr.Idx,
@@ -37,6 +29,11 @@ pub const Body = union(enum) {
     /// The payload retains the owning source pattern identity.
     pattern_error: CIR.Pattern.Idx,
     pattern_validation: PatternValidation,
+    /// An unannotated top-level value that always crashes binds nothing. The
+    /// root evaluates the binding's right-hand side for its effects, up to
+    /// where it crashes, and archives nothing. The payload is the binding's
+    /// pattern; the root does not materialize that binding.
+    valueless_binding: CIR.Pattern.Idx,
 };
 
 /// The runtime value shape produced by a selected root.
@@ -76,6 +73,24 @@ pub const SelectedHoistedRoot = struct {
     /// expression survives post-solve pruning. Checker-only ownership metadata;
     /// checked artifact publication does not persist it.
     validation_owner_expr: ?CIR.Expr.Idx = null,
+    /// Whether the root's expression is reached only through a branch, guard,
+    /// loop body, or expect body. A guarded root whose evaluation crashes is
+    /// not a diagnostic: the original expression stays in runtime lowering.
+    guarded: bool = false,
+};
+
+/// A local function binding the checker promoted to a procedure of its own.
+///
+/// Its lambda uses nothing from the function body that declares it: every
+/// captured name is itself a promoted local function, and the lambda refers to
+/// no type variable or type declaration of an enclosing function. Such a
+/// function is a top-level procedure written inside another function, so
+/// checked publication gives it its own procedure template and every use
+/// references that procedure.
+pub const PromotedLocalProcedure = struct {
+    pattern: CIR.Pattern.Idx,
+    /// The binding's lambda (`e_lambda`) or closure (`e_closure`) expression.
+    expr: CIR.Expr.Idx,
 };
 
 /// Clones a hoisted-root body into the caller's allocator when needed.
@@ -85,45 +100,21 @@ pub fn cloneBody(_: Allocator, body: Body) Allocator.Error!Body {
         .pattern_error => |pattern| .{ .pattern_error = pattern },
         .pattern_extraction => |extraction| .{ .pattern_extraction = extraction },
         .pattern_validation => |validation| .{ .pattern_validation = validation },
+        .valueless_binding => |pattern| .{ .valueless_binding = pattern },
     };
 }
 
 /// Releases allocator-owned data inside a hoisted-root body.
 pub fn deinitBody(_: Allocator, body: Body) void {
     switch (body) {
-        .expr, .pattern_error => {},
+        .expr, .pattern_error, .valueless_binding => {},
         .pattern_extraction => {},
         .pattern_validation => {},
     }
-}
-
-/// Clones a selected hoisted root into the caller's allocator.
-pub fn cloneSelectedRoot(allocator: Allocator, root: SelectedHoistedRoot) Allocator.Error!SelectedHoistedRoot {
-    return .{
-        .expr = root.expr,
-        .pattern = root.pattern,
-        .body = try cloneBody(allocator, root.body),
-        .value_kind = root.value_kind,
-        .validation_owner_expr = root.validation_owner_expr,
-    };
 }
 
 /// Releases allocator-owned data inside a selected hoisted root.
 pub fn deinitSelectedRoot(allocator: Allocator, root: *SelectedHoistedRoot) void {
     deinitBody(allocator, root.body);
     root.body = .expr;
-}
-
-/// Releases allocator-owned bodies for a slice of selected hoisted roots.
-pub fn deinitSelectedRootBodies(allocator: Allocator, roots: []const SelectedHoistedRoot) void {
-    for (roots) |*root| {
-        deinitBody(allocator, root.body);
-    }
-}
-
-/// Releases a selected-root slice and all allocator-owned bodies in it.
-pub fn freeSelectedRootSlice(allocator: Allocator, roots: []const SelectedHoistedRoot) void {
-    if (roots.len == 0) return;
-    deinitSelectedRootBodies(allocator, roots);
-    allocator.free(roots);
 }

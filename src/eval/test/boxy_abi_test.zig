@@ -133,31 +133,14 @@ fn customInspectSpecializesDescriptor(
     ret_desc.* = null;
 }
 
-test "boxy abi structural equality compares scalars through a descriptor" {
-    const allocator = std.testing.allocator;
-    var setup = try TestSetup.init(allocator);
-    defer setup.deinit();
-
-    const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-    };
-    try setup.startRuntime(allocator, .{ .type_descs = &descs });
-
-    var a: u64 = 42;
-    var b: u64 = 42;
-    var c: u64 = 7;
-    try std.testing.expect(boxy_abi.roc_boxy_eq(@ptrCast(&a), @ptrCast(&b), @intFromEnum(layout_mod.Idx.u64), &descs[0]));
-    try std.testing.expect(!boxy_abi.roc_boxy_eq(@ptrCast(&a), @ptrCast(&c), @intFromEnum(layout_mod.Idx.u64), &descs[0]));
-}
-
 test "boxy abi static descriptor lookup resolves ids to the descriptor table" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -173,10 +156,11 @@ test "boxy abi Box payload descriptor projection accepts both descriptor convent
     const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
         .{
             .payload_layout = box_layout,
             .contains_refcounted = true,
+            .shape = .erased,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
     };
@@ -201,7 +185,7 @@ test "boxy abi inspect renders a scalar through its descriptor" {
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -226,6 +210,7 @@ test "boxy abi inspect dispatches descriptor method and releases its owned resul
     const descs = [_]BoxyTypeDesc{.{
         .payload_layout = .u64,
         .contains_refcounted = false,
+        .shape = .primitive,
         .inspect_method = @enumFromInt(fixtureTableIndex(0)),
     }};
     const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
@@ -267,12 +252,12 @@ test "boxy abi reentrant inspect specialization keeps descriptors outside per-ca
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false, .inspect_method = @enumFromInt(fixtureTableIndex(0)) },
-        .{ .payload_layout = .u64, .contains_refcounted = false, .inspect_method = @enumFromInt(fixtureTableIndex(0)) },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive, .inspect_method = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive, .inspect_method = @enumFromInt(fixtureTableIndex(0)) },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
     };
     const desc_refs = [_]LIR.BoxyDescRef{.{ .static = @enumFromInt(fixtureTableIndex(0)) }};
     const method_slots = [_]LirProgram.BoxyMethodSlot{.{
@@ -342,7 +327,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
             .identity = LIR.ProcIdentity.forTest(2),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
-        });
+        }, .none);
         slot.* = .{ .method = inspect_method, .proc = proc, .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
@@ -350,6 +335,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
         desc.* = .{
             .payload_layout = .u64x2,
             .contains_refcounted = false,
+            .shape = .primitive,
             .inspect_method = @enumFromInt(index),
         };
         ref.* = .{ .static = @enumFromInt(index) };
@@ -403,6 +389,7 @@ test "issue 11170 boxy record inspect reborrows descriptor refs after a custom m
     const aggregate_desc = BoxyTypeDesc{
         .payload_layout = aggregate_layout,
         .contains_refcounted = false,
+        .shape = .tuple,
         .nested_descs = boxy_runtime.makeRuntimeBoxySpan(0, 2),
     };
     var values: [4]u64 align(16) = .{ 1, 2, 3, 4 };
@@ -436,11 +423,13 @@ test "boxy residual tags preserve runtime source and target spans while growing"
     const source = BoxyTypeDesc{
         .payload_layout = union_layout,
         .contains_refcounted = false,
+        .shape = .tag_union,
         .tag_variants = boxy_runtime.makeRuntimeBoxySpan(0, 4),
     };
     const target = BoxyTypeDesc{
         .payload_layout = union_layout,
         .contains_refcounted = false,
+        .shape = .tag_union,
         .tag_variants = boxy_runtime.makeRuntimeBoxySpan(1, 1),
     };
     const residual = try runtime.runtime.materializeTagResidualBoxyDescValues(&source, &target);
@@ -476,7 +465,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
             .identity = LIR.ProcIdentity.forTest(1),
             .args = LIR.LocalSpan.empty(),
             .ret_layout = .str,
-        });
+        }, .none);
         slot.* = .{ .method = inspect_method, .proc = proc, .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
@@ -484,6 +473,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
         desc.* = .{
             .payload_layout = .u64x2,
             .contains_refcounted = false,
+            .shape = .primitive,
             .inspect_method = @enumFromInt(index),
         };
         ref.* = .{ .static = @enumFromInt(index) };
@@ -548,6 +538,7 @@ test "boxy tag inspect preserves variant metadata across a custom method" {
     const aggregate_desc = BoxyTypeDesc{
         .payload_layout = union_layout,
         .contains_refcounted = false,
+        .shape = .tag_union,
         .tag_variants = boxy_runtime.makeRuntimeBoxySpan(0, 1),
     };
     var values: [4]u64 align(16) = .{ 1, 2, 3, 4 };
@@ -573,9 +564,10 @@ test "boxy abi custom inspect preserves a full descriptor across a payload-shape
         .{
             .payload_layout = aggregate_layout,
             .contains_refcounted = false,
+            .shape = .tuple,
             .inspect_method = @enumFromInt(fixtureTableIndex(0)),
         },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
     };
     const desc_refs = [_]LIR.BoxyDescRef{
         .{ .static = @enumFromInt(fixtureTableIndex(1)) },
@@ -650,7 +642,7 @@ test "boxy abi box and unbox round-trip a string payload with balanced refcounts
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -706,16 +698,18 @@ test "boxy abi list materialization preserves reserved capacity" {
         .{ .static = @enumFromInt(1) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
         .{
             .payload_layout = list_layout,
             .contains_refcounted = true,
+            .shape = .list,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
         .{
             .payload_layout = list_layout,
             .contains_refcounted = true,
+            .shape = .list,
             .nested_descs = .{ .start = 1, .len = 1 },
         },
     };
@@ -766,16 +760,18 @@ test "boxy abi call result completes an erased source list descriptor from the c
     const target_list_layout = try setup.layouts.insertLayout(layout_mod.Layout.list(.u64));
     const desc_refs = [_]LIR.BoxyDescRef{
         .{ .static = @enumFromInt(1) },
+        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = box_layout, .contains_refcounted = true },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = box_layout, .contains_refcounted = true, .shape = .erased },
         .{
             .payload_layout = source_list_layout,
             .contains_refcounted = true,
+            .shape = .list,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
-        .{ .payload_layout = target_list_layout, .contains_refcounted = true },
+        .{ .payload_layout = target_list_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 1, .len = 1 } },
     };
     try setup.startRuntime(allocator, .{
         .type_descs = &descs,
@@ -888,14 +884,14 @@ test "boxy abi call result transfers nested tag list ownership" {
         },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
-        .{ .payload_layout = .str, .contains_refcounted = true },
-        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
-        .{ .payload_layout = node_layout, .contains_refcounted = true, .tag_variants = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = node_layout, .contains_refcounted = true, .tag_variants = .{ .start = 1, .len = 1 } },
-        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .nested_descs = .{ .start = 4, .len = 1 } },
-        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .nested_descs = .{ .start = 5, .len = 1 } },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = node_layout, .contains_refcounted = true, .shape = .tag_union, .tag_variants = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = node_layout, .contains_refcounted = true, .shape = .tag_union, .tag_variants = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 4, .len = 1 } },
+        .{ .payload_layout = list_node_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 5, .len = 1 } },
     };
     try setup.startRuntime(allocator, .{
         .type_descs = &descs,
@@ -967,10 +963,10 @@ test "boxy abi relabel adapter transfers a list allocation unchanged" {
         .{ .static = @enumFromInt(1) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = list_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 1, .len = 1 } },
     };
     const adapters = [_]LirProgram.BoxyAdapter{.{
         .kind = .boxy_to_boxy,
@@ -1018,9 +1014,9 @@ test "boxy abi move adapter transfers unique boxed list elements" {
         .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = source_list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = target_list_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = source_list_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = target_list_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 1, .len = 1 } },
     };
     const adapters = [_]LirProgram.BoxyAdapter{.{
         .kind = .boxy_to_boxy,
@@ -1092,21 +1088,23 @@ test "boxy abi move adapter releases tag payloads across differing discriminants
         .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
     }};
     const variants = [_]LirProgram.BoxyTagVariant{
-        .{ .name = name_a, .discriminant = 0, .payload_layout = .u64, .payload_count = 1 },
+        .{ .name = name_a, .discriminant = 0, .payload_layout = .u64, .payload_count = 1, .payload_descs = .{ .start = 0, .len = 1 } },
         .{ .name = name_b, .discriminant = 1, .payload_layout = box_layout, .payload_count = 1, .payload_descs = .{ .start = 0, .len = 1 } },
-        .{ .name = name_b, .discriminant = 0, .payload_layout = .u64, .payload_count = 1 },
-        .{ .name = name_c, .discriminant = 1, .payload_layout = .u64, .payload_count = 1 },
+        .{ .name = name_b, .discriminant = 0, .payload_layout = .u64, .payload_count = 1, .payload_descs = .{ .start = 0, .len = 1 } },
+        .{ .name = name_c, .discriminant = 1, .payload_layout = .u64, .payload_count = 1, .payload_descs = .{ .start = 0, .len = 1 } },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
         .{
             .payload_layout = source_union_layout,
             .contains_refcounted = true,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 0, .len = 2 },
         },
         .{
             .payload_layout = target_union_layout,
             .contains_refcounted = false,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 2, .len = 2 },
         },
     };
@@ -1203,15 +1201,17 @@ test "boxy abi move adapter transfers a dynamic box into a target tag extension"
         .{ .name = name_err, .discriminant = 0, .payload_layout = .zst, .payload_count = 0 },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
         .{
             .payload_layout = source_union_layout,
             .contains_refcounted = true,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 0, .len = 1 },
         },
         .{
             .payload_layout = target_union_layout,
             .contains_refcounted = true,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 1, .len = 1 },
             .tag_ext_desc = .{ .static = @enumFromInt(1) },
         },
@@ -1291,11 +1291,11 @@ test "boxy abi moved reboxed payload transfers a nested list allocation" {
         .{ .static = @enumFromInt(2) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
-        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 1, .len = 1 } },
-        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .nested_descs = .{ .start = 2, .len = 1 } },
-        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .nested_descs = .{ .start = 3, .len = 1 } },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 1, .len = 1 } },
+        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .shape = .tuple, .nested_descs = .{ .start = 2, .len = 1 } },
+        .{ .payload_layout = struct_box_layout, .contains_refcounted = true, .shape = .tuple, .nested_descs = .{ .start = 3, .len = 1 } },
     };
     try setup.startRuntime(allocator, .{
         .type_descs = &descs,
@@ -1406,11 +1406,13 @@ test "boxy abi copied recursive tag retains boxed children" {
         .{
             .payload_layout = tree_layout,
             .contains_refcounted = true,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 0, .len = 2 },
         },
         .{
             .payload_layout = concrete_box_layout,
             .contains_refcounted = true,
+            .shape = .box,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
     };
@@ -1514,8 +1516,8 @@ test "boxy abi dynamic numeric literal encodes through the descriptor payload la
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-        .{ .payload_layout = .dec, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
+        .{ .payload_layout = .dec, .contains_refcounted = false, .shape = .primitive },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -1548,7 +1550,7 @@ test "boxy abi dynamic numeric literal publishes its default scalar descriptor" 
 
     const box_layout = try setup.layouts.insertLayout(layout_mod.Layout.erasedBox());
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = box_layout, .contains_refcounted = true },
+        .{ .payload_layout = box_layout, .contains_refcounted = true, .shape = .erased },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -1619,15 +1621,17 @@ test "boxy abi unbox specializes a concrete tag descriptor before materializatio
         },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u8, .contains_refcounted = false },
+        .{ .payload_layout = .u8, .contains_refcounted = false, .shape = .primitive },
         .{
             .payload_layout = source_union_layout,
             .contains_refcounted = true,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 0, .len = 1 },
         },
         .{
             .payload_layout = target_union_layout,
             .contains_refcounted = false,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 1, .len = 2 },
         },
     };
@@ -1718,6 +1722,7 @@ test "boxy abi tag construction, matching, and payload reads" {
         .{
             .payload_layout = union_layout,
             .contains_refcounted = false,
+            .shape = .tag_union,
             .tag_variants = .{ .start = 0, .len = 2 },
         },
     };
@@ -1789,9 +1794,9 @@ test "boxy abi copied tag payload owns its nested list" {
         },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
-        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .nested_descs = .{ .start = 0, .len = 1 } },
-        .{ .payload_layout = union_layout, .contains_refcounted = true, .tag_variants = .{ .start = 0, .len = 2 } },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
+        .{ .payload_layout = list_str_layout, .contains_refcounted = true, .shape = .list, .nested_descs = .{ .start = 0, .len = 1 } },
+        .{ .payload_layout = union_layout, .contains_refcounted = true, .shape = .tag_union, .tag_variants = .{ .start = 0, .len = 2 } },
     };
     try setup.startRuntime(allocator, .{
         .type_descs = &descs,
@@ -1866,10 +1871,11 @@ test "boxy abi descriptor copy materializes a template with local captures" {
         .{ .local = @enumFromInt(5) },
     };
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
         .{
             .payload_layout = erased_box,
             .contains_refcounted = true,
+            .shape = .erased,
             .nested_descs = .{ .start = 0, .len = 1 },
         },
     };
@@ -1980,8 +1986,8 @@ test "boxy abi dictionary call preserves a full descriptor across a payload-shap
         .{ .index = 1, .layout = .u64 },
     });
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = aggregate_layout, .contains_refcounted = false },
-        .{ .payload_layout = .u64, .contains_refcounted = false },
+        .{ .payload_layout = aggregate_layout, .contains_refcounted = false, .shape = .tuple },
+        .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
     };
     const desc_refs = [_]LIR.BoxyDescRef{
         .{ .static = @enumFromInt(fixtureTableIndex(1)) },
@@ -2041,82 +2047,13 @@ test "boxy abi dictionary call preserves a full descriptor across a payload-shap
     try std.testing.expectEqual(@as(?*const BoxyTypeDesc, null), out_desc);
 }
 
-test "boxy abi dictionary dispatch runs structural equality slots inline" {
-    const allocator = std.testing.allocator;
-    var setup = try TestSetup.init(allocator);
-    defer setup.deinit();
-
-    const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .u64, .contains_refcounted = false },
-    };
-    const desc_refs = [_]LirProgram.BoxyDescRef{
-        .{ .static = @enumFromInt(fixtureTableIndex(0)) },
-    };
-    const method_slots = [_]LirProgram.BoxyMethodSlot{
-        .{
-            .method = @enumFromInt(fixtureTableIndex(0)),
-            .proc = @enumFromInt(fixtureTableIndex(0)),
-            .hidden_descs = .{ .start = 0, .len = 1 },
-            .structural_eq = true,
-        },
-    };
-    const dicts = [_]LirProgram.BoxyDict{
-        .{ .method_slots = .{ .start = 0, .len = 1 } },
-    };
-    try setup.startRuntime(allocator, .{
-        .type_descs = &descs,
-        .desc_refs = &desc_refs,
-        .dicts = &dicts,
-        .method_slots = &method_slots,
-    });
-
-    var lhs: u64 = 42;
-    var rhs: u64 = 42;
-    const args = [_]boxy_abi.RocBoxyCallArg{
-        .{ .value = @ptrCast(&lhs), .layout = @intFromEnum(layout_mod.Idx.u64), .desc = null },
-        .{ .value = @ptrCast(&rhs), .layout = @intFromEnum(layout_mod.Idx.u64), .desc = null },
-    };
-    var out: u8 = 0;
-    var out_desc: ?*const BoxyTypeDesc = null;
-    boxy_abi.roc_boxy_call_dict(
-        @ptrCast(&out),
-        &out_desc,
-        &dicts[0],
-        0,
-        0,
-        &args,
-        args.len,
-        null,
-        0,
-        null,
-        @intFromEnum(layout_mod.Idx.bool),
-    );
-    try std.testing.expectEqual(@as(u8, 1), out);
-
-    rhs = 7;
-    boxy_abi.roc_boxy_call_dict(
-        @ptrCast(&out),
-        &out_desc,
-        &dicts[0],
-        0,
-        0,
-        &args,
-        args.len,
-        null,
-        0,
-        null,
-        @intFromEnum(layout_mod.Idx.bool),
-    );
-    try std.testing.expectEqual(@as(u8, 0), out);
-}
-
 test "boxy abi drop balances refcounts across incref and decref" {
     const allocator = std.testing.allocator;
     var setup = try TestSetup.init(allocator);
     defer setup.deinit();
 
     const descs = [_]BoxyTypeDesc{
-        .{ .payload_layout = .str, .contains_refcounted = true },
+        .{ .payload_layout = .str, .contains_refcounted = true, .shape = .primitive },
     };
     try setup.startRuntime(allocator, .{ .type_descs = &descs });
 
@@ -2165,6 +2102,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     try lowered.boxy_type_descs.append(fba_alloc, .{
         .payload_layout = .u64,
         .contains_refcounted = false,
+        .shape = .primitive,
     });
     try lowered.boxy_tag_variants.append(fba_alloc, .{
         .name = tag_name,
@@ -2190,14 +2128,7 @@ test "boxy abi sidecar view initializes the global runtime from image bytes" {
     try boxy_abi.initGlobalFromSidecarView(allocator, &view, env.get_ops());
     defer boxy_abi.deinitGlobal();
 
-    var a: u64 = 5;
-    var b: u64 = 5;
-    try std.testing.expect(boxy_abi.roc_boxy_eq(
-        @ptrCast(&a),
-        @ptrCast(&b),
-        @intFromEnum(layout_mod.Idx.u64),
-        &view.tables.type_descs[0],
-    ));
+    try std.testing.expectEqual(&view.tables.type_descs[0], boxy_abi.roc_boxy_static_desc(0));
 }
 
 test "boxy abi standalone sidecar preserves producer tag identities after literal removal" {
@@ -2210,10 +2141,11 @@ test "boxy abi standalone sidecar preserves producer tag identities after litera
         const missing = try lowered.store.insertBoxyName("Missing");
         const union_layout = try lowered.layouts.putTagUnion(&.{ .u64, .zst });
         try lowered.boxy_type_descs.appendSlice(allocator, &.{
-            .{ .payload_layout = .u64, .contains_refcounted = false },
+            .{ .payload_layout = .u64, .contains_refcounted = false, .shape = .primitive },
             .{
                 .payload_layout = union_layout,
                 .contains_refcounted = false,
+                .shape = .tag_union,
                 .tag_variants = .{ .start = 0, .len = 2 },
             },
         });

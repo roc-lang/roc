@@ -85,10 +85,22 @@ NO CHANGE
 			(args
 				(p-assign (ident "a"))
 				(p-assign (ident "b")))
-			(e-runtime-error (tag "erroneous_value_expr"))))
+			(e-structural-eq (negated "false")
+				(lhs
+					(e-record
+						(fields
+							(field (name "n")
+								(e-lookup-local
+									(p-assign (ident "a")))))))
+				(rhs
+					(e-record
+						(fields
+							(field (name "n")
+								(e-lookup-local
+									(p-assign (ident "b"))))))))))
 	(d-let
 		(p-assign (ident "x"))
-		(e-call (constraint-fn-var 236)
+		(e-call (constraint-fn-var 241)
 			(e-runtime-error (tag "erroneous_value_expr"))
 			(e-lambda
 				(args

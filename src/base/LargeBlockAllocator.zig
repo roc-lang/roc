@@ -23,12 +23,17 @@ const PageAllocator = std.heap.PageAllocator;
 
 const Self = @This();
 
-/// Requests of at least this many bytes are owned by this allocator. It
-/// matches the slab size above which `SmpAllocator` maps pages directly.
-pub const large_threshold: usize = 64 * 1024;
-const min_class_log2: u6 = std.math.log2_int(usize, large_threshold);
+/// Requests of at least this many bytes are owned by this allocator.
+/// `SmpAllocator` serves requests of up to half its 64 KiB slab from its size
+/// classes and maps every larger request directly, so ownership starts just
+/// above that largest slot.
+pub const large_threshold: usize = 32 * 1024 + 1;
+/// A size class: the base-2 logarithm of a length, rounded up. Its type holds
+/// every such logarithm of a `usize` on the target, including the word width.
+const Class = std.math.Log2IntCeil(usize);
+const min_class_log2: Class = std.math.log2_int_ceil(usize, large_threshold);
 /// Largest cached class; bigger blocks are mapped and unmapped directly.
-const max_class_log2: u6 = 30; // 1 GiB
+const max_class_log2: Class = 30; // 1 GiB
 const class_count = max_class_log2 - min_class_log2 + 1;
 /// Bytes retained per class beyond which a freed block is unmapped, so the
 /// cache bounds peak memory at a few times the live set rather than growing
@@ -76,13 +81,16 @@ const vtable: Allocator.VTable = .{
     .free = free,
 };
 
-fn classOf(len: usize) u6 {
+fn classOf(len: usize) Class {
     std.debug.assert(len >= large_threshold);
-    return @intCast(std.math.log2_int_ceil(usize, len));
+    return std.math.log2_int_ceil(usize, len);
 }
 
-fn classCapacity(class: u6) usize {
-    return @as(usize, 1) << class;
+/// Only cached classes have a capacity; larger requests keep their exact length.
+fn classCapacity(class: Class) usize {
+    std.debug.assert(class <= max_class_log2);
+    const shift: std.math.Log2Int(usize) = @intCast(class);
+    return @as(usize, 1) << shift;
 }
 
 fn isLarge(len: usize, alignment: Alignment) bool {
@@ -205,11 +213,12 @@ test "large blocks are recycled through their size class" {
 test "resize stays in place within a class and refuses class changes" {
     var wrapper = Self.init(std.testing.allocator);
     const a = wrapper.allocator();
-    var block = try a.alloc(u8, large_threshold + 1);
+    const class_capacity = classCapacity(min_class_log2);
+    var block = try a.alloc(u8, large_threshold);
     defer a.free(block);
-    try std.testing.expect(a.resize(block, large_threshold * 2));
-    block.len = large_threshold * 2;
-    try std.testing.expect(!a.resize(block, large_threshold * 2 + 1));
+    try std.testing.expect(a.resize(block, class_capacity));
+    block.len = class_capacity;
+    try std.testing.expect(!a.resize(block, class_capacity + 1));
     try std.testing.expect(!a.resize(block, large_threshold - 1));
 }
 

@@ -12,12 +12,15 @@ const core = @import("lir_core");
 const layout = @import("layout");
 const BodyClone = @import("body_clone.zig");
 const Trmc = @import("trmc.zig");
+const PruneJoinParams = @import("prune_join_params.zig");
 const ScalarizeJoins = @import("scalarize_joins.zig");
 const LoopAppendPromote = @import("loop_append_promote.zig");
 const RangeProve = @import("range_prove.zig");
 const BoxReuse = @import("box_reuse.zig");
 const ForwardingJoinInline = @import("forwarding_join_inline.zig");
 const TagCaseFusion = @import("tag_case_fusion.zig");
+const BranchExpectation = @import("branch_expectation.zig");
+const KnownTagJump = @import("known_tag_jump.zig");
 
 const Allocator = std.mem.Allocator;
 const LIR = core.LIR;
@@ -26,9 +29,11 @@ const TaskExecutor = base.post_check_task_executor;
 
 /// Phase boundaries preserve the established optimization order.
 pub const Phase = enum {
+    branch_expectation,
     trmc,
     forwarding_join,
     tag_fusion,
+    prune_join_params,
     scalarize,
     loop_append,
     range,
@@ -107,7 +112,7 @@ const TaskContext = struct {
     fn executeOnLane(self: *TaskContext, worker: TaskExecutor.Worker) Allocator.Error!void {
         const analysis = switch (self.phase) {
             .tag_fusion, .loop_append, .range, .box_reuse => try analysisForLane(worker.lane_state),
-            .trmc, .forwarding_join, .scalarize => null,
+            .branch_expectation, .trmc, .forwarding_join, .prune_join_params, .scalarize => null,
         };
         try self.execute(worker.allocator, worker.scratch, analysis);
     }
@@ -116,6 +121,7 @@ const TaskContext = struct {
         var shard = try self.source.cloneForProcRewrite(output_allocator, self.proc);
         errdefer shard.deinit();
         switch (self.phase) {
+            .branch_expectation => try BranchExpectation.runProc(&shard, self.proc, scratch_allocator),
             .trmc => self.trmc_report = try Trmc.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .forwarding_join, .tag_fusion => {
                 var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
@@ -125,9 +131,11 @@ const TaskContext = struct {
                     try ForwardingJoinInline.runProc(&shard, self.layouts, self.proc, scratch_allocator, &joins);
                 } else {
                     try TagCaseFusion.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, &joins, analysis.?);
+                    try KnownTagJump.runProc(&shard, self.proc, scratch_allocator, &joins);
                 }
                 self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
             },
+            .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
             .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
@@ -151,7 +159,7 @@ pub fn run(
     switch (phase) {
         .trmc => try Trmc.prepareLayouts(store, layouts),
         .box_reuse => try BoxReuse.prepareLayouts(store, layouts),
-        .forwarding_join, .tag_fusion, .scalarize, .loop_append, .range => {},
+        .branch_expectation, .forwarding_join, .tag_fusion, .prune_join_params, .scalarize, .loop_append, .range => {},
     }
     var contexts = std.ArrayList(TaskContext).empty;
     defer {
@@ -164,7 +172,7 @@ pub fn run(
             .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
             .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
             .scalarize => ScalarizeJoins.rewritableProcBody(store, proc),
-            .trmc, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
+            .branch_expectation, .trmc, .prune_join_params, .loop_append, .range, .box_reuse => BodyClone.rewritableProcBody(store, proc),
         };
         if (body == null) continue;
         const admitted = phaseAdmits(store, phase, proc);
@@ -183,7 +191,7 @@ pub fn run(
     // fresh joins above this boundary; ordered commit rebases only those IDs.
     const first_fresh_join = switch (phase) {
         .forwarding_join, .tag_fusion => BodyClone.firstFreshJoinPoint(store),
-        .trmc, .scalarize, .loop_append, .range, .box_reuse => 0,
+        .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .range, .box_reuse => 0,
     };
     for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
     const prefix = store.captureBodyPrefix();
@@ -242,7 +250,7 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
+            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
                 counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
@@ -279,12 +287,13 @@ pub fn run(
 fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bool {
     const shapes = store.getProcSpec(proc).shapes;
     return switch (phase) {
+        .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
         .loop_append => shapes.loop,
-        .forwarding_join => shapes.join_param,
+        .forwarding_join, .prune_join_params => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
-        .range => shapes.checked_arithmetic or shapes.switch_stmt,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.unsigned_compare or shapes.simd_concat_shift,
         .box_reuse => shapes.box_box,
     };
 }
@@ -336,25 +345,25 @@ test "procedure rewrite ownership includes statements reached through shared met
     var store = LirStore.init(allocator);
     defer store.deinit();
     const value = try store.addLocal(.{ .layout_idx = .u64 });
-    const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const shared_body = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = shared_body }});
     var contexts: [2]TaskContext = undefined;
     var initialized: usize = 0;
     defer for (contexts[0..initialized]) |*context| context.shard.?.deinit();
     for (&contexts, 0..) |*context, i| {
-        const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } });
+        const fallback = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
         const body = try store.addCFStmt(.{ .switch_stmt = .{
             .cond = value,
             .branches = branches,
             .default_branch = fallback,
-        } });
+        } }, .test_fixture);
         const proc = try store.addProcSpec(.{
             .identity = LIR.ProcIdentity.forTest(@intCast(i)),
             .name = store.freshSyntheticSymbol(),
             .args = try store.addLocalSpan(&.{value}),
             .body = body,
             .ret_layout = .u64,
-        });
+        }, .none);
         context.* = .{ .source = &store, .layouts = undefined, .phase = .tag_fusion, .proc = proc };
     }
     const prefix = store.captureBodyPrefix();
@@ -381,8 +390,8 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
     for (0..100000) |_| _ = try store.addLocal(.{ .layout_idx = .u64 });
     const high = try store.addLocal(.{ .layout_idx = .u64 });
     for (0..16) |index| {
-        const ret = try store.addCFStmt(.{ .ret = .{ .value = high } });
-        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } });
+        const ret = try store.addCFStmt(.{ .ret = .{ .value = high } }, .test_fixture);
+        const body = try store.addCFStmt(.{ .assign_ref = .{ .target = high, .op = .{ .local = low }, .next = ret } }, .test_fixture);
         _ = try store.addProcSpec(.{
             .name = store.freshSyntheticSymbol(),
             .identity = LIR.ProcIdentity.forTest(@intCast(index)),
@@ -390,7 +399,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .frame_locals = try store.addLocalSpan(&.{ low, high }),
             .body = body,
             .ret_layout = .u64,
-        });
+        }, .none);
     }
     var meter = testing.FailingAllocator.init(testing.allocator, .{});
     var lane = TaskExecutor.LaneState.init(meter.allocator());
@@ -451,8 +460,8 @@ test "issue 11325 lane registration and counting allocation failures release sto
         .identity = LIR.ProcIdentity.forTest(0),
         .args = try store.addLocalSpan(&.{local}),
         .frame_locals = try store.addLocalSpan(&.{local}),
-        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }),
+        .body = try store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture),
         .ret_layout = .u64,
-    });
+    }, .none);
     try testing.checkAllAllocationFailures(testing.allocator, testLaneCountingAllocation, .{ &store, &layouts, proc });
 }

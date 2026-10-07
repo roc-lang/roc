@@ -30,10 +30,9 @@ Format := [Default].{
 	skip_record_field : Format, State -> Try(State, [FormatError])
 	skip_record_field = |_, state| Ok(state)
 
-	# This deliberately has the wrong result type for the parser protocol.
-	# Since this parser retains MissingRequiredField in its own error row, the
-	# generated body never uses invalid_value and this unrelated declaration
-	# must not be constrained.
+	# This deliberately has the wrong result type for the parser protocol. A
+	# derived record parser reports a missing field as MissingRequiredField and
+	# never calls invalid_value, so this declaration must not be constrained.
 	invalid_value : Format, State -> {}
 	invalid_value = |_, _| {}
 }

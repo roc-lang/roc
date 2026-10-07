@@ -6,7 +6,13 @@ const base = @import("base");
 const Self = @This();
 
 /// Dense identity shared by Boxy statements, descriptors, and field names.
-pub const Id = enum(u32) { _ };
+pub const Id = enum(u32) {
+    /// Names a declared nominal record's unnamed padding field, which holds
+    /// no value: inspection skips it, and it corresponds only to the padding
+    /// field at the same position of another descriptor.
+    padding_field = std.math.maxInt(u32),
+    _,
+};
 
 /// Insertion uses the shared interner. Images retain only bytes and ranges;
 /// its hash index is compiler scratch and is never rebuilt by a runtime view.

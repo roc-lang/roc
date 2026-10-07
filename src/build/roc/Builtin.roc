@@ -279,9 +279,9 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
-					}
+				}
 			}
 
 			parse_trailing_commas : Str -> Try(a, [InvalidJson(Str), ..errs])
@@ -296,9 +296,9 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
-					}
+				}
 			}
 
 			parser_camel : () -> (Str -> Try(a, [InvalidJson(Str), ..errs]))
@@ -315,14 +315,14 @@ Builtin :: [].{
 							if Str.is_empty(json_trim_start(rest)) {
 								Ok(parsed.value)
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
-						}
+					}
 				}
 			}
 
-			invalid_json : [InvalidJson(Str), ..]
-			invalid_json = InvalidJson("Invalid JSON")
+			invalid_json : {} -> [InvalidJson(Str)]
+			invalid_json = |{}| InvalidJson("Invalid JSON")
 
 			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_bool = |raw| {
@@ -334,7 +334,7 @@ Builtin :: [].{
 				} else if Str.is_eq(parts.value, "false") {
 					Ok({ value: False, rest: JsonState.Input(json_trim_start(parts.after)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -346,7 +346,7 @@ Builtin :: [].{
 				if Str.is_eq(parts.value, "null") {
 					Ok(JsonState.Input(json_trim_start(parts.after)))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -359,7 +359,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "[") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "[")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -387,13 +387,13 @@ Builtin :: [].{
 						if JsonEncoding.allows_trailing_commas(encoding) {
 							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]")))))
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					} else {
 						Ok(Continue(JsonState.Input(after_comma)))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -405,7 +405,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(trimmed, "["))
@@ -414,10 +414,10 @@ Builtin :: [].{
 					if Str.starts_with(after_open, "]") {
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_open, "]"))))
 					} else {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					}
 				} else if Str.starts_with(after_open, "]") {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok(JsonState.Input(after_open))
 				}
@@ -428,7 +428,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
@@ -454,36 +454,41 @@ Builtin :: [].{
 					}
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
-			parse_json_unsigned_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_unsigned_int = |raw, parse_num| {
+			## Parse a JSON integer or float scalar with a numeric prefix parser. The prefix
+			## parser consumes the longest Roc numeric token; that token must also be a valid
+			## JSON literal and must end at a JSON scalar delimiter or at the end of input.
+			## Every Roc-only continuation (`_`, radix prefixes, `+`, `inf`, int exponents)
+			## is therefore consumed into the token and rejected by `is_json_literal`.
+			parse_json_number_prefix : Str, (Str -> { err : U8, rest : Str, value : a }), (Str -> Bool) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
+			parse_json_number_prefix = |raw, parse_prefix, is_json_literal| {
 				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				parsed = parse_prefix(trimmed)
 
-				if Json.is_json_unsigned_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
-					}
-				} else {
-					Err(Json.invalid_json)
+				if parsed.err != 0 {
+					return Err(Json.invalid_json({}))
 				}
-			}
 
-			parse_json_signed_int : Str, (Str -> Try(a, [BadNumStr])) -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
-			parse_json_signed_int = |raw, parse_num| {
-				trimmed = json_trim_start(raw)
-				parts = Json.split_json_scalar_tail(trimmed)?
+				rest_len = Str.count_utf8_bytes(parsed.rest)
+				ends_scalar = rest_len == 0 or is_json_scalar_delimiter(str_get_utf8_byte_unsafe(parsed.rest, 0))
 
-				if Json.is_json_signed_int_literal(parts.value) {
-					match parse_num(parts.value) {
-						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+				if !ends_scalar {
+					return Err(Json.invalid_json({}))
+				}
+
+				token = match Str.drop_last_bytes(trimmed, rest_len) {
+					Ok(t) => t
+					Err(BadUtf8) => {
+						crash "Json number prefix invariant violated: numeric token did not end on a UTF-8 boundary"
 					}
+				}
+
+				if is_json_literal(token) {
+					Ok({ value: parsed.value, rest: JsonState.Input(json_trim_start(parsed.rest)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -495,10 +500,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -518,7 +523,7 @@ Builtin :: [].{
 							Ok(split) => Ok({ mantissa: split.before, exponent: split.after })
 							Err(NotFound) => Err(NotFound)
 						}
-					}
+				}
 
 			dec_from_json_exponent_parts : Str, Str -> Try(Dec, [BadNumStr])
 			dec_from_json_exponent_parts = |mantissa, exponent_text| {
@@ -627,7 +632,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
@@ -642,10 +647,10 @@ Builtin :: [].{
 				if Json.is_json_unsigned_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -656,10 +661,10 @@ Builtin :: [].{
 				if Json.is_json_signed_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -670,10 +675,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -741,7 +746,7 @@ Builtin :: [].{
 			append_json_string_bytes : List(U8), Str -> List(U8)
 			append_json_string_bytes = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len)
+				var $out = u8_list_reserve_for_append(out, len)
 				var $index = 0
 
 				while $index < len {
@@ -755,7 +760,7 @@ Builtin :: [].{
 			append_json_quoted_string : List(U8), Str -> List(U8)
 			append_json_quoted_string = |out, value| {
 				len = Str.count_utf8_bytes(value)
-				var $out = u8_list_reserve(out, len + 2)
+				var $out = u8_list_reserve_for_append(out, len + 2)
 				var $index = 0
 
 				$out = u8_append($out, 34)
@@ -830,7 +835,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "{") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "{")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -868,7 +873,7 @@ Builtin :: [].{
 				}
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
@@ -878,7 +883,7 @@ Builtin :: [].{
 						after_record = json_trim_start(Str.drop_prefix(after_comma, "}"))
 						return Ok(Done(JsonState.Input(after_record)))
 					} else {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 				}
 
@@ -888,7 +893,7 @@ Builtin :: [].{
 			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_parts = Json.split_json_string_tail(Str.drop_prefix(remaining, "\""))?
@@ -896,7 +901,7 @@ Builtin :: [].{
 				after_key = json_trim_start(key_parts.after)
 
 				if !Str.starts_with(after_key, ":") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -957,7 +962,7 @@ Builtin :: [].{
 							if Json.is_json_scalar(scalar_parts.value) {
 								Ok(JsonState.Input(json_trim_start(scalar_parts.after)))
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
 						}
 					}
@@ -968,7 +973,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_field = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -979,14 +984,14 @@ Builtin :: [].{
 
 				while True {
 					if !Str.starts_with($after_field, "\"") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_skipped_key = skip_json_string_tail(Str.drop_prefix($after_field, "\""))?
 					after_key = json_trim_start(after_skipped_key)
 
 					if !Str.starts_with(after_key, ":") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -1001,7 +1006,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_value_trimmed, ","))
@@ -1010,7 +1015,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "}"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1025,7 +1030,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_value = json_trim_start(Str.drop_prefix(remaining, "["))
@@ -1046,7 +1051,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_nested_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_nested_value_trimmed, ","))
@@ -1055,7 +1060,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1081,19 +1086,19 @@ Builtin :: [].{
 							start_payloads: Json.start_string_tag_payloads,
 							next_payload: Json.next_string_tag_payload,
 							finish_payloads: Json.finish_string_tag_payloads,
-							missing: Json.invalid_json,
+							missing: Json.invalid_json({}),
 						},
 					)
 				}
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
 
 				if !Str.starts_with(after_open, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_split = Json.split_json_string_tail(Str.drop_prefix(after_open, "\""))
@@ -1104,17 +1109,17 @@ Builtin :: [].{
 						after_key = json_trim_start(key_parts.after)
 
 						if !Str.starts_with(after_key, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						payload = json_trim_start(Str.drop_prefix(after_key, ":"))
 
 						if Str.starts_with(payload, "}") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						if Str.starts_with(payload, ",") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						parsed = ParseTagUnionSpec.parse(
@@ -1126,7 +1131,7 @@ Builtin :: [].{
 								start_payloads: |state, count| Json.start_object_tag_payloads(encoding, state, count),
 								next_payload: |state, index, count| Json.next_object_tag_payload(encoding, state, index, count),
 								finish_payloads: |state, count| Json.finish_object_tag_payloads(encoding, state, count),
-								missing: Json.invalid_json,
+								missing: Json.invalid_json({}),
 							},
 						)?
 
@@ -1134,20 +1139,20 @@ Builtin :: [].{
 							Input(after_payload) => Json.finish_tag_payload(encoding, parsed.value, after_payload)
 						}
 					}
-					Err(_) => Err(Json.invalid_json)
+					Err(_) => Err(Json.invalid_json({}))
 				}
 			}
 
 			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
-			next_string_tag_payload = |_, _, _| Err(Json.invalid_json)
+			next_string_tag_payload = |_, _, _| Err(Json.invalid_json({}))
 
 			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			## A multi-payload tag writes its payloads as a JSON array, which is
 			## a fixed-arity sequence, so it reads back through the tuple
@@ -1171,7 +1176,7 @@ Builtin :: [].{
 			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
@@ -1203,10 +1208,10 @@ Builtin :: [].{
 						}
 					}
 
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
 			consume_empty_json_object : Str -> Try({ after : Str }, [InvalidJson(Str)])
@@ -1214,7 +1219,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -1222,7 +1227,7 @@ Builtin :: [].{
 				if Str.starts_with(after_open, "}") {
 					Ok({ after: Str.drop_prefix(after_open, "}") })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -1459,7 +1464,7 @@ Builtin :: [].{
 
 				if $found {
 					if $index == 0 {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					} else {
 						value = match Str.drop_last_bytes(raw, len - $index) {
 							Ok(v) => v
@@ -1472,7 +1477,7 @@ Builtin :: [].{
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok({ value: raw, after: "" })
 				}
@@ -1506,7 +1511,7 @@ Builtin :: [].{
 							rest = json_trim_start(string_parts.after)
 							Ok({ value: string_parts.value, rest: JsonState.Input(rest) })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}
@@ -1520,61 +1525,61 @@ Builtin :: [].{
 			parse_u8 : JsonEncoding, JsonState -> Try({ value : U8, rest : JsonState }, [InvalidJson(Str)])
 			parse_u8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u8_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i8 : JsonEncoding, JsonState -> Try({ value : I8, rest : JsonState }, [InvalidJson(Str)])
 			parse_i8 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i8_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i8_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u16 : JsonEncoding, JsonState -> Try({ value : U16, rest : JsonState }, [InvalidJson(Str)])
 			parse_u16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u16_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i16 : JsonEncoding, JsonState -> Try({ value : I16, rest : JsonState }, [InvalidJson(Str)])
 			parse_i16 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i16_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i16_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u32 : JsonEncoding, JsonState -> Try({ value : U32, rest : JsonState }, [InvalidJson(Str)])
 			parse_u32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u32_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i32 : JsonEncoding, JsonState -> Try({ value : I32, rest : JsonState }, [InvalidJson(Str)])
 			parse_i32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i32_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u64 : JsonEncoding, JsonState -> Try({ value : U64, rest : JsonState }, [InvalidJson(Str)])
 			parse_u64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u64_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i64 : JsonEncoding, JsonState -> Try({ value : I64, rest : JsonState }, [InvalidJson(Str)])
 			parse_i64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i64_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_u128 : JsonEncoding, JsonState -> Try({ value : U128, rest : JsonState }, [InvalidJson(Str)])
 			parse_u128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_unsigned_int(raw, u128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, u128_from_str_prefix_raw, Json.is_json_unsigned_int_literal)
 				}
 
 			parse_i128 : JsonEncoding, JsonState -> Try({ value : I128, rest : JsonState }, [InvalidJson(Str)])
 			parse_i128 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_signed_int(raw, i128_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, i128_from_str_prefix_raw, Json.is_json_signed_int_literal)
 				}
 
 			parse_dec : JsonEncoding, JsonState -> Try({ value : Dec, rest : JsonState }, [InvalidJson(Str)])
@@ -1586,13 +1591,13 @@ Builtin :: [].{
 			parse_f32 : JsonEncoding, JsonState -> Try({ value : F32, rest : JsonState }, [InvalidJson(Str)])
 			parse_f32 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f32_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f32_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_f64 : JsonEncoding, JsonState -> Try({ value : F64, rest : JsonState }, [InvalidJson(Str)])
 			parse_f64 = |_, state|
 				match state {
-					Input(raw) => Json.parse_json_number(raw, f64_from_str)
+					Input(raw) => Json.parse_json_number_prefix(raw, f64_from_str_prefix_raw, Json.is_json_number)
 				}
 
 			parse_null : JsonEncoding, JsonState -> Try(JsonState, [InvalidJson(Str)])
@@ -1698,7 +1703,7 @@ Builtin :: [].{
 						trimmed = json_trim_start(raw)
 
 						if !Str.starts_with(trimmed, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
@@ -1715,7 +1720,7 @@ Builtin :: [].{
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
 
 			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str)]
-			invalid_value = |_, _| Json.invalid_json
+			invalid_value = |_, _| Json.invalid_json({})
 
 			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
@@ -1889,7 +1894,7 @@ Builtin :: [].{
 						} else if Str.is_eq(parts.value, "false") {
 							Ok({ value: False, rest: parts.rest })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}
@@ -2224,6 +2229,14 @@ Builtin :: [].{
 			EncodesSurrogateHalf,
 		].{
 			is_eq : Utf8Problem, Utf8Problem -> Bool
+		}
+
+		Utf16Problem := [UnpairedHighSurrogate, UnpairedLowSurrogate, UnexpectedEndOfSequence].{
+			is_eq : Utf16Problem, Utf16Problem -> Bool
+		}
+
+		Utf32Problem := [CodePointTooLarge, SurrogateCodePoint, UnexpectedEndOfSequence].{
+			is_eq : Utf32Problem, Utf32Problem -> Bool
 		}
 
 		## Returns guidance about string length instead of a number.
@@ -2733,6 +2746,138 @@ Builtin :: [].{
 		## ```
 		from_utf8 : List(U8) -> Try(Str, [BadUtf8({ problem : Str.Utf8Problem, index : U64 })])
 
+		## Decodes little-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf16_le([65, 0]) == Ok("A")
+		## expect Str.from_utf16_le([]) == Ok("")
+		## ```
+		from_utf16_le : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+		from_utf16_le = |bytes| utf16_result(decode_utf16(bytes, True, False), 0)
+
+		## Decodes little-endian UTF-16 bytes, preserving U+FEFF as text.
+		## Replaces each unpaired surrogate and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf16_le_lossy([65, 0]) == "A"
+		## expect Str.from_utf16_le_lossy([65]) == "�"
+		## ```
+		from_utf16_le_lossy : List(U8) -> Str
+		from_utf16_le_lossy = |bytes| decode_utf16(bytes, True, True).string
+
+		## Decodes big-endian UTF-16 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf16_be([0, 65]) == Ok("A")
+		## expect Str.from_utf16_be([]) == Ok("")
+		## ```
+		from_utf16_be : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+		from_utf16_be = |bytes| utf16_result(decode_utf16(bytes, False, False), 0)
+
+		## Decodes big-endian UTF-16 bytes, preserving U+FEFF as text.
+		## Replaces each unpaired surrogate and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf16_be_lossy([0, 65]) == "A"
+		## expect Str.from_utf16_be_lossy([65]) == "�"
+		## ```
+		from_utf16_be_lossy : List(U8) -> Str
+		from_utf16_be_lossy = |bytes| decode_utf16(bytes, False, True).string
+
+		## Decodes UTF-16 bytes with a required leading byte order mark.
+		## Consumes exactly one marker; subsequent U+FEFF characters remain text.
+		## Missing, incomplete, or unrecognized markers return `MissingByteOrderMark`.
+		## Malformed payload indices are byte offsets in the original input, including the marker.
+		## ```roc
+		## expect Str.from_utf16_bom([255, 254]) == Ok("")
+		## expect Str.from_utf16_bom([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf16_bom : List(U8) -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 }), MissingByteOrderMark])
+		from_utf16_bom = |bytes| {
+			little_endian = utf16_byte_order(bytes)?
+			utf16_result(decode_utf16(List.drop_first(bytes, 2), little_endian, False), 2)
+		}
+
+		## Requires and consumes a leading UTF-16 byte order mark, then decodes lossily.
+		## A missing marker is an error; malformed payload is replaced with U+FFFD.
+		## ```roc
+		## expect Str.from_utf16_bom_lossy([255, 254]) == Ok("")
+		## expect Str.from_utf16_bom_lossy([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf16_bom_lossy : List(U8) -> Try(Str, [MissingByteOrderMark])
+		from_utf16_bom_lossy = |bytes| {
+			little_endian = utf16_byte_order(bytes)?
+			Ok(decode_utf16(List.drop_first(bytes, 2), little_endian, True).string)
+		}
+
+		## Decodes little-endian UTF-32 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf32_le([65, 0, 0, 0]) == Ok("A")
+		## expect Str.from_utf32_le([]) == Ok("")
+		## ```
+		from_utf32_le : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+		from_utf32_le = |bytes| utf32_result(decode_utf32(bytes, True, False), 0)
+
+		## Decodes little-endian UTF-32 bytes, preserving U+FEFF as text.
+		## Replaces each invalid scalar and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf32_le_lossy([65, 0, 0, 0]) == "A"
+		## expect Str.from_utf32_le_lossy([65]) == "�"
+		## ```
+		from_utf32_le_lossy : List(U8) -> Str
+		from_utf32_le_lossy = |bytes| decode_utf32(bytes, True, True).string
+
+		## Decodes big-endian UTF-32 bytes. Preserves U+FEFF, including at the start.
+		## Returns the first malformed sequence's zero-based byte offset and problem.
+		## A partial final code unit reports `UnexpectedEndOfSequence`; empty input succeeds.
+		## ```roc
+		## expect Str.from_utf32_be([0, 0, 0, 65]) == Ok("A")
+		## expect Str.from_utf32_be([]) == Ok("")
+		## ```
+		from_utf32_be : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+		from_utf32_be = |bytes| utf32_result(decode_utf32(bytes, False, False), 0)
+
+		## Decodes big-endian UTF-32 bytes, preserving U+FEFF as text.
+		## Replaces each invalid scalar and any partial final code unit with U+FFFD.
+		## Empty input returns an empty string.
+		## ```roc
+		## expect Str.from_utf32_be_lossy([0, 0, 0, 65]) == "A"
+		## expect Str.from_utf32_be_lossy([65]) == "�"
+		## ```
+		from_utf32_be_lossy : List(U8) -> Str
+		from_utf32_be_lossy = |bytes| decode_utf32(bytes, False, True).string
+
+		## Decodes UTF-32 bytes with a required leading byte order mark.
+		## Consumes exactly one marker; subsequent U+FEFF characters remain text.
+		## Missing, incomplete, or unrecognized markers return `MissingByteOrderMark`.
+		## Malformed payload indices are byte offsets in the original input, including the marker.
+		## ```roc
+		## expect Str.from_utf32_bom([255, 254, 0, 0]) == Ok("")
+		## expect Str.from_utf32_bom([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf32_bom : List(U8) -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 }), MissingByteOrderMark])
+		from_utf32_bom = |bytes| {
+			little_endian = utf32_byte_order(bytes)?
+			utf32_result(decode_utf32(List.drop_first(bytes, 4), little_endian, False), 4)
+		}
+
+		## Requires and consumes a leading UTF-32 byte order mark, then decodes lossily.
+		## A missing marker is an error; malformed payload is replaced with U+FFFD.
+		## ```roc
+		## expect Str.from_utf32_bom_lossy([255, 254, 0, 0]) == Ok("")
+		## expect Str.from_utf32_bom_lossy([]) == Err(MissingByteOrderMark)
+		## ```
+		from_utf32_bom_lossy : List(U8) -> Try(Str, [MissingByteOrderMark])
+		from_utf32_bom_lossy = |bytes| {
+			little_endian = utf32_byte_order(bytes)?
+			Ok(decode_utf32(List.drop_first(bytes, 4), little_endian, True).string)
+		}
+
 		## Converts a string literal to a [Str].
 		##
 		## The compiler calls this when a string literal's type is [Str], passing
@@ -2743,15 +2888,23 @@ Builtin :: [].{
 		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
 		from_quote = |str| Ok(str)
 
-		## Assembles an interpolated string literal.
+		## Converts an interpolated string literal to a [Str].
 		##
-		## The compiler calls this when a string literal contains interpolations:
-		## the first argument is the literal segment before the first
-		## interpolation, and the iterator yields each interpolated value paired
-		## with the literal segment that follows it.
-		from_interpolation : Str, Iter((Str, Str)) -> Str
-		from_interpolation = |first, rest|
-			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+		## The compiler calls this at compile time with the literal's segments: the
+		## text before the first interpolation, then the text after each one. It
+		## returns the function the compiler calls at runtime with the interpolated
+		## values, in order, to assemble the string.
+		## ```roc
+		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"])) == Ok("abc")
+		## ```
+		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
+		from_interpolation = |segments|
+			Ok(
+				|values| {
+					first = List.first(segments).ok_or("")
+					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+				},
+			)
 
 		## Split a string around a separator.
 		##
@@ -3049,6 +3202,7 @@ Builtin :: [].{
 		# The general unfold. `advance` maps a seed to either the next item paired with the
 		# next seed, or `NoMore`. `custom` owns rebuilding the rest from the new seed, so the
 		# seed type stays hidden inside the step closure and never appears in `Iter(item)`.
+		# `Known(n)` is a promise: yielding more than n items crashes. Fewer is allowed.
 		custom : state, [Known(U64), Unknown], (state -> Try((item, state), [NoMore])) -> Iter(item)
 		custom = |seed, len_if_known, advance|
 			iter_from_step(
@@ -3060,6 +3214,11 @@ Builtin :: [].{
 								item,
 								rest: Iter.custom(
 									next_seed,
+									# A source that outlives its `Known` count crashes on this
+									# subtraction, before the extra item reaches the unchecked
+									# append in `List.from_iter`. No extra branch here: ranges
+									# are built on `custom`, and loops rely on this step
+									# optimizing away completely.
 									match len_if_known {
 										Known(l) => Known(l - 1)
 										Unknown => Unknown
@@ -3140,11 +3299,11 @@ Builtin :: [].{
 						Unknown => Unknown
 					},
 					||
-					# Once `remaining_first` is exhausted it is kept (not swapped
-					# for `range_done()`) so `make`'s inner-iterator argument keeps
-					# a single monomorphic type for the whole chain. An exhausted
-					# iterator reports length 0 and its `next` stays `Done`, so this
-					# is length- and result-equivalent.
+						# Once `remaining_first` is exhausted it is kept (not swapped
+						# for `range_done()`) so `make`'s inner-iterator argument keeps
+						# a single monomorphic type for the whole chain. An exhausted
+						# iterator reports length 0 and its `next` stays `Done`, so this
+						# is length- and result-equivalent.
 						match Iter.next(remaining_first) {
 							Done =>
 								match Iter.next(remaining_second) {
@@ -3213,7 +3372,7 @@ Builtin :: [].{
 								One({ item, rest }) => One({ item: transform(item), rest: Iter.map(rest, transform) })
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that pairs each item with its position among the
 		## items this iterator yields. The first yielded item gets index `0`, and
@@ -3240,7 +3399,7 @@ Builtin :: [].{
 							} else {
 								Skip({ rest: Iter.keep_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		drop_if : Iter(a), (a -> Bool) -> Iter(a)
@@ -3257,16 +3416,19 @@ Builtin :: [].{
 							} else {
 								One({ item, rest: Iter.drop_if(rest, predicate) })
 							}
-						},
+					},
 			)
 
 		fold : Iter(a), acc, (acc, a -> acc) -> acc
-		fold = |iterator, acc, step|
-			match Iter.next(iterator) {
-				Done => acc
-				Skip({ rest }) => Iter.fold(rest, acc, step)
-				One({ item, rest }) => Iter.fold(rest, step(acc, item), step)
+		fold = |iterator, init, step| {
+			var $state = init
+
+			for item in iterator {
+				$state = step($state, item)
 			}
+
+			$state
+		}
 
 		## Sum the items of an iterator, without collecting them into a list first.
 		## Works for any type that implements `plus` and `default` methods, such as the
@@ -3365,7 +3527,8 @@ Builtin :: [].{
 		}
 
 		## Lift this pure iterator into an effectful [Stream], so it can be combined
-		## with effectful operations like [Stream.map].
+		## with effectful operations like [Stream.map]. A `for!` loop calls this on
+		## the iterator it loops over.
 		stream : Iter(item) -> Stream(item)
 		stream = |iterator| Stream.from_iter(iterator)
 
@@ -3406,7 +3569,7 @@ Builtin :: [].{
 								}
 							},
 					)
-				}
+			}
 
 		## Returns an iterator that skips the first `n` items of this iterator.
 		## If the source has `n` or fewer items, the result is empty.
@@ -3440,9 +3603,9 @@ Builtin :: [].{
 									} else {
 										Skip({ rest: Iter.drop_first(rest, n - 1) })
 									}
-								},
+							},
 					)
-				}
+			}
 
 		## Returns an iterator that yields the first item and then every `n`th item
 		## after it, skipping the `n - 1` items in between. A step of `0` yields an
@@ -3457,8 +3620,10 @@ Builtin :: [].{
 	}
 
 	## An effectful iterator: identical to [Iter] except that its `step!` thunk is
-	## effectful, so combinators like [Stream.map!] can run effects per item while
-	## staying lazy. Produced from an [Iter] via [Iter.map!] and driven by [Stream.collect!].
+	## effectful, so combinators like [Stream.map] can run effects per item while
+	## staying lazy. Produced from an [Iter] via [Iter.stream], or from an effectful
+	## source via [Stream.custom], and consumed by a `for!` loop, [Stream.fold!],
+	## [Stream.for_each!], or [Stream.collect!].
 	Stream(item) :: {
 		len_if_known : [Known(U64), Unknown],
 		step! : () => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done],
@@ -3469,75 +3634,230 @@ Builtin :: [].{
 		## Carries the source's length forward so [Stream.collect!] can pre-size.
 		from_iter : Iter(item) -> Stream(item)
 		from_iter = |iterator|
-			{
-				len_if_known: Iter.size_hint(iterator),
-				step!: ||
+			stream_from_step(
+				Iter.size_hint(iterator),
+				||
 					match Iter.next(iterator) {
 						Done => Done
 						Skip({ rest }) => Skip({ rest: Stream.from_iter(rest) })
 						One({ item, rest }) => One({ item, rest: Stream.from_iter(rest) })
 					},
-			}
+			)
+
+		## Build a lazy, effectful stream from a seed; the effectful counterpart of [Iter.custom].
+		## Each pull runs `advance!` exactly once: `Ok((item, next_state))` yields `item` and
+		## continues from `next_state`, while `Err(NoMore)` ends the stream. Building the
+		## stream runs no effects. `Known(n)` promises exactly n items; sources whose length
+		## is only discovered by reading (files, stdin, sockets) use `Unknown`. A source that
+		## yields more items than its `Known` count reports `Unknown` from then on.
+		##
+		## Source errors belong in `item` (e.g. `Try(List(U8), ReadErr)`). To stop after an
+		## error, yield it paired with a terminal state that holds no resource, so the
+		## resource is released rather than retained by the rest of the stream.
+		custom : state, [Known(U64), Unknown], (state => Try((item, state), [NoMore])) -> Stream(item)
+		custom = |seed, len_if_known, advance!|
+			stream_from_step(
+				len_if_known,
+				||
+					match advance!(seed) {
+						Ok((item, next_seed)) =>
+							One({
+								item,
+								rest: Stream.custom(
+									next_seed,
+									# A source that outlives its `Known` count degrades to
+									# `Unknown` instead of underflowing the countdown.
+									match len_if_known {
+										Known(0) => Unknown
+										Known(l) => Known(l - 1)
+										Unknown => Unknown
+									},
+									advance!,
+								),
+							})
+						Err(NoMore) => Done
+					},
+			)
 
 		## Transform each item of this stream. The transform may run effects; because
 		## the stream's steps are already effectful, building the mapped stream stays
 		## lazy (the transform runs only as the stream is driven).
 		map : Stream(a), (a => b) -> Stream(b)
-		map = |stream, transform!|
-			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
-						},
-				}
+		map = |source, transform!|
+			match source {
+				{ len_if_known, .. } =>
+					stream_from_step(
+						len_if_known,
+						||
+							match Stream.next!(source) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.map(rest, transform!) })
+								One({ item, rest }) => One({ item: transform!(item), rest: Stream.map(rest, transform!) })
+							},
+					)
 			}
 
 		## Transform each item of this stream with an effectful function.
 		map! : Stream(a), (a => b) => Stream(b)
-		map! = |stream, transform!|
-			match stream {
-				{ len_if_known, step! } => {
-					len_if_known,
-					step!: ||
-						match step!() {
-							Done => Done
-							Skip({ rest }) => Skip({ rest: Stream.map!(rest, transform!) })
-							One({ item, rest }) => One({ item: transform!(item), rest: Stream.map!(rest, transform!) })
+		map! = |stream, transform!| Stream.map(stream, transform!)
+
+		## Returns a stream that pairs each item with its position among the items
+		## this stream yields. The first yielded item gets index `0`, and the index
+		## only advances for items that are actually yielded.
+		with_index : Stream(a) -> Stream((U64, a))
+		with_index = |source| stream_with_index(source, 0)
+
+		## Returns a stream of only the items for which `predicate!` returns `Bool.True`.
+		## The predicate may run effects; it runs once per item as the stream is driven.
+		keep_if : Stream(a), (a => Bool) -> Stream(a)
+		keep_if = |source, predicate!|
+			stream_from_step(
+				Unknown,
+				||
+					match Stream.next!(source) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Stream.keep_if(rest, predicate!) })
+						One({ item, rest }) =>
+							if predicate!(item) {
+								One({ item, rest: Stream.keep_if(rest, predicate!) })
+							} else {
+								Skip({ rest: Stream.keep_if(rest, predicate!) })
+							}
+					},
+			)
+
+		## Returns a stream without the items for which `predicate!` returns `Bool.True`.
+		## The predicate may run effects; it runs once per item as the stream is driven.
+		drop_if : Stream(a), (a => Bool) -> Stream(a)
+		drop_if = |source, predicate!|
+			stream_from_step(
+				Unknown,
+				||
+					match Stream.next!(source) {
+						Done => Done
+						Skip({ rest }) => Skip({ rest: Stream.drop_if(rest, predicate!) })
+						One({ item, rest }) =>
+							if predicate!(item) {
+								Skip({ rest: Stream.drop_if(rest, predicate!) })
+							} else {
+								One({ item, rest: Stream.drop_if(rest, predicate!) })
+							}
+					},
+			)
+
+		## Returns a stream that yields at most the first `n` items of this stream.
+		## Once `n` items have been yielded, the source is not pulled again.
+		take_first : Stream(item), U64 -> Stream(item)
+		take_first = |source, n|
+			match source {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
+						Known(len) => Known(
+							if len < n {
+								len
+							} else {
+								n
+							},
+						)
+						Unknown => if n == 0 {
+							Known(0)
+						} else {
+							Unknown
+						}
+					},
+					||
+						if n == 0 {
+							Done
+						} else {
+							match Stream.next!(source) {
+								Done => Done
+								Skip({ rest }) => Skip({ rest: Stream.take_first(rest, n) })
+								One({ item, rest }) => One({ item, rest: Stream.take_first(rest, n - 1) })
+							}
 						},
-				}
+				)
+			}
+
+		## Returns a stream that skips the first `n` items of this stream. The skipped
+		## items are still pulled from the source, so their effects still run.
+		drop_first : Stream(item), U64 -> Stream(item)
+		drop_first = |source, n|
+			match source {
+				{ len_if_known, .. } => stream_from_step(
+					match len_if_known {
+						Known(len) => Known(
+							if len < n {
+								0
+							} else {
+								len - n
+							},
+						)
+						Unknown => Unknown
+					},
+					||
+						match Stream.next!(source) {
+							Done => Done
+							Skip({ rest }) => Skip({ rest: Stream.drop_first(rest, n) })
+							One({ item, rest }) =>
+								if n == 0 {
+									One({ item, rest: Stream.drop_first(rest, 0) })
+								} else {
+									Skip({ rest: Stream.drop_first(rest, n - 1) })
+								}
+						},
+				)
+			}
+
+		## Returns this stream unchanged. A `for!` loop calls `stream` on the value it
+		## loops over, so this is what lets `for!` consume a [Stream] directly.
+		stream : Stream(item) -> Stream(item)
+		stream = |self| self
+
+		## Drive the stream to completion, combining its items into one value.
+		fold! : Stream(a), acc, (acc, a => acc) => acc
+		fold! = |source, init, step!| {
+			var $acc = init
+			for! item in source {
+				$acc = step!($acc, item)
+			}
+			$acc
+		}
+
+		## Drive the stream to completion, running `f!` on each item in order.
+		for_each! : Stream(a), (a => {}) => {}
+		for_each! = |source, f!|
+			for! item in source {
+				f!(item)
 			}
 
 		## Advance the stream by one step.
 		next! : Stream(item) => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]
-		next! = |stream| match stream {
+		next! = |source| match source {
 			{ step!, .. } => step!()
 		}
 
 		## Returns the stream's length if it is known up front.
 		size_hint : Stream(item) -> [Known(U64), Unknown]
-		size_hint = |stream| match stream {
+		size_hint = |source| match source {
 			{ len_if_known, .. } => len_if_known
 		}
 
 		## Drive the stream to completion with an explicit loop, collecting its items
 		## into a [List] (pre-sized from `len_if_known` when known).
 		collect! : Stream(item) => List(item)
-		collect! = |stream| {
-			# `Known(n)` guarantees exactly n items (count-changing combinators
-			# report `Unknown`), so reserve up front and use the unchecked append.
-			# When the length is unknown, start empty and grow with the reserving
-			# append—the unchecked append would corrupt a zero-capacity list.
-			length = Stream.size_hint(stream)
+		collect! = |source| {
+			# `Known(n)` promises n items (count-changing combinators report
+			# `Unknown`), so reserve up front and use the unchecked append while
+			# the reservation lasts. `Stream.custom` hints come from the caller and
+			# may undercount, so past `cap` use the reserving append instead: the
+			# unchecked append would write past the list's capacity.
+			length = Stream.size_hint(source)
 			cap = match length {
 				Known(n) => n
 				Unknown => 0
 			}
 			var $list = List.with_capacity(cap)
-			var $rest = stream
+			var $rest = source
 			while Bool.True {
 				match Stream.next!($rest) {
 					Done => {
@@ -3547,9 +3867,10 @@ Builtin :: [].{
 						$rest = rest
 					}
 					One({ item, rest }) => {
-						$list = match length {
-							Known(_) => list_append_unsafe($list, item)
-							Unknown => List.append($list, item)
+						$list = if List.len($list) < cap {
+							list_append_unsafe($list, item)
+						} else {
+							List.append($list, item)
 						}
 						$rest = rest
 					}
@@ -3800,13 +4121,10 @@ Builtin :: [].{
 		## }
 		## ```
 		##
-		## `reserve(spare)` aims for a capacity of `List.len(list) + spare` items; it
-		## trusts the request rather than rounding it up. If the list is not shared and
-		## already has room for `spare` more items, it does nothing. Otherwise it asks
-		## the allocator to grow the list to that size. The one exception is reserving
-		## a single item beyond the current capacity: that is indistinguishable from an
-		## ordinary [List.append] outgrowing the list, so the capacity grows
-		## geometrically instead of by one.
+		## `reserve(spare)` aims for a capacity of exactly `List.len(list) + spare`
+		## items; it trusts the request rather than rounding it up. If the list is not
+		## shared and already has room for `spare` more items, it does nothing.
+		## Otherwise it asks the allocator to grow the list to that size.
 		##
 		## Note that the reserve above sits before the loop. Because [List.reserve] aims
 		## for the exact size requested, it is a poor fit for use inside one: a reserve
@@ -3938,7 +4256,7 @@ Builtin :: [].{
 		## ```
 		append : List(a), a -> List(a)
 		append = |list, item| {
-			reserved = List.reserve(list, 1)
+			reserved = list_reserve_for_append(list, 1)
 			list_append_unsafe(reserved, item)
 		}
 
@@ -4044,6 +4362,17 @@ Builtin :: [].{
 		prepend_if_ok = |list, maybe_item| list_prepend_if_ok(list, maybe_item)
 
 		## Add a single item to the beginning of a list.
+		##
+		## This is usually O(n), because every existing item has to move over by
+		## one to make room at the front. To build up a list one item at a time,
+		## `append` is much faster; if you need the items in the opposite order,
+		## `reverse` the list once at the end.
+		##
+		## The one exception is a list that is unique (nothing else refers to it)
+		## and has had items removed from its front, for example by `drop_first`.
+		## Removing items from the front leaves free space there, so prepending
+		## onto such a list is O(1). This makes a pop-then-push pattern like
+		## `list.drop_first(1).prepend(item)` fast.
 		## ```roc
 		## expect [2, 3, 4].prepend(1) == [1, 2, 3, 4]
 		##
@@ -4071,11 +4400,32 @@ Builtin :: [].{
 		## expect [100, 200, 300].get(5) == Err(OutOfBounds)
 		## ```
 		get : List(item), U64 -> Try(item, [OutOfBounds])
-		get = |list, index| if index < List.len(list) {
+		get = |list, index| if bool_likely(index < List.len(list)) {
 			Try.Ok(list_get_unsafe(list, index))
 		} else {
 			Try.Err(OutOfBounds)
 		}
+
+		## Returns the list unchanged, hinting to the processor that the item
+		## at the given index is about to be read or written so it can start
+		## bringing that memory into its cache.
+		##
+		## This is a no-op as far as the program's results go: it reads
+		## nothing, changes nothing, and an index past the end of the list is
+		## fine. Its only possible effect is on speed, and that effect can go
+		## either way. A hint for memory that was about to be loaded anyway,
+		## or that is never used, costs time; a hint issued too late does
+		## nothing. Only use it together with careful measurement, and keep it
+		## only where the measurement shows it helping.
+		##
+		## It tends to pay off when the index is unpredictable, the list is
+		## much larger than the cache, and the index is known some steps
+		## before the item is used, as with a hash table's next bucket.
+		## ```roc
+		## expect List.prefetched([10.U64, 20, 30], 1) == [10, 20, 30]
+		## ```
+		prefetched : List(item), U64 -> List(item)
+		prefetched = |list, index| list_prefetched(list, index)
 
 		## Alias for [List.get], enabling the future `list[index]` subscript operator.
 		## Returns an item from a list at the given index.
@@ -4116,7 +4466,7 @@ Builtin :: [].{
 		## ```
 		set : List(a), U64, a -> Try(List(a), [OutOfBounds])
 		set = |list, index, value|
-			if index < List.len(list) {
+			if bool_likely(index < List.len(list)) {
 				Ok(list_set_unsafe(list, index, value))
 			} else {
 				Err(OutOfBounds)
@@ -4849,9 +5199,7 @@ Builtin :: [].{
 		## expect [1.I64, 2, 3].clear() == []
 		## ```
 		clear : List(a) -> List(a)
-		clear = |list| {
-			List.take_first(list, 0)
-		}
+		clear = |list| list_clear(list)
 
 		## Returns the given number of items from the end of the list.
 		## ```roc
@@ -5125,7 +5473,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Find the maximum item in a list, or `Err(ListWasEmpty)` if the list is empty.
 		## Works for any type that implements `max`.
@@ -5144,7 +5492,7 @@ Builtin :: [].{
 
 				Err(ListWasEmpty) =>
 					Err(ListWasEmpty)
-				}
+			}
 
 		## Build an encoder for a list using a format that provides a list encoding method.
 		encoder_for : encoding -> (List(item), state -> Try(state, err))
@@ -5203,10 +5551,6 @@ Builtin :: [].{
 		## expect !Bool.False == Bool.True
 		## ```
 		not : Bool -> Bool
-		not = |bool| match bool {
-			Bool.True => Bool.False
-			Bool.False => Bool.True
-		}
 
 		## Returns `Bool.True` if the two booleans are the same, and `Bool.False` if they are different.
 		is_eq : Bool, Bool -> Bool
@@ -5276,18 +5620,6 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
-		}
-
-		## Forwards interpolated string literal assembly through an inner type
-		## whose `from_interpolation` method returns the same [Try].
-		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
-			where [
-				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
-			]
-		from_interpolation = |first, rest| {
-			OkType : ok
-
-			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns
@@ -6224,7 +6556,7 @@ Builtin :: [].{
 						Try.Ok(new_value) => HashMap(dict_insert_absent_data(data, missing, key, new_value))
 						Try.Err(Missing) => dict
 					}
-				}
+			}
 		}
 	}
 
@@ -6683,7 +7015,6 @@ Builtin :: [].{
 			## expect U8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U8, U8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -6960,11 +7291,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 256).
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U8.shl_wrap(1, 8) == 1
+			## # 0b0000_0001 == 1
+			## expect U8.shl_wrap(0b0000_0001, 8) == 0b0000_0001
 			## ```
 			shl_wrap : U8, U8 -> U8
 
@@ -6975,11 +7307,12 @@ Builtin :: [].{
 			## [U8.shr_zf_wrap].
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U8.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U8.shr_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect U8.shr_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_wrap : U8, U8 -> U8
 
@@ -6988,64 +7321,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U8.shr_wrap].
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U8.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U8.shr_zf_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect U8.shr_zf_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U8, U8 -> U8
 
 			## Returns the bitwise AND of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U8.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U8, U8 -> U8
 
 			## Returns the bitwise OR of two [U8] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U8.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U8, U8 -> U8
 
 			## Returns the bitwise XOR of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U8.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U8, U8 -> U8
 
 			## Returns the bitwise NOT of a [U8] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U8.bitwise_not(0) == 255
+			## # 0b0000_0101 == 5
+			## # 0b1111_1010 == 250
+			## expect U8.bitwise_not(0b0000_0101) == 0b1111_1010
 			## ```
 			bitwise_not : U8 -> U8
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U8.count_leading_zero_bits(1) == 7
+			## # 0b0000_0001 == 1
+			## expect U8.count_leading_zero_bits(0b0000_0001) == 7
 			##
-			## expect U8.count_leading_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect U8.count_leading_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U8 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U8.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U8.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U8.count_trailing_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect U8.count_trailing_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U8 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U8.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U8.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U8.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U8.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U8 -> U8
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
@@ -7073,6 +7430,66 @@ Builtin :: [].{
 			## expect U8.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U8, [BadNumStr])
+
+			## Parse a [U8] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U8.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U8], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U8.from_str_prefix("42,rest") == Ok({ value: 42, rest: ",rest" })
+			##
+			## expect U8.from_str_prefix("300,") == Err(OutOfRange)
+			##
+			## expect U8.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U8, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u8_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U8] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U8.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U8.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			##
+			## expect U8.from_utf8_prefix([0x33, 0x30, 0x30]) == Err(OutOfRange)
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U8, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u8_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			## Iterator of integers beginning with this `U8` and ending with the other `U8`.
 			## (Use [U8.until] instead to end with the other `U8` minus one.)
@@ -7350,7 +7767,6 @@ Builtin :: [].{
 			## expect I8.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I8, I8 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -7696,11 +8112,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I8.shl_wrap(1, 8) == 1
+			## # 0b0000_0001 == 1
+			## expect I8.shl_wrap(0b0000_0001, 8) == 0b0000_0001
 			## ```
 			shl_wrap : I8, U8 -> I8
 
@@ -7711,44 +8128,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1110_0000
+			## # -8 == 0b1111_1000
 			## expect I8.shr_wrap(-32, 2) == -8
 			##
-			## expect I8.shr_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect I8.shr_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I8.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I8.shr_zf_wrap(32, 8) == 32
+			## # -1 == 0b1111_1111
+			## # 0b0000_1111 == 15
+			## expect I8.shr_zf_wrap(-1, 4) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I8.shr_zf_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I8, U8 -> I8
 
 			## Returns the bitwise AND of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I8.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I8.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I8, I8 -> I8
 
 			## Returns the bitwise OR of two [I8] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I8.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1101
+			## expect I8.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I8, I8 -> I8
 
 			## Returns the bitwise XOR of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I8.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I8, I8 -> I8
 
@@ -7756,32 +8207,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I8.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I8 -> I8
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111
 			## expect I8.count_leading_zero_bits(-1) == 0
 			##
-			## expect I8.count_leading_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect I8.count_leading_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I8 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1000
 			## expect I8.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I8.count_trailing_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect I8.count_trailing_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I8 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111
 			## expect I8.count_one_bits(-1) == 8
 			##
-			## expect I8.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I8.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I8 -> U8
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
@@ -7879,6 +8344,66 @@ Builtin :: [].{
 			## expect I8.from_str("200") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I8, [BadNumStr])
+
+			## Parse a [I8] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I8.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I8], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I8.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I8.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I8.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I8.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I8, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i8_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I8] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I8.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I8.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I8, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i8_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			## No-op: leave an [I8] unchanged as an [I8].
 			to_i8 : I8 -> I8
@@ -8136,7 +8661,6 @@ Builtin :: [].{
 			## expect U16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U16, U16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -8413,11 +8937,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 65536).
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U16.shl_wrap(1, 16) == 1
+			## # 0b0000_0001 == 1
+			## expect U16.shl_wrap(0b0000_0001, 16) == 0b0000_0001
 			## ```
 			shl_wrap : U16, U8 -> U16
 
@@ -8428,11 +8953,12 @@ Builtin :: [].{
 			## [U16.shr_zf_wrap].
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U16.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U16.shr_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect U16.shr_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_wrap : U16, U8 -> U16
 
@@ -8441,64 +8967,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U16.shr_wrap].
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U16.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U16.shr_zf_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect U16.shr_zf_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U16, U8 -> U16
 
 			## Returns the bitwise AND of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U16.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U16, U16 -> U16
 
 			## Returns the bitwise OR of two [U16] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U16.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U16, U16 -> U16
 
 			## Returns the bitwise XOR of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U16.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U16, U16 -> U16
 
 			## Returns the bitwise NOT of a [U16] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U16.bitwise_not(0) == 65535
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1010 == 65530
+			## expect U16.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1010
 			## ```
 			bitwise_not : U16 -> U16
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U16.count_leading_zero_bits(1) == 15
+			## # 0b0000_0001 == 1
+			## expect U16.count_leading_zero_bits(0b0000_0001) == 15
 			##
-			## expect U16.count_leading_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect U16.count_leading_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U16 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U16.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U16.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U16.count_trailing_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect U16.count_trailing_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U16 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U16.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U16.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U16.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U16.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U16 -> U8
 
 			## Read a little-endian [U16] from the two bytes at the given byte
@@ -8618,6 +9168,66 @@ Builtin :: [].{
 			## expect U16.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U16, [BadNumStr])
+
+			## Parse a [U16] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U16.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U16], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U16.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U16.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U16.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U16.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U16, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u16_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U16] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U16.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U16.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U16, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u16_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -8862,7 +9472,6 @@ Builtin :: [].{
 			## expect I16.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I16, I16 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9208,11 +9817,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I16.shl_wrap(1, 16) == 1
+			## # 0b0000_0001 == 1
+			## expect I16.shl_wrap(0b0000_0001, 16) == 0b0000_0001
 			## ```
 			shl_wrap : I16, U8 -> I16
 
@@ -9223,44 +9833,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1000
 			## expect I16.shr_wrap(-32, 2) == -8
 			##
-			## expect I16.shr_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect I16.shr_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I16.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I16.shr_zf_wrap(32, 16) == 32
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I16.shr_zf_wrap(-1, 12) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I16.shr_zf_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I16, U8 -> I16
 
 			## Returns the bitwise AND of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I16.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I16.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I16, I16 -> I16
 
 			## Returns the bitwise OR of two [I16] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I16.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1101
+			## expect I16.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I16, I16 -> I16
 
 			## Returns the bitwise XOR of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I16.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I16, I16 -> I16
 
@@ -9268,32 +9912,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I16.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I16 -> I16
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
 			## expect I16.count_leading_zero_bits(-1) == 0
 			##
-			## expect I16.count_leading_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect I16.count_leading_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I16 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1000
 			## expect I16.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I16.count_trailing_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect I16.count_trailing_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I16 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
 			## expect I16.count_one_bits(-1) == 16
 			##
-			## expect I16.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I16.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I16 -> U8
 
 			## Read a little-endian [I16] from the two bytes at the given byte
@@ -9417,6 +10075,66 @@ Builtin :: [].{
 			## expect I16.from_str("40000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I16, [BadNumStr])
+
+			## Parse a [I16] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I16.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I16], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I16.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I16.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I16.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I16.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I16, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i16_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I16] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I16.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I16.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I16, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i16_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -9689,7 +10407,6 @@ Builtin :: [].{
 			## expect U32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U32, U32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -9966,11 +10683,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 4294967296).
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U32.shl_wrap(1, 32) == 1
+			## # 0b0000_0001 == 1
+			## expect U32.shl_wrap(0b0000_0001, 32) == 0b0000_0001
 			## ```
 			shl_wrap : U32, U8 -> U32
 
@@ -9981,11 +10699,12 @@ Builtin :: [].{
 			## [U32.shr_zf_wrap].
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U32.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U32.shr_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect U32.shr_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_wrap : U32, U8 -> U32
 
@@ -9994,64 +10713,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U32.shr_wrap].
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U32.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U32.shr_zf_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect U32.shr_zf_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U32, U8 -> U32
 
 			## Returns the bitwise AND of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U32.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U32, U32 -> U32
 
 			## Returns the bitwise OR of two [U32] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U32.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U32, U32 -> U32
 
 			## Returns the bitwise XOR of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U32.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U32, U32 -> U32
 
 			## Returns the bitwise NOT of a [U32] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U32.bitwise_not(0) == 4294967295
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1010 == 4294967290
+			## expect U32.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1111_1111_1111_1111_1010
 			## ```
 			bitwise_not : U32 -> U32
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U32.count_leading_zero_bits(1) == 31
+			## # 0b0000_0001 == 1
+			## expect U32.count_leading_zero_bits(0b0000_0001) == 31
 			##
-			## expect U32.count_leading_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect U32.count_leading_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U32 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U32.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U32.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U32.count_trailing_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect U32.count_trailing_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U32 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U32.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U32.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U32.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U32.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U32 -> U8
 
 			## Read a little-endian [U32] from the four bytes at the given byte
@@ -10171,6 +10914,66 @@ Builtin :: [].{
 			## expect U32.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U32, [BadNumStr])
+
+			## Parse a [U32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U32.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U32.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U32.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U32.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U32.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U32.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -10447,7 +11250,6 @@ Builtin :: [].{
 			## expect I32.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I32, I32 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -10793,11 +11595,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I32.shl_wrap(1, 32) == 1
+			## # 0b0000_0001 == 1
+			## expect I32.shl_wrap(0b0000_0001, 32) == 0b0000_0001
 			## ```
 			shl_wrap : I32, U8 -> I32
 
@@ -10808,44 +11611,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I32.shr_wrap(-32, 2) == -8
 			##
-			## expect I32.shr_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect I32.shr_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I32.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I32.shr_zf_wrap(32, 32) == 32
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32.shr_zf_wrap(-1, 28) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I32.shr_zf_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I32, U8 -> I32
 
 			## Returns the bitwise AND of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I32.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I32.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I32, I32 -> I32
 
 			## Returns the bitwise OR of two [I32] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I32.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I32.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I32, I32 -> I32
 
 			## Returns the bitwise XOR of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I32.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I32, I32 -> I32
 
@@ -10853,32 +11690,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I32.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I32 -> I32
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I32.count_leading_zero_bits(-1) == 0
 			##
-			## expect I32.count_leading_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect I32.count_leading_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I32 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I32.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I32.count_trailing_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect I32.count_trailing_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I32 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I32.count_one_bits(-1) == 32
 			##
-			## expect I32.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I32.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I32 -> U8
 
 			## Read a little-endian [I32] from the four bytes at the given byte
@@ -11002,6 +11853,66 @@ Builtin :: [].{
 			## expect I32.from_str("3000000000") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(I32, [BadNumStr])
+
+			## Parse a [I32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I32.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I32.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I32.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I32.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I32.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I32.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -11291,7 +12202,6 @@ Builtin :: [].{
 			## expect U64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U64, U64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -11568,11 +12478,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 2^64).
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U64.shl_wrap(1, 64) == 1
+			## # 0b0000_0001 == 1
+			## expect U64.shl_wrap(0b0000_0001, 64) == 0b0000_0001
 			## ```
 			shl_wrap : U64, U8 -> U64
 
@@ -11583,11 +12494,12 @@ Builtin :: [].{
 			## [U64.shr_zf_wrap].
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U64.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U64.shr_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect U64.shr_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_wrap : U64, U8 -> U64
 
@@ -11596,64 +12508,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U64.shr_wrap].
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U64.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U64.shr_zf_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect U64.shr_zf_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U64, U8 -> U64
 
 			## Returns the bitwise AND of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U64.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U64, U64 -> U64
 
 			## Returns the bitwise OR of two [U64] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U64.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U64, U64 -> U64
 
 			## Returns the bitwise XOR of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U64.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U64, U64 -> U64
 
 			## Returns the bitwise NOT of a [U64] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U64.bitwise_not(0) == 18446744073709551615
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010 == 18446744073709551610
+			## expect U64.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
 			## ```
 			bitwise_not : U64 -> U64
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U64.count_leading_zero_bits(1) == 63
+			## # 0b0000_0001 == 1
+			## expect U64.count_leading_zero_bits(0b0000_0001) == 63
 			##
-			## expect U64.count_leading_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect U64.count_leading_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U64 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U64.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U64.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U64.count_trailing_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect U64.count_trailing_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U64 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U64.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U64.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U64.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U64.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U64 -> U8
 
 			## Read a little-endian [U64] from the eight bytes at the given byte
@@ -11800,6 +12736,66 @@ Builtin :: [].{
 			## expect U64.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U64, [BadNumStr])
+
+			## Parse a [U64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U64.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U64.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U64.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U64.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U64.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U64.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -12111,7 +13107,6 @@ Builtin :: [].{
 			## expect I64.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I64, I64 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -12458,11 +13453,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I64.shl_wrap(1, 64) == 1
+			## # 0b0000_0001 == 1
+			## expect I64.shl_wrap(0b0000_0001, 64) == 0b0000_0001
 			## ```
 			shl_wrap : I64, U8 -> I64
 
@@ -12473,44 +13469,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I64.shr_wrap(-32, 2) == -8
 			##
-			## expect I64.shr_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect I64.shr_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I64.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I64.shr_zf_wrap(32, 64) == 32
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I64.shr_zf_wrap(-1, 60) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I64.shr_zf_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I64, U8 -> I64
 
 			## Returns the bitwise AND of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I64.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I64.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I64, I64 -> I64
 
 			## Returns the bitwise OR of two [I64] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I64.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I64.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I64, I64 -> I64
 
 			## Returns the bitwise XOR of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I64.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I64, I64 -> I64
 
@@ -12518,32 +13548,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I64.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I64 -> I64
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I64.count_leading_zero_bits(-1) == 0
 			##
-			## expect I64.count_leading_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect I64.count_leading_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I64 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I64.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I64.count_trailing_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect I64.count_trailing_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I64 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I64.count_one_bits(-1) == 64
 			##
-			## expect I64.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I64.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I64 -> U8
 
 			## Read a little-endian [I64] from the eight bytes at the given byte
@@ -12674,6 +13718,66 @@ Builtin :: [].{
 			## expect I64.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I64, [BadNumStr])
+
+			## Parse a [I64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I64.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I64.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I64.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I64.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I64.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I64.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -12978,7 +14082,6 @@ Builtin :: [].{
 			## expect U128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : U128, U128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -13255,11 +14358,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 2^128).
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U128.shl_wrap(1, 128) == 1
+			## # 0b0000_0001 == 1
+			## expect U128.shl_wrap(0b0000_0001, 128) == 0b0000_0001
 			## ```
 			shl_wrap : U128, U8 -> U128
 
@@ -13270,11 +14374,12 @@ Builtin :: [].{
 			## [U128.shr_zf_wrap].
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U128.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U128.shr_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect U128.shr_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_wrap : U128, U8 -> U128
 
@@ -13283,64 +14388,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U128.shr_wrap].
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U128.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U128.shr_zf_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect U128.shr_zf_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U128, U8 -> U128
 
 			## Returns the bitwise AND of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U128.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U128, U128 -> U128
 
 			## Returns the bitwise OR of two [U128] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U128.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U128, U128 -> U128
 
 			## Returns the bitwise XOR of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U128.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U128, U128 -> U128
 
 			## Returns the bitwise NOT of a [U128] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U128.bitwise_not(0) == 340282366920938463463374607431768211455
+			## # 0b0000_0101 == 5
+			## # 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFA == 0b1111_1111_…_1111_1010
+			## expect U128.bitwise_not(0b0000_0101) == 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFA
 			## ```
 			bitwise_not : U128 -> U128
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U128.count_leading_zero_bits(1) == 127
+			## # 0b0000_0001 == 1
+			## expect U128.count_leading_zero_bits(0b0000_0001) == 127
 			##
-			## expect U128.count_leading_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect U128.count_leading_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U128 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U128.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U128.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U128.count_trailing_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect U128.count_trailing_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U128 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U128.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U128.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U128.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U128.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U128 -> U8
 
 			## Read a little-endian [U128] from the sixteen bytes at the given
@@ -13470,6 +14599,66 @@ Builtin :: [].{
 			## expect U128.from_str("-1") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(U128, [BadNumStr])
+
+			## Parse a [U128] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [U128.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [U128], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect U128.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect U128.from_str_prefix("-5") == Err(OutOfRange)
+			##
+			## expect U128.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect U128.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : U128, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = u128_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [U128] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [U128.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect U128.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : U128, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = u128_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -13811,7 +15000,6 @@ Builtin :: [].{
 			## expect I128.order_relative_to(3, 2) == After
 			## ```
 			order_relative_to : I128, I128 -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns `Bool.True` if the value is evenly divisible by `2`.
 			## ```roc
@@ -14160,11 +15348,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I128.shl_wrap(1, 128) == 1
+			## # 0b0000_0001 == 1
+			## expect I128.shl_wrap(0b0000_0001, 128) == 0b0000_0001
 			## ```
 			shl_wrap : I128, U8 -> I128
 
@@ -14175,44 +15364,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I128.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_…_1110_0000
+			## # -8 == 0b1111_1111_…_1111_1000
 			## expect I128.shr_wrap(-32, 2) == -8
 			##
-			## expect I128.shr_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect I128.shr_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I128.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I128.shr_zf_wrap(32, 128) == 32
+			## # -1 == 0b1111_1111_…_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I128.shr_zf_wrap(-1, 124) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I128.shr_zf_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I128, U8 -> I128
 
 			## Returns the bitwise AND of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I128.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_…_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I128.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I128, I128 -> I128
 
 			## Returns the bitwise OR of two [I128] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I128.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_…_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_…_1111_1101
+			## expect I128.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I128, I128 -> I128
 
 			## Returns the bitwise XOR of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I128.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_…_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_…_1111_1010
+			## expect I128.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I128, I128 -> I128
 
@@ -14220,32 +15443,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I128.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_…_1111_1010
+			## expect I128.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I128 -> I128
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_…_1111_1111
 			## expect I128.count_leading_zero_bits(-1) == 0
 			##
-			## expect I128.count_leading_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect I128.count_leading_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I128 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_…_1111_1000
 			## expect I128.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I128.count_trailing_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect I128.count_trailing_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I128 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_…_1111_1111
 			## expect I128.count_one_bits(-1) == 128
 			##
-			## expect I128.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I128.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I128 -> U8
 
 			## Read a little-endian [I128] from the sixteen bytes at the given
@@ -14384,6 +15621,66 @@ Builtin :: [].{
 			## expect I128.from_str("-1") == Ok(-1)
 			## ```
 			from_str : Str -> Try(I128, [BadNumStr])
+
+			## Parse a [I128] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [I128.from_str]
+			## accepts: an optional sign, then `0x`, `0o` or `0b` followed by radix digits, or
+			## decimal digits with an optional exponent (`2e5`, `2e-1`). Digits may be
+			## separated by single underscores. A `.` is never part of an integer, so
+			## `"1.2.3"` parses `1` and leaves `".2.3"`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [I128], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect I128.from_str_prefix("12,34") == Ok({ value: 12, rest: ",34" })
+			##
+			## expect I128.from_str_prefix("-7abc") == Ok({ value: -7, rest: "abc" })
+			##
+			## expect I128.from_str_prefix("0b12") == Ok({ value: 1, rest: "2" })
+			##
+			## expect I128.from_str_prefix("abc") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : I128, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = i128_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [I128] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [I128.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect I128.from_utf8_prefix([0x35, 0x0D, 0xFF]) == Ok({ value: 5, rest: [0x0D, 0xFF] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : I128, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = i128_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers
 
@@ -14766,7 +16063,6 @@ Builtin :: [].{
 			## expect Dec.order_relative_to(3.0, 2.0) == After
 			## ```
 			order_relative_to : Dec, Dec -> [Before, Same, After]
-			order_relative_to = |a, b| numeric_compare(a, b)
 
 			## Returns the greater of two [Dec] values.
 			## ```roc
@@ -14793,6 +16089,51 @@ Builtin :: [].{
 					a
 				else
 					b
+
+			## Returns `True` if `a` and `b` are within the given tolerances of each
+			## other: `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude.
+			##
+			## [Dec] addition and subtraction are exact, so `==` is usually what you
+			## want; this helps with rounded results such as division or `sqrt`. It never
+			## overflows: a difference too large for a [Dec] is never approximately equal.
+			## This is not transitive, so do not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs >= 0`.
+			## ```roc
+			## expect Dec.is_approx_eq(1.0, 1.01, { rel: 0.01, abs: 0.0 })
+			##
+			## expect Dec.is_approx_eq(100.0, 109.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(100.0, 111.0, { rel: 0.0, abs: 10.0 })
+			##
+			## expect !Dec.is_approx_eq(Dec.highest, Dec.lowest, { rel: 1.0, abs: 0.0 })
+			## ```
+			is_approx_eq : Dec, Dec, { rel : Dec, abs : Dec } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0) {
+					crash "Dec.is_approx_eq: rel must be in [0, 1] and abs non-negative"
+				}
+
+				if a == b {
+					True
+				} else {
+					diff_result = if a > b Dec.minus_try(a, b) else Dec.minus_try(b, a)
+					match diff_result {
+						Ok(diff) => {
+							magnitude = if a == Dec.lowest or b == Dec.lowest {
+								Dec.highest
+							} else {
+								Dec.max(Dec.abs(a), Dec.abs(b))
+							}
+							diff <= Dec.max(abs, rel * magnitude)
+						}
+						Err(Overflow) => False
+					}
+				}
+			}
 
 			## Negate a [Dec].
 			## ```roc
@@ -15047,6 +16388,149 @@ Builtin :: [].{
 			## ```
 			abs_diff : Dec, Dec -> Dec
 
+			## Round a [Dec] to the nearest whole number, keeping it a [Dec]. Halfway
+			## values round away from zero, matching [Dec.round_to_i128].
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens within
+			## half of one of [Dec.highest] or [Dec.lowest]. Use [Dec.round_try] to
+			## handle that case.
+			## ```roc
+			## expect Dec.round(2.5) == 3.0
+			##
+			## expect Dec.round(-2.5) == -3.0
+			##
+			## expect Dec.round(2.4999) == 2.0
+			## ```
+			round : Dec -> Dec
+			round = |self|
+				match Dec.round_try(self) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round overflowed"
+					}
+				}
+
+			## Like [Dec.round], but returns `Err(Overflow)` instead of crashing when
+			## the rounded value does not fit in a [Dec].
+			## ```roc
+			## expect Dec.round_try(2.5) == Ok(3.0)
+			##
+			## expect Dec.round_try(Dec.highest) == Err(Overflow)
+			## ```
+			round_try : Dec -> Try(Dec, [Overflow])
+			round_try = |self| dec_round_to_multiple_try(self, dec_attos_per_whole, AwayFromZero)
+
+			## Round a [Dec] down to the nearest whole number, toward negative infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values below `Dec.lowest + 1`. Use [Dec.floor_try] to handle that case.
+			## ```roc
+			## expect Dec.floor(2.7) == 2.0
+			##
+			## expect Dec.floor(-2.1) == -3.0
+			## ```
+			floor : Dec -> Dec
+			floor = |self|
+				match Dec.floor_try(self) {
+					Ok(floored) => floored
+					Err(Overflow) => {
+						crash "Dec.floor overflowed"
+					}
+				}
+
+			## Like [Dec.floor], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.floor_try(-2.1) == Ok(-3.0)
+			##
+			## expect Dec.floor_try(Dec.lowest) == Err(Overflow)
+			## ```
+			floor_try : Dec -> Try(Dec, [Overflow])
+			floor_try = |self| dec_attos_multiple_try(I128.div_floor_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Round a [Dec] up to the nearest whole number, toward positive infinity.
+			##
+			## Crashes if the result does not fit in a [Dec], which only happens for
+			## values above `Dec.highest - 1`. Use [Dec.ceiling_try] to handle that case.
+			## ```roc
+			## expect Dec.ceiling(2.1) == 3.0
+			##
+			## expect Dec.ceiling(-2.7) == -2.0
+			## ```
+			ceiling : Dec -> Dec
+			ceiling = |self|
+				match Dec.ceiling_try(self) {
+					Ok(ceiled) => ceiled
+					Err(Overflow) => {
+						crash "Dec.ceiling overflowed"
+					}
+				}
+
+			## Like [Dec.ceiling], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec].
+			## ```roc
+			## expect Dec.ceiling_try(2.1) == Ok(3.0)
+			##
+			## expect Dec.ceiling_try(Dec.highest) == Err(Overflow)
+			## ```
+			ceiling_try : Dec -> Try(Dec, [Overflow])
+			ceiling_try = |self| dec_attos_multiple_try(I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole), dec_attos_per_whole)
+
+			## Drop the fractional part of a [Dec], rounding toward zero. This never
+			## overflows.
+			## ```roc
+			## expect Dec.trunc(2.7) == 2.0
+			##
+			## expect Dec.trunc(-2.7) == -2.0
+			## ```
+			trunc : Dec -> Dec
+			trunc = |self| Dec.from_attos(I128.div_trunc_by(Dec.to_attos(self), dec_attos_per_whole) * dec_attos_per_whole)
+
+			## Round a [Dec] to the nearest multiple of `step`: `0.01` for cents, `0.05`
+			## for cash rounding, `1000` for thousands.
+			##
+			## `ties` chooses what happens to values exactly halfway between two
+			## multiples: `AwayFromZero` rounds them away from zero, and `ToEven`
+			## (banker's rounding) picks the even multiple, which avoids systematic drift
+			## when many rounded values are summed.
+			##
+			## Crashes if `step` is not positive, or if the result does not fit in a
+			## [Dec]. Use [Dec.round_to_try] to handle overflow.
+			## ```roc
+			## expect Dec.round_to(19.995, { step: 0.01, ties: AwayFromZero }) == 20.0
+			##
+			## expect Dec.round_to(2.345, { step: 0.01, ties: ToEven }) == 2.34
+			##
+			## expect Dec.round_to(7.23, { step: 0.05, ties: AwayFromZero }) == 7.25
+			##
+			## expect Dec.round_to(1500, { step: 1000, ties: ToEven }) == 2000
+			## ```
+			round_to : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Dec
+			round_to = |self, options|
+				match Dec.round_to_try(self, options) {
+					Ok(rounded) => rounded
+					Err(Overflow) => {
+						crash "Dec.round_to overflowed"
+					}
+				}
+
+			## Like [Dec.round_to], but returns `Err(Overflow)` instead of crashing when
+			## the result does not fit in a [Dec]. Still crashes if `step` is not
+			## positive.
+			## ```roc
+			## expect Dec.round_to_try(2.345, { step: 0.01, ties: AwayFromZero }) == Ok(2.35)
+			##
+			## expect Dec.round_to_try(Dec.highest, { step: 1000, ties: ToEven }) == Err(Overflow)
+			## ```
+			round_to_try : Dec, { step : Dec, ties : [AwayFromZero, ToEven] } -> Try(Dec, [Overflow])
+			round_to_try = |self, { step, ties }| {
+				step_attos = Dec.to_attos(step)
+				if step_attos <= 0 {
+					crash "Dec.round_to: step must be positive"
+				}
+				dec_round_to_multiple_try(self, step_attos, ties)
+			}
+
 			## Round a [Dec] to the nearest [I8]. Halfway values round away from zero. Returns `Err(OutOfRange)` if the rounded value is out of range.
 			## ```roc
 			## expect Dec.round_to_i8_try(3.4) == Ok(3)
@@ -15298,6 +16782,60 @@ Builtin :: [].{
 			## expect Dec.from_str("not a number") == Err(BadNumStr)
 			## ```
 			from_str : Str -> Try(Dec, [BadNumStr])
+
+			## Parse a [Dec] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [Dec.from_str]
+			## accepts: an optional sign, decimal digits (with single `_` between digits),
+			## an optional fraction and an optional exponent. There is no hex, `inf`, or `nan`.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [Dec], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect Dec.from_str_prefix("1.5]") == Ok({ value: 1.5, rest: "]" })
+			##
+			## expect Dec.from_str_prefix("inf") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : Dec, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = dec_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [Dec] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [Dec.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect Dec.from_utf8_prefix([0x31, 0x2E, 0x35, 0x5D]) == Ok({ value: 1.5, rest: [0x5D] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : Dec, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = dec_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
 
 			# Conversions to signed integers (all lossy - truncates fractional part)
 
@@ -15777,6 +17315,42 @@ Builtin :: [].{
 			## expect !F32.is_float_eq(F32.nan, F32.nan)
 			## ```
 			is_float_eq : F32, F32 -> Bool
+
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F32.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-6, abs: 0.0 })
+			##
+			## expect F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F32.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F32.is_approx_eq(F32.nan, F32.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F32, F32, { rel : F32, abs : F32 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F32.is_finite(abs)) {
+					crash "F32.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F32.is_float_eq(a, b) {
+					True
+				} else if F32.is_finite(a) and F32.is_finite(b) {
+					F32.abs(a - b) <= F32.max(abs, rel * F32.max(F32.abs(a), F32.abs(b)))
+				} else {
+					False
+				}
+			}
 
 			is_eq : _
 
@@ -16314,6 +17888,60 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(F32, [BadNumStr])
 
+			## Parse a [F32] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [F32.from_str]
+			## accepts: an optional sign, then `inf`, `infinity` or `nan` (any case), a decimal
+			## mantissa with an optional exponent, or a `0x` hex float with an optional `p` exponent.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [F32], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect F32.from_str_prefix("1.5e3]") == Ok({ value: 1500.0, rest: "]" })
+			##
+			## expect F32.from_str_prefix("x1") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : F32, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = f32_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [F32] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [F32.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect F32.from_utf8_prefix([0x32, 0x2E, 0x35, 0x2C]) == Ok({ value: 2.5, rest: [0x2C] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : F32, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = f32_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers (all lossy - truncation + range check)
 
 			## Convert an [F32] to an [I8]. The fractional part is truncated
@@ -16701,6 +18329,42 @@ Builtin :: [].{
 			## expect !F64.is_float_eq(F64.nan, F64.nan)
 			## ```
 			is_float_eq : F64, F64 -> Bool
+
+			## Returns `True` if `a` and `b` are equal within the given tolerances:
+			## exactly equal (including `+0.0`/`-0.0` and same-sign infinities), or both
+			## finite with `|a - b| <= max(abs, rel * max(|a|, |b|))`.
+			##
+			## - `rel`: allowed difference as a fraction of the larger magnitude.
+			## - `abs`: allowed difference regardless of magnitude; needed near zero.
+			##
+			## `NaN` is never approximately equal to anything, including itself. An
+			## infinity is only equal to the same infinity. This is not transitive, so do
+			## not use it as equality for `Dict`/`Set` keys.
+			##
+			## Crashes unless `0 <= rel <= 1` and `abs` is finite and `>= 0`.
+			## ```roc
+			## expect F64.is_approx_eq(0.1 + 0.2, 0.3, { rel: 1e-12, abs: 0.0 })
+			##
+			## expect F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 1e-12 })
+			##
+			## expect !F64.is_approx_eq(1e-20, 0.0, { rel: 1e-9, abs: 0.0 })
+			##
+			## expect !F64.is_approx_eq(F64.nan, F64.nan, { rel: 1.0, abs: 1.0 })
+			## ```
+			is_approx_eq : F64, F64, { rel : F64, abs : F64 } -> Bool
+			is_approx_eq = |a, b, { rel, abs }| {
+				if !(rel >= 0.0 and rel <= 1.0 and abs >= 0.0 and F64.is_finite(abs)) {
+					crash "F64.is_approx_eq: rel must be in [0, 1] and abs finite and non-negative"
+				}
+
+				if F64.is_float_eq(a, b) {
+					True
+				} else if F64.is_finite(a) and F64.is_finite(b) {
+					F64.abs(a - b) <= F64.max(abs, rel * F64.max(F64.abs(a), F64.abs(b)))
+				} else {
+					False
+				}
+			}
 
 			is_eq : _
 
@@ -17238,6 +18902,60 @@ Builtin :: [].{
 			## ```
 			from_str : Str -> Try(F64, [BadNumStr])
 
+			## Parse a [F64] from the start of a [Str], returning the parsed value
+			## and the rest of the string after it.
+			##
+			## The number is the longest prefix that matches the grammar [F64.from_str]
+			## accepts: an optional sign, then `inf`, `infinity` or `nan` (any case), a decimal
+			## mantissa with an optional exponent, or a `0x` hex float with an optional `p` exponent.
+			##
+			## There is no backtracking: if the longest match does not fit in a
+			## [F64], the result is `Err(OutOfRange)` even when a shorter prefix would.
+			## If no number starts the input, the result is `Err(NotANumber)`.
+			## No leading whitespace is skipped.
+			##
+			## The returned `rest` is a slice of the original string.
+			## ```roc
+			## expect F64.from_str_prefix("1.5e3]") == Ok({ value: 1500.0, rest: "]" })
+			##
+			## expect F64.from_str_prefix("x1") == Err(NotANumber)
+			## ```
+			from_str_prefix : Str -> Try({ value : F64, rest : Str }, [OutOfRange, NotANumber])
+			from_str_prefix = |str| {
+				parsed = f64_from_str_prefix_raw(str)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
+			## Parse a [F64] from the start of a list of UTF-8 bytes, returning the
+			## parsed value and the bytes after it. The bytes after the number do not
+			## need to be valid UTF-8, so this works on mixed binary/text formats.
+			##
+			## The grammar is the same as [F64.from_str_prefix].
+			##
+			## The returned `rest` is a slice of the original list.
+			## ```roc
+			## expect F64.from_utf8_prefix([0x32, 0x2E, 0x35, 0x2C]) == Ok({ value: 2.5, rest: [0x2C] })
+			## ```
+			from_utf8_prefix : List(U8) -> Try({ value : F64, rest : List(U8) }, [OutOfRange, NotANumber])
+			from_utf8_prefix = |bytes| {
+				parsed = f64_from_utf8_prefix_raw(bytes)
+
+				if parsed.err == 0 {
+					Ok({ value: parsed.value, rest: parsed.rest })
+				} else if parsed.err == 1 {
+					Err(NotANumber)
+				} else {
+					Err(OutOfRange)
+				}
+			}
+
 			# Conversions to signed integers (all lossy - truncation + range check)
 
 			## Convert an [F64] to an [I8]. The fractional part is truncated
@@ -17663,24 +19381,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U8x16.splat(0b0000_1100).bitwise_and(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_1000)
+			## ```
 			bitwise_and : U8x16, U8x16 -> U8x16
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U8x16.splat(0b0000_1100).bitwise_or(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_1110)
+			## ```
 			bitwise_or : U8x16, U8x16 -> U8x16
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U8x16.splat(0b0000_1100).bitwise_xor(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U8x16, U8x16 -> U8x16
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1010 == 250
+			## expect U8x16.splat(0b0000_0101).bitwise_not() == U8x16.splat(0b1111_1010)
+			## ```
 			bitwise_not : U8x16 -> U8x16
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -17690,6 +19431,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U8x16.splat(0b0011_1100).bit_select(U8x16.splat(0b0101_0101), U8x16.splat(0b0110_0110)) == U8x16.splat(0b0101_0110)
+			## ```
 			bit_select : U8x16, U8x16, U8x16 -> U8x16
 
 			## Compare lane-wise for equality: each result lane is 255 where
@@ -17735,7 +19483,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i8x16.bitmask` on wasm.
 			## ```roc
-			## expect U8x16.splat(255).to_bitmask() == 65535
+			## # 0b1000_0000 == 128
+			## # 0b0000_0000_0000_0010 == 2
+			## expect U8x16.splat(0).with_lane(1, 0b1000_0000).to_bitmask() == 0b0000_0000_0000_0010
+			##
+			## # 0b1000_0000 == 128
+			## # 0b1111_1111_1111_1111 == 65535
+			## expect U8x16.splat(0b1000_0000).to_bitmask() == 0b1111_1111_1111_1111
 			## ```
 			to_bitmask : U8x16 -> U16
 
@@ -17757,11 +19511,27 @@ Builtin :: [].{
 			## `psllw` + `pand` mask, with the count masked to the lane width
 			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
 			## `i8x16.shl` masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b0000_0101).shl_wrap(2) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U8x16.splat(0b0000_0001).shl_wrap(8) == U8x16.splat(0b0000_0001)
+			## ```
 			shl_wrap : U8x16, U8 -> U8x16
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 8. For unsigned lanes this
 			## behaves the same as [U8x16.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b1010_0000).shr_wrap(3) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U8x16.splat(0b0010_0000).shr_wrap(8) == U8x16.splat(0b0010_0000)
+			## ```
 			shr_wrap : U8x16, U8 -> U8x16
 
 			## Shift every lane's bits right by the same count, filling the
@@ -17773,6 +19543,14 @@ Builtin :: [].{
 			## the count masked to the lane width first; `ushr` on AArch64 NEON
 			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
 			## natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b1010_0000).shr_zf_wrap(3) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U8x16.splat(0b0010_0000).shr_zf_wrap(8) == U8x16.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U8x16, U8 -> U8x16
 
 			## The value of the lane at the given index. Crashes if the index
@@ -18017,14 +19795,14 @@ Builtin :: [].{
 					0.U64,
 					Known(chunk_count),
 					|start|
-					# Compare the index against a limit rather than subtracting from it.
-					# Both `len < 16` and `len - 16` depend only on the list, so a loop that
-					# reads repeatedly hoists them out and keeps just the one comparison of
-					# `start` against a precomputed bound. Subtracting the other way round --
-					# `len - start < 16` -- reads the same but depends on `start`, so all of it
-					# stays in the loop.
-					#
-					# Wrapping is safe because the first check has already ruled out `len < 16`.
+						# Compare the index against a limit rather than subtracting from it.
+						# Both `len < 16` and `len - 16` depend only on the list, so a loop that
+						# reads repeatedly hoists them out and keeps just the one comparison of
+						# `start` against a precomputed bound. Subtracting the other way round --
+						# `len - start < 16` -- reads the same but depends on `start`, so all of it
+						# stays in the loop.
+						#
+						# Wrapping is safe because the first check has already ruled out `len < 16`.
 						if len >= 16 and start <= len.minus_wrap(16) {
 							Ok((simd_u8x16_load_16_unchecked(bytes, start), start + 16))
 						} else {
@@ -18225,24 +20003,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I8x16.splat(0b0000_1100).bitwise_and(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I8x16.splat(-8).bitwise_and(I8x16.splat(0b0001_1111)) == I8x16.splat(0b0001_1000)
+			## ```
 			bitwise_and : I8x16, I8x16 -> I8x16
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I8x16.splat(0b0000_1100).bitwise_or(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1101
+			## expect I8x16.splat(-8).bitwise_or(I8x16.splat(0b0000_0101)) == I8x16.splat(-3)
+			## ```
 			bitwise_or : I8x16, I8x16 -> I8x16
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I8x16.splat(0b0000_1100).bitwise_xor(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8x16.splat(-1).bitwise_xor(I8x16.splat(0b0000_0101)) == I8x16.splat(-6)
+			## ```
 			bitwise_xor : I8x16, I8x16 -> I8x16
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8x16.splat(0b0000_0101).bitwise_not() == I8x16.splat(-6)
+			## ```
 			bitwise_not : I8x16 -> I8x16
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -18252,6 +20068,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I8x16.splat(0b0011_1100).bit_select(I8x16.splat(0b0101_0101), I8x16.splat(0b0110_0110)) == I8x16.splat(0b0101_0110)
+			## ```
 			bit_select : I8x16, I8x16, I8x16 -> I8x16
 
 			## Compare lane-wise for equality: each result lane is -1 (all bits
@@ -18299,7 +20122,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i8x16.bitmask` on wasm.
 			## ```roc
-			## expect I8x16.splat(-1).to_bitmask() == 65535
+			## # -1 == 0b1111_1111
+			## # 0b0000_0000_0000_0010 == 2
+			## expect I8x16.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0000_0000_0010
+			##
+			## # -1 == 0b1111_1111
+			## # 0b1111_1111_1111_1111 == 65535
+			## expect I8x16.splat(-1).to_bitmask() == 0b1111_1111_1111_1111
 			## ```
 			to_bitmask : I8x16 -> U16
 
@@ -18321,6 +20150,14 @@ Builtin :: [].{
 			## `psllw` + `pand` mask, with the count masked to the lane width
 			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
 			## `i8x16.shl` masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I8x16.splat(0b0000_0101).shl_wrap(2) == I8x16.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I8x16.splat(0b0000_0001).shl_wrap(8) == I8x16.splat(0b0000_0001)
+			## ```
 			shl_wrap : I8x16, U8 -> I8x16
 
 			## Shift every lane's bits right by the same count, filling the
@@ -18332,6 +20169,18 @@ Builtin :: [].{
 			## the count masked to the lane width first; `ushr` on AArch64 NEON
 			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
 			## natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8x16.splat(0b0101_0000).shr_zf_wrap(3) == I8x16.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_1111 == 15
+			## expect I8x16.splat(-1).shr_zf_wrap(4) == I8x16.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I8x16.splat(0b0010_0000).shr_zf_wrap(8) == I8x16.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I8x16, U8 -> I8x16
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -18344,7 +20193,16 @@ Builtin :: [].{
 			## AArch64 NEON takes the pre-masked count; `i8x16.shr_s` on wasm
 			## masks the count natively.
 			## ```roc
-			## expect I8x16.splat(-8).shr_wrap(1).get_lane(0) == -4
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8x16.splat(0b0101_0000).shr_wrap(3) == I8x16.splat(0b0000_1010)
+			##
+			## # -32 == 0b1110_0000
+			## # -8 == 0b1111_1000
+			## expect I8x16.splat(-32).shr_wrap(2) == I8x16.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I8x16.splat(0b0010_0000).shr_wrap(8) == I8x16.splat(0b0010_0000)
 			## ```
 			shr_wrap : I8x16, U8 -> I8x16
 
@@ -18726,24 +20584,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U16x8.splat(0b0000_1100).bitwise_and(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_1000)
+			## ```
 			bitwise_and : U16x8, U16x8 -> U16x8
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U16x8.splat(0b0000_1100).bitwise_or(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_1110)
+			## ```
 			bitwise_or : U16x8, U16x8 -> U16x8
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U16x8.splat(0b0000_1100).bitwise_xor(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U16x8, U16x8 -> U16x8
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1010 == 65530
+			## expect U16x8.splat(0b0000_0101).bitwise_not() == U16x8.splat(0b1111_1111_1111_1010)
+			## ```
 			bitwise_not : U16x8 -> U16x8
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -18753,6 +20634,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U16x8.splat(0b0011_1100).bit_select(U16x8.splat(0b0101_0101), U16x8.splat(0b0110_0110)) == U16x8.splat(0b0101_0110)
+			## ```
 			bit_select : U16x8, U16x8, U16x8 -> U16x8
 
 			## Compare lane-wise for equality: each result lane is 65535 where
@@ -18798,7 +20686,13 @@ Builtin :: [].{
 			## narrowing sequence on AArch64 NEON (no single instruction), and
 			## `i16x8.bitmask` on wasm.
 			## ```roc
-			## expect U16x8.splat(65535).to_bitmask() == 255
+			## # 0b1000_0000_0000_0000 == 32768
+			## # 0b0000_0010 == 2
+			## expect U16x8.splat(0).with_lane(1, 0b1000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000 == 32768
+			## # 0b1111_1111 == 255
+			## expect U16x8.splat(0b1000_0000_0000_0000).to_bitmask() == 0b1111_1111
 			## ```
 			to_bitmask : U16x8 -> U8
 
@@ -18819,11 +20713,27 @@ Builtin :: [].{
 			## Lowers to `psllw` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b0000_0101).shl_wrap(2) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U16x8.splat(0b0000_0001).shl_wrap(16) == U16x8.splat(0b0000_0001)
+			## ```
 			shl_wrap : U16x8, U8 -> U16x8
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 16. For unsigned lanes this
 			## behaves the same as [U16x8.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b1010_0000).shr_wrap(3) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U16x8.splat(0b0010_0000).shr_wrap(16) == U16x8.splat(0b0010_0000)
+			## ```
 			shr_wrap : U16x8, U8 -> U16x8
 
 			## Shift every lane's bits right by the same count, filling the
@@ -18834,6 +20744,14 @@ Builtin :: [].{
 			## Lowers to `psrlw` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b1010_0000).shr_zf_wrap(3) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U16x8.splat(0b0010_0000).shr_zf_wrap(16) == U16x8.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U16x8, U8 -> U16x8
 
 			## The value of the lane at the given index. Crashes if the index
@@ -18994,6 +20912,19 @@ Builtin :: [].{
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u16x8_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Read 8 numeric U16 units starting at the given unit index.
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm. Each lane preserves its input unit value.
+			load_units : List(U16), U64 -> Try(U16x8, [OutOfBounds])
+			load_units = |units, index| {
+				len = List.len(units)
+				if len < 8 or index > len.minus_wrap(8) {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u16x8_load_units_unchecked(units, index))
 				}
 			}
 
@@ -19258,24 +21189,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I16x8.splat(0b0000_1100).bitwise_and(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I16x8.splat(-8).bitwise_and(I16x8.splat(0b0001_1111)) == I16x8.splat(0b0001_1000)
+			## ```
 			bitwise_and : I16x8, I16x8 -> I16x8
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I16x8.splat(0b0000_1100).bitwise_or(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1101
+			## expect I16x8.splat(-8).bitwise_or(I16x8.splat(0b0000_0101)) == I16x8.splat(-3)
+			## ```
 			bitwise_or : I16x8, I16x8 -> I16x8
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I16x8.splat(0b0000_1100).bitwise_xor(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16x8.splat(-1).bitwise_xor(I16x8.splat(0b0000_0101)) == I16x8.splat(-6)
+			## ```
 			bitwise_xor : I16x8, I16x8 -> I16x8
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16x8.splat(0b0000_0101).bitwise_not() == I16x8.splat(-6)
+			## ```
 			bitwise_not : I16x8 -> I16x8
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -19285,6 +21254,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I16x8.splat(0b0011_1100).bit_select(I16x8.splat(0b0101_0101), I16x8.splat(0b0110_0110)) == I16x8.splat(0b0101_0110)
+			## ```
 			bit_select : I16x8, I16x8, I16x8 -> I16x8
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -19329,6 +21305,15 @@ Builtin :: [].{
 			## Lowers to a `packsswb` + `pmovmskb` sequence on x86-64, a short
 			## narrowing sequence on AArch64 NEON (no single instruction), and
 			## `i16x8.bitmask` on wasm.
+			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I16x8.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b1111_1111 == 255
+			## expect I16x8.splat(-1).to_bitmask() == 0b1111_1111
+			## ```
 			to_bitmask : I16x8 -> U8
 
 			## Returns `Bool.True` if any lane's sign bit is set (any lane is
@@ -19348,6 +21333,14 @@ Builtin :: [].{
 			## Lowers to `psllw` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I16x8.splat(0b0000_0101).shl_wrap(2) == I16x8.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I16x8.splat(0b0000_0001).shl_wrap(16) == I16x8.splat(0b0000_0001)
+			## ```
 			shl_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane's bits right by the same count, preserving the
@@ -19358,6 +21351,18 @@ Builtin :: [].{
 			## Lowers to `psraw` on x86-64 with the count masked to the lane
 			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_s` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16x8.splat(0b0101_0000).shr_wrap(3) == I16x8.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1000
+			## expect I16x8.splat(-32).shr_wrap(2) == I16x8.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I16x8.splat(0b0010_0000).shr_wrap(16) == I16x8.splat(0b0010_0000)
+			## ```
 			shr_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane's bits right by the same count, filling the
@@ -19368,6 +21373,18 @@ Builtin :: [].{
 			## Lowers to `psrlw` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16x8.splat(0b0101_0000).shr_zf_wrap(3) == I16x8.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I16x8.splat(-1).shr_zf_wrap(12) == I16x8.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I16x8.splat(0b0010_0000).shr_zf_wrap(16) == I16x8.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane right by the same count, rounding to nearest
@@ -19757,24 +21774,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U32x4.splat(0b0000_1100).bitwise_and(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_1000)
+			## ```
 			bitwise_and : U32x4, U32x4 -> U32x4
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U32x4.splat(0b0000_1100).bitwise_or(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_1110)
+			## ```
 			bitwise_or : U32x4, U32x4 -> U32x4
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U32x4.splat(0b0000_1100).bitwise_xor(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U32x4, U32x4 -> U32x4
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1010 == 4294967290
+			## expect U32x4.splat(0b0000_0101).bitwise_not() == U32x4.splat(0b1111_1111_1111_1111_1111_1111_1111_1010)
+			## ```
 			bitwise_not : U32x4 -> U32x4
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -19784,6 +21824,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U32x4.splat(0b0011_1100).bit_select(U32x4.splat(0b0101_0101), U32x4.splat(0b0110_0110)) == U32x4.splat(0b0101_0110)
+			## ```
 			bit_select : U32x4, U32x4, U32x4 -> U32x4
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -19829,7 +21876,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i32x4.bitmask` on wasm.
 			## ```roc
-			## expect U32x4.splat(4294967295).to_bitmask() == 15
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000 == 2147483648
+			## # 0b0000_0010 == 2
+			## expect U32x4.splat(0).with_lane(1, 0b1000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000 == 2147483648
+			## # 0b0000_1111 == 15
+			## expect U32x4.splat(0b1000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_1111
 			## ```
 			to_bitmask : U32x4 -> U8
 
@@ -19850,11 +21903,27 @@ Builtin :: [].{
 			## Lowers to `pslld` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b0000_0101).shl_wrap(2) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U32x4.splat(0b0000_0001).shl_wrap(32) == U32x4.splat(0b0000_0001)
+			## ```
 			shl_wrap : U32x4, U8 -> U32x4
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 32. For unsigned lanes this
 			## behaves the same as [U32x4.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b1010_0000).shr_wrap(3) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U32x4.splat(0b0010_0000).shr_wrap(32) == U32x4.splat(0b0010_0000)
+			## ```
 			shr_wrap : U32x4, U8 -> U32x4
 
 			## Shift every lane's bits right by the same count, filling the
@@ -19865,6 +21934,14 @@ Builtin :: [].{
 			## Lowers to `psrld` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b1010_0000).shr_zf_wrap(3) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U32x4.splat(0b0010_0000).shr_zf_wrap(32) == U32x4.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U32x4, U8 -> U32x4
 
 			## The value of the lane at the given index. Crashes if the index
@@ -19995,6 +22072,19 @@ Builtin :: [].{
 					Err(OutOfBounds)
 				} else {
 					Ok(simd_u32x4_load_16_unchecked(bytes, index))
+				}
+			}
+
+			## Read 4 numeric U32 units starting at the given unit index.
+			## Lowers to `movdqu` on x86-64, `ldr` (Q register) on AArch64,
+			## and `v128.load` on wasm. Each lane preserves its input unit value.
+			load_units : List(U32), U64 -> Try(U32x4, [OutOfBounds])
+			load_units = |units, index| {
+				len = List.len(units)
+				if len < 4 or index > len.minus_wrap(4) {
+					Err(OutOfBounds)
+				} else {
+					Ok(simd_u32x4_load_units_unchecked(units, index))
 				}
 			}
 
@@ -20225,24 +22315,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I32x4.splat(0b0000_1100).bitwise_and(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I32x4.splat(-8).bitwise_and(I32x4.splat(0b0001_1111)) == I32x4.splat(0b0001_1000)
+			## ```
 			bitwise_and : I32x4, I32x4 -> I32x4
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I32x4.splat(0b0000_1100).bitwise_or(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I32x4.splat(-8).bitwise_or(I32x4.splat(0b0000_0101)) == I32x4.splat(-3)
+			## ```
 			bitwise_or : I32x4, I32x4 -> I32x4
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I32x4.splat(0b0000_1100).bitwise_xor(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32x4.splat(-1).bitwise_xor(I32x4.splat(0b0000_0101)) == I32x4.splat(-6)
+			## ```
 			bitwise_xor : I32x4, I32x4 -> I32x4
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32x4.splat(0b0000_0101).bitwise_not() == I32x4.splat(-6)
+			## ```
 			bitwise_not : I32x4 -> I32x4
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -20252,6 +22380,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I32x4.splat(0b0011_1100).bit_select(I32x4.splat(0b0101_0101), I32x4.splat(0b0110_0110)) == I32x4.splat(0b0101_0110)
+			## ```
 			bit_select : I32x4, I32x4, I32x4 -> I32x4
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -20295,6 +22430,15 @@ Builtin :: [].{
 			## Lowers to `movmskps` on x86-64, a short emulated narrowing
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i32x4.bitmask` on wasm.
+			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I32x4.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32x4.splat(-1).to_bitmask() == 0b0000_1111
+			## ```
 			to_bitmask : I32x4 -> U8
 
 			## Returns `Bool.True` if any lane's sign bit is set (any lane is
@@ -20314,6 +22458,14 @@ Builtin :: [].{
 			## Lowers to `pslld` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I32x4.splat(0b0000_0101).shl_wrap(2) == I32x4.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I32x4.splat(0b0000_0001).shl_wrap(32) == I32x4.splat(0b0000_0001)
+			## ```
 			shl_wrap : I32x4, U8 -> I32x4
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -20324,6 +22476,18 @@ Builtin :: [].{
 			## Lowers to `psrad` on x86-64 with the count masked to the lane
 			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_s` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32x4.splat(0b0101_0000).shr_wrap(3) == I32x4.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## expect I32x4.splat(-32).shr_wrap(2) == I32x4.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I32x4.splat(0b0010_0000).shr_wrap(32) == I32x4.splat(0b0010_0000)
+			## ```
 			shr_wrap : I32x4, U8 -> I32x4
 
 			## Shift every lane's bits right by the same count, filling the
@@ -20334,6 +22498,18 @@ Builtin :: [].{
 			## Lowers to `psrld` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32x4.splat(0b0101_0000).shr_zf_wrap(3) == I32x4.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32x4.splat(-1).shr_zf_wrap(28) == I32x4.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I32x4.splat(0b0010_0000).shr_zf_wrap(32) == I32x4.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I32x4, U8 -> I32x4
 
 			## Arithmetic right shift that rounds to nearest by adding a
@@ -20650,24 +22826,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U64x2.splat(0b0000_1100).bitwise_and(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_1000)
+			## ```
 			bitwise_and : U64x2, U64x2 -> U64x2
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U64x2.splat(0b0000_1100).bitwise_or(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_1110)
+			## ```
 			bitwise_or : U64x2, U64x2 -> U64x2
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U64x2.splat(0b0000_1100).bitwise_xor(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U64x2, U64x2 -> U64x2
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010 == 18446744073709551610
+			## expect U64x2.splat(0b0000_0101).bitwise_not() == U64x2.splat(0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010)
+			## ```
 			bitwise_not : U64x2 -> U64x2
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -20677,6 +22876,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U64x2.splat(0b0011_1100).bit_select(U64x2.splat(0b0101_0101), U64x2.splat(0b0110_0110)) == U64x2.splat(0b0101_0110)
+			## ```
 			bit_select : U64x2, U64x2, U64x2 -> U64x2
 
 			## Compare lane-wise for equality: each result lane is all-ones where
@@ -20694,7 +22900,13 @@ Builtin :: [].{
 			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
 			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
 			## ```roc
-			## expect U64x2.splat(18446744073709551615).to_bitmask() == 3
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000 == 9223372036854775808
+			## # 0b0000_0010 == 2
+			## expect U64x2.splat(0).with_lane(1, 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000 == 9223372036854775808
+			## # 0b0000_0011 == 3
+			## expect U64x2.splat(0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0011
 			## ```
 			to_bitmask : U64x2 -> U8
 
@@ -20715,11 +22927,27 @@ Builtin :: [].{
 			## Lowers to `psllq` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b0000_0101).shl_wrap(2) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U64x2.splat(0b0000_0001).shl_wrap(64) == U64x2.splat(0b0000_0001)
+			## ```
 			shl_wrap : U64x2, U8 -> U64x2
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 64. For unsigned lanes this
 			## behaves the same as [U64x2.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b1010_0000).shr_wrap(3) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U64x2.splat(0b0010_0000).shr_wrap(64) == U64x2.splat(0b0010_0000)
+			## ```
 			shr_wrap : U64x2, U8 -> U64x2
 
 			## Shift every lane's bits right by the same count, filling the
@@ -20730,6 +22958,14 @@ Builtin :: [].{
 			## Lowers to `psrlq` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b1010_0000).shr_zf_wrap(3) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U64x2.splat(0b0010_0000).shr_zf_wrap(64) == U64x2.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U64x2, U8 -> U64x2
 
 			## The value of the lane at the given index. Crashes if the index
@@ -20816,7 +23052,9 @@ Builtin :: [].{
 			## (polynomial, crypto extension) on AArch64 NEON, and a software
 			## sequence on wasm (no instruction).
 			## ```roc
-			## expect U64x2.splat(3).carryless_times_lo(U64x2.splat(5)).get_lane(0) == 15
+			## # 0b0000_0011 == 3
+			## # 0b0000_0101 == 5
+			## expect U64x2.splat(0b0000_0011).carryless_times_lo(U64x2.splat(0b0000_0011)).get_lane(0) == 0b0000_0101
 			## ```
 			carryless_times_lo : U64x2, U64x2 -> U64x2
 
@@ -20828,6 +23066,11 @@ Builtin :: [].{
 			## Lowers to `pclmulqdq` (immediate `0x11`) on x86-64, `pmull2`
 			## (polynomial, crypto extension) on AArch64 NEON, and a software
 			## sequence on wasm (no instruction).
+			## ```roc
+			## # 0b0000_0011 == 3
+			## # 0b0000_0101 == 5
+			## expect U64x2.splat(0b0000_0011).carryless_times_hi(U64x2.splat(0b0000_0011)).get_lane(0) == 0b0000_0101
+			## ```
 			carryless_times_hi : U64x2, U64x2 -> U64x2
 
 			## Read 16 bytes starting at the given byte index, as lanes in
@@ -21033,24 +23276,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I64x2.splat(0b0000_1100).bitwise_and(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I64x2.splat(-8).bitwise_and(I64x2.splat(0b0001_1111)) == I64x2.splat(0b0001_1000)
+			## ```
 			bitwise_and : I64x2, I64x2 -> I64x2
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I64x2.splat(0b0000_1100).bitwise_or(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I64x2.splat(-8).bitwise_or(I64x2.splat(0b0000_0101)) == I64x2.splat(-3)
+			## ```
 			bitwise_or : I64x2, I64x2 -> I64x2
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I64x2.splat(0b0000_1100).bitwise_xor(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64x2.splat(-1).bitwise_xor(I64x2.splat(0b0000_0101)) == I64x2.splat(-6)
+			## ```
 			bitwise_xor : I64x2, I64x2 -> I64x2
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64x2.splat(0b0000_0101).bitwise_not() == I64x2.splat(-6)
+			## ```
 			bitwise_not : I64x2 -> I64x2
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -21060,6 +23341,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I64x2.splat(0b0011_1100).bit_select(I64x2.splat(0b0101_0101), I64x2.splat(0b0110_0110)) == I64x2.splat(0b0101_0110)
+			## ```
 			bit_select : I64x2, I64x2, I64x2 -> I64x2
 
 			## Compare lane-wise for equality: each result lane is all-ones where
@@ -21103,7 +23391,13 @@ Builtin :: [].{
 			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
 			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
 			## ```roc
-			## expect I64x2.splat(-1).to_bitmask() == 3
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I64x2.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0011 == 3
+			## expect I64x2.splat(-1).to_bitmask() == 0b0000_0011
 			## ```
 			to_bitmask : I64x2 -> U8
 
@@ -21124,6 +23418,14 @@ Builtin :: [].{
 			## Lowers to `psllq` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I64x2.splat(0b0000_0101).shl_wrap(2) == I64x2.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I64x2.splat(0b0000_0001).shl_wrap(64) == I64x2.splat(0b0000_0001)
+			## ```
 			shl_wrap : I64x2, U8 -> I64x2
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -21135,6 +23437,18 @@ Builtin :: [].{
 			## to a `psrlq` + sign-fixup sequence, with the count masked to the
 			## lane width first; AArch64 NEON `sshr` takes the pre-masked count;
 			## wasm `i64x2.shr_s` masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64x2.splat(0b0101_0000).shr_wrap(3) == I64x2.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## expect I64x2.splat(-32).shr_wrap(2) == I64x2.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I64x2.splat(0b0010_0000).shr_wrap(64) == I64x2.splat(0b0010_0000)
+			## ```
 			shr_wrap : I64x2, U8 -> I64x2
 
 			## Shift every lane's bits right by the same count, filling the
@@ -21145,6 +23459,18 @@ Builtin :: [].{
 			## Lowers to `psrlq` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64x2.splat(0b0101_0000).shr_zf_wrap(3) == I64x2.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I64x2.splat(-1).shr_zf_wrap(60) == I64x2.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I64x2.splat(0b0010_0000).shr_zf_wrap(64) == I64x2.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I64x2, U8 -> I64x2
 
 			## The value of the lane at the given index. Crashes if the index
@@ -21752,6 +24078,58 @@ f32_from_str : Str -> Try(F32, [BadNumStr])
 
 f64_from_str : Str -> Try(F64, [BadNumStr])
 
+u8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U8 }
+
+u8_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U8 }
+
+i8_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I8 }
+
+i8_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I8 }
+
+u16_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U16 }
+
+u16_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U16 }
+
+i16_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I16 }
+
+i16_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I16 }
+
+u32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U32 }
+
+u32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U32 }
+
+i32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I32 }
+
+i32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I32 }
+
+u64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U64 }
+
+u64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U64 }
+
+i64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I64 }
+
+i64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I64 }
+
+u128_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : U128 }
+
+u128_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : U128 }
+
+i128_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : I128 }
+
+i128_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : I128 }
+
+dec_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : Dec }
+
+dec_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : Dec }
+
+f32_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : F32 }
+
+f32_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : F32 }
+
+f64_from_str_prefix_raw : Str -> { err : U8, rest : Str, value : F64 }
+
+f64_from_utf8_prefix_raw : List(U8) -> { err : U8, rest : List(U8), value : F64 }
+
 u8_from_int_digits : List(U8) -> Try(U8, [OutOfRange])
 u8_from_int_digits = |digits| int_from_digits(digits, |str| u8_from_str(str))
 
@@ -21866,7 +24244,7 @@ from_numeral_with = |numeral, parse|
 				Ok(num) => Ok(num)
 				Err(_) => Err(InvalidNumeral("invalid numeric literal"))
 			}
-		}
+	}
 
 numeral_to_str : Num.Numeral -> Try(Str, [InvalidNumeral(Str)])
 numeral_to_str = |numeral|
@@ -21990,12 +24368,12 @@ u8_repeat = |byte, count| {
 }
 
 u8_append : List(U8), U8 -> List(U8)
-u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve(list, 1), byte)
+u8_append = |list, byte| u8_list_append_unsafe(u8_list_reserve_for_append(list, 1), byte)
 
 u8_concat : List(U8), List(U8) -> List(U8)
 u8_concat = |left, right| {
 	len = u8_list_len(right)
-	var $out = u8_list_reserve(left, len)
+	var $out = u8_list_reserve_for_append(left, len)
 	var $index = 0
 
 	while $index < len {
@@ -22149,6 +24527,8 @@ u8_list_append_unsafe : List(U8), U8 -> List(U8)
 
 u8_list_reserve : List(U8), U64 -> List(U8)
 
+u8_list_reserve_for_append : List(U8), U64 -> List(U8)
+
 dec_sqrt_unsafe : Dec -> Dec
 
 dec_pow_unsafe : Dec, Dec -> Dec
@@ -22197,6 +24577,43 @@ dec_floor_to_i128 = |self| I128.div_floor_by(Dec.to_attos(self), dec_attos_per_w
 
 dec_ceiling_to_i128 : Dec -> I128
 dec_ceiling_to_i128 = |self| I128.div_ceil_by(Dec.to_attos(self), dec_attos_per_whole)
+
+## `quotient * step` as a [Dec], or `Err(Overflow)` if it does not fit.
+dec_attos_multiple_try : I128, I128 -> Try(Dec, [Overflow])
+dec_attos_multiple_try = |quotient, step_attos|
+	match I128.times_try(quotient, step_attos) {
+		Ok(attos) => Ok(Dec.from_attos(attos))
+		Err(Overflow) => Err(Overflow)
+	}
+
+## Round to the nearest multiple of a positive `step_attos`, entirely in
+## integer attos. The halfway test compares `|remainder|` with
+## `step - |remainder|` so that it cannot overflow.
+dec_round_to_multiple_try : Dec, I128, [AwayFromZero, ToEven] -> Try(Dec, [Overflow])
+dec_round_to_multiple_try = |self, step_attos, ties| {
+	attos = Dec.to_attos(self)
+	truncated = I128.div_trunc_by(attos, step_attos)
+	remainder_magnitude = I128.abs(I128.rem_by(attos, step_attos))
+	distance_to_next = step_attos - remainder_magnitude
+	away = if remainder_magnitude > distance_to_next {
+		True
+	} else if remainder_magnitude < distance_to_next {
+		False
+	} else {
+		match ties {
+			AwayFromZero => True
+			ToEven => I128.is_odd(truncated)
+		}
+	}
+	quotient = if !away {
+		truncated
+	} else if attos < 0 {
+		truncated - 1
+	} else {
+		truncated + 1
+	}
+	dec_attos_multiple_try(quotient, step_attos)
+}
 
 dec_floor_to_whole : Dec -> Dec
 dec_floor_to_whole = |self| {
@@ -22270,7 +24687,7 @@ dec_from_digits = |digits, parse| {
 					}
 				}
 			}
-		}
+	}
 }
 
 digits_to_str : List(U8) -> Try(Str, [OutOfRange])
@@ -22564,7 +24981,7 @@ unsigned_div_ceil_try = |zero, one, a, b|
 			} else {
 				Ok(quotient + one)
 			}
-		}
+	}
 
 signed_div_ceil_try : item, item, item, item, item, item -> Try(item, [DivByZero, Overflow])
 	where [
@@ -22604,7 +25021,7 @@ signed_div_ceil_try = |lowest, zero, one, neg_one, a, b|
 			} else {
 				Ok(quotient)
 			}
-		}
+	}
 
 list_append_if_ok : List(a), Try(a, err) -> List(a)
 list_append_if_ok = |list, maybe_item|
@@ -22692,7 +25109,7 @@ signed_times_saturated_rescaled = |lowest, highest, zero, neg_one, a, b|
 			} else {
 				highest
 			}
-		}
+	}
 
 integer_is_even : item, item, item -> Bool
 	where [item.is_eq : item, item -> Bool, item.rem_by : item, item -> item]
@@ -22721,8 +25138,6 @@ signed_is_multiple_of = |zero, neg_one, value, divisor|
 	} else {
 		value.rem_by(divisor) == zero
 	}
-
-numeric_compare : item, item -> [Before, Same, After]
 
 range_with_step : num, num, num, [Exclusive, Inclusive], [To, From] -> Num.Range(num)
 	where [num.range_len_if_known : num, num, num, [Exclusive, Inclusive] -> [Known(U64), Unknown]]
@@ -22981,6 +25396,15 @@ iter_from_step = |len_if_known, step| {
 	step,
 }
 
+# The `Stream` counterpart of `iter_from_step`: every `Stream` source and
+# adapter builds its value through this one registered constructor, so Monotype
+# can give the result its exact minted representation.
+stream_from_step : [Known(U64), Unknown], (() => [One({ item : item, rest : Stream(item) }), Skip({ rest : Stream(item) }), Done]) -> Stream(item)
+stream_from_step = |len_if_known, step!| {
+	len_if_known,
+	step!,
+}
+
 range_done : () -> Iter(item)
 range_done = || iter_from_step(
 	Known(0),
@@ -23000,6 +25424,20 @@ iter_with_index = |src, index|
 				Done => Done
 				Skip({ rest }) => Skip({ rest: iter_with_index(rest, index) })
 				One({ item, rest }) => One({ item: (index, item), rest: iter_with_index(rest, index + 1) })
+			},
+	)
+
+# The recursive worker behind `Stream.with_index`; the public `with_index` is
+# the arity-1 wrapper that seeds the counter.
+stream_with_index : Stream(a), U64 -> Stream((U64, a))
+stream_with_index = |src, index|
+	stream_from_step(
+		Stream.size_hint(src),
+		||
+			match Stream.next!(src) {
+				Done => Done
+				Skip({ rest }) => Skip({ rest: stream_with_index(rest, index) })
+				One({ item, rest }) => One({ item: (index, item), rest: stream_with_index(rest, index + 1) })
 			},
 	)
 
@@ -23038,7 +25476,7 @@ iter_step_by = |src, (stride, pending)|
 						} else {
 							Skip({ rest: iter_step_by(rest, (stride, pending - 1)) })
 						}
-					}
+				}
 			},
 	)
 
@@ -23303,6 +25741,15 @@ append_utf8_code_point = |out, code_point|
 # Implemented by the compiler, does not perform bounds checks
 list_get_unsafe : List(item), U64 -> item
 
+# Implemented by the compiler: the same Bool, marking the branch it decides as
+# the one taken in the common case, so the other branch is laid out cold.
+bool_likely : Bool -> Bool
+
+# Implemented by the compiler: the same list, with a hint that the item at this
+# index is about to be used. It reads nothing, and an index outside the list
+# is harmless.
+list_prefetched : List(item), U64 -> List(item)
+
 # Implemented by the compiler, does not perform bounds checks
 list_append_unsafe : List(item), item -> List(item)
 
@@ -23376,6 +25823,11 @@ list_map_write_unsafe : List(output), U64, output -> List(output)
 # Implemented by the compiler, ensures at least spare additional items of capacity
 list_reserve : List(item), U64 -> List(item)
 
+# Implemented by the compiler, ensures at least spare additional items of
+# capacity ahead of appending them. Unlike list_reserve, growth takes at least
+# the next geometric capacity step, so a run of appends stays amortized-linear.
+list_reserve_for_append : List(item), U64 -> List(item)
+
 # Implemented by the compiler. Appends count items copied from the list
 # itself beginning at start, reading through freshly appended items. The
 # caller has already verified start is in bounds and count is nonzero.
@@ -23396,6 +25848,10 @@ list_append_le_bytes : List(U8), U64, U64 -> List(U8)
 
 # Implemented by the compiler, trims unused list capacity
 list_release_excess_capacity : List(item) -> List(item)
+
+# Implemented by the compiler: removes every item, keeping the allocation and
+# its capacity when the list is uniquely owned
+list_clear : List(item) -> List(item)
 
 # Implemented by the compiler. Consumes the list and sorts it stably using the
 # boxed comparator. The comparator allocation is borrowed for the whole call.
@@ -23540,6 +25996,8 @@ simd_u16x8_with_lane_unchecked : Num.U16x8, U64, U16 -> Num.U16x8
 
 simd_u16x8_load_16_unchecked : List(U8), U64 -> Num.U16x8
 
+simd_u16x8_load_units_unchecked : List(U16), U64 -> Num.U16x8
+
 simd_u16x8_store_16_unchecked : Num.U16x8, List(U8), U64 -> List(U8)
 
 simd_i16x8_get_lane_unchecked : Num.I16x8, U64 -> I16
@@ -23555,6 +26013,8 @@ simd_u32x4_get_lane_unchecked : Num.U32x4, U64 -> U32
 simd_u32x4_with_lane_unchecked : Num.U32x4, U64, U32 -> Num.U32x4
 
 simd_u32x4_load_16_unchecked : List(U8), U64 -> Num.U32x4
+
+simd_u32x4_load_units_unchecked : List(U32), U64 -> Num.U32x4
 
 simd_u32x4_store_16_unchecked : Num.U32x4, List(U8), U64 -> List(U8)
 
@@ -23581,3 +26041,267 @@ simd_i64x2_with_lane_unchecked : Num.I64x2, U64, I64 -> Num.I64x2
 simd_i64x2_load_16_unchecked : List(U8), U64 -> Num.I64x2
 
 simd_i64x2_store_16_unchecked : Num.I64x2, List(U8), U64 -> List(U8)
+
+# Wide UTF decoding borrows bytes and sizes before allocating. Status 0 is
+# success, 1/2 are invalid units, and 3 is an incomplete trailing code unit.
+wide_utf_short_max_bytes : U64
+wide_utf_short_max_bytes = 23
+
+utf8_width : U64 -> U64
+utf8_width = |code_point|
+	if code_point < 0x80 {
+		1
+	} else if code_point < 0x800 {
+		2
+	} else if code_point < 0x10000 {
+		3
+	} else {
+		4
+	}
+
+utf16_result : { index : U64, status : U8, string : Str }, U64 -> Try(Str, [BadUtf16({ problem : Str.Utf16Problem, index : U64 })])
+utf16_result = |decoded, offset| {
+	match decoded.status {
+		0 => Ok(decoded.string)
+		1 => Err(BadUtf16({ problem: UnpairedHighSurrogate, index: decoded.index + offset }))
+		2 => Err(BadUtf16({ problem: UnpairedLowSurrogate, index: decoded.index + offset }))
+		3 => Err(BadUtf16({ problem: UnexpectedEndOfSequence, index: decoded.index + offset }))
+		_ => crash "Invalid UTF-16 decoder status"
+	}
+}
+
+utf16_byte_order : List(U8) -> Try(Bool, [MissingByteOrderMark])
+utf16_byte_order = |bytes| {
+	if List.len(bytes) < 2 {
+		return Err(MissingByteOrderMark)
+	}
+	if list_get_unsafe(bytes, 0) == 255 and list_get_unsafe(bytes, 1) == 254 {
+		Ok(True)
+	} else if list_get_unsafe(bytes, 0) == 254 and list_get_unsafe(bytes, 1) == 255 {
+		Ok(False)
+	} else {
+		Err(MissingByteOrderMark)
+	}
+}
+
+# Caller establishes that a full code unit is available.
+utf16_read : List(U8), U64, Bool -> U16
+utf16_read = |bytes, index, little_endian| {
+	unit = u16_from_le_bytes_unchecked(bytes, index)
+	if little_endian {
+		unit
+	} else {
+		unit.shl_wrap(8).bitwise_or(unit.shr_wrap(8))
+	}
+}
+
+utf16_load : List(U8), U64, Bool -> Num.U16x8
+utf16_load = |bytes, index, little_endian| {
+	lanes = simd_u16x8_load_16_unchecked(bytes, index)
+	if little_endian {
+		lanes
+	} else {
+		lanes.shl_wrap(8).bitwise_or(lanes.shr_wrap(8))
+	}
+}
+
+utf16_ascii_chunk : List(U8), U64, Bool -> Bool
+utf16_ascii_chunk = |bytes, index, little_endian| {
+	a = utf16_load(bytes, index, little_endian)
+	b = utf16_load(bytes, index + 16, little_endian)
+	a.bitwise_or(b).gt_lanes(Num.U16x8.splat(127)).to_bitmask() == 0
+}
+
+utf16_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
+utf16_step = |bytes, index, little_endian| {
+	remaining = List.len(bytes) - index
+	if remaining < 2 {
+		return { scalar: 0xFFFD, bytes: remaining, status: 3 }
+	}
+	unit = utf16_read(bytes, index, little_endian)
+	if unit >= 0xD800 and unit <= 0xDBFF {
+		if remaining >= 4 {
+			low = utf16_read(bytes, index + 2, little_endian)
+			if low >= 0xDC00 and low <= 0xDFFF {
+				return { scalar: 0x10000 + (unit.to_u64() - 0xD800) * 1024 + (low.to_u64() - 0xDC00), bytes: 4, status: 0 }
+			}
+		}
+		{ scalar: 0xFFFD, bytes: 2, status: 1 }
+	} else if unit >= 0xDC00 and unit <= 0xDFFF {
+		{ scalar: 0xFFFD, bytes: 2, status: 2 }
+	} else {
+		{ scalar: unit.to_u64(), bytes: 2, status: 0 }
+	}
+}
+
+decode_utf16 : List(U8), Bool, Bool -> { index : U64, status : U8, string : Str }
+decode_utf16 = |bytes, little_endian, lossy| {
+	len = List.len(bytes)
+	var $size = 0.U64
+	var $index = 0.U64
+	while $index < len {
+		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+			$size = $size + 16
+			$index = $index + 32
+		} else {
+			step = utf16_step(bytes, $index, little_endian)
+			if step.status != 0 and !lossy {
+				return { index: $index, status: step.status, string: "" }
+			}
+			$size = $size + utf8_width(step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	if $size <= wide_utf_short_max_bytes {
+		string = if little_endian {
+			str_from_utf16_le_short(bytes)
+		} else {
+			str_from_utf16_be_short(bytes)
+		}
+		return { index: 0, status: 0, string }
+	}
+	var $out = u8_list_with_capacity($size)
+	$index = 0
+	while $index < len {
+		if len - $index >= 32 and utf16_read(bytes, $index, little_endian) <= 127 and utf16_ascii_chunk(bytes, $index, little_endian) {
+			a = utf16_load(bytes, $index, little_endian)
+			b = utf16_load(bytes, $index + 16, little_endian)
+			$out = a.narrow_to_u8x16_wrap(b).append_to($out)
+			$index = $index + 32
+		} else {
+			step = utf16_step(bytes, $index, little_endian)
+			$out = append_utf8_code_point($out, step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	{ index: 0, status: 0, string: str_from_utf8_validated($out) }
+}
+
+# Private: borrows bytes whose lossy output was sized to at most 23 bytes.
+str_from_utf16_le_short : List(U8) -> Str
+
+str_from_utf16_be_short : List(U8) -> Str
+
+utf32_result : { index : U64, status : U8, string : Str }, U64 -> Try(Str, [BadUtf32({ problem : Str.Utf32Problem, index : U64 })])
+utf32_result = |decoded, offset| {
+	match decoded.status {
+		0 => Ok(decoded.string)
+		1 => Err(BadUtf32({ problem: CodePointTooLarge, index: decoded.index + offset }))
+		2 => Err(BadUtf32({ problem: SurrogateCodePoint, index: decoded.index + offset }))
+		3 => Err(BadUtf32({ problem: UnexpectedEndOfSequence, index: decoded.index + offset }))
+		_ => crash "Invalid UTF-32 decoder status"
+	}
+}
+
+utf32_byte_order : List(U8) -> Try(Bool, [MissingByteOrderMark])
+utf32_byte_order = |bytes| {
+	if List.len(bytes) < 4 {
+		return Err(MissingByteOrderMark)
+	}
+	if list_get_unsafe(bytes, 0) == 255 and list_get_unsafe(bytes, 1) == 254 and list_get_unsafe(bytes, 2) == 0 and list_get_unsafe(bytes, 3) == 0 {
+		Ok(True)
+	} else if list_get_unsafe(bytes, 0) == 0 and list_get_unsafe(bytes, 1) == 0 and list_get_unsafe(bytes, 2) == 254 and list_get_unsafe(bytes, 3) == 255 {
+		Ok(False)
+	} else {
+		Err(MissingByteOrderMark)
+	}
+}
+
+# Caller establishes that a full code unit is available.
+utf32_read : List(U8), U64, Bool -> U32
+utf32_read = |bytes, index, little_endian| {
+	unit = u32_from_le_bytes_unchecked(bytes, index)
+	if little_endian {
+		unit
+	} else {
+		unit.shl_wrap(24).bitwise_or(unit.bitwise_and(0x0000FF00).shl_wrap(8)).bitwise_or(unit.shr_wrap(8).bitwise_and(0x0000FF00)).bitwise_or(unit.shr_wrap(24))
+	}
+}
+
+utf32_load : List(U8), U64, Bool -> Num.U32x4
+utf32_load = |bytes, index, little_endian| {
+	lanes = simd_u32x4_load_16_unchecked(bytes, index)
+	if little_endian {
+		lanes
+	} else {
+		lanes.shl_wrap(24).bitwise_or(lanes.bitwise_and(Num.U32x4.splat(0x0000FF00)).shl_wrap(8)).bitwise_or(lanes.shr_wrap(8).bitwise_and(Num.U32x4.splat(0x0000FF00))).bitwise_or(lanes.shr_wrap(24))
+	}
+}
+
+utf32_ascii_chunk : List(U8), U64, Bool -> Bool
+utf32_ascii_chunk = |bytes, index, little_endian| {
+	a = utf32_load(bytes, index, little_endian)
+	b = utf32_load(bytes, index + 16, little_endian)
+	c = utf32_load(bytes, index + 32, little_endian)
+	d = utf32_load(bytes, index + 48, little_endian)
+	a.bitwise_or(b).bitwise_or(c).bitwise_or(d).gt_lanes(Num.U32x4.splat(127)).to_bitmask() == 0
+}
+
+utf32_step : List(U8), U64, Bool -> { scalar : U64, bytes : U64, status : U8 }
+utf32_step = |bytes, index, little_endian| {
+	remaining = List.len(bytes) - index
+	if remaining < 4 {
+		return { scalar: 0xFFFD, bytes: remaining, status: 3 }
+	}
+	unit = utf32_read(bytes, index, little_endian)
+	if unit > 0x10FFFF {
+		{ scalar: 0xFFFD, bytes: 4, status: 1 }
+	} else if unit >= 0xD800 and unit <= 0xDFFF {
+		{ scalar: 0xFFFD, bytes: 4, status: 2 }
+	} else {
+		{ scalar: unit.to_u64(), bytes: 4, status: 0 }
+	}
+}
+
+decode_utf32 : List(U8), Bool, Bool -> { index : U64, status : U8, string : Str }
+decode_utf32 = |bytes, little_endian, lossy| {
+	len = List.len(bytes)
+	var $size = 0.U64
+	var $index = 0.U64
+	while $index < len {
+		if len - $index >= 64 and utf32_read(bytes, $index, little_endian) <= 127 and utf32_ascii_chunk(bytes, $index, little_endian) {
+			$size = $size + 16
+			$index = $index + 64
+		} else {
+			step = utf32_step(bytes, $index, little_endian)
+			if step.status != 0 and !lossy {
+				return { index: $index, status: step.status, string: "" }
+			}
+			$size = $size + utf8_width(step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	if $size <= wide_utf_short_max_bytes {
+		string = if little_endian {
+			str_from_utf32_le_short(bytes)
+		} else {
+			str_from_utf32_be_short(bytes)
+		}
+		return { index: 0, status: 0, string }
+	}
+	var $out = u8_list_with_capacity($size)
+	$index = 0
+	while $index < len {
+		if len - $index >= 64 and utf32_read(bytes, $index, little_endian) <= 127 and utf32_ascii_chunk(bytes, $index, little_endian) {
+			a = utf32_load(bytes, $index, little_endian)
+			b = utf32_load(bytes, $index + 16, little_endian)
+			c = utf32_load(bytes, $index + 32, little_endian)
+			d = utf32_load(bytes, $index + 48, little_endian)
+			$out = a.narrow_to_u16x8_wrap(b).narrow_to_u8x16_wrap(c.narrow_to_u16x8_wrap(d)).append_to($out)
+			$index = $index + 64
+		} else {
+			step = utf32_step(bytes, $index, little_endian)
+			$out = append_utf8_code_point($out, step.scalar)
+			$index = $index + step.bytes
+		}
+	}
+	{ index: 0, status: 0, string: str_from_utf8_validated($out) }
+}
+
+# Private: borrows bytes whose lossy output was sized to at most 23 bytes.
+str_from_utf32_le_short : List(U8) -> Str
+
+str_from_utf32_be_short : List(U8) -> Str
+
+# Private: the UTF decoders establish validity while producing these bytes.
+str_from_utf8_validated : List(U8) -> Str

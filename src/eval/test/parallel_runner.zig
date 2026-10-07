@@ -117,6 +117,17 @@ pub const TestCase = struct {
     /// Expensive proof cases are excluded from an unfiltered run and are
     /// selected explicitly by name by their dedicated build step.
     opt_in: bool = false,
+    /// Native stack, in bytes, for the thread that compiles and evaluates this
+    /// case. Deep-nesting cases set a deliberately small budget, so a compiler
+    /// stage whose native call depth grows with source nesting or sequence
+    /// length fails deterministically instead of only past some large depth.
+    stack_bytes: ?usize = null,
+    /// Memory stress cases run one at a time, after ordinary parallel cases.
+    serial: bool = false,
+    /// Index in the filtered list reconstructed by re-executed workers.
+    worker_index: usize = 0,
+    /// How post-check lowering specializes the program.
+    specialization_strategy: base.SpecializationStrategy = .lss,
 
     pub const Expected = union(enum) {
         inspect_str: []const u8,
@@ -169,6 +180,7 @@ fn constScalar(value: check.CheckedArtifact.ConstValue) ?check.CheckedArtifact.C
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,
@@ -187,6 +199,7 @@ fn constList(value: check.CheckedArtifact.ConstValue) ?check.ConstStore.ConstLis
         .tuple,
         .record,
         .crash,
+        .checked_error,
         .tag,
         .nominal,
         .fn_value,
@@ -975,7 +988,7 @@ fn backendTimeoutBudgetMs(io: std.Io, index: usize, standard_deadline_ms: ?i64) 
 
 fn runSingleTestInner(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) RunnerError!TestOutcome {
     return switch (tc.expected) {
-        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, timeout_ms),
+        .inspect_str => runInspectTest(io, allocator, tc.source_kind, tc.source, tc.imports, tc.expected, tc.skip, tc.specialization_strategy, timeout_ms),
         .allocations_at_most => |expected| runAllocationTest(io, allocator, tc.source_kind, tc.source, tc.imports, expected, tc.skip),
         .comptime_f32_bits, .comptime_f64_bits, .comptime_f32_list_bits, .comptime_f64_list_bits => runComptimeFloatBitsTest(allocator, tc.source_kind, tc.source, tc.imports, tc.expected),
         .problem => runTestProblem(allocator, tc.source_kind, tc.source, tc.imports),
@@ -1012,7 +1025,7 @@ fn runComptimeFloatBitsTest(
 
     const node = switch (roots[0].payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => {
+        .pending, .fn_value, .discarded, .expect, .runtime => {
             return .{
                 .status = .fail,
                 .message = "compile-time float root did not produce a ConstStore node",
@@ -1125,7 +1138,7 @@ fn materializedComptimeFloatBitsMatch(
     };
     const const_node = switch (compile_time_root.payload) {
         .const_node => |value| value,
-        .pending, .fn_value, .discarded, .expect => return false,
+        .pending, .fn_value, .discarded, .expect, .runtime => return false,
     };
     const static_request = lir.CheckedPipeline.StaticDataRequest{
         .const_locator = const_locator,
@@ -1166,7 +1179,9 @@ fn materializedComptimeFloatBitsMatch(
     );
     defer static_data.deinitStaticData(allocator, exports);
 
-    const root_export = findStaticDataExport(exports, "roc__requested_const_value_0") orelse return false;
+    const requested_name = try static_data.requestedValueSymbolName(allocator, &lowered, 0);
+    defer allocator.free(requested_name);
+    const root_export = findStaticDataExport(exports, requested_name) orelse return false;
     return switch (expected) {
         .comptime_f32_bits => |bits| bytesEqualIntegerAt(u32, root_export.bytes, root_export.symbol_offset, bits),
         .comptime_f64_bits => |bits| bytesEqualIntegerAt(u64, root_export.bytes, root_export.symbol_offset, bits),
@@ -1272,7 +1287,7 @@ fn runAllocationTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
         const dur = timer.read();
 
@@ -1360,9 +1375,16 @@ fn runInspectTest(
     imports: []const helpers.ModuleSource,
     expected: TestCase.Expected,
     skip: TestCase.Skip,
+    specialization_strategy: base.SpecializationStrategy,
     timeout_ms: u64,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileInspectedProgram(allocator, io, source_kind, src, imports);
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
+    // Only the wasm backend reads the 32-bit lowering.
+    const wasm_lowering: helpers.WasmLowering = if (skips[2] or !WASM_BACKEND_IMPLEMENTED) .skip else .lower;
+    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy, wasm_lowering);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1372,10 +1394,6 @@ fn runInspectTest(
     };
 
     const display_expected = expected.display();
-    const skips = if (comptime coverage_mode)
-        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
-    else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1405,7 +1423,7 @@ fn runInspectTest(
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1644,7 +1662,7 @@ fn runCrashTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1721,8 +1739,6 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .unused_variable,
         .used_underscore_variable,
         .type_shadowed_warning,
-        .unused_type_var_name,
-        .type_var_marked_unused,
         .type_var_starting_with_dollar,
         .underscore_in_type_declaration,
         .module_header_deprecated,
@@ -1737,6 +1753,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_num_literal,
         .empty_tuple,
         .ident_already_in_scope,
+        .duplicate_pattern_binder,
         .ident_not_in_scope,
         .read_uninitialized_var,
         .self_referential_definition,
@@ -1750,15 +1767,10 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .invalid_associated_statement,
         .expr_not_canonicalized,
         .range_op_chained,
-        .invalid_string_interpolation,
+        .expr_syntax_error,
         .unreachable_string_pattern_capture,
         .pattern_arg_invalid,
         .pattern_not_canonicalized,
-        .can_lambda_not_implemented,
-        .lambda_body_not_canonicalized,
-        .if_condition_not_canonicalized,
-        .if_then_not_canonicalized,
-        .if_else_not_canonicalized,
         .if_expr_without_else,
         .malformed_type_annotation,
         .malformed_where_clause,
@@ -1773,7 +1785,6 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .record_default_reference_cycle,
         .var_across_function_boundary,
         .type_redeclared,
-        .tuple_elem_not_canonicalized,
         .file_import_not_found,
         .file_import_io_error,
         .file_import_absolute_path,
@@ -1813,6 +1824,8 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .break_outside_loop,
         .infinite_loop_never_exits,
         .return_outside_fn,
+        .control_flow_in_expect,
+        .var_reassigned_in_expect,
         .mutually_recursive_type_aliases,
         => true,
     };
@@ -1937,7 +1950,10 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
 /// on --verbose) so it stays coherent across N workers; see `Pool` config below.
 fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64) TestResult {
     var timer = Timer.start() catch unreachable;
-    const outcome = runSingleTest(io, allocator, tc, timeout_ms);
+    const outcome = if (tc.stack_bytes) |stack_bytes|
+        runSingleTestOnStack(io, allocator, tc, timeout_ms, stack_bytes)
+    else
+        runSingleTest(io, allocator, tc, timeout_ms);
     const duration = timer.read();
     var backends: [NUM_BACKENDS]BackendDetail = undefined;
     if (outcome.has_backend_details) backends = outcome.backends;
@@ -1952,6 +1968,25 @@ fn runTestForPool(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeou
     };
 }
 
+fn runSingleTestOnStack(io: std.Io, allocator: std.mem.Allocator, tc: TestCase, timeout_ms: u64, stack_bytes: usize) TestOutcome {
+    const Run = struct {
+        fn run(outcome: *TestOutcome, run_io: std.Io, run_allocator: std.mem.Allocator, case: TestCase, run_timeout_ms: u64) void {
+            outcome.* = runSingleTest(run_io, run_allocator, case, run_timeout_ms);
+        }
+    };
+    var outcome: TestOutcome = undefined;
+    const thread = std.Thread.spawn(.{ .stack_size = stack_bytes }, Run.run, .{ &outcome, io, allocator, tc, timeout_ms }) catch |err| {
+        return .{
+            .status = .fail,
+            .message = @errorName(err),
+            .has_backend_details = false,
+            .backends = undefined,
+        };
+    };
+    thread.join();
+    return outcome;
+}
+
 fn onTestStarted(tc: TestCase) void {
     if (verbose_logging) std.debug.print("RUN  {s}\n", .{tc.name});
 }
@@ -1961,10 +1996,10 @@ fn onTestStarted(tc: TestCase) void {
 /// once per backend with `--worker-backend <name>` so we can pin down which
 /// backend was responsible.
 fn applyBackendIsolation(skip: *TestCase.Skip, name: []const u8) void {
-    skip.interpreter = !std.mem.eql(u8, name, "interpreter");
-    skip.dev = !std.mem.eql(u8, name, "dev");
-    skip.wasm = !std.mem.eql(u8, name, "wasm");
-    skip.llvm = !std.mem.eql(u8, name, "llvm");
+    skip.interpreter = skip.interpreter or !std.mem.eql(u8, name, "interpreter");
+    skip.dev = skip.dev or !std.mem.eql(u8, name, "dev");
+    skip.wasm = skip.wasm or !std.mem.eql(u8, name, "wasm");
+    skip.llvm = skip.llvm or !std.mem.eql(u8, name, "llvm");
 }
 
 /// Phase-2 retry: re-run each failing/crashing/timed-out test once per
@@ -1978,10 +2013,11 @@ fn retryFailedForAttribution(
     io: std.Io,
     gpa: std.mem.Allocator,
     results: []TestResult,
+    tests: []const TestCase,
     worker_argv_template: []const []const u8,
     hang_timeout_ms: u64,
 ) void {
-    for (results, 0..) |*r, idx| {
+    for (results, tests, 0..) |*r, tc, idx| {
         const needs_retry = r.status == .fail or r.status == .crash or r.status == .timeout;
         if (!needs_retry) continue;
 
@@ -1992,7 +2028,12 @@ fn retryFailedForAttribution(
             for (&attributed) |*b| b.* = .{ .status = .fail };
         }
 
+        const skips = [NUM_BACKENDS]bool{ tc.skip.interpreter, tc.skip.dev, tc.skip.wasm, tc.skip.llvm };
         for (BACKEND_NAMES, 0..) |name, bi| {
+            if (skips[bi]) {
+                attributed[bi] = .{ .status = .skip };
+                continue;
+            }
             // Skip backends that aren't implemented at compile time—no
             // point retrying. (When Phase-1 set has_backend_details=true,
             // these rows are already populated correctly; when it didn't,
@@ -2129,6 +2170,10 @@ const timeout_result: TestResult = .{
     .backends = undefined,
 };
 
+fn getWorkerIndex(tc: TestCase) usize {
+    return tc.worker_index;
+}
+
 const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .runTest = &runTestForPool,
     .serialize = &serializeResultForPool,
@@ -2138,6 +2183,7 @@ const Pool = harness.ProcessPool(TestCase, TestResult, .{
     .timeout_result = timeout_result,
     .stabilizeResult = &stabilizeResult,
     .getName = getTestName,
+    .getWorkerIndex = getWorkerIndex,
     // Backend children enforce the real backend timeout. The outer worker gets
     // enough extra time for the LLVM-only budget plus a short cleanup/reporting
     // window, so it can serialize the backend row that timed out instead of
@@ -2681,7 +2727,23 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
     trace_worker.stamp("filter pass");
 
-    const tests = filtered_buf.items;
+    // Keep worker indices stable across both pools and re-executed workers.
+    const ordered = try gpa.alloc(TestCase, filtered_buf.items.len);
+    defer gpa.free(ordered);
+    var parallel_count: usize = 0;
+    for (filtered_buf.items) |tc| {
+        if (tc.serial) continue;
+        ordered[parallel_count] = tc;
+        parallel_count += 1;
+    }
+    var next = parallel_count;
+    for (filtered_buf.items) |tc| {
+        if (!tc.serial) continue;
+        ordered[next] = tc;
+        next += 1;
+    }
+    for (ordered, 0..) |*tc, index| tc.worker_index = index;
+    const tests = ordered;
     if (tests.len == 0) {
         if (cli.filters.len == 0) {
             std.debug.print("No eval tests found.\n", .{});
@@ -2690,7 +2752,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     }
 
     const cpu_count = std.Thread.getCpuCount() catch 1;
-    const max_children: usize = effectiveMaxChildren(cli, cpu_count, tests.len);
+    const max_children: usize = effectiveMaxChildren(cli, cpu_count, @max(parallel_count, 1));
     llvm_eval_slot_count = max_children;
 
     // Worker modes: on Windows the harness pool spawned this process with
@@ -2765,7 +2827,16 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // unused (fork path doesn't re-exec) but we build it uniformly.
     const worker_argv_template = try harness.buildWorkerArgvTemplate(io, args_arena.allocator(), init.minimal.args);
 
-    Pool.runWithSpans(io, tests, results, spans, max_children, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    Pool.runWithSpans(io, tests[0..parallel_count], results[0..parallel_count], spans[0..parallel_count], max_children, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    const serial_start = wall_timer.read();
+    Pool.runWithSpans(io, tests[parallel_count..], results[parallel_count..], spans[parallel_count..], 1, hang_timeout_ms, gpa, worker_argv_template, cli.child_debug);
+    for (spans[parallel_count..]) |*maybe_span| {
+        if (maybe_span.*) |*span| {
+            span.test_index += parallel_count;
+            span.start_ns += serial_start;
+            span.end_ns += serial_start;
+        }
+    }
 
     // Phase-2 retry: on Windows, a Phase-1 worker that crashed kills the
     // whole worker before per-backend details land in the wire payload. For
@@ -2774,7 +2845,7 @@ pub fn main(init: std.process.Init) RunnerError!void {
     // pays zero retry cost. Skipped on POSIX where forkAndEval already
     // attributes crashes per-backend within the worker.
     if (builtin.os.tag == .windows) {
-        retryFailedForAttribution(io, gpa, results, worker_argv_template, hang_timeout_ms);
+        retryFailedForAttribution(io, gpa, results, tests, worker_argv_template, hang_timeout_ms);
     }
 
     const wall_elapsed = wall_timer.read();

@@ -10,4 +10,10 @@ private body output in deterministic order. Global analyses and identity
 reservation remain coordinator-owned. `LirImage` preserves the resulting
 ARC-complete program without compiler scratch or worker state.
 
+`use_order.zig` owns the neutral control-flow queries shared by loop promotion
+and ARC. Procedure rewrites use compact statement/local domains; ARC retains
+its store-indexed topology and reuses scratch across procedure queries, resetting
+only touched entries. Neither client reconstructs ownership decisions from the
+other.
+
 See `design.md` for the transformation, ownership, and serialization contracts.

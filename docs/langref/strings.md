@@ -105,8 +105,9 @@ target type, that type can opt in by defining
 
 Interpolated string literals use
 [`from_interpolation`](static-dispatch#literal-conversion) on the result
-type. The literal segments are `Str` values, and each interpolated value is
-paired with the literal segment that follows it.
+type. It receives the literal's segments as a `List(Str)` before the program
+runs, and returns the function that assembles the interpolated values into
+the result each time the literal runs.
 
 ## String equality and normalization
 
@@ -209,3 +210,21 @@ For this reason (among others), grapheme functions live in [roc-lang/unicode](ht
 ## Low-Level
 
 Since Roc only allows valid UTF-8, surrogate pairs (including individual high and low surrogates) are not valid syntax, not even in single quotes.
+
+## Bidirectional controls
+
+Literal Unicode bidirectional controls are not allowed in Roc source. They can
+make code appear different from what the compiler executes (CVE-2021-42574).
+This restriction applies inside strings too, even when the controls are balanced.
+Use an explicit Unicode escape when a string needs a directional control:
+
+```roc
+right_to_left_override = "\u(202E)"
+```
+
+The escape produces the actual character in the string at runtime. Ordinary
+Arabic, Hebrew, and other Unicode text remains valid. Roc diagnostics display
+controls visibly, for example `<U+202E RLO>`, without changing string values.
+
+The restricted code points are U+061C, U+200E–U+200F, U+202A–U+202E, and
+U+2066–U+2069. Formatting refuses affected source and leaves the file unchanged.

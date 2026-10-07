@@ -133,6 +133,40 @@ pub const EvaluationOrder = struct {
     }
 };
 
+/// The order in which type checking processes a module's top-level defs,
+/// together with each group's direct name dependencies. Groups are indexed by
+/// their position in `sccs`; every dependency index is smaller than the index
+/// of the group that depends on it.
+pub const CheckOrder = struct {
+    /// Binding groups in deterministic topological order
+    /// (dependencies come before dependents).
+    sccs: []SCC,
+
+    /// Offsets into `group_dependencies`: the direct name dependencies of
+    /// group `g` are `group_dependencies[group_dependency_starts[g]..group_dependency_starts[g + 1]]`.
+    group_dependency_starts: []u32,
+
+    /// Every group's direct name dependencies (other groups only, each listed
+    /// once), in ascending group order within each group's range.
+    group_dependencies: []u32,
+
+    allocator: std.mem.Allocator,
+
+    /// The groups that `group_index` names directly, in ascending order.
+    pub fn dependenciesOf(self: *const CheckOrder, group_index: u32) []const u32 {
+        return self.group_dependencies[self.group_dependency_starts[group_index]..self.group_dependency_starts[group_index + 1]];
+    }
+
+    pub fn deinit(self: *CheckOrder) void {
+        for (self.sccs) |scc| {
+            self.allocator.free(scc.defs);
+        }
+        self.allocator.free(self.sccs);
+        self.allocator.free(self.group_dependency_starts);
+        self.allocator.free(self.group_dependencies);
+    }
+};
+
 /// Collect the graph's exact edges in deterministic order for downstream
 /// consumers that need the strict top-level demand relation.
 pub fn collectDependencies(
@@ -205,12 +239,19 @@ pub fn hasDependency(
 
 const DemandSummary = struct {
     deps: std.AutoHashMapUnmanaged(CIR.Def.Idx, void) = .{},
+    /// Lambdas whose summarized graph deps this demand also has. A callee's
+    /// deps are reached through its summary rather than copied into every
+    /// caller's, so a call chain's summaries stay the size of each body's
+    /// direct demands; `DemandAnalyzer.expandDeps` collects the transitive set
+    /// once per def that needs its edges.
+    deps_from: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
     called_patterns: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, void) = .{},
     /// Literal callable vars whose target remains polymorphic in this summary.
     literal_requirements: std.AutoHashMapUnmanaged(Var, void) = .{},
 
     fn deinit(self: *DemandSummary, allocator: std.mem.Allocator) void {
         self.deps.deinit(allocator);
+        self.deps_from.deinit(allocator);
         self.called_patterns.deinit(allocator);
         self.literal_requirements.deinit(allocator);
     }
@@ -244,6 +285,12 @@ const DemandSummary = struct {
             if (try self.addDep(allocator, def_idx.*)) changed = true;
         }
 
+        var from_iter = other.deps_from.keyIterator();
+        while (from_iter.next()) |lambda_idx| {
+            const gop = try self.deps_from.getOrPut(allocator, lambda_idx.*);
+            if (!gop.found_existing) changed = true;
+        }
+
         var called_iter = other.called_patterns.keyIterator();
         while (called_iter.next()) |pattern_idx| {
             if (try self.addCalledPattern(allocator, pattern_idx.*)) changed = true;
@@ -270,14 +317,13 @@ const DemandAnalyzer = struct {
     scheme_use_by_node: std.AutoHashMapUnmanaged(CIR.Node.Idx, u32) = .{},
     summaries: std.AutoHashMapUnmanaged(CIR.Expr.Idx, DemandSummary) = .{},
     active_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
-    /// Dedups omitted-default expression pushes per walk, mirroring
-    /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
-    /// comment): a default expression is shared across construction sites,
-    /// and a chain of defaults that each construct omitting more defaults
-    /// would otherwise re-walk with product growth. Demand contributions are
-    /// set-based and frames fold into their parents, so one visit per walk
-    /// reaches the walk's output. Cleared per walk root.
-    scratch_seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// The lambdas of `summary_defs`, whose summaries `computeSummaries`
+    /// computes as jobs of their own.
+    summary_lambdas: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    /// Set when a summary job's walk needs a summary lambda's summary that
+    /// is not computed yet: that lambda's job runs first, then the walk
+    /// resumes.
+    needed_summary: ?CIR.Expr.Idx = null,
 
     fn init(
         cir: *const ModuleEnv,
@@ -322,7 +368,7 @@ const DemandAnalyzer = struct {
                     const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
             }
         }
 
@@ -342,43 +388,107 @@ const DemandAnalyzer = struct {
         self.resolved_literal_targets.deinit(self.allocator);
         self.scheme_use_by_node.deinit(self.allocator);
         self.active_lambdas.deinit(self.allocator);
-        self.scratch_seen_defaults.deinit(self.allocator);
+        self.summary_lambdas.deinit(self.allocator);
     }
 
+    /// The summary of one lambda being computed: its argument patterns and
+    /// then its body walk with the lambda marked active, exactly as an
+    /// inline execution frame would.
+    const SummaryJob = struct {
+        lambda: CIR.Expr.Idx,
+        computed: DemandSummary = .{},
+        local_callables: LocalCallables = .{},
+        walk: Walk = .{},
+        /// Argument patterns walked so far; one more once the body walk has
+        /// started.
+        next_part: usize = 0,
+
+        fn deinit(job: *SummaryJob, allocator: std.mem.Allocator) void {
+            job.walk.deinit(allocator);
+            job.local_callables.deinit(allocator);
+            job.computed.deinit(allocator);
+        }
+    };
+
+    /// Summaries grow monotonically to their least fixpoint. Within each
+    /// round, a walk that needs a summary lambda's summary before it exists
+    /// suspends while that lambda's own job runs, so callee summaries are
+    /// computed before their callers fold them rather than being re-walked
+    /// inline by every caller.
     fn computeSummaries(self: *DemandAnalyzer) std.mem.Allocator.Error!void {
+        for (self.summary_defs) |def_idx| {
+            const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
+            if (self.cir.store.getExpr(lambda_idx) == .e_lambda) try self.summary_lambdas.put(self.allocator, lambda_idx, {});
+        }
+        defer self.summary_lambdas.clearRetainingCapacity();
+
+        var jobs = std.ArrayList(SummaryJob).empty;
+        defer {
+            for (jobs.items) |*job| {
+                _ = self.active_lambdas.remove(job.lambda);
+                job.deinit(self.allocator);
+            }
+            jobs.deinit(self.allocator);
+        }
         var changed = true;
         while (changed) {
             changed = false;
             for (self.summary_defs) |def_idx| {
                 const lambda_idx = self.lambdaFromDef(def_idx) orelse continue;
-
-                var local_callables = LocalCallables{};
-                defer local_callables.deinit(self.allocator);
-
-                var computed = DemandSummary{};
-                defer computed.deinit(self.allocator);
-
-                // Walk the lambda's execution with the lambda marked active,
-                // exactly as an inline execution frame would.
-                const lambda_expr = self.cir.store.getExpr(lambda_idx);
-                if (lambda_expr == .e_lambda and !self.active_lambdas.contains(lambda_idx)) {
-                    try self.active_lambdas.put(self.allocator, lambda_idx, {});
-                    defer _ = self.active_lambdas.remove(lambda_idx);
-                    for (self.cir.store.slicePatterns(lambda_expr.e_lambda.args)) |arg_pattern| {
-                        try self.walkPatternDemand(arg_pattern, &computed, &local_callables);
+                if (self.cir.store.getExpr(lambda_idx) != .e_lambda or self.active_lambdas.contains(lambda_idx)) {
+                    // A lambda already being walked contributes nothing new
+                    // on this pass; its summary entry still exists.
+                    const nothing = DemandSummary{};
+                    if (try self.mergeSummary(lambda_idx, &nothing)) changed = true;
+                    continue;
+                }
+                try self.startSummaryJob(&jobs, lambda_idx);
+                while (jobs.items.len != 0) {
+                    const job = &jobs.items[jobs.items.len - 1];
+                    if (job.walk.work.items.len != 0) {
+                        try self.drainWalk(&job.walk, &job.computed, &job.local_callables);
+                        if (self.needed_summary) |needed| {
+                            self.needed_summary = null;
+                            try self.startSummaryJob(&jobs, needed);
+                        }
+                        continue;
                     }
-                    try self.walkDemand(lambda_expr.e_lambda.body, &computed, &local_callables);
-                }
-
-                const gop = try self.summaries.getOrPut(self.allocator, lambda_idx);
-                if (!gop.found_existing) {
-                    gop.value_ptr.* = .{};
-                }
-                if (try gop.value_ptr.mergeFrom(self.allocator, &computed)) {
-                    changed = true;
+                    const args = self.cir.store.slicePatterns(self.cir.store.getExpr(job.lambda).e_lambda.args);
+                    if (job.next_part <= args.len) {
+                        // Each argument pattern and the body is a walk of its own.
+                        job.walk.deinit(self.allocator);
+                        job.walk = .{};
+                        if (job.next_part < args.len) {
+                            try job.walk.push(self.allocator, .{ .visit_pattern = args[job.next_part] });
+                        } else {
+                            try job.walk.push(self.allocator, .{ .visit = self.cir.store.getExpr(job.lambda).e_lambda.body });
+                        }
+                        job.next_part += 1;
+                        continue;
+                    }
+                    var finished = jobs.pop().?;
+                    defer finished.deinit(self.allocator);
+                    _ = self.active_lambdas.remove(finished.lambda);
+                    if (try self.mergeSummary(finished.lambda, &finished.computed)) changed = true;
                 }
             }
         }
+    }
+
+    fn startSummaryJob(self: *DemandAnalyzer, jobs: *std.ArrayList(SummaryJob), lambda_idx: CIR.Expr.Idx) std.mem.Allocator.Error!void {
+        try jobs.ensureUnusedCapacity(self.allocator, 1);
+        try self.active_lambdas.put(self.allocator, lambda_idx, {});
+        jobs.appendAssumeCapacity(.{ .lambda = lambda_idx });
+    }
+
+    /// Merge a computed summary into the lambda's stored summary; true when
+    /// the stored summary grew or was created.
+    fn mergeSummary(self: *DemandAnalyzer, lambda_idx: CIR.Expr.Idx, computed: *const DemandSummary) std.mem.Allocator.Error!bool {
+        const gop = try self.summaries.getOrPut(self.allocator, lambda_idx);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        return try gop.value_ptr.mergeFrom(self.allocator, computed);
     }
 
     fn collectDefDependencies(self: *DemandAnalyzer, def_idx: CIR.Def.Idx, out: *DemandSummary) std.mem.Allocator.Error!void {
@@ -388,6 +498,25 @@ const DemandAnalyzer = struct {
         const def = self.cir.store.getDef(def_idx);
         try self.walkDemand(def.expr, out, &local_callables);
         try self.walkPatternDemand(def.pattern, out, &local_callables);
+    }
+
+    /// Every graph dep a def's demand reaches: its own, and each summarized
+    /// lambda's reached through `deps_from`, visiting each lambda once.
+    fn expandDeps(self: *DemandAnalyzer, demand: *DemandSummary) std.mem.Allocator.Error!void {
+        var visited = std.AutoHashMapUnmanaged(CIR.Expr.Idx, void).empty;
+        defer visited.deinit(self.allocator);
+        var pending = std.ArrayList(CIR.Expr.Idx).empty;
+        defer pending.deinit(self.allocator);
+        var roots = demand.deps_from.keyIterator();
+        while (roots.next()) |lambda_idx| try pending.append(self.allocator, lambda_idx.*);
+        while (pending.pop()) |lambda_idx| {
+            if ((try visited.getOrPut(self.allocator, lambda_idx)).found_existing) continue;
+            const summary = self.summaries.getPtr(lambda_idx) orelse continue;
+            var deps = summary.deps.keyIterator();
+            while (deps.next()) |def_idx| _ = try demand.addDep(self.allocator, def_idx.*);
+            var callees = summary.deps_from.keyIterator();
+            while (callees.next()) |callee| try pending.append(self.allocator, callee.*);
+        }
     }
 
     fn addGraphDep(self: *DemandAnalyzer, out: *DemandSummary, def_idx: CIR.Def.Idx) std.mem.Allocator.Error!void {
@@ -472,12 +601,29 @@ const DemandAnalyzer = struct {
 
     const Walk = struct {
         work: std.ArrayList(WalkItem) = .empty,
-        frames: std.ArrayList(DemandSummary) = .empty,
+        /// Summaries of the lambdas whose bodies are being walked inline.
+        /// Each is boxed so a summary being folded into stays in place while
+        /// the fold starts further lambda walks.
+        frames: std.ArrayList(*DemandSummary) = .empty,
+        /// Dedups omitted-default expression pushes per walk, mirroring
+        /// `collectNameReferences`'s `scratch_seen_defaults` (see its doc
+        /// comment): a default expression is shared across construction
+        /// sites, and a chain of defaults that each construct omitting more
+        /// defaults would otherwise re-walk with product growth. Demand
+        /// contributions are set-based and frames fold into their parents,
+        /// so one visit per walk reaches the walk's output.
+        seen_defaults: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
 
         fn deinit(walk: *Walk, allocator: std.mem.Allocator) void {
+            walk.seen_defaults.deinit(allocator);
             walk.work.deinit(allocator);
-            for (walk.frames.items) |*frame| frame.deinit(allocator);
+            for (walk.frames.items) |frame| destroyFrame(allocator, frame);
             walk.frames.deinit(allocator);
+        }
+
+        fn destroyFrame(allocator: std.mem.Allocator, frame: *DemandSummary) void {
+            frame.deinit(allocator);
+            allocator.destroy(frame);
         }
 
         fn push(walk: *Walk, allocator: std.mem.Allocator, item: WalkItem) std.mem.Allocator.Error!void {
@@ -494,7 +640,6 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
-        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit = root_expr });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -506,9 +651,10 @@ const DemandAnalyzer = struct {
         out: *DemandSummary,
         local_callables: *LocalCallables,
     ) std.mem.Allocator.Error!void {
-        while (walk.work.pop()) |item| {
+        while (self.needed_summary == null) {
+            const item = walk.work.pop() orelse return;
             const current: *DemandSummary = if (walk.frames.items.len > 0)
-                &walk.frames.items[walk.frames.items.len - 1]
+                walk.frames.items[walk.frames.items.len - 1]
             else
                 out;
             switch (item) {
@@ -519,14 +665,14 @@ const DemandAnalyzer = struct {
                 .apply_call_target => |call| try self.applyCallTarget(walk, current, call.func, call.args, local_callables),
                 .apply_called_value => |expr_idx| try self.applyCalledValue(walk, current, expr_idx, local_callables),
                 .finish_lambda => |fin| {
-                    var computed = walk.frames.pop().?;
-                    defer computed.deinit(self.allocator);
+                    const computed = walk.frames.pop().?;
+                    defer Walk.destroyFrame(self.allocator, computed);
                     _ = self.active_lambdas.remove(fin.lambda);
                     const parent: *DemandSummary = if (walk.frames.items.len > 0)
-                        &walk.frames.items[walk.frames.items.len - 1]
+                        walk.frames.items[walk.frames.items.len - 1]
                     else
                         out;
-                    try self.foldLambdaSummary(walk, parent, &computed, fin.lambda, fin.args, fin.demand_node);
+                    try self.foldLambdaSummary(walk, parent, computed, fin.lambda, fin.args, fin.demand_node);
                 },
             }
         }
@@ -541,7 +687,6 @@ const DemandAnalyzer = struct {
     ) std.mem.Allocator.Error!void {
         var walk = Walk{};
         defer walk.deinit(self.allocator);
-        self.scratch_seen_defaults.clearRetainingCapacity();
         try walk.push(self.allocator, .{ .visit_pattern = root_pattern });
 
         try self.drainWalk(&walk, out, local_callables);
@@ -558,17 +703,41 @@ const DemandAnalyzer = struct {
         lambda_idx: CIR.Expr.Idx,
         call_args: CIR.Expr.Span,
         demand_node: ?CIR.Node.Idx,
+        retry: ?WalkItem,
     ) std.mem.Allocator.Error!void {
         if (self.summaries.getPtr(lambda_idx)) |summary| {
             try self.foldLambdaSummary(walk, current, summary, lambda_idx, call_args, demand_node);
             return;
         }
+        if (retry) |item| {
+            if (self.summary_lambdas.contains(lambda_idx) and !self.active_lambdas.contains(lambda_idx)) {
+                // Compute the lambda's own summary first, then apply it.
+                try walk.push(self.allocator, item);
+                self.needed_summary = lambda_idx;
+                return;
+            }
+        }
+        try self.beginLambdaWalk(walk, lambda_idx, call_args, demand_node);
+    }
+
+    /// Walk an uncached lambda's body inline in its own frame, guarded by
+    /// `active_lambdas` against recursion; the frame folds when it closes.
+    fn beginLambdaWalk(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+        demand_node: ?CIR.Node.Idx,
+    ) std.mem.Allocator.Error!void {
         if (self.active_lambdas.contains(lambda_idx)) return;
         const expr = self.cir.store.getExpr(lambda_idx);
         if (expr != .e_lambda) return;
 
         try self.active_lambdas.put(self.allocator, lambda_idx, {});
-        try walk.frames.append(self.allocator, DemandSummary{});
+        try walk.frames.ensureUnusedCapacity(self.allocator, 1);
+        const frame = try self.allocator.create(DemandSummary);
+        frame.* = .{};
+        walk.frames.appendAssumeCapacity(frame);
         // The finish item pops first-in-last-out: argument patterns and the
         // body run inside the frame, then the frame folds into its parent.
         try walk.push(self.allocator, .{ .finish_lambda = .{ .lambda = lambda_idx, .args = call_args, .demand_node = demand_node } });
@@ -576,10 +745,22 @@ const DemandAnalyzer = struct {
         try self.pushPatternSpanReversed(walk, expr.e_lambda.args);
     }
 
+    /// A folded summary whose literal requirements are still being applied.
+    const FoldCursor = struct {
+        literals: std.AutoHashMapUnmanaged(Var, void).KeyIterator,
+        demand_node: ?CIR.Node.Idx,
+        /// Target definitions of the literal requirement being applied.
+        targets: []const CIR.Def.Idx = &.{},
+        next_target: usize = 0,
+    };
+
     /// Fold one lambda's demand summary into `into` for a call with
     /// `call_args`: graph deps transfer directly; called patterns flow through
     /// the matching argument; and polymorphic literal requirements translate
-    /// through the exact scheme-use pairs recorded at `demand_node`.
+    /// through the exact scheme-use pairs recorded at `demand_node`. A
+    /// requirement with resolved targets applies each target method's own
+    /// summary in turn, so cursors over the summaries being applied are kept
+    /// on an explicit stack.
     fn foldLambdaSummary(
         self: *DemandAnalyzer,
         walk: *Walk,
@@ -589,9 +770,59 @@ const DemandAnalyzer = struct {
         call_args: CIR.Expr.Span,
         demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
-        var dep_iter = summary.deps.keyIterator();
-        while (dep_iter.next()) |def_idx| {
-            try self.addGraphDep(into, def_idx.*);
+        var cursors = std.ArrayList(FoldCursor).empty;
+        defer cursors.deinit(self.allocator);
+        try self.foldSummaryEdges(walk, into, summary, lambda_idx, call_args);
+        try cursors.append(self.allocator, .{ .literals = summary.literal_requirements.keyIterator(), .demand_node = demand_node });
+        while (cursors.items.len > 0) {
+            const cursor = &cursors.items[cursors.items.len - 1];
+            if (cursor.next_target < cursor.targets.len) {
+                const target_def = cursor.targets[cursor.next_target];
+                cursor.next_target += 1;
+                const target_lambda = self.lambdaFromDef(target_def) orelse continue;
+                // Literal conversion arguments contain no callable value
+                // supplied by source, so only each selected method body's
+                // explicit top-level demands can flow outward.
+                const no_source_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
+                if (self.summaries.getPtr(target_lambda)) |target_summary| {
+                    try self.foldSummaryEdges(walk, into, target_summary, target_lambda, no_source_args);
+                    try cursors.append(self.allocator, .{ .literals = target_summary.literal_requirements.keyIterator(), .demand_node = null });
+                } else {
+                    try self.beginLambdaWalk(walk, target_lambda, no_source_args, null);
+                }
+                continue;
+            }
+            const literal = cursor.literals.next() orelse {
+                _ = cursors.pop();
+                continue;
+            };
+            switch (self.literalRequirementTarget(literal.*, cursor.demand_node)) {
+                .targets => |targets| {
+                    cursor.targets = targets;
+                    cursor.next_target = 0;
+                },
+                .requirement => |fn_var| _ = try into.addLiteralRequirement(self.allocator, fn_var),
+            }
+        }
+    }
+
+    /// The graph deps and called patterns of a folded summary.
+    fn foldSummaryEdges(
+        self: *DemandAnalyzer,
+        walk: *Walk,
+        into: *DemandSummary,
+        summary: *const DemandSummary,
+        lambda_idx: CIR.Expr.Idx,
+        call_args: CIR.Expr.Span,
+    ) std.mem.Allocator.Error!void {
+        if (self.summaries.getPtr(lambda_idx) == summary) {
+            try into.deps_from.put(self.allocator, lambda_idx, {});
+        } else {
+            // An inline frame's demand has no stored summary to reach later.
+            var dep_iter = summary.deps.keyIterator();
+            while (dep_iter.next()) |def_idx| try self.addGraphDep(into, def_idx.*);
+            var from_iter = summary.deps_from.keyIterator();
+            while (from_iter.next()) |callee| try into.deps_from.put(self.allocator, callee.*, {});
         }
 
         var called_iter = summary.called_patterns.keyIterator();
@@ -602,11 +833,6 @@ const DemandAnalyzer = struct {
             } else {
                 _ = try into.addCalledPattern(self.allocator, pattern_idx.*);
             }
-        }
-
-        var literal_iter = summary.literal_requirements.keyIterator();
-        while (literal_iter.next()) |fn_var| {
-            try self.applyLiteralRequirement(walk, into, fn_var.*, demand_node);
         }
     }
 
@@ -621,18 +847,18 @@ const DemandAnalyzer = struct {
         const expr = self.cir.store.getExpr(call_func);
         const tag = std.meta.activeTag(expr);
         if (tag == .e_lambda) {
-            try self.beginApplyLambdaSummary(walk, current, call_func, call_args, ModuleEnv.nodeIdxFrom(call_func));
+            try self.beginApplyLambdaSummary(walk, current, call_func, call_args, ModuleEnv.nodeIdxFrom(call_func), .{ .apply_call_target = .{ .func = call_func, .args = call_args } });
         } else if (tag == .e_closure) {
-            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func), .{ .apply_call_target = .{ .func = call_func, .args = call_args } });
         } else if (tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
             if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
-                try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func), .{ .apply_call_target = .{ .func = call_func, .args = call_args } });
                 return;
             }
             if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
                 if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func));
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, call_args, ModuleEnv.nodeIdxFrom(call_func), .{ .apply_call_target = .{ .func = call_func, .args = call_args } });
                 }
                 return;
             }
@@ -651,18 +877,18 @@ const DemandAnalyzer = struct {
         const expr = self.cir.store.getExpr(expr_idx);
         const tag = std.meta.activeTag(expr);
         if (tag == .e_lambda) {
-            try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
+            try self.beginApplyLambdaSummary(walk, current, expr_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx), .{ .apply_called_value = expr_idx });
         } else if (tag == .e_closure) {
-            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
+            try self.beginApplyLambdaSummary(walk, current, expr.e_closure.lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx), .{ .apply_called_value = expr_idx });
         } else if (tag == .e_lookup_local) {
             const lookup = expr.e_lookup_local;
             if (local_callables.get(lookup.pattern_idx)) |lambda_idx| {
-                try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
+                try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx), .{ .apply_called_value = expr_idx });
                 return;
             }
             if (self.pattern_to_def.get(lookup.pattern_idx)) |def_idx| {
                 if (self.lambdaFromDef(def_idx)) |lambda_idx| {
-                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx));
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, empty_args, ModuleEnv.nodeIdxFrom(expr_idx), .{ .apply_called_value = expr_idx });
                 }
                 return;
             }
@@ -706,20 +932,13 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
-            .s_while => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
                 try walk.push(self.allocator, .{ .visit = while_stmt.body });
                 try walk.push(self.allocator, .{ .visit = while_stmt.cond });
             },
-            .s_infinite_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
-            .s_breakable_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+            .s_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
         }
     }
 
@@ -796,11 +1015,7 @@ const DemandAnalyzer = struct {
                 if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
             },
             .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
-            .e_method_call => |call| {
-                try self.pushExprSpanReversed(walk, call.args);
-                try walk.push(self.allocator, .{ .visit = call.receiver });
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
@@ -848,11 +1063,11 @@ const DemandAnalyzer = struct {
                 // DefaultCycles runs before any demand graph is built and
                 // drops every name-resolvable cyclic default, so the
                 // omission relation walked here is acyclic and the walk
-                // terminates; `scratch_seen_defaults` dedups the pushes so
+                // terminates; `walk.seen_defaults` dedups the pushes so
                 // shared defaults don't re-walk with product growth.
                 var omissions = default_omissions.omittedDefaults(self.cir, nominal.nominal_type_decl, nominal.backing_expr);
                 while (omissions.next()) |omitted| {
-                    const entry = try self.scratch_seen_defaults.getOrPut(self.allocator, omitted.default_expr);
+                    const entry = try walk.seen_defaults.getOrPut(self.allocator, omitted.default_expr);
                     if (entry.found_existing) continue;
                     try walk.push(self.allocator, .{ .visit = omitted.default_expr });
                 }
@@ -901,8 +1116,8 @@ const DemandAnalyzer = struct {
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
         }
     }
 
@@ -991,24 +1206,35 @@ const DemandAnalyzer = struct {
         source_fn_var: Var,
         demand_node: ?CIR.Node.Idx,
     ) std.mem.Allocator.Error!void {
-        const fn_var = if (demand_node) |node|
-            self.translateLiteralRequirement(source_fn_var, node)
-        else
-            source_fn_var;
-        const fn_root = self.cir.types.resolveVar(fn_var).var_;
-        if (self.resolved_literal_targets.get(fn_root)) |target_defs| {
-            for (target_defs.items) |target_def| {
+        switch (self.literalRequirementTarget(source_fn_var, demand_node)) {
+            .targets => |targets| for (targets) |target_def| {
                 if (self.lambdaFromDef(target_def)) |lambda_idx| {
                     // Literal conversion arguments contain no callable value
                     // supplied by source, so only each selected method body's
                     // explicit top-level demands can flow outward.
                     const no_source_args = CIR.Expr.Span{ .span = base.DataSpan.empty() };
-                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, no_source_args, null);
+                    try self.beginApplyLambdaSummary(walk, current, lambda_idx, no_source_args, null, null);
                 }
-            }
-            return;
+            },
+            .requirement => |fn_var| _ = try current.addLiteralRequirement(self.allocator, fn_var),
         }
-        _ = try current.addLiteralRequirement(self.allocator, fn_var);
+    }
+
+    const LiteralTarget = union(enum) {
+        /// The definitions whose methods the literal resolved to.
+        targets: []const CIR.Def.Idx,
+        /// The literal's callable var, still polymorphic here.
+        requirement: Var,
+    };
+
+    fn literalRequirementTarget(self: *const DemandAnalyzer, source_fn_var: Var, demand_node: ?CIR.Node.Idx) LiteralTarget {
+        const fn_var = if (demand_node) |node|
+            self.translateLiteralRequirement(source_fn_var, node)
+        else
+            source_fn_var;
+        const fn_root = self.cir.types.resolveVar(fn_var).var_;
+        if (self.resolved_literal_targets.get(fn_root)) |target_defs| return .{ .targets = target_defs.items };
+        return .{ .requirement = fn_var };
     }
 
     fn translateLiteralRequirement(
@@ -1078,9 +1304,7 @@ fn appendChildPatterns(
                 try out.append(allocator, arg);
             }
         },
-        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .deferred_import_ref => |deferred| try out.append(allocator, deferred.backing_pattern),
+        inline .nominal, .nominal_external, .deferred_import_ref => |nominal| try out.append(allocator, nominal.backing_pattern),
         .record_destructure => |record| {
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
@@ -1224,6 +1448,7 @@ pub fn buildDependencyGraphWithResolvedLiteralTargets(
         defer deps.deinit(allocator);
 
         try analyzer.collectDefDependencies(def_idx, &deps);
+        try analyzer.expandDeps(&deps);
 
         var dep_iter = deps.deps.keyIterator();
         while (dep_iter.next()) |dep_def_idx| {
@@ -1264,88 +1489,6 @@ pub fn computeSCCs(
         .sccs = sccs,
         .allocator = allocator,
     };
-}
-
-/// Returns indices of all top-level constants (definitions that are not functions).
-///
-/// This is used to identify definitions that should be evaluated at compile time,
-/// as opposed to functions which are only evaluated when called.
-pub fn getTopLevelConstants(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error![]const CIR.Def.Idx {
-    const defs_slice = cir.store.sliceDefs(all_defs);
-
-    var constants: std.ArrayList(CIR.Def.Idx) = .empty;
-    errdefer constants.deinit(allocator);
-
-    for (defs_slice) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        const expr = cir.store.getExpr(def.expr);
-
-        const tag = std.meta.activeTag(expr);
-        const is_constant = tag != .e_lambda and
-            tag != .e_closure and
-            tag != .e_anno_only and
-            tag != .e_derived_method and
-            tag != .e_hosted_lambda;
-
-        if (is_constant) {
-            try constants.append(allocator, def_idx);
-        }
-    }
-
-    return constants.toOwnedSlice(allocator);
-}
-
-/// Returns constants in dependency order (dependencies first).
-///
-/// This computes the strongly connected components (SCCs) for only the constant
-/// definitions, returning them in topological order so that each constant can
-/// be evaluated after all its dependencies have been evaluated.
-pub fn getConstantsInDependencyOrder(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EvaluationOrder {
-    // Get only the constant definitions
-    const constants = try getTopLevelConstants(cir, all_defs, allocator);
-    defer allocator.free(constants);
-
-    if (constants.len == 0) {
-        return EvaluationOrder{
-            .sccs = &[_]SCC{},
-            .allocator = allocator,
-        };
-    }
-
-    // Build a dependency graph for just the constants
-    var graph = DependencyGraph.init(allocator, constants);
-    errdefer graph.deinit();
-
-    const defs_slice = cir.store.sliceDefs(all_defs);
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, &.{}, allocator);
-    defer analyzer.deinit();
-
-    try analyzer.computeSummaries();
-
-    for (constants) |def_idx| {
-        var deps = DemandSummary{};
-        defer deps.deinit(allocator);
-
-        try analyzer.collectDefDependencies(def_idx, &deps);
-
-        var dep_iter = deps.deps.keyIterator();
-        while (dep_iter.next()) |dep_def_idx| {
-            try graph.addEdge(def_idx, dep_def_idx.*);
-        }
-    }
-
-    // Compute SCCs using Tarjan's algorithm
-    const result = try computeSCCs(&graph, allocator);
-    graph.deinit();
-    return result;
 }
 
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
@@ -1401,8 +1544,11 @@ pub fn collectNameReferences(
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
             .e_type_dispatch_call => |call| {
-                if (cir.lookupMethodBindingForOwnerConst(call.type_dispatch_stmt, call.method_name)) |binding| {
-                    try out.put(allocator, binding.def_idx, {});
+                switch (call.owner) {
+                    .statement => |stmt| if (cir.lookupMethodBindingForOwnerConst(stmt, call.method_name)) |binding| {
+                        try out.put(allocator, binding.def_idx, {});
+                    },
+                    .dispatcher => {},
                 }
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
@@ -1447,11 +1593,7 @@ pub fn collectNameReferences(
                 }
             },
             .e_field_access => |access| try scratch_stack.append(allocator, access.receiver),
-            .e_method_call => |call| {
-                try scratch_stack.append(allocator, call.receiver);
-                for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try scratch_stack.append(allocator, call.receiver);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
@@ -1486,9 +1628,7 @@ pub fn collectNameReferences(
                         .s_decl => |decl| try scratch_stack.append(allocator, decl.expr),
                         .s_var => |var_stmt| try scratch_stack.append(allocator, var_stmt.expr),
                         .s_var_uninitialized => {},
-                        .s_reassign => |reassign| try scratch_stack.append(allocator, reassign.expr),
-                        .s_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
-                        .s_expr => |expr_stmt| try scratch_stack.append(allocator, expr_stmt.expr),
+                        inline .s_reassign, .s_dbg, .s_expr => |reassign| try scratch_stack.append(allocator, reassign.expr),
                         .s_expect => |expect| try scratch_stack.append(allocator, expect.body),
                         .s_for => |for_stmt| {
                             try scratch_stack.append(allocator, for_stmt.expr);
@@ -1507,7 +1647,8 @@ pub fn collectNameReferences(
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
                         .s_return => |ret| try scratch_stack.append(allocator, ret.expr),
-                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+                        .s_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
+                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
                     }
                 }
                 try scratch_stack.append(allocator, block.final_expr);
@@ -1573,8 +1714,8 @@ pub fn collectNameReferences(
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
         }
     }
 }
@@ -1595,7 +1736,7 @@ pub fn computeCheckOrder(
     cir: *const ModuleEnv,
     all_defs: CIR.Def.Span,
     allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EvaluationOrder {
+) std.mem.Allocator.Error!CheckOrder {
     const defs_slice = cir.store.sliceDefs(all_defs);
 
     var pattern_to_def: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{};
@@ -1709,8 +1850,13 @@ pub fn computeCheckOrder(
     }
     try ordered_sccs.ensureTotalCapacityPrecise(allocator, group_count);
 
+    // Each Tarjan group's position in the emitted order.
+    const emitted_index = try allocator.alloc(u32, group_count);
+    defer allocator.free(emitted_index);
+
     while (ready.pop()) |group_index| {
         const scc = tarjan_order.sccs[group_index];
+        emitted_index[group_index] = @intCast(ordered_sccs.items.len);
         ordered_sccs.appendAssumeCapacity(.{
             .defs = try allocator.dupe(CIR.Def.Idx, scc.defs),
             .is_recursive = scc.is_recursive,
@@ -1723,14 +1869,45 @@ pub fn computeCheckOrder(
     // Tarjan produced an acyclic condensation, so Kahn must emit every group.
     std.debug.assert(ordered_sccs.items.len == group_count);
 
+    // Each emitted group's direct dependencies, flattened. A successor edge
+    // `dep -> dependent` lists `dep` among `dependent`'s dependencies.
+    const group_dependency_starts = try allocator.alloc(u32, group_count + 1);
+    errdefer allocator.free(group_dependency_starts);
+    @memset(group_dependency_starts, 0);
+    for (successors) |list| {
+        for (list.items) |dependent| {
+            group_dependency_starts[emitted_index[dependent] + 1] += 1;
+        }
+    }
+    for (1..group_count + 1) |i| {
+        group_dependency_starts[i] += group_dependency_starts[i - 1];
+    }
+    const group_dependencies = try allocator.alloc(u32, group_dependency_starts[group_count]);
+    errdefer allocator.free(group_dependencies);
+    const fill = try allocator.dupe(u32, group_dependency_starts[0..group_count]);
+    defer allocator.free(fill);
+    for (successors, 0..) |list, dependency| {
+        for (list.items) |dependent| {
+            const dependent_index = emitted_index[dependent];
+            group_dependencies[fill[dependent_index]] = emitted_index[dependency];
+            fill[dependent_index] += 1;
+        }
+    }
+    for (0..group_count) |group_index| {
+        const deps = group_dependencies[group_dependency_starts[group_index]..group_dependency_starts[group_index + 1]];
+        std.mem.sort(u32, deps, {}, std.sort.asc(u32));
+    }
+
     const sccs = try ordered_sccs.toOwnedSlice(allocator);
     errdefer {
         for (sccs) |scc| allocator.free(scc.defs);
         allocator.free(sccs);
     }
 
-    return EvaluationOrder{
+    return CheckOrder{
         .sccs = sccs,
+        .group_dependency_starts = group_dependency_starts,
+        .group_dependencies = group_dependencies,
         .allocator = allocator,
     };
 }

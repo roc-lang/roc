@@ -8,6 +8,7 @@
 //! the structural passes without reconstructing source-level intent.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -26,12 +27,30 @@ const Candidate = struct {
     outer_param: LIR.LocalId,
     inner_stmt: LIR.CFStmtId,
     inner_param: LIR.LocalId,
+    moved: MovedBody,
+};
+
+/// The outer join body split at its structurally shared suffix. Only the
+/// exclusive prefix is moved; statements another reachable edge also enters
+/// stay in place and the moved prefix links to them.
+const MovedBody = struct {
+    /// Every statement of the outer body with an incoming edge from outside
+    /// the outer body, and everything reachable from one.
+    shared_stmts: collections.DenseMap(LIR.CFStmtId, void),
+    /// Parameter binders of joins declared in the exclusive prefix.
     fresh_definitions: body_clone.ReadCounts,
+
+    fn deinit(self: *MovedBody) void {
+        self.fresh_definitions.deinit();
+        self.shared_stmts.deinit();
+    }
 };
 
 const RetRewriter = struct {
-    pub fn cloneRet(_: *RetRewriter, cloner: anytype, value: LIR.LocalId) ResourceError!LIR.CFStmtId {
-        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } });
+    pub fn cloneRet(_: *RetRewriter, cloner: anytype, value: LIR.LocalId, origin: LIR.StmtOrigin) ResourceError!LIR.CFStmtId {
+        var ret_origin = origin;
+        ret_origin.kind = .forwarding_join_inline;
+        return try cloner.store.addCFStmt(.{ .ret = .{ .value = try cloner.mapLocal(value) } }, ret_origin);
     }
 };
 
@@ -67,7 +86,7 @@ pub fn runProc(
     var indexed = false;
     while (try findCandidate(store, layouts, proc, scratch_allocator)) |found| {
         var candidate = found;
-        defer candidate.fresh_definitions.deinit();
+        defer candidate.moved.deinit();
         if (!indexed) {
             try join_params.indexReachable(store, body);
             indexed = true;
@@ -81,6 +100,8 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
     const proc_body = proc.body orelse return null;
     var incoming_edges = try reachableIncomingEdgeCounts(store, proc_body, allocator);
     defer incoming_edges.deinit();
+    var forwarded = try forwardedJoins(store, proc_body, allocator);
+    defer forwarded.deinit();
 
     var walk = try body_clone.ReachableStmts.initWithAllocator(store, proc_body, allocator);
     defer walk.deinit();
@@ -91,6 +112,10 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         const outer_params = store.getLocalSpan(outer.params);
         if (outer_params.len != 1) continue;
         const outer_param = GuardedList.at(outer_params, 0);
+        // Only a join that some reachable one-parameter join forwards into
+        // can be selected below; every other join is settled without walking
+        // its body and remainder.
+        if (!forwarded.contains(.{ .join = outer.id, .param = outer_param })) continue;
 
         // Before ARC, moving a continuation that consumes an owning value can
         // change the dominance facts ARC uses to certify the join parameter's
@@ -144,7 +169,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
                 .outer_param = outer_param,
                 .inner_stmt = inner_stmt,
                 .inner_param = inner_param,
-                .fresh_definitions = undefined,
+                .moved = undefined,
             };
         }
 
@@ -154,7 +179,7 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
         // or bypass that source.
         if (incoming_count == 1) {
             if (selected) |*candidate| {
-                candidate.fresh_definitions = try collectFreshDefinitions(store, outer.body, &incoming_edges, allocator);
+                candidate.moved = try collectMovedBody(store, outer.body, &incoming_edges, allocator);
                 return candidate.*;
             }
         }
@@ -163,6 +188,38 @@ fn findCandidate(store: *LirStore, layouts: *const layout_mod.Store, proc_id: LI
 }
 
 const IncomingEdges = collections.DenseMap(LIR.CFStmtId, u32);
+
+const ForwardTarget = struct { join: LIR.JoinPointId, param: LIR.LocalId };
+
+/// Each join parameter that a reachable one-parameter join's body forwards
+/// its own parameter into (`forwardsToJoin`).
+fn forwardedJoins(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!std.AutoHashMap(ForwardTarget, void) {
+    var targets = std.AutoHashMap(ForwardTarget, void).init(allocator);
+    errdefer targets.deinit();
+    var walk = try body_clone.ReachableStmts.initWithAllocator(store, body, allocator);
+    defer walk.deinit();
+    while (try walk.next()) |stmt_id| {
+        const node = store.getCFStmt(stmt_id);
+        if (node != .join) continue;
+        const params = store.getLocalSpan(node.join.params);
+        if (params.len != 1) continue;
+        const source = GuardedList.at(params, 0);
+        const first = store.getCFStmt(node.join.body);
+        const target: LIR.LocalId, const terminal_id = if (first == .assign_ref) blk: {
+            const assign = first.assign_ref;
+            if (assign.op != .local or assign.op.local != source) continue;
+            break :blk .{ assign.target, assign.next };
+        } else if (first == .set_local) blk: {
+            const set = first.set_local;
+            if (set.value != source or set.mode != .initialize_join_param) continue;
+            break :blk .{ set.target, set.next };
+        } else continue;
+        const terminal = store.getCFStmt(terminal_id);
+        if (terminal != .jump) continue;
+        try targets.put(.{ .join = terminal.jump.target, .param = target }, {});
+    }
+    return targets;
+}
 
 fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: Allocator) ResourceError!IncomingEdges {
     var counts = IncomingEdges.init(allocator);
@@ -173,10 +230,10 @@ fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: 
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = counts.get(successor) orelse 0;
-            if (count == std.math.maxInt(u32)) @panic("LIR statement incoming-edge count overflowed");
+            if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR statement incoming-edge count overflowed"});
             try counts.put(successor, count + 1);
         }
     }
@@ -193,12 +250,12 @@ fn subtreeJumpsTo(store: *LirStore, body: LIR.CFStmtId, target: LIR.JoinPointId,
     return false;
 }
 
-fn collectFreshDefinitions(
+fn collectMovedBody(
     store: *LirStore,
     root: LIR.CFStmtId,
     proc_incoming_edges: *const IncomingEdges,
     allocator: Allocator,
-) ResourceError!body_clone.ReadCounts {
+) ResourceError!MovedBody {
     var internal_incoming = IncomingEdges.init(allocator);
     defer internal_incoming.deinit();
 
@@ -211,45 +268,45 @@ fn collectFreshDefinitions(
     while (try walk.next()) |stmt_id| {
         try nodes.append(allocator, stmt_id);
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = internal_incoming.get(successor) orelse 0;
-            if (count == std.math.maxInt(u32)) @panic("LIR subtree incoming-edge count overflowed");
+            if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR subtree incoming-edge count overflowed"});
             try internal_incoming.put(successor, count + 1);
         }
     }
 
     var shared_stmts = collections.DenseMap(LIR.CFStmtId, void).init(allocator);
-    defer shared_stmts.deinit();
+    errdefer shared_stmts.deinit();
     var shared_work = std.ArrayList(LIR.CFStmtId).empty;
     defer shared_work.deinit(allocator);
     for (nodes.items) |stmt_id| {
         const expected = (internal_incoming.get(stmt_id) orelse 0) + @intFromBool(stmt_id == root);
         const incoming = proc_incoming_edges.get(stmt_id) orelse 0;
-        if (incoming < expected) @panic("LIR subtree has more internal edges than its procedure graph");
+        if (incoming < expected) invariant("{s}", .{"LIR subtree has more internal edges than its procedure graph"});
         if (incoming > expected) try shared_work.append(allocator, stmt_id);
     }
     while (shared_work.pop()) |stmt_id| {
         if (shared_stmts.contains(stmt_id)) continue;
         try shared_stmts.put(stmt_id, {});
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         try shared_work.appendSlice(allocator, successors.items);
     }
 
-    var shared_definitions: body_clone.ReadCounts = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) };
-    errdefer shared_definitions.deinit();
+    var fresh_definitions: body_clone.ReadCounts = .{ .counts = collections.DenseMap(LIR.LocalId, u32).init(allocator) };
+    errdefer fresh_definitions.deinit();
     for (nodes.items) |stmt_id| {
         // A cloned join declaration receives a fresh join-point identity, so
         // its parameter binders must be alpha-renamed with it. Unlike ordinary
         // statement targets, jump initialization is not represented by a
         // structural successor edge to the declaration; retaining a parameter
         // identity can therefore merge two distinct control-flow binders.
-        if (store.getCFStmt(stmt_id) == .join or shared_stmts.contains(stmt_id)) {
-            try body_clone.markStmtDefinitionsSparse(store, &shared_definitions, stmt_id);
+        if (store.getCFStmt(stmt_id) == .join and !shared_stmts.contains(stmt_id)) {
+            try body_clone.markStmtDefinitionsSparse(store, &fresh_definitions, stmt_id);
         }
     }
-    return shared_definitions;
+    return .{ .shared_stmts = shared_stmts, .fresh_definitions = fresh_definitions };
 }
 
 fn forwardsToJoin(
@@ -288,15 +345,25 @@ fn applyCandidate(
     var cloner = try body_clone.BodyCloner(RetRewriter).initWithFreshDeclaredJoinsAndAllocator(store, .{}, outer.body, join_params, allocator);
     defer cloner.deinit();
 
+    // The shared suffix stays where it is: another reachable edge enters it,
+    // so the moved prefix links to it rather than copying it. Copying would
+    // duplicate every later forwarding pair in the suffix, and each of those
+    // rewrites would copy its own shared suffix again, growing the procedure
+    // exponentially in the number of sequential forwarding chains. The
+    // suffix cannot read the eliminated outer parameter, which is out of
+    // scope on the other edge into it.
+    var shared_stmts = candidate.moved.shared_stmts;
+    var shared = shared_stmts.keyIterator();
+    while (shared.next()) |stmt_id| try cloner.stmt_map.put(stmt_id.*, stmt_id.*);
+
     // Ordinary definitions in the exclusive prefix are moved, so they keep
-    // their identities. Definitions in a structurally shared suffix and
-    // parameter binders of alpha-renamed joins receive fresh identities. The
-    // eliminated outer parameter is substituted with the inner parameter that
-    // carried the same value.
+    // their identities. Parameter binders of alpha-renamed joins receive
+    // fresh identities. The eliminated outer parameter is substituted with
+    // the inner parameter that carried the same value.
     const frame = store.getLocalSpan(store.getProcSpec(proc_id).frame_locals);
     for (0..frame.len) |index| {
         const local = GuardedList.at(frame, index);
-        if (candidate.fresh_definitions.get(local) == 0) {
+        if (candidate.moved.fresh_definitions.get(local) == 0) {
             try cloner.local_map.put(local, local);
         }
     }
@@ -318,7 +385,7 @@ fn applyCandidate(
 
     // All references to the outer join entered through the forwarding body we
     // just replaced, so its remainder is now the complete procedure path.
-    store.getCFStmtPtr(candidate.outer_stmt).* = store.getCFStmt(outer.remainder);
+    try store.replaceCFStmt(candidate.outer_stmt, store.getCFStmt(outer.remainder), store.stmtOrigin(outer.remainder));
 }
 
 test "forwarding join inline declarations are referenced" {
@@ -329,7 +396,7 @@ test "forwarding join inline eligibility is scope and body, not ABI" {
     var store = LirStore.init(std.testing.allocator);
     defer store.deinit();
     const value = try store.addLocal(.{ .layout_idx = .u64 });
-    const body = try store.addCFStmt(.{ .ret = .{ .value = value } });
+    const body = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -339,7 +406,7 @@ test "forwarding join inline eligibility is scope and body, not ABI" {
         .ret_layout = .u64,
         .abi = .erased_callable,
         .iterator_fusion_scope = true,
-    });
+    }, .none);
     try std.testing.expectEqual(body, rewritableProcBody(&store, proc).?);
     store.getProcSpecPtr(proc).iterator_fusion_scope = false;
     try std.testing.expectEqual(null, rewritableProcBody(&store, proc));
@@ -397,7 +464,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
 
     for (0..unrelated_count) |_| {
         const unrelated = try store.addLocal(.{ .layout_idx = .u64 });
-        _ = try store.addCFStmt(.{ .ret = .{ .value = unrelated } });
+        _ = try store.addCFStmt(.{ .ret = .{ .value = unrelated } }, .test_fixture);
     }
     const outer_param = try store.addLocal(.{ .layout_idx = .u64 });
     const inner_param = try store.addLocal(.{ .layout_idx = .u64 });
@@ -407,43 +474,43 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     const outer_id = testFreshJoinPointId(&next_join_point);
     const inner_id = testFreshJoinPointId(&next_join_point);
 
-    const outer_ret = try store.addCFStmt(.{ .ret = .{ .value = copied } });
+    const outer_ret = try store.addCFStmt(.{ .ret = .{ .value = copied } }, .test_fixture);
     const outer_body = try store.addCFStmt(.{ .assign_ref = .{
         .target = copied,
         .op = .{ .local = outer_param },
         .next = outer_ret,
-    } });
-    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    } }, .test_fixture);
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const forward = try store.addCFStmt(.{ .set_local = .{
         .target = outer_param,
         .value = inner_param,
         .mode = .initialize_join_param,
         .next = jump_outer,
-    } });
-    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } });
+    } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
     const set_inner = try store.addCFStmt(.{ .set_local = .{
         .target = inner_param,
         .value = one,
         .mode = .initialize_join_param,
         .next = jump_inner,
-    } });
+    } }, .test_fixture);
     const inner_remainder = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = set_inner,
-    } });
+    } }, .test_fixture);
     const inner_stmt = try store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = try store.addLocalSpan(&.{inner_param}),
         .body = forward,
         .remainder = inner_remainder,
-    } });
+    } }, .test_fixture);
     const outer_stmt = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = try store.addLocalSpan(&.{outer_param}),
         .body = outer_body,
         .remainder = inner_stmt,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(4),
@@ -452,7 +519,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
         .body = outer_stmt,
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one, copied }),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
@@ -470,7 +537,7 @@ fn testSoleConsumer(scratch_allocator: Allocator, mode: TestMode, unrelated_coun
     try testing.expectEqual(@as(usize, 4), rewritten_frame.len);
 }
 
-test "forwarding join inline freshens definitions only in a shared tail" {
+test "forwarding join inline links the moved prefix to a shared tail" {
     try testSharedTail(std.testing.allocator, .standalone);
     try testSharedTail(std.testing.allocator, .procedure);
 }
@@ -491,55 +558,55 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     const outer_id = testFreshJoinPointId(&next_join_point);
     const inner_id = testFreshJoinPointId(&next_join_point);
 
-    const shared_ret = try store.addCFStmt(.{ .ret = .{ .value = shared_result } });
+    const shared_ret = try store.addCFStmt(.{ .ret = .{ .value = shared_result } }, .test_fixture);
     const shared_tail = try store.addCFStmt(.{ .assign_ref = .{
         .target = shared_result,
         .op = .{ .local = one },
         .next = shared_ret,
-    } });
+    } }, .test_fixture);
     const outer_body = try store.addCFStmt(.{ .assign_ref = .{
         .target = copied,
         .op = .{ .local = outer_param },
         .next = shared_tail,
-    } });
-    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    } }, .test_fixture);
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const forward = try store.addCFStmt(.{ .set_local = .{
         .target = outer_param,
         .value = inner_param,
         .mode = .initialize_join_param,
         .next = jump_outer,
-    } });
-    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } });
+    } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
     const set_inner = try store.addCFStmt(.{ .set_local = .{
         .target = inner_param,
         .value = one,
         .mode = .initialize_join_param,
         .next = jump_inner,
-    } });
+    } }, .test_fixture);
     const choose = try store.addCFStmt(.{ .switch_stmt = .{
         .cond = one,
         .branches = try store.addCFSwitchBranches(&.{.{ .value = 0, .body = shared_tail }}),
         .default_branch = set_inner,
         .default_is_cold = false,
         .continuation = null,
-    } });
+    } }, .test_fixture);
     const inner_remainder = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = choose,
-    } });
+    } }, .test_fixture);
     const inner_stmt = try store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = try store.addLocalSpan(&.{inner_param}),
         .body = forward,
         .remainder = inner_remainder,
-    } });
+    } }, .test_fixture);
     const outer_stmt = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = try store.addLocalSpan(&.{outer_param}),
         .body = outer_body,
         .remainder = inner_stmt,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(3),
@@ -548,7 +615,7 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
         .body = outer_stmt,
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one, copied, shared_result }),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     try testRun(&store, &layouts, proc, scratch_allocator, mode);
 
@@ -559,18 +626,13 @@ fn testSharedTail(scratch_allocator: Allocator, mode: TestMode) TestError!void {
     try testing.expect(moved_prefix == .assign_ref);
     try testing.expectEqual(copied, moved_prefix.assign_ref.target);
     try testing.expectEqual(inner_param, moved_prefix.assign_ref.op.local);
-    const moved_tail = store.getCFStmt(moved_prefix.assign_ref.next);
-    try testing.expect(moved_tail == .assign_ref);
-    try testing.expect(moved_tail.assign_ref.target != shared_result);
-    const moved_ret = store.getCFStmt(moved_tail.assign_ref.next);
-    try testing.expect(moved_ret == .ret);
-    try testing.expectEqual(moved_tail.assign_ref.target, moved_ret.ret.value);
+    try testing.expectEqual(shared_tail, moved_prefix.assign_ref.next);
 
     const original_tail = store.getCFStmt(shared_tail);
     try testing.expectEqual(shared_result, original_tail.assign_ref.target);
+    try testing.expectEqual(shared_ret, original_tail.assign_ref.next);
     const rewritten_frame = store.getLocalSpan(store.getProcSpec(proc).frame_locals);
-    try testing.expectEqual(@as(usize, 6), rewritten_frame.len);
-    try testing.expectEqual(moved_tail.assign_ref.target, GuardedList.at(rewritten_frame, 5));
+    try testing.expectEqual(@as(usize, 5), rewritten_frame.len);
 }
 
 test "forwarding join inline preserves recursive outer join declarations" {
@@ -587,38 +649,38 @@ test "forwarding join inline preserves recursive outer join declarations" {
     const outer_id = testFreshJoinPointId(&next_join_point);
     const inner_id = testFreshJoinPointId(&next_join_point);
 
-    const outer_back_edge = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
-    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const outer_back_edge = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const forward = try store.addCFStmt(.{ .set_local = .{
         .target = outer_param,
         .value = inner_param,
         .mode = .initialize_join_param,
         .next = jump_outer,
-    } });
-    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } });
+    } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
     const set_inner = try store.addCFStmt(.{ .set_local = .{
         .target = inner_param,
         .value = one,
         .mode = .initialize_join_param,
         .next = jump_inner,
-    } });
+    } }, .test_fixture);
     const inner_remainder = try store.addCFStmt(.{ .assign_literal = .{
         .target = one,
         .value = .{ .i64_literal = .{ .value = 1, .layout_idx = .u64 } },
         .next = set_inner,
-    } });
+    } }, .test_fixture);
     const inner_stmt = try store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = try store.addLocalSpan(&.{inner_param}),
         .body = forward,
         .remainder = inner_remainder,
-    } });
+    } }, .test_fixture);
     const outer_stmt = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = try store.addLocalSpan(&.{outer_param}),
         .body = outer_back_edge,
         .remainder = inner_stmt,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(2),
@@ -627,7 +689,7 @@ test "forwarding join inline preserves recursive outer join declarations" {
         .body = outer_stmt,
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, one }),
         .ret_layout = .u64,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 
@@ -651,33 +713,33 @@ test "forwarding join inline preserves owning continuation parameters" {
     const outer_id = testFreshJoinPointId(&next_join_point);
     const inner_id = testFreshJoinPointId(&next_join_point);
 
-    const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_param } });
-    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } });
+    const outer_body = try store.addCFStmt(.{ .ret = .{ .value = outer_param } }, .test_fixture);
+    const jump_outer = try store.addCFStmt(.{ .jump = .{ .target = outer_id } }, .test_fixture);
     const forward = try store.addCFStmt(.{ .set_local = .{
         .target = outer_param,
         .value = inner_param,
         .mode = .initialize_join_param,
         .next = jump_outer,
-    } });
-    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } });
+    } }, .test_fixture);
+    const jump_inner = try store.addCFStmt(.{ .jump = .{ .target = inner_id } }, .test_fixture);
     const set_inner = try store.addCFStmt(.{ .set_local = .{
         .target = inner_param,
         .value = source,
         .mode = .initialize_join_param,
         .next = jump_inner,
-    } });
+    } }, .test_fixture);
     const inner_stmt = try store.addCFStmt(.{ .join = .{
         .id = inner_id,
         .params = try store.addLocalSpan(&.{inner_param}),
         .body = forward,
         .remainder = set_inner,
-    } });
+    } }, .test_fixture);
     const outer_stmt = try store.addCFStmt(.{ .join = .{
         .id = outer_id,
         .params = try store.addLocalSpan(&.{outer_param}),
         .body = outer_body,
         .remainder = inner_stmt,
-    } });
+    } }, .test_fixture);
     const proc = try store.addProcSpec(.{
         .name = LIR.Symbol.fromRaw(1),
         .identity = LIR.ProcIdentity.forTest(1),
@@ -686,7 +748,7 @@ test "forwarding join inline preserves owning continuation parameters" {
         .body = outer_stmt,
         .frame_locals = try store.addLocalSpan(&.{ outer_param, inner_param, source }),
         .ret_layout = .str,
-    });
+    }, .none);
 
     try run(&store, &layouts);
 

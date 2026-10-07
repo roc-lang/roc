@@ -184,7 +184,7 @@ y = x == x
 								(pattern (degenerate false)
 									(p-applied-tag)))
 							(value
-								(e-dispatch-call (method "frob") (constraint-fn-var 300)
+								(e-dispatch-call (method "frob") (constraint-fn-var 303)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "v"))))
@@ -225,7 +225,11 @@ y = x == x
 						(ty-lookup (name "Str") (builtin)))))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x")))))
 	(s-nominal-decl
 		(ty-header (name "Expr")
 			(ty-args

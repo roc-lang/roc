@@ -149,7 +149,7 @@ pub const TestEnv = struct {
         return self.allocation_map.count();
     }
 
-    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) ?*anyopaque {
+    fn rocAllocFn(ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Allocate memory using the testing allocator with comptime alignment
@@ -206,7 +206,7 @@ pub const TestEnv = struct {
         }
     }
 
-    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) ?*anyopaque {
+    fn rocReallocFn(ops: *RocOps, ptr: *anyopaque, new_length: usize, _: usize) callconv(.c) *anyopaque {
         const self: *TestEnv = @ptrCast(@alignCast(ops.env));
 
         // Look up the old allocation
@@ -256,7 +256,7 @@ pub const TestEnv = struct {
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
         const message = bytes[0..len];
         debugPrint("Roc crashed: {s}\n", .{message});
-        unreachable;
+        @trap();
     }
 };
 
@@ -303,20 +303,6 @@ else
 /// - As a placeholder when the decrement operation is handled elsewhere
 pub fn rcNone(_: ?*anyopaque, _: ?[*]u8) callconv(.c) void {}
 
-/// Enum representing different integer widths and signedness for runtime type information
-pub const IntWidth = enum(u8) {
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    U128 = 4,
-    I8 = 5,
-    I16 = 6,
-    I32 = 7,
-    I64 = 8,
-    I128 = 9,
-};
-
 const Refcount = enum {
     none,
     normal,
@@ -348,11 +334,9 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
             }
             roc_ops.crash("Use-after-free: incref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             roc_ops.crash("Invalid incref: incrementing non-positive refcount");
-            return;
         }
     }
 
@@ -372,7 +356,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                             DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
                         }
                         roc_ops.crash("Use-after-free: incref on already-freed memory");
-                        return;
                     }
                     unreachable;
                 }
@@ -387,12 +370,6 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
 /// Increments reference count of an RC pointer by specified amount
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
     increfRcPtr(ptr_to_refcount, amount, .atomic, roc_ops);
-}
-
-/// Increments reference count of an RC pointer by specified amount, for
-/// allocations proven confined to a single thread.
-pub fn increfRcPtrSingleThreadC(ptr_to_refcount: *isize, amount: isize, roc_ops: *RocOps) callconv(.c) void {
-    increfRcPtr(ptr_to_refcount, amount, .single_thread, roc_ops);
 }
 
 /// Decrements the refcount pointed to directly by `bytes_or_null`,
@@ -417,76 +394,6 @@ pub fn decrefRcPtr(
     );
 }
 
-/// TODO
-pub fn decrefRcPtrC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Decrements the refcount pointed to directly by `bytes_or_null`, for
-/// allocations proven confined to a single thread.
-pub fn decrefRcPtrSingleThreadC(
-    bytes_or_null: ?[*]isize,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefRcPtr(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer,
-/// using the given count-update atomicity.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNull(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    atomicity: RcAtomicity,
-    roc_ops: *RocOps,
-) void {
-    if (bytes_or_null) |bytes| {
-        const isizes: [*]isize = alignedPtrCast([*]isize, bytes, @src());
-        return @call(
-            .always_inline,
-            decref_ptr_to_refcount,
-            .{ isizes - 1, alignment, elements_refcounted, atomicity, roc_ops, .decref_check_null },
-        );
-    }
-}
-
-/// Safely decrements reference count for a potentially null pointer
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .atomic, roc_ops);
-}
-
-/// Safely decrements reference count for a potentially null pointer, for
-/// allocations proven confined to a single thread.
-/// WARNING: This function assumes `bytes` points to 8-byte aligned data.
-/// It should NOT be used for seamless slices with non-zero start offsets,
-/// as those have misaligned bytes pointers. Use RocList.decref instead.
-pub fn decrefCheckNullSingleThreadC(
-    bytes_or_null: ?[*]u8,
-    alignment: u32,
-    elements_refcounted: bool,
-    roc_ops: *RocOps,
-) callconv(.c) void {
-    return decrefCheckNull(bytes_or_null, alignment, elements_refcounted, .single_thread, roc_ops);
-}
-
 /// Decrements reference count for a data pointer and frees memory if count
 /// reaches zero, using the given count-update atomicity.
 /// Handles tag bits in the pointer and extracts the reference count pointer.
@@ -509,7 +416,6 @@ pub fn decrefDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             roc_ops.crash("decrefDataPtr: unmasked pointer is not aligned");
-            return;
         }
     }
 
@@ -566,7 +472,6 @@ pub fn increfDataPtr(
     if (comptime builtin.mode == .Debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             roc_ops.crash("increfDataPtr: refcount pointer is not aligned");
-            return;
         }
     }
 
@@ -708,14 +613,12 @@ inline fn decref_ptr_to_refcount(
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Use-after-free: decref on already-freed memory");
-            return;
         }
         if (refcount <= 0 and !rcConstant(refcount)) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
             }
             roc_ops.crash("Refcount underflow: decrementing non-positive refcount");
-            return;
         }
     }
 
@@ -766,10 +669,7 @@ pub fn isUnique(
 /// Used to determine if in-place mutation is safe for reference-counted data
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == 1;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == 1;
         },
         .none => {
@@ -782,10 +682,7 @@ pub inline fn rcUnique(refcount: isize) bool {
 /// Constant references (REFCOUNT_MAX_ISIZE) are never freed when decremented
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
-        .normal => {
-            return refcount == REFCOUNT_STATIC_DATA;
-        },
-        .atomic => {
+        .normal, .atomic => {
             return refcount == REFCOUNT_STATIC_DATA;
         },
         .none => {
@@ -794,69 +691,9 @@ pub inline fn rcConstant(refcount: isize) bool {
     }
 }
 
-/// Debug-only assertion that a data pointer has a valid refcount.
-/// Panics if the refcount is poisoned (use-after-free) or invalid (underflow).
-/// Compiles to nothing in release builds - zero overhead.
-///
-/// Use this at key points in slice-creating or refcount-manipulating functions
-/// to catch bugs early during development.
-pub inline fn assertValidRefcount(data_ptr: ?[*]u8, roc_ops: *RocOps) void {
-    if (builtin.mode != .Debug) return;
-    if (data_ptr) |ptr| {
-        const rc_ptr: [*]isize = alignedPtrCast([*]isize, ptr - @sizeOf(usize), @src());
-        const rc = rc_ptr[0];
-        if (rc == POISON_VALUE) {
-            roc_ops.crash("assertValidRefcount: Use-after-free detected");
-            return;
-        }
-        if (rc <= 0 and !rcConstant(rc)) {
-            roc_ops.crash("assertValidRefcount: Invalid refcount (underflow or corruption)");
-            return;
-        }
-    }
-}
-
-// We follow roughly the [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md) when it comes to growing a RocList.
-// Here is [their growth strategy](https://github.com/facebook/folly/blob/3e0525988fd444201b19b76b390a5927c15cb697/folly/FBVector.h#L1128) for push_back:
-//
-// (1) initial size
-//     Instead of growing to size 1 from empty, fbvector allocates at least
-//     64 bytes. You may still use reserve to reserve a lesser amount of
-//     memory.
-// (2) 1.5x
-//     For medium-sized vectors, the growth strategy is 1.5x. See the docs
-//     for details.
-//     This does not apply to very small or very large fbvectors. This is a
-//     heuristic.
-//
-// In our case, we exposed allocate and reallocate, which will use a smart growth strategy.
-// We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
-
-/// Calculates the new capacity for a growing list, based on the old capacity, requested length, and element width.
-///
-/// Should only be called when growing a collection.
-///
-/// `requested_length` should always be greater than old_capacity.
-pub inline fn calculateCapacity(
-    old_capacity: usize,
-    requested_length: usize,
-    element_width: usize,
-) usize {
-    // TODO: Deal with the fact we allocate an extra u64 for refcount.
-    // This may lead to allocating page size + 8 bytes.
-    // That could mean allocating an entire page for 8 bytes of data which isn't great.
-
-    if (requested_length != old_capacity + 1) {
-        // The user is explicitly requesting n elements.
-        // Trust the user and just reserve that amount.
-        return requested_length;
-    }
-
-    if (element_width == 0) {
-        return requested_length;
-    }
-    return @max(geometricGrowth(old_capacity, element_width), requested_length);
-}
+// Growth roughly follows [fbvector](https://github.com/facebook/folly/blob/main/folly/docs/FBVector.md):
+// an empty collection grows to at least 64 bytes, medium-sized ones grow by
+// 1.5x, and very small or very large ones double.
 
 /// The next capacity step in the geometric growth progression. Appends that
 /// outgrow the current capacity reserve at least this much so a run of them
@@ -895,25 +732,9 @@ pub inline fn geometricGrowth(old_capacity: usize, element_width: usize) usize {
 // of the caller's body, so the guard costs a hot path only the overflow branch
 // itself and does not bloat entrypoints that inline an allocation.
 noinline fn crashAllocationTooLarge(roc_ops: *RocOps) noreturn {
+    // `crash` is `noreturn` and traps if the host returns, so the wrapped
+    // size can never reach the allocator.
     roc_ops.crash("Attempted to allocate a collection larger than the platform address space");
-    // Most hosts never return from `crash`: the compile-time host longjmps and
-    // a platform's handler terminates the process, so this is dead code there.
-    // Two return by design instead. The wasm host cannot longjmp across the VM
-    // boundary, and the LLVM backend on aarch64 Linux deliberately reports
-    // crashes by returning to its Zig caller, because longjmping through
-    // LLVM-generated frames is unreliable there (see `emitCrashBytes`, which
-    // emits `ret void` after the callback on that target, and
-    // `RuntimeHostEnv.longjmp_on_crash`).
-    //
-    // That contract covers Roc-level `crash` expressions, whose frames the
-    // backend emits and can return from. A Zig builtin has no such frame to
-    // unwind, so halting is the only remaining option -- the same one every
-    // other builtin crash site takes (see `str.repeatC`). `@trap()` makes it
-    // deterministic rather than leaving `unreachable` to fall through with the
-    // wrapped size and run off the buffer this guard exists to protect, and it
-    // costs nothing on the hot path because it sits behind the overflow branch
-    // in a cold function.
-    @trap();
 }
 
 /// Returns `count * element_width`, or crashes if the product overflows `usize`.
@@ -993,7 +814,7 @@ pub fn allocateWithRefcount(
     // tiny allocation. See `crashAllocationTooLarge`.
     const length = checkedAllocLen(data_bytes, extra_bytes, roc_ops);
 
-    const new_bytes = @as([*]u8, @ptrCast(roc_ops.tryAlloc(length, alignment)));
+    const new_bytes = @as([*]u8, @ptrCast(roc_ops.allocRaw(length, alignment)));
 
     const data_ptr = new_bytes + extra_bytes;
 
@@ -1006,12 +827,6 @@ pub fn allocateWithRefcount(
 
     return data_ptr;
 }
-
-/// A C-compatible slice structure containing a pointer and length
-pub const CSlice = extern struct {
-    pointer: *anyopaque,
-    len: usize,
-};
 
 /// Reallocates memory for a list to accommodate growth
 /// Preserves existing data and handles refcount placement
@@ -1050,7 +865,7 @@ pub fn unsafeReallocate(
     // Use the same alignment calculation as allocateWithRefcount
     const allocation_alignment = @max(ptr_width, element_alignment);
 
-    const reallocated = roc_ops.tryRealloc(old_allocation, new_width, allocation_alignment);
+    const reallocated = roc_ops.realloc(old_allocation, new_width, allocation_alignment);
 
     const new_source = @as([*]u8, @ptrCast(reallocated)) + extra_bytes;
     if (comptime builtin.os.tag != .freestanding) {
@@ -1364,36 +1179,6 @@ test "increfC, static data" {
     try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
-test "increfRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 19);
-}
-
-test "increfRcPtrSingleThreadC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").increfRcPtrSingleThreadC(ptr_to_refcount, 2, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
-}
-
-test "decrefRcPtrSingleThreadC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrSingleThreadC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
 test "single-thread incref/decref pair on a real allocation frees on zero" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
@@ -1416,26 +1201,6 @@ test "single-thread incref/decref pair on a real allocation frees on zero" {
 
     decrefDataPtr(data_ptr, 8, false, .single_thread, ops);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "decrefC, refcounted data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = 17;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, 16);
-}
-
-test "decrefC, static data" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-
-    var mock_rc: isize = @import("utils.zig").REFCOUNT_STATIC_DATA;
-    const ptr_to_refcount: *isize = &mock_rc;
-    @import("utils.zig").decrefRcPtrC(@ptrCast(ptr_to_refcount), 8, false, test_env.getOps());
-    try std.testing.expectEqual(mock_rc, @import("utils.zig").REFCOUNT_STATIC_DATA);
 }
 
 test "TestEnv basic functionality" {
@@ -1461,79 +1226,8 @@ test "TestEnv allocation tracking" {
     try std.testing.expectEqual(@as(usize, 1), test_env.getAllocationCount());
 
     // Test deallocation
-    ops.roc_dealloc(ops, allocated.?, 8);
+    ops.roc_dealloc(ops, allocated, 8);
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
-}
-
-test "calculateCapacity with various inputs" {
-    // Test zero capacity
-    try std.testing.expectEqual(@as(usize, 0), calculateCapacity(0, 0, 1));
-
-    // Test basic growth
-    try std.testing.expectEqual(@as(usize, 6), calculateCapacity(4, 6, 1));
-
-    // Test with larger element sizes
-    try std.testing.expectEqual(@as(usize, 20), calculateCapacity(16, 20, 1));
-
-    // Test that it rounds up appropriately
-    try std.testing.expectEqual(@as(usize, 10), calculateCapacity(8, 10, 1));
-
-    // Test growth logic when requesting exactly old_capacity + 1
-    try std.testing.expectEqual(@as(usize, 8), calculateCapacity(4, 5, 1));
-}
-
-// The allocation size guards are written as comparisons rather than
-// `@mulWithOverflow`/`@addWithOverflow` so they fold away when the sizes are
-// known (see `checkedByteCount`). These tests hold the comparisons to exactly
-// the intrinsics' answer, because that equivalence is the whole safety claim:
-// a size that wraps `usize` must be rejected, not turned into a tiny
-// allocation the next write runs off the end of.
-test "byteCountOverflows agrees with the multiply overflow intrinsic" {
-    const max = std.math.maxInt(usize);
-    const widths = [_]usize{ 0, 1, 2, 3, 8, 16, 24, 4096, max / 2, max };
-    const counts = [_]usize{ 0, 1, 2, 3, 7, 8, 1000, max / 4096, max / 2, max - 1, max };
-    for (widths) |width| {
-        for (counts) |count| {
-            const expected = @mulWithOverflow(count, width)[1] != 0;
-            try std.testing.expectEqual(expected, byteCountOverflows(count, width));
-        }
-    }
-}
-
-test "allocLenOverflows agrees with the add overflow intrinsic" {
-    const max = std.math.maxInt(usize);
-    const headers = [_]usize{ 0, 1, 8, 16, 24, max / 2, max };
-    const sizes = [_]usize{ 0, 1, 8, 1000, max / 2, max - 24, max - 1, max };
-    for (headers) |header| {
-        for (sizes) |size| {
-            const expected = @addWithOverflow(size, header)[1] != 0;
-            try std.testing.expectEqual(expected, allocLenOverflows(size, header));
-        }
-    }
-}
-
-test "checked size helpers return exact values at the largest safe input" {
-    var test_env = TestEnv.init(std.testing.allocator);
-    defer test_env.deinit();
-    const ops = test_env.getOps();
-    const max = std.math.maxInt(usize);
-
-    // The largest count that still fits must be allowed through untouched: an
-    // off-by-one in the guard would crash here instead of returning.
-    for ([_]usize{ 1, 2, 3, 8, 4096 }) |width| {
-        const largest_safe = max / width;
-        try std.testing.expect(!byteCountOverflows(largest_safe, width));
-        try std.testing.expectEqual(largest_safe * width, checkedByteCount(largest_safe, width, ops));
-    }
-
-    // A zero element width can never overflow, whatever the count.
-    try std.testing.expectEqual(@as(usize, 0), checkedByteCount(max, 0, ops));
-
-    for ([_]usize{ 0, 8, 16, 24 }) |header| {
-        const largest_safe = max - header;
-        try std.testing.expect(!allocLenOverflows(largest_safe, header));
-        try std.testing.expectEqual(max, checkedAllocLen(largest_safe, header, ops));
-    }
 }
 
 test "allocateWithRefcount basic functionality" {

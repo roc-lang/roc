@@ -69,6 +69,39 @@ An eligible call like `List.with_capacity(123)` will still be evaluated at compi
 
 Note that it's not `List.with_capacity` itself that's special-cased; rather, it's the empty builtin collections. You can still build nonempty lists at compile time by calling functions which use `List.with_capacity`; storing it in the binary is only skipped if its length is actually zero at the end of compile-time evaluation.
 
+## Code With Errors
+
+Roc keeps doing useful work in a program that has compilation errors (such as type mismatches): the
+code that has an error crashes if it runs, and everything else works normally. Compile-time
+evaluation follows the same principle, so every expression that can be evaluated at compile time
+still is.
+
+If evaluating an expression at compile time reaches code that has a compilation error, no matter how
+indirectly it gets there (through a chain of function calls, a method call, a call made by `==` or a
+[parser](parsers), and so on), Roc stops evaluating that expression and reports nothing beyond the
+original error. Using the expression's value at runtime crashes, just as running the code with the
+error would. For example:
+
+```roc
+Format := [Default].{
+    parse_u8 : Format, {} -> Try({ value : U8, rest : {} }, [Bad])
+    parse_u8 = |_, _| Err(OtherErr)
+}
+
+parsed = (U8.parser_for(Format.Default))({})
+fine = 1 + 2
+```
+
+`parse_u8` has a type mismatch (it can return `OtherErr`, which its annotation doesn't list), and
+the parser that `U8.parser_for(Format.Default)` builds calls `parse_u8`. So evaluating `parsed`
+reaches code with an error: the type mismatch is reported once, not a second time as a compile-time
+crash, and using `parsed` at runtime crashes. `fine` doesn't reach `parse_u8`, so it gets evaluated
+at compile time as usual. So does an expression that calls a function containing an error but never
+reaches that part of it, for example because a condition takes the other branch.
+
+The same rule applies to top-level [`expect`s](statements#top-level-expect): if running one reaches
+code with an error, `roc test` reports it as a compiler error instead of a pass or a failure.
+
 ## Performance
 
 Doing work at compile time instead of runtime ordinarily makes a program run faster because it does less work.

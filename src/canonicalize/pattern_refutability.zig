@@ -13,33 +13,41 @@ pub const PatternClass = enum {
 };
 
 /// Returns whether a pattern can fail to match using only adapter-provided syntax.
-pub fn canMiss(comptime Adapter: type, adapter: Adapter, pattern_id: Adapter.PatternId) bool {
-    return switch (adapter.patternClass(pattern_id)) {
-        .cannot_miss => false,
-        .can_miss => true,
-        .child => canMiss(Adapter, adapter, adapter.child(pattern_id)),
-        .sequence => blk: {
+pub fn canMiss(
+    comptime Adapter: type,
+    adapter: Adapter,
+    allocator: std.mem.Allocator,
+    pattern_id: Adapter.PatternId,
+) std.mem.Allocator.Error!bool {
+    // A pattern can miss when any component can, so components are checked
+    // from a worklist in any order.
+    var stack_allocator_state = std.heap.stackFallback(1024, allocator);
+    const stack_allocator = stack_allocator_state.get();
+    var pending = std.ArrayList(Adapter.PatternId).empty;
+    defer pending.deinit(stack_allocator);
+    try pending.append(stack_allocator, pattern_id);
+    while (pending.pop()) |current| switch (adapter.patternClass(current)) {
+        .cannot_miss => {},
+        .can_miss => return true,
+        .child => try pending.append(stack_allocator, adapter.child(current)),
+        .sequence => {
             var index: usize = 0;
-            while (index < adapter.sequenceLen(pattern_id)) : (index += 1) {
-                if (canMiss(Adapter, adapter, adapter.sequenceChild(pattern_id, index))) break :blk true;
+            while (index < adapter.sequenceLen(current)) : (index += 1) {
+                try pending.append(stack_allocator, adapter.sequenceChild(current, index));
             }
-            break :blk false;
         },
-        .record => blk: {
+        .record => {
             var index: usize = 0;
-            while (index < adapter.recordLen(pattern_id)) : (index += 1) {
-                if (canMiss(Adapter, adapter, adapter.recordChild(pattern_id, index))) break :blk true;
+            while (index < adapter.recordLen(current)) : (index += 1) {
+                try pending.append(stack_allocator, adapter.recordChild(current, index));
             }
-            break :blk false;
         },
-        .list => listCanMiss(Adapter, adapter, pattern_id),
+        .list => {
+            if (adapter.listFixedLen(current) != 0) return true;
+            if (!adapter.listHasRest(current)) return true;
+            if (adapter.listRestPattern(current)) |rest| try pending.append(stack_allocator, rest);
+        },
     };
-}
-
-fn listCanMiss(comptime Adapter: type, adapter: Adapter, pattern_id: Adapter.PatternId) bool {
-    if (adapter.listFixedLen(pattern_id) != 0) return true;
-    if (!adapter.listHasRest(pattern_id)) return true;
-    if (adapter.listRestPattern(pattern_id)) |rest| return canMiss(Adapter, adapter, rest);
     return false;
 }
 
@@ -164,19 +172,19 @@ const TestAdapter = struct {
 test "list refutability distinguishes rest-only patterns" {
     const adapter = TestAdapter{};
 
-    try std.testing.expect(canMiss(TestAdapter, adapter, .empty_list));
-    try std.testing.expect(!canMiss(TestAdapter, adapter, .rest_list));
-    try std.testing.expect(!canMiss(TestAdapter, adapter, .rest_bind_list));
-    try std.testing.expect(canMiss(TestAdapter, adapter, .fixed_rest_list));
-    try std.testing.expect(canMiss(TestAdapter, adapter, .rest_literal_list));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .empty_list));
+    try std.testing.expect(!try canMiss(TestAdapter, adapter, std.testing.allocator, .rest_list));
+    try std.testing.expect(!try canMiss(TestAdapter, adapter, std.testing.allocator, .rest_bind_list));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .fixed_rest_list));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .rest_literal_list));
 }
 
 test "children determine compound pattern refutability" {
     const adapter = TestAdapter{};
 
-    try std.testing.expect(!canMiss(TestAdapter, adapter, .tuple_wildcard));
-    try std.testing.expect(canMiss(TestAdapter, adapter, .tuple_literal));
-    try std.testing.expect(!canMiss(TestAdapter, adapter, .record_wildcard));
-    try std.testing.expect(canMiss(TestAdapter, adapter, .record_literal));
-    try std.testing.expect(canMiss(TestAdapter, adapter, .as_literal));
+    try std.testing.expect(!try canMiss(TestAdapter, adapter, std.testing.allocator, .tuple_wildcard));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .tuple_literal));
+    try std.testing.expect(!try canMiss(TestAdapter, adapter, std.testing.allocator, .record_wildcard));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .record_literal));
+    try std.testing.expect(try canMiss(TestAdapter, adapter, std.testing.allocator, .as_literal));
 }

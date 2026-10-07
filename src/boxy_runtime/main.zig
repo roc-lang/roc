@@ -36,7 +36,6 @@ pub const panic = std.debug.FullPanic(panicImpl);
 
 fn panicImpl(msg: []const u8, _: ?usize) noreturn {
     (startup_ops orelse builtins.in_process_host.ops()).crash(msg);
-    unreachable;
 }
 
 /// Whether this root is the evaluator Wasm flavor, which receives its host
@@ -210,15 +209,18 @@ comptime {
         "roc_boxy_tag_ext_desc",
         "roc_boxy_tag_residual_desc",
         "roc_boxy_inspect",
+        "roc_boxy_eq",
+        "roc_boxy_hash",
         "roc_boxy_box",
         "roc_boxy_unbox",
+        "roc_boxy_record_update",
         "roc_boxy_adapt",
         "roc_boxy_tag",
         "roc_boxy_tag_payload",
-        "roc_boxy_eq",
         "roc_boxy_drop",
         "roc_boxy_tag_match",
         "roc_boxy_desc_copy",
+        "roc_boxy_dict_copy",
         "roc_boxy_dynamic_num_literal",
         "roc_boxy_dynamic_num_literal_ref",
         "roc_boxy_dynamic_frac_literal_ref",
@@ -227,6 +229,10 @@ comptime {
         "roc_boxy_register_proc",
         "roc_boxy_register_erased_proc",
         "roc_boxy_call_erased",
+        "roc_boxy_defer_erased",
+        "roc_boxy_drive_pending",
+        "roc_boxy_caller_drives",
+        "roc_boxy_return_pending",
         "roc_boxy_list_concat",
         "roc_boxy_list_prepend",
         "roc_boxy_list_sublist",
@@ -237,6 +243,7 @@ comptime {
         "roc_boxy_list_reverse",
         "roc_boxy_list_sort_with",
         "roc_boxy_list_reserve",
+        "roc_boxy_list_reserve_for_append",
         "roc_boxy_list_release_excess_capacity",
     };
     for (names) |name| {

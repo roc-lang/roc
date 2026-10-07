@@ -23,7 +23,6 @@ pub const ReportedError =
     Allocator.Error ||
     backend.wasm.WasmModule.MergeError ||
     backend.wasm.WasmModule.ParseError ||
-    backend.wasm.ObjectArchive.ParseError ||
     linker.LinkError ||
     lir.LirImage.ImageError ||
     std.zig.system.DetectError ||
@@ -90,8 +89,10 @@ pub const ReportedError =
         MissingTargetsSection,
         NativeCompilationFailed,
         NoCacheDir,
+        NoHomeDirectory,
         NoPlatformSource,
         NotAnAppHeader,
+        SourceTokenizationFailed,
         PathAlreadyExists,
         PathOutsideWorkspace,
         PlatformNotSupported,
@@ -535,44 +536,42 @@ fn createFileNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Please check that the path is correct and the file exists.");
 
     return report;
 }
 
-fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not read the file {s}.", .{info.path});
+/// A report whose headline is formatted from `headline_fmt` and whose body
+/// names the error that caused it.
+fn createErrorNameReport(
+    allocator: Allocator,
+    title: []const u8,
+    comptime headline_fmt: []const u8,
+    headline_args: anytype,
+    severity: reporting.Severity,
+    err_name: []const u8,
+) Allocator.Error!Report {
+    const headline = try std.fmt.allocPrint(allocator, headline_fmt, headline_args);
     defer allocator.free(headline);
-    var report = try Report.init(allocator, "File Read Failed", headline, .runtime_error);
+    var report = try Report.init(allocator, title, headline, severity);
 
     try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
+    try report.document.addText(err_name);
 
     return report;
+}
+
+fn createFileReadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
+    return createErrorNameReport(allocator, "File Read Failed", "I could not read the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
 }
 
 fn createFileWriteFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not write to the file {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "File Write Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "File Write Failed", "I could not write to the file {s}.", .{info.path}, .runtime_error, @errorName(info.err));
 }
 
 fn createDirectoryCreateFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not create the directory {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Directory Create Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Directory Create Failed", "I could not create the directory {s}.", .{info.path}, .runtime_error, @errorName(info.err));
 }
 
 fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -585,12 +584,7 @@ fn createDirectoryNotFoundReport(allocator: Allocator, info: anytype) Allocator.
 }
 
 fn createTempDirFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Temporary Directory Failed", "I could not create a temporary directory.", .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Temporary Directory Failed", "I could not create a temporary directory.", .{}, .runtime_error, @errorName(info.err));
 }
 
 fn createCacheDirUnavailableReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -635,8 +629,7 @@ fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.E
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Please check that the platform path is correct and the file exists.");
 
     return report;
@@ -647,8 +640,7 @@ fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Alloc
 
     try report.document.addText("Platform path: ");
     try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Searched in:");
     for (info.searched_paths) |path| {
         try report.document.addLineBreak();
@@ -706,8 +698,7 @@ fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocat
 
     try report.document.addText("    ");
     try report.document.addAnnotated(info.platform_spec, .path);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Tip: Use a relative path like ");
     try report.document.addAnnotated("../path/to/platform", .emphasized);
     try report.document.addText(" or a URL.");
@@ -721,11 +712,9 @@ fn createInvalidAppHeaderReport(allocator: Allocator, info: anytype) Allocator.E
     var report = try Report.init(allocator, "Invalid App Header", headline, .runtime_error);
 
     try report.document.addText("Expected an app header like:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("    app [main] { pf: platform \"...\" }");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("The platform package name (e.g., ");
     try report.document.addAnnotated("pf", .emphasized);
     try report.document.addText(") is used to qualify imports from the package like ");
@@ -741,8 +730,7 @@ fn createBuildNotSupportedForHeaderlessReport(allocator: Allocator, info: anytyp
     var report = try Report.init(allocator, "Build Not Supported", headline, .fatal);
 
     try report.document.addText("designed for tutorials and cannot be compiled to a standalone executable.");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("To run this file, use:");
     try report.document.addLineBreak();
     try report.document.addCodeBlock(
@@ -827,8 +815,7 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
         try report.document.addText("    ");
         try report.document.addAnnotated(symbol, .emphasized);
     }
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Every linker symbol named in the platform header's ");
     try report.document.addAnnotated("hosted", .emphasized);
     try report.document.addText(" section, plus the fixed runtime set (roc_alloc, roc_dealloc, roc_realloc, roc_dbg, roc_expect_failed, roc_crashed), must be defined by the host inputs listed in the platform's ");
@@ -839,34 +826,15 @@ fn createMissingHostSymbolsReport(allocator: Allocator, info: anytype) Allocator
 }
 
 fn createLinkerFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "The linker failed while building for target {s}.", .{info.target});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Linker Failed", headline, .fatal);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Linker Failed", "The linker failed while building for target {s}.", .{info.target}, .fatal, @errorName(info.err));
 }
 
 fn createObjectCompilationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to compile object file for {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Object Compilation Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Object Compilation Failed", "Failed to compile object file for {s}.", .{info.path}, .runtime_error, @errorName(info.err));
 }
 
 fn createShimGenerationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Shim Generation Failed", "Failed to generate the platform shim.", .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Shim Generation Failed", "Failed to generate the platform shim.", .{}, .runtime_error, @errorName(info.err));
 }
 
 fn createInvalidUrlReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -889,8 +857,8 @@ fn createBumpFailedReport(allocator: Allocator, info: anytype) Allocator.Error!R
 }
 
 fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = switch (info.err) {
-        error.InvalidHash => try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)}),
+    const is_invalid_hash = switch (info.err) {
+        error.InvalidHash => true,
         error.AccessDenied,
         error.AmbiguousVersion,
         error.AntivirusInterference,
@@ -947,10 +915,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.HttpError,
         error.InputOutput,
         error.Internal,
-        error.InvalidArchiveHeader,
-        error.InvalidArchiveMagic,
-        error.InvalidArchiveName,
-        error.InvalidArchiveSize,
         error.InvalidArguments,
         error.InvalidBatchScriptArg,
         error.InvalidDependency,
@@ -995,9 +959,11 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.NoDataExtracted,
         error.NoDevice,
         error.NoHashInUrl,
+        error.NoHomeDirectory,
         error.NoPlatformSource,
         error.NoSpaceLeft,
         error.NotAnAppHeader,
+        error.SourceTokenizationFailed,
         error.NotDir,
         error.NotOpenForReading,
         error.NotOpenForWriting,
@@ -1047,196 +1013,41 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
-        => try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url}),
+        => false,
     };
+    const headline = if (is_invalid_hash)
+        try std.fmt.allocPrint(allocator, "Error: {s}.", .{@errorName(info.err)})
+    else
+        try std.fmt.allocPrint(allocator, "Failed to download from {s}.", .{info.url});
     defer allocator.free(headline);
     var report = try Report.init(allocator, "Download Failed", headline, .runtime_error);
 
-    switch (info.err) {
-        error.InvalidHash => {
-            try report.document.addText("The url contains an invalid hash.");
-            try report.document.addLineBreaks(2);
+    if (is_invalid_hash) {
+        try report.document.addText("The url contains an invalid hash.");
+        try report.document.addLineBreaks(2);
 
-            try report.document.addText("Platform Url: ");
-            try report.document.addAnnotated(info.url, .emphasized);
-            try report.document.addLineBreaks(2);
+        try report.document.addText("Platform Url: ");
+        try report.document.addAnnotated(info.url, .emphasized);
+        try report.document.addLineBreaks(2);
 
-            try report.document.addText("Possible Reasons: ");
-            try report.document.addLineBreak();
-            try report.document.addText("1. The ");
-            try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
-            try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
-            try report.document.addLineBreak();
-            try report.document.addText("2. The Hash portion of the URL is malformed.");
+        try report.document.addText("Possible Reasons: ");
+        try report.document.addLineBreak();
+        try report.document.addText("1. The ");
+        try report.document.addAnnotated("platform was built with the old Roc", .error_highlight);
+        try report.document.addText(" (Rust) compiler (alpha4 or older), instead of the new Roc (Zig) compiler. The new compiler is available at https://github.com/roc-lang/nightlies");
+        try report.document.addLineBreak();
+        try report.document.addText("2. The Hash portion of the URL is malformed.");
 
-            try report.document.addLineBreaks(2);
-            try report.document.addText("Tips:");
-            try report.document.addLineBreak();
-            try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
-            try report.document.addLineBreak();
-            try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
-            try report.document.addLineBreak();
-        },
-        error.AccessDenied,
-        error.AmbiguousVersion,
-        error.AntivirusInterference,
-        error.ApiLevelQueryFailed,
-        error.ArchiveWriteFailed,
-        error.BadPathName,
-        error.BrokenDocLinks,
-        error.BrokenPipe,
-        error.BuiltinsExtractionFailed,
-        error.Canceled,
-        error.CheckFailed,
-        error.ChecksumFailure,
-        error.CliError,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConcurrencyUnavailable,
-        error.ConnectionResetByPeer,
-        error.Crash,
-        error.CrossDevice,
-        error.DecompressionFailed,
-        error.DeviceBusy,
-        error.DictionaryIdFlagUnsupported,
-        error.DirNotEmpty,
-        error.DirectoryCreateFailed,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.DocsFailed,
-        error.DuplicateSymbol,
-        error.EmptyArchive,
-        error.EndOfStream,
-        error.EntrypointNotFound,
-        error.ExpandedSizeLimitExceeded,
-        error.ExpectErr,
-        error.ExpectedAppHeader,
-        error.ExpectedPlatformString,
-        error.ExpectedString,
-        error.FailedToCreateUniqueTempDir,
-        error.FdConfigFailed,
-        error.FileBusy,
-        error.FileCreateFailed,
-        error.FileError,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileSystem,
-        error.FileTooBig,
-        error.FileTooLarge,
-        error.FileWriteFailed,
-        error.FormattingFailed,
-        error.FunctionTypeMismatch,
-        error.HandleInheritanceFailed,
-        error.HardwareFailure,
-        error.HasInternalGlobals,
-        error.HashMismatch,
-        error.HttpError,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidArchiveHeader,
-        error.InvalidArchiveMagic,
-        error.InvalidArchiveName,
-        error.InvalidArchiveSize,
-        error.InvalidArguments,
-        error.InvalidBatchScriptArg,
-        error.InvalidDependency,
-        error.InvalidExe,
-        error.InvalidFileName,
-        error.InvalidFilename,
-        error.InvalidLinkingVersion,
-        error.InvalidLirImage,
-        error.InvalidMagic,
-        error.InvalidName,
-        error.InvalidPackageName,
-        error.InvalidPath,
-        error.InvalidProcessGroupId,
-        error.InvalidProxyUrl,
-        error.InvalidSection,
-        error.InvalidTarHeader,
-        error.InvalidTarget,
-        error.InvalidUrl,
-        error.InvalidUserId,
-        error.InvalidUtf8,
-        error.InvalidVersion,
-        error.InvalidWtf8,
-        error.IsDir,
-        error.LLVMCompilationFailed,
-        error.LLVMNotAvailable,
-        error.LinkFailed,
-        error.LinkQuotaExceeded,
-        error.LocalhostWasNotLoopback,
-        error.LockViolation,
-        error.MalformedBlock,
-        error.MalformedFrame,
-        error.MissingBundleFiles,
-        error.MissingFilesDirectory,
-        error.MissingLinkingSection,
-        error.MissingTargetFile,
-        error.MissingTargetsSection,
-        error.NameTooLong,
-        error.NativeCompilationFailed,
-        error.NetworkError,
-        error.NetworkNotFound,
-        error.NoCacheDir,
-        error.NoDataExtracted,
-        error.NoDevice,
-        error.NoHashInUrl,
-        error.NoPlatformSource,
-        error.NoSpaceLeft,
-        error.NotAnAppHeader,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OSVersionDetectionFail,
-        error.OperationUnsupported,
-        error.OutOfMemory,
-        error.Overflow,
-        error.PathAlreadyExists,
-        error.PathOutsideWorkspace,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.PlatformNotSupported,
-        error.ProcessAlreadyExec,
-        error.ProcessCreationFailed,
-        error.ProcessExitCodeFailed,
-        error.ProcessFdQuotaExceeded,
-        error.ProcessWaitFailed,
-        error.ReadFailed,
-        error.ReadOnlyFileSystem,
-        error.ResolutionFailed,
-        error.ResourceLimitReached,
-        error.RuntimeError,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempDirCreation,
-        error.TestsFailed,
-        error.Timeout,
-        error.TypeCheckingFailed,
-        error.UnbundleFailed,
-        error.Unexpected,
-        error.UnexpectedEnd,
-        error.UnexpectedEndOfStream,
-        error.UnexpectedResult,
-        error.UnrecognizedVolume,
-        error.Unseekable,
-        error.UnsupportedCrossCompilation,
-        error.UnsupportedHeader,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLowLevel,
-        error.UnsupportedTarget,
-        error.UnsupportedWatchMode,
-        error.WasmOutputWriteFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
-            try report.document.addText("Error: ");
-            try report.document.addText(@errorName(info.err));
-        },
+        try report.document.addLineBreaks(2);
+        try report.document.addText("Tips:");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("1. If there is a newer version of the platform available, try updating.");
+        try report.document.addLineBreak();
+        try report.document.addSuggestion("2. Verify the URL and ensure it matches a valid platform release.");
+        try report.document.addLineBreak();
+    } else {
+        try report.document.addText("Error: ");
+        try report.document.addText(@errorName(info.err));
     }
 
     return report;
@@ -1349,25 +1160,11 @@ fn createInstallBundleMissingMainReport(allocator: Allocator, info: anytype) All
 }
 
 fn createInstallPublishFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "I could not publish the completed installation for `{s}`.", .{info.name});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Install Publish Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Install Publish Failed", "I could not publish the completed installation for `{s}`.", .{info.name}, .runtime_error, @errorName(info.err));
 }
 
 fn createChildProcessSpawnFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to start process: {s}.", .{info.command});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Process Spawn Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Process Spawn Failed", "Failed to start process: {s}.", .{info.command}, .runtime_error, @errorName(info.err));
 }
 
 fn createChildProcessFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -1387,25 +1184,11 @@ fn createChildProcessSignaledReport(allocator: Allocator, info: anytype) Allocat
 }
 
 fn createChildProcessWaitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to wait for process {s}.", .{info.command});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Process Wait Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Process Wait Failed", "Failed to wait for process {s}.", .{info.command}, .runtime_error, @errorName(info.err));
 }
 
 fn createSharedMemoryFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Shared memory operation '{s}' failed.", .{info.operation});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Shared Memory Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Shared Memory Failed", "Shared memory operation '{s}' failed.", .{info.operation}, .runtime_error, @errorName(info.err));
 }
 
 fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
@@ -1415,16 +1198,13 @@ fn createExpectedAppHeaderReport(allocator: Allocator, info: anytype) Allocator.
 
     try report.document.addText("but found: ");
     try report.document.addAnnotated(info.found, .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("An app header looks like:");
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addCodeBlock(
         \\app [main!] { pf: platform "..." }
     );
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Tip: Maybe you wanted to run ");
     try report.document.addAnnotated("roc test", .emphasized);
     try report.document.addText(" or ");
@@ -1449,14 +1229,7 @@ fn createExpectedPlatformStringReport(allocator: Allocator, info: anytype) Alloc
 }
 
 fn createModuleInitFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "Failed to initialize module {s}.", .{info.path});
-    defer allocator.free(headline);
-    var report = try Report.init(allocator, "Module Initialization Failed", headline, .runtime_error);
-
-    try report.document.addText("Error: ");
-    try report.document.addText(@errorName(info.err));
-
-    return report;
+    return createErrorNameReport(allocator, "Module Initialization Failed", "Failed to initialize module {s}.", .{info.path}, .runtime_error, @errorName(info.err));
 }
 
 fn createNoExportsFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {

@@ -26,16 +26,6 @@ pub const Symbol = enum(u32) {
     }
 };
 
-/// Public struct `AttachedMethodKey`.
-pub const AttachedMethodKey = struct {
-    module_idx: u32,
-    type_ident: base.Ident.Idx,
-    method_ident: base.Ident.Idx,
-};
-
-/// Public value `AttachedMethodIndex`.
-pub const AttachedMethodIndex = std.AutoHashMap(AttachedMethodKey, Symbol);
-
 /// Interned owner idents for builtin attached-method lookup.
 pub const PrimitiveMethodOwnerIdents = extern struct {
     bool: base.Ident.Idx,
@@ -74,21 +64,6 @@ pub const PrimitiveMethodOwnerIdents = extern struct {
         };
     }
 };
-
-/// Public enum `BuiltinAttachedMethodOwner`.
-pub const BuiltinAttachedMethodOwner = enum {
-    list,
-    box,
-};
-
-/// Public struct `BuiltinAttachedMethodKey`.
-pub const BuiltinAttachedMethodKey = struct {
-    owner: BuiltinAttachedMethodOwner,
-    method_ident: base.Ident.Idx,
-};
-
-/// Public value `BuiltinAttachedMethodIndex`.
-pub const BuiltinAttachedMethodIndex = std.AutoHashMap(BuiltinAttachedMethodKey, Symbol);
 
 /// Public union `BindingOrigin`.
 pub const BindingOrigin = union(enum) {

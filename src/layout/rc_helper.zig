@@ -1,6 +1,7 @@
 //! Canonical deep-RC helper plans derived from canonical layout identities.
 
 const std = @import("std");
+const base = @import("base");
 const digest_mod = @import("digest.zig");
 const builtins = @import("builtins");
 
@@ -42,9 +43,8 @@ pub const RcOp = enum(u2) {
     pub fn performed(self: RcOp) PerformedOp {
         return switch (self) {
             .incref => .incref,
-            .decref => .decref,
+            .decref, .host_drop => .decref,
             .free => .free,
-            .host_drop => .decref,
         };
     }
 };
@@ -99,9 +99,7 @@ pub const Atomicity = enum {
 /// program-local layout index, so objects compiled separately name and share
 /// the same helper.
 pub fn symbolName(allocator: std.mem.Allocator, store: *const Store, key: HelperKey, atomicity: Atomicity) std.mem.Allocator.Error![]u8 {
-    var digests = try digest_mod.Digests.init(allocator, store);
-    defer digests.deinit();
-    return symbolNameForDigest(allocator, key.op, try digests.get(key.layout_idx), atomicity);
+    return symbolNameForDigest(allocator, key.op, try store.contentDigest(key.layout_idx), atomicity);
 }
 
 /// `symbolName` for a layout whose digest is already known.
@@ -179,11 +177,6 @@ pub const Resolver = struct {
         return self.store.layoutContainsRefcounted(l);
     }
 
-    /// Build a helper key from an operation and layout id.
-    pub fn makeKey(_: *const Resolver, op: RcOp, layout_idx: Idx) HelperKey {
-        return .{ .op = op, .layout_idx = layout_idx };
-    }
-
     /// Plan the RC behavior for a canonical helper key.
     ///
     /// A `host_drop` adapter performs its layout's `decref`, so it plans as
@@ -217,7 +210,7 @@ pub const Resolver = struct {
                 .decref => .{ .box_decref = self.boxPlan(key.layout_idx) },
                 .free => .{ .box_free = self.boxPlan(key.layout_idx) },
             },
-            .erased_box => std.debug.panic(
+            .erased_box => base.invariant(
                 "layout/ARC invariant violated: erased_box RC requires its explicit Boxy descriptor",
                 .{},
             ),
@@ -271,7 +264,7 @@ pub const Resolver = struct {
     }
 
     /// Return the byte offset of the discriminant for a tag-union helper.
-    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u16 {
+    pub fn tagUnionDiscriminantOffset(self: *const Resolver, tag_plan: TagUnionPlan) u32 {
         return self.store.getTagUnionDiscriminantOffset(tag_plan.tag_union_idx);
     }
 

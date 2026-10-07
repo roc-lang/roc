@@ -251,7 +251,6 @@ fn expectCanonicalizationTypePathLookupIsNonRecursive(can_source: []const u8) So
 
 fn expectCanonicalizationKernelsDoNotCallRecursiveWrappers(can_source: []const u8) SourceAuditError!void {
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExpr(");
-    try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeExprOrMalformed(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "canonicalizeStatement");
     try expectSourceSliceBetweenDoesNotContain(can_source, "fn runExprKernel(", "fn addBoolTagExpr", "processAssociatedBlock(");
     try expectSourceSliceBetweenDoesNotContain(can_source, "pub fn canonicalizePattern(", "fn isVarPattern", "self.canonicalizePattern(");
@@ -448,6 +447,25 @@ test "block-local type use before declaration does not forward resolve" {
     try canonicalizeModuleAndCheck(source, struct {
         fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
             try testing.expectEqual(@as(usize, 1), countUndeclaredTypeDiagnostics(diagnostics));
+        }
+    }.check);
+}
+
+test "where clause use of a where alias resolves before its declaration" {
+    // Repro for https://github.com/roc-lang/roc/issues/11540: a where clause
+    // naming a where alias (`a.Show2`) must resolve regardless of whether the
+    // `coll.Show2 : where [...]` declaration appears above or below the use,
+    // like every other type declaration in the module.
+    const source =
+        \\f : a -> Str where [a.Show2]
+        \\f = |_| "hi"
+        \\
+        \\coll.Show2 : where [coll.show2 : coll -> Str]
+    ;
+
+    try canonicalizeModuleAndCheck(source, struct {
+        fn check(_: *ModuleEnv, diagnostics: []const CIR.Diagnostic) TypeDeclTestError!void {
+            try testing.expectEqual(@as(usize, 0), countUndeclaredTypeDiagnostics(diagnostics));
         }
     }.check);
 }

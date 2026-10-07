@@ -79,12 +79,12 @@ encode_twice = |value, fmt| value.encode(value.encode(fmt))
 			(args
 				(p-assign (ident "value"))
 				(p-assign (ident "fmt")))
-			(e-dispatch-call (method "encode") (constraint-fn-var 244)
+			(e-dispatch-call (method "encode") (constraint-fn-var 249)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "value"))))
 				(args
-					(e-dispatch-call (method "encode") (constraint-fn-var 241)
+					(e-dispatch-call (method "encode") (constraint-fn-var 246)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
