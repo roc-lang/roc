@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const compiled_builtins = @import("compiled_builtins");
 const reporting = @import("reporting");
 const runner = @import("runner.zig");
 
@@ -20,6 +21,10 @@ const Diagnostics = runner.Diagnostics;
 const ExtraFile = runner.ExtraFile;
 
 const REPORT_WIDTH: u32 = 64;
+
+/// Embed the builtins zstd-compressed to keep echo.wasm under the website's
+/// asset size limit; `compileAndRunInner` decompresses them on first use.
+pub const roc_compressed_builtins = @import("compressed_builtins");
 
 /// Public API.
 pub const std_options: std.Options = .{
@@ -173,7 +178,12 @@ export fn compileAndRun(source_ptr: [*]const u8, source_len: usize) u8 {
     return result;
 }
 
-fn compileAndRunInner(source: []const u8) runner.RunEchoError!u8 {
+fn compileAndRunInner(source: []const u8) (runner.RunEchoError || error{CorruptEmbeddedBuiltins})!u8 {
+    compiled_builtins.decompress() catch |err| {
+        jsWrite(null, "echo: failed to decompress the embedded builtins\n");
+        return err;
+    };
+
     fba.reset();
     allocator = fba.allocator();
 

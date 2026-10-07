@@ -544,6 +544,12 @@ jobs:
         if: matrix.web_wasm
         run: zig build run-test-echo-wasm
 
+      # www.roc-lang.org refuses an echo.wasm over Cloudflare's 25 MiB asset
+      # limit; catch growth here rather than in the website's nightly bump.
+      - name: Check echo.wasm size
+        if: matrix.web_wasm
+        run: zig build check-echo-wasm-size
+
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
       # composition after each shard is the restored cache plus whatever the

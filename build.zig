@@ -783,6 +783,56 @@ const CheckBuiltinBakeReproducibleStep = struct {
     }
 };
 
+/// Size budget for echo.wasm, the browser compiler on www.roc-lang.org. The website
+/// rejects a module over Cloudflare's 25 MiB asset limit (`MAX_ASSET_SIZE` in
+/// roc-lang/www.roc-lang.org `ci_scripts/prepare_compiler_wasm.mjs`). The website
+/// measures after `wasm-opt -Oz`, which in practice only shrinks the module (by about
+/// 10%), so checking the raw ReleaseSmall build against the full limit is conservative
+/// and needs no Binaryen in CI.
+const echo_wasm_size_budget: u64 = 26_214_400;
+
+/// Fails when a wasm module exceeds its size budget, and warns from 90% of it.
+const CheckWasmSizeStep = struct {
+    step: Step,
+    wasm: std.Build.LazyPath,
+    budget: u64,
+    budget_name: []const u8,
+
+    fn create(b: *std.Build, compile: *Step.Compile, budget: u64, budget_name: []const u8) *CheckWasmSizeStep {
+        const self = b.allocator.create(CheckWasmSizeStep) catch @panic("OOM");
+        self.* = .{
+            .step = Step.init(.{
+                .id = .custom,
+                .name = b.fmt("check {s} size", .{compile.name}),
+                .owner = b,
+                .makeFn = make,
+            }),
+            .wasm = compile.getEmittedBin(),
+            .budget = budget,
+            .budget_name = budget_name,
+        };
+        self.step.dependOn(&compile.step);
+        return self;
+    }
+
+    fn make(step: *Step, _: Step.MakeOptions) !void {
+        const self: *CheckWasmSizeStep = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const path = self.wasm.getPath2(b, step);
+        const size = (try std.Io.Dir.cwd().statFile(b.graph.io, path, .{})).size;
+        const name = std.fs.path.basename(path);
+        const permille = size * 1000 / self.budget;
+        if (size > self.budget) {
+            return step.fail("{s} is {d} bytes, {d} bytes over the {d} byte budget ({s} in build.zig)", .{ name, size, size - self.budget, self.budget, self.budget_name });
+        }
+        std.debug.print("{s}: {d} bytes, {d}.{d}% of the {d} byte budget ({d} bytes left)\n", .{ name, size, permille / 10, permille % 10, self.budget, self.budget - size });
+        if (permille >= 900) {
+            const prefix = if (b.graph.environ_map.get("GITHUB_ACTIONS") != null) "::warning::" else "warning: ";
+            std.debug.print("{s}{s} is within 10% of its size budget ({s} in build.zig)\n", .{ prefix, name, self.budget_name });
+        }
+    }
+};
+
 const BuiltinCompilerRun = struct {
     exe: *Step.Compile,
     run: *Step.Run,
@@ -790,6 +840,40 @@ const BuiltinCompilerRun = struct {
     builtin_indices_zig: std.Build.LazyPath,
     builtin_artifact_bin: std.Build.LazyPath,
 };
+
+/// zstd frames of the builtin blobs, for browser modules that must stay under the
+/// website's asset size limit. A root module opts in with
+/// `pub const roc_compressed_builtins = @import("compressed_builtins");` and calls
+/// `compiled_builtins.decompress()` before compiling. Level 9 takes about a second
+/// even with the Debug zstd of default builds; levels 18+ save another 1 MB but take
+/// tens of seconds there, on the critical path of the wasm compile.
+fn addCompressedBuiltins(
+    b: *std.Build,
+    compress_exe: *Step.Compile,
+    builtin_compiler: BuiltinCompilerRun,
+    builtin_roc: std.Build.LazyPath,
+) *std.Build.Module {
+    const files = b.addWriteFiles();
+    const inputs = [_]struct { std.Build.LazyPath, []const u8 }{
+        .{ builtin_compiler.builtin_bin, "Builtin.bin.zst" },
+        .{ builtin_roc, "Builtin.roc.zst" },
+        .{ builtin_compiler.builtin_artifact_bin, "Builtin.artifact.bin.zst" },
+    };
+    for (inputs) |input| {
+        const compress = b.addRunArtifact(compress_exe);
+        compress.addFileArg(input[0]);
+        const output = compress.addOutputFileArg(input[1]);
+        compress.addArg("9");
+        _ = files.addCopyFile(output, input[1]);
+    }
+    const source = files.add("compressed_builtins.zig",
+        \\pub const builtin_bin = @embedFile("Builtin.bin.zst");
+        \\pub const builtin_source = @embedFile("Builtin.roc.zst");
+        \\pub const builtin_artifact_bin = @embedFile("Builtin.artifact.bin.zst");
+        \\
+    );
+    return b.createModule(.{ .root_source_file = source });
+}
 
 fn createAndRunBuiltinCompiler(
     b: *std.Build,
@@ -1503,6 +1587,7 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
+    const check_echo_wasm_size_step = b.step("check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -1868,14 +1953,55 @@ pub fn build(b: *std.Build) void {
     // Generate compiled_builtins.zig with hardcoded Builtin module.
     // The embedded blobs are copied by Zig at compile time into 16-byte-aligned
     // static storage, so runtime code can build views over them directly.
+    //
+    // A root module that declares `roc_compressed_builtins` (see
+    // `addCompressedBuiltins`) embeds zstd frames instead: the blobs are about
+    // 40 MB raw and 4 MB compressed. The raw files are then only read for their
+    // lengths, so they are not linked, and `decompress` must run before any blob is read.
     const builtins_source_str =
+        \\const std = @import("std");
+        \\const root = @import("root");
         \\const generated_indices = @import("builtin_indices");
         \\
+        \\const compressed = @hasDecl(root, "roc_compressed_builtins");
+        \\// The zstd decoder needs one spare block of output capacity.
+        \\const slack = if (compressed) std.compress.zstd.block_size_max else 0;
+        \\
         \\const builtin_bin_raw = @embedFile("Builtin.bin");
-        \\pub var builtin_bin: [builtin_bin_raw.len]u8 align(16) = builtin_bin_raw.*;
-        \\pub const builtin_source = @embedFile("Builtin.roc");
+        \\var builtin_bin_storage: [builtin_bin_raw.len + slack]u8 align(16) =
+        \\    if (compressed) @splat(0) else builtin_bin_raw.*;
+        \\pub const builtin_bin: *align(16) [builtin_bin_raw.len]u8 = builtin_bin_storage[0..builtin_bin_raw.len];
+        \\const builtin_source_raw = @embedFile("Builtin.roc");
+        \\var builtin_source_storage: [builtin_source_raw.len + slack]u8 = @splat(0);
+        \\pub const builtin_source = if (compressed) builtin_source_storage[0..builtin_source_raw.len] else builtin_source_raw;
         \\const builtin_artifact_bin_raw = @embedFile("Builtin.artifact.bin");
-        \\pub var builtin_artifact_bin: [builtin_artifact_bin_raw.len]u8 align(16) = builtin_artifact_bin_raw.*;
+        \\var builtin_artifact_bin_storage: [builtin_artifact_bin_raw.len + slack]u8 align(16) =
+        \\    if (compressed) @splat(0) else builtin_artifact_bin_raw.*;
+        \\pub const builtin_artifact_bin: *align(16) [builtin_artifact_bin_raw.len]u8 = builtin_artifact_bin_storage[0..builtin_artifact_bin_raw.len];
+        \\
+        \\var decompressed = !compressed;
+        \\
+        \\/// Fill the blobs from `root.roc_compressed_builtins`; a no-op once done or
+        \\/// when the blobs are embedded raw. Not thread-safe.
+        \\pub fn decompress() error{CorruptEmbeddedBuiltins}!void {
+        \\    if (!compressed) return;
+        \\    if (decompressed) return;
+        \\    const frames = root.roc_compressed_builtins;
+        \\    try decompressInto(frames.builtin_bin, &builtin_bin_storage, builtin_bin_raw.len);
+        \\    try decompressInto(frames.builtin_source, &builtin_source_storage, builtin_source_raw.len);
+        \\    try decompressInto(frames.builtin_artifact_bin, &builtin_artifact_bin_storage, builtin_artifact_bin_raw.len);
+        \\    decompressed = true;
+        \\}
+        \\
+        \\fn decompressInto(frame: []const u8, storage: []u8, len: usize) error{CorruptEmbeddedBuiltins}!void {
+        \\    var in: std.Io.Reader = .fixed(frame);
+        \\    var out: std.Io.Writer = .fixed(storage);
+        \\    // The whole output stays buffered, so any window size fits.
+        \\    var zstd: std.compress.zstd.Decompress = .init(&in, &.{}, .{ .window_len = std.math.maxInt(u32) });
+        \\    const n = zstd.reader.streamRemaining(&out) catch return error.CorruptEmbeddedBuiltins;
+        \\    if (n != len) return error.CorruptEmbeddedBuiltins;
+        \\}
+        \\
         \\pub const builtin_indices_raw = generated_indices.builtin_indices_raw;
         \\pub fn builtinIndices(comptime CIR: type) CIR.BuiltinIndices {
         \\    return generated_indices.builtinIndices(CIR);
@@ -3260,6 +3386,10 @@ pub fn build(b: *std.Build) void {
         echo_wasm.root_module.addImport("reporting", roc_modules.reporting);
         echo_wasm.root_module.addImport("roc_target", roc_modules.roc_target);
         echo_wasm.root_module.addImport("compiled_builtins", compiled_builtins_module);
+        echo_wasm.root_module.addImport(
+            "compressed_builtins",
+            addCompressedBuiltins(b, wasm_archive_exe, builtin_compiler, b.path(builtin_roc_path)),
+        );
         echo_wasm.root_module.addImport("WasmFilesystem.zig", b.createModule(.{
             .root_source_file = b.path("src/playground_wasm/WasmFilesystem.zig"),
             .target = echo_wasm_target,
@@ -3275,6 +3405,9 @@ pub fn build(b: *std.Build) void {
         const echo_wasm_archive_out = echo_wasm_archive_cmd.addOutputFileArg("echo.wasm.zst");
         const echo_wasm_archive_install = b.addInstallFileWithDir(echo_wasm_archive_out, .lib, "echo/echo.wasm.zst");
         echo_wasm_archive_step.dependOn(&echo_wasm_archive_install.step);
+
+        const check_echo_wasm_size = CheckWasmSizeStep.create(b, echo_wasm, echo_wasm_size_budget, "echo_wasm_size_budget");
+        check_echo_wasm_size_step.dependOn(&check_echo_wasm_size.step);
 
         // Copy the echo platform www files alongside echo.wasm
         inline for (.{ "index.html", "app.js" }) |filename| {
