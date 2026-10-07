@@ -456,7 +456,7 @@ fn compileGlueSpec(
 
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("glue invariant violated: glue spec produced no published make_glue platform root", .{});
+            base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
         unreachable;
     };
@@ -1011,7 +1011,7 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic("glue invariant violated: " ++ message, args);
+        base.invariant("glue invariant violated: " ++ message, args);
     }
     unreachable;
 }
@@ -1250,40 +1250,9 @@ fn hostedEntryKeyAllocFromAst(
 /// Parse a platform header to extract hosted entries and validate it's a platform file.
 fn parsePlatformHeader(gpa: Allocator, platform_path: []const u8, std_io: std.Io) (Allocator.Error || error{ FileNotFound, ParseFailed, NotPlatformFile })!PlatformHeaderInfo {
     // Read source file
-    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (err) {
-        error.FileNotFound => return error.FileNotFound,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return error.ParseFailed,
+    var source = std.Io.Dir.cwd().readFileAlloc(std_io, platform_path, gpa, .unlimited) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return error.FileNotFound,
+        .out_of_memory, .other => return error.ParseFailed,
     };
     source = base.source_utils.normalizeLineEndingsRealloc(gpa, source) catch {
         gpa.free(source);

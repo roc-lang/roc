@@ -385,13 +385,22 @@ main = |_| {
 				(e-dec-small (numerator "33") (denominator-power-of-ten "1") (value "3.3")))))
 	(d-let
 		(p-assign (ident "all_int_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "int_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "all_str_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "str_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "all_float_list"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "float_list")))
+			(e-runtime-error (tag "expr_syntax_error"))))
 	(d-let
 		(p-assign (ident "get_empty"))
 		(e-lambda
@@ -413,7 +422,27 @@ main = |_| {
 				(e-literal (string "test")))))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-block
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(s-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-external
+							(builtin))
+						(e-runtime-error (tag "erroneous_value_expr"))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-runtime-error (tag "erroneous_value_expr")))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -429,7 +458,7 @@ main = |_| {
 		(patt (type "_arg -> List(_a)"))
 		(patt (type "List(_a)"))
 		(patt (type "List(_a)"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> _ret")))
 	(expressions
 		(expr (type "List(_a)"))
 		(expr (type "List(Dec)"))
@@ -441,5 +470,5 @@ main = |_| {
 		(expr (type "_arg -> List(_a)"))
 		(expr (type "List(_a)"))
 		(expr (type "List(_a)"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> _ret"))))
 ~~~

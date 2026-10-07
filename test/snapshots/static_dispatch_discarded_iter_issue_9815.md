@@ -12,26 +12,33 @@ run = || {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
+TYPE NOT DETERMINED - static_dispatch_discarded_iter_issue_9815.md:3:9:3:53
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 3 9) (end 3 53))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "from_iter")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "static_dispatch_discarded_iter_issue_9815.md") (start 3 9) (end 3 53) (annotation error) (line-text "    _ = Iter.collect(Iter.custom(0.U64, Unknown, f))"))
 			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "from_iter")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

@@ -277,10 +277,6 @@ const ConstantHashPolicy = struct {
         return owner.append(gpa, bytes);
     }
 
-    pub fn entryCount(_: *const CollisionOwner, index: *const Index(ConstantHashPolicy)) u32 {
-        return index.len;
-    }
-
     pub fn hash(_: []const u8) u64 {
         return 0;
     }

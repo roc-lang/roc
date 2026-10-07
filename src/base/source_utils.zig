@@ -2,44 +2,6 @@
 
 const std = @import("std");
 
-/// Normalizes line endings in source code by converting CRLF (\r\n) to LF (\n).
-///
-/// This ensures consistent behavior across different operating systems. On Windows,
-/// text files often have CRLF line endings, but Roc source code should be processed
-/// with LF-only line endings for consistent parsing and formatting.
-///
-/// The normalization is done in-place, modifying the input buffer and returning
-/// a slice of the normalized content. The returned slice will be the same length
-/// or shorter than the input.
-///
-/// IMPORTANT: This function returns a sub-slice of the input. If the input was
-/// allocated, the caller must keep track of the original allocation for freeing.
-/// For allocated buffers where proper memory management is needed, use
-/// `normalizeLineEndingsRealloc` instead.
-///
-/// Standalone \r characters (not followed by \n) are preserved as-is - the tokenizer
-/// will report these as errors separately via the MisplacedCarriageReturn diagnostic.
-pub fn normalizeLineEndings(source: []u8) []u8 {
-    if (source.len == 0) return source;
-
-    var write_pos: usize = 0;
-    var read_pos: usize = 0;
-
-    while (read_pos < source.len) {
-        const c = source[read_pos];
-        if (c == '\r' and read_pos + 1 < source.len and source[read_pos + 1] == '\n') {
-            // Skip the \r in \r\n sequence, only write the \n
-            read_pos += 1;
-        } else {
-            source[write_pos] = c;
-            write_pos += 1;
-            read_pos += 1;
-        }
-    }
-
-    return source[0..write_pos];
-}
-
 /// Normalizes line endings and reallocates the buffer to the correct size.
 ///
 /// This function normalizes CRLF to LF and properly handles memory:
@@ -143,66 +105,6 @@ pub fn normalizeLineEndingsAlloc(allocator: std.mem.Allocator, source: []const u
     }
 
     return .{ .data = result, .allocated = true };
-}
-
-test "normalizeLineEndings - no changes needed" {
-    const allocator = std.testing.allocator;
-
-    // Test with LF-only content
-    {
-        const source = try allocator.dupe(u8, "hello\nworld\n");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("hello\nworld\n", result);
-    }
-
-    // Test with empty content
-    {
-        const source: []u8 = &.{};
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("", result);
-    }
-}
-
-test "normalizeLineEndings - CRLF to LF" {
-    const allocator = std.testing.allocator;
-
-    // Test with CRLF content
-    {
-        const source = try allocator.dupe(u8, "hello\r\nworld\r\n");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("hello\nworld\n", result);
-    }
-
-    // Test with mixed line endings
-    {
-        const source = try allocator.dupe(u8, "line1\r\nline2\nline3\r\n");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("line1\nline2\nline3\n", result);
-    }
-}
-
-test "normalizeLineEndings - standalone CR preserved" {
-    const allocator = std.testing.allocator;
-
-    // Standalone \r (not followed by \n) should be preserved
-    // The tokenizer will handle these as errors
-    {
-        const source = try allocator.dupe(u8, "hello\rworld");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("hello\rworld", result);
-    }
-
-    // Mix of standalone \r and \r\n
-    {
-        const source = try allocator.dupe(u8, "a\rb\r\nc");
-        defer allocator.free(source);
-        const result = normalizeLineEndings(source);
-        try std.testing.expectEqualStrings("a\rb\nc", result);
-    }
 }
 
 test "normalizeLineEndingsAlloc - allocates new buffer" {

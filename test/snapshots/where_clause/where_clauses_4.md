@@ -9,7 +9,7 @@ import Decode exposing [Decode]
 
 decodeThings : List(List(U8)) -> List(a)
 	where [a.Decode]
-decodeThings = ...
+decodeThings = |_| ...
 ~~~
 # EXPECTED
 MOD NOT FOUND - where_clauses_4.md:1:1:1:32
@@ -45,7 +45,7 @@ MOD NOT FOUND - where_clauses_4.md:4:10:4:17
 KwImport,UpperIdent,KwExposing,OpenSquare,UpperIdent,CloseSquare,
 LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 KwWhere,OpenSquare,LowerIdent,NoSpaceDotUpperIdent,CloseSquare,
-LowerIdent,OpAssign,TripleDot,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,TripleDot,
 EndOfFile,
 ~~~
 # PARSE
@@ -71,7 +71,10 @@ EndOfFile,
 					(ty (name "Decode")))))
 		(s-decl
 			(p-ident (raw "decodeThings"))
-			(e-ellipsis))))
+			(e-lambda
+				(args
+					(p-underscore))
+				(e-ellipsis)))))
 ~~~
 # FORMATTED
 ~~~roc

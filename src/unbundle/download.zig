@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const builtin = @import("builtin");
+const private_file_permissions: std.Io.Dir.Permissions = if (@hasDecl(std.Io.Dir.Permissions, "fromMode")) .fromMode(0o600) else .default_file;
 const base = @import("base");
 const unbundle = @import("unbundle.zig");
 const localhost = @import("localhost.zig");
@@ -16,6 +16,38 @@ const MAX_TEMP_FILE_RETRIES: usize = 10;
 
 // Length of random suffix for temp filenames
 const RANDOM_SUFFIX_LEN: usize = 16;
+/// Maximum redirect responses followed during one package download.
+pub const MAX_REDIRECTS: usize = 3;
+
+/// Resolve and validate a redirect before the next connection is opened.
+/// The returned URI borrows memory from `allocator`.
+pub fn resolveRedirect(allocator: Allocator, current: std.Uri, location: []const u8) DownloadError!std.Uri {
+    const current_url = try std.fmt.allocPrint(allocator, "{f}", .{std.Uri.fmt(&current, .all)});
+    const buffer = try allocator.alloc(u8, current_url.len + location.len + 1);
+    @memcpy(buffer[0..location.len], location);
+    var remaining = buffer;
+    const next = current.resolveInPlace(location.len, &remaining) catch return error.InvalidUrl;
+    const next_url = try std.fmt.allocPrint(allocator, "{f}", .{std.Uri.fmt(&next, .all)});
+    _ = try validateUrl(next_url);
+    return next;
+}
+
+/// Pin a verified localhost connection to loopback while preserving its Host header.
+pub fn prepareRequestUri(uri: std.Uri) DownloadError!struct { uri: std.Uri, headers: []const std.http.Header } {
+    var result = uri;
+    var headers: []const std.http.Header = &.{};
+    if (uri.host) |host| {
+        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
+            const family = try localhost.resolveLoopback();
+            result.host = switch (family) {
+                .ip4 => .{ .percent_encoded = "127.0.0.1" },
+                .ip6 => .{ .percent_encoded = "[::1]" },
+            };
+            headers = &.{.{ .name = "Host", .value = "localhost" }};
+        }
+    }
+    return .{ .uri = result, .headers = headers };
+}
 
 /// Generate a random alphanumeric suffix for unique temp filenames.
 /// Uses cryptographically secure random bytes mapped to alphanumeric characters.
@@ -25,39 +57,6 @@ fn generateRandomSuffix(io: std.Io, buf: *[RANDOM_SUFFIX_LEN]u8) void {
     for (buf) |*byte| {
         byte.* = charset[byte.* % charset.len];
     }
-}
-
-/// Get a handle to the system temp directory.
-/// Checks TMPDIR (Unix), TEMP, TMP environment variables, falls back to /tmp on Unix.
-fn getTempDir(allocator: std.mem.Allocator, io: std.Io) Allocator.Error!std.Io.Dir {
-    // Try a named env var; returns an opened dir or null if env var is unset.
-    const tryEnv = struct {
-        fn call(alloc: std.mem.Allocator, io_inner: std.Io, name: []const u8) Allocator.Error!?std.Io.Dir {
-            const path = std.process.getEnvVarOwned(alloc, name) catch |err| switch (err) {
-                error.EnvironmentVariableNotFound => return null,
-                error.InvalidWtf8 => return null,
-                error.OutOfMemory => return error.OutOfMemory,
-            };
-            defer alloc.free(path);
-            return std.Io.Dir.cwd().openDir(io_inner, path, .{}) catch return error.FileError;
-        }
-    }.call;
-
-    // Check TMPDIR first (standard on Unix)
-    if (try tryEnv(allocator, io, "TMPDIR")) |dir| return dir;
-
-    // Check TEMP (common on Windows)
-    if (try tryEnv(allocator, io, "TEMP")) |dir| return dir;
-
-    // Check TMP (fallback on Windows)
-    if (try tryEnv(allocator, io, "TMP")) |dir| return dir;
-
-    // Fall back to /tmp on Unix-like systems
-    if (comptime builtin.os.tag != .windows) {
-        return std.Io.Dir.cwd().openDir(io, "/tmp", .{}) catch return error.FileError;
-    }
-
-    return error.FileError;
 }
 
 /// Errors that can occur during the download operation.
@@ -96,8 +95,8 @@ pub fn validateUrl(url: []const u8) DownloadError!ParsedUrl {
 /// Options controlling download and extraction.
 pub const DownloadOptions = struct {
     /// Maximum allowed decompressed size of the bundle in bytes, or null for
-    /// no limit.
-    max_expanded_bytes: ?u64 = null,
+    /// an explicit opt-out. Defaults to the shared 512 MiB bundle limit.
+    max_expanded_bytes: ?u64 = base.max_bundle_expanded_bytes,
 };
 
 /// Download and extract a bundled tar.zst file from a URL.
@@ -197,16 +196,10 @@ fn downloadToFile(
     // proxied/network-restricted environments (same variables `zig fetch` uses).
     try initProxiesFromEnv(&client, proxy_arena.allocator());
 
-    // Parse the URL
-    const uri = std.Uri.parse(url) catch return error.InvalidUrl;
-
-    // Check if we need to resolve localhost and verify loopback
-    if (uri.host) |host| {
-        if (std.mem.eql(u8, host.percent_encoded, "localhost")) {
-            // Security: resolve "localhost" and require at least one loopback result.
-            try localhost.requireLoopback();
-        }
-    }
+    // Redirect URI components live for the entire request chain.
+    var redirect_arena = std.heap.ArenaAllocator.init(allocator.*);
+    defer redirect_arena.deinit();
+    var uri = std.Uri.parse(url) catch return error.InvalidUrl;
 
     // Try to create temp file with unique random suffix
     var attempts: usize = 0;
@@ -222,7 +215,7 @@ fn downloadToFile(
         }) catch return error.FileError;
 
         // Try to create file with exclusive flag (fails if file already exists)
-        var file = dir.createFile(io, filename, .{ .exclusive = true }) catch |err| switch (err) {
+        var file = dir.createFile(io, filename, .{ .exclusive = true, .permissions = private_file_permissions }) catch |err| switch (err) {
             error.AccessDenied,
             error.AntivirusInterference,
             error.BadPathName,
@@ -260,13 +253,43 @@ fn downloadToFile(
         var write_buffer: [IO_BUFFER_SIZE]u8 = undefined;
         var file_writer = file.writer(io, &write_buffer);
 
-        // Use fetch API with response_writer to write directly to file
-        const fetch_result = client.fetch(.{
-            .location = .{ .uri = uri },
-            .response_writer = &file_writer.interface,
-        }) catch {
-            return error.HttpError;
-        };
+        var redirects: usize = 0;
+        while (true) {
+            const target = try prepareRequestUri(uri);
+            var request = client.request(.GET, target.uri, .{
+                .redirect_behavior = .unhandled,
+                .extra_headers = target.headers,
+            }) catch return error.HttpError;
+            defer request.deinit();
+            request.sendBodiless() catch return error.HttpError;
+            var head_buffer: [16 * 1024]u8 = undefined;
+            var response = request.receiveHead(&head_buffer) catch return error.HttpError;
+
+            if (response.head.status.class() == .redirect) {
+                if (redirects == MAX_REDIRECTS) return error.HttpError;
+                const location = response.head.location orelse return error.HttpError;
+                uri = try resolveRedirect(redirect_arena.allocator(), uri, location);
+                redirects += 1;
+                continue;
+            }
+            if (response.head.status != .ok) return error.HttpError;
+
+            var transfer_buffer: [64]u8 = undefined;
+            var decompress: std.http.Decompress = undefined;
+            // HTTP content encoding is handled by the same standard-library reader
+            // that Client.fetch uses.
+            const decompress_len: usize = switch (response.head.content_encoding) {
+                .identity => 0,
+                .zstd => std.compress.zstd.default_window_len,
+                .deflate, .gzip => std.compress.flate.max_window_len,
+                .compress => return error.HttpError,
+            };
+            const decompress_buffer = try allocator.alloc(u8, decompress_len);
+            defer allocator.free(decompress_buffer);
+            const reader = response.readerDecompressing(&transfer_buffer, &decompress, decompress_buffer);
+            _ = reader.streamRemaining(&file_writer.interface) catch return error.HttpError;
+            break;
+        }
 
         // Flush the writer before closing
         file_writer.interface.flush() catch {
@@ -276,12 +299,6 @@ fn downloadToFile(
         // Close file after fetch completes
         file.close(io);
         file_closed = true;
-
-        // Check for successful response
-        if (fetch_result.status != .ok) {
-            dir.deleteFile(io, filename) catch {};
-            return error.HttpError;
-        }
 
         return filename;
     }
@@ -314,62 +331,4 @@ fn initProxiesFromEnv(client: *std.http.Client, arena: Allocator) DownloadError!
         => return error.InvalidProxyUrl,
         error.OutOfMemory => return error.OutOfMemory,
     };
-}
-
-/// Download and extract a bundled tar.zst file to memory buffers.
-///
-/// Returns a BufferExtractWriter containing all extracted files and directories.
-/// The caller owns the returned writer and must call deinit() on it.
-pub fn downloadAndExtractToBuffer(
-    allocator: *std.mem.Allocator,
-    io: std.Io,
-    url: []const u8,
-    options: DownloadOptions,
-) DownloadError!unbundle.BufferExtractWriter {
-    // Validate URL and extract hash
-    const parsed_url = try validateUrl(url);
-    const base58_hash = parsed_url.hash;
-
-    // Validate the hash before starting any I/O
-    const expected_hash = (try unbundle.validateBase58Hash(base58_hash)) orelse {
-        return error.InvalidHash;
-    };
-
-    // Use a temp directory for downloading
-    var tmp_dir = getTempDir(allocator.*, io) catch {
-        return error.FileError;
-    };
-    defer tmp_dir.close(io);
-
-    // Build prefix for temp filename
-    var prefix_buf: [64]u8 = undefined;
-    const prefix = std.fmt.bufPrint(&prefix_buf, "roc_{s}", .{base58_hash}) catch {
-        return error.InvalidHash;
-    };
-
-    // Download to temp file with unique random suffix
-    var temp_filename_buf: [96]u8 = undefined;
-    const temp_filename = try downloadToFile(allocator, io, url, tmp_dir, prefix, &temp_filename_buf);
-    defer tmp_dir.deleteFile(io, temp_filename) catch {};
-
-    // Open the downloaded file for reading
-    var temp_file = tmp_dir.openFile(io, temp_filename, .{}) catch {
-        return error.FileError;
-    };
-    defer temp_file.close(io);
-
-    // Create a buffered reader from the file
-    var read_buffer: [IO_BUFFER_SIZE]u8 = undefined;
-    var file_reader = temp_file.reader(io, &read_buffer);
-
-    // Setup buffer extract writer
-    var buffer_writer = unbundle.BufferExtractWriter.init(allocator);
-    errdefer buffer_writer.deinit();
-
-    // Extract the content using the streaming architecture
-    _ = try unbundle.unbundleStream(allocator.*, &file_reader.interface, buffer_writer.extractWriter(), &expected_hash, null, .{
-        .max_expanded_bytes = options.max_expanded_bytes,
-    });
-
-    return buffer_writer;
 }

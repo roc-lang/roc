@@ -104,6 +104,10 @@ pub const Context = union(enum) {
     expect,
     /// recursive definition mismatch
     recursive_def: RecursiveDef,
+    /// A use that instantiated an annotated definition's predeclared scheme
+    /// relies on a type the definition's published scheme does not have
+    /// (design.md "Predeclared Scheme Uses").
+    predeclared_use: PredeclaredUseContext,
 
     /// Context for function call
     pub const FnCallArityContext = struct {
@@ -194,14 +198,6 @@ pub const Context = union(enum) {
         match_expr: CIR.Expr.Idx,
     };
 
-    /// Context for tag argument type errors
-    pub const TagArgContext = struct {
-        /// Name of the tag
-        tag_name: Ident.Idx,
-        /// 0-based index of the argument
-        arg_index: u32,
-    };
-
     /// Context for binary operator type errors
     pub const BinopContext = struct {
         operator: Binop,
@@ -248,14 +244,6 @@ pub const Context = union(enum) {
         record_region_idx: base.Region.Idx,
         /// Name of the record being update
         record_name: ?Ident.Idx,
-    };
-
-    /// Context for method call type errors
-    pub const MethodCallContext = struct {
-        /// Name of the method being called
-        method_name: Ident.Idx,
-        /// The type variable of the dispatcher (receiver)
-        dispatcher_var: Var,
     };
 
     /// Context for list element type errors
@@ -349,6 +337,15 @@ pub const Context = union(enum) {
 
     pub const RecursiveDef = struct {
         /// The def name
+        def_name: ?Ident.Idx,
+    };
+
+    /// Context for a predeclared-scheme use rejected by the definition's
+    /// published scheme
+    pub const PredeclaredUseContext = struct {
+        /// The use: the reference or the dispatching expression
+        region: base.Region,
+        /// The referenced definition's name, when the use names it
         def_name: ?Ident.Idx,
     };
 };

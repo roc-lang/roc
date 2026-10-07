@@ -1,6 +1,7 @@
 //! Closure lifting over Monotype IR.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const Common = @import("../common.zig");
@@ -245,7 +246,7 @@ fn verifyActiveCaptureInvariants(program: *const Ast.Program, graph: *const Capt
     const violation = checkActiveCaptureInvariants(program, graph) catch |err| switch (err) {
         error.OutOfMemory => Common.invariant("verifyActiveCaptureInvariants: out of memory during structural check"),
     };
-    if (violation) |message| std.debug.panic("postcheck invariant violated: {s}", .{message});
+    if (violation) |message| base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// Debug-only structural check that a freshly lifted program's entire capture
@@ -268,7 +269,7 @@ pub fn verifyCaptureInvariants(program: *const Ast.Program) void {
     const violation = checkCaptureInvariants(program) catch |err| switch (err) {
         error.OutOfMemory => Common.invariant("verifyCaptureInvariants: out of memory during structural check"),
     };
-    if (violation) |message| std.debug.panic("postcheck invariant violated: {s}", .{message});
+    if (violation) |message| base.invariant("postcheck invariant violated: {s}", .{message});
 }
 
 /// The check itself, factored out of the panicking wrapper so it can be unit

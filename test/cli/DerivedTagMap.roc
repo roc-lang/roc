@@ -56,7 +56,11 @@ expect {
 	value : [Selected(U64), Ignored(ZstWrapper)]
 	value = Selected(42)
 
-	value.map(U64.to_str) == Selected("42")
+	# `ZstWrapper` has no `is_eq`, so the result is inspected by matching.
+	match value.map(U64.to_str) {
+		Selected(text) => text == "42"
+		Ignored(_) => False
+	}
 }
 
 expect {

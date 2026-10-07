@@ -3,19 +3,18 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const semantic_tokens = @import("lsp").semantic_tokens;
-const line_info = @import("lsp").line_info;
 const tokenize = @import("parse").tokenize;
 
 const Token = tokenize.Token;
 const SemanticToken = semantic_tokens.SemanticToken;
 const SemanticType = semantic_tokens.SemanticType;
-const LineInfo = line_info.LineInfo;
+const LineOffsets = @import("lsp").position.LineOffsets;
 
 test "semantic tokens do not read file imports" {
     const allocator = std.testing.allocator;
     const source = "import \"does-not-exist.txt\" as input : Str\nmain = input";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokensWithImports(
@@ -266,7 +265,7 @@ test "extractSemanticTokens simple expression" {
     const allocator = std.testing.allocator;
     const source = "x = 42";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -307,7 +306,7 @@ test "extractSemanticTokens keeps field access and method calls distinct" {
     const allocator = std.testing.allocator;
     const source = "field = value.field\nmethod = value.method()";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -332,7 +331,7 @@ test "extractSemanticTokens multiline" {
     const allocator = std.testing.allocator;
     const source = "x = 1\ny = 2";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -355,7 +354,7 @@ test "extractSemanticTokens handles keywords" {
     const allocator = std.testing.allocator;
     const source = "if x else y";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -382,7 +381,7 @@ test "extractSemanticTokens handles types" {
     const allocator = std.testing.allocator;
     const source = "x : Int";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -405,7 +404,7 @@ test "extractSemanticTokens empty source" {
     const allocator = std.testing.allocator;
     const source = "";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
@@ -423,7 +422,7 @@ test "semantic tokens survive invalid utf8 in the source" {
     // server instead of returning a column.
     const source = "main = \"a\xffb\"\nnext = 1";
 
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
 
     const tokens = try semantic_tokens.extractSemanticTokensWithImports(
@@ -473,7 +472,7 @@ const ExpectError = Allocator.Error || error{ TextNotOnLine, UnexpectedToken, To
 
 fn expectTokens(source: []const u8, expectations: []const Expectation) ExpectError!void {
     const allocator = std.testing.allocator;
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
     defer allocator.free(tokens);
@@ -892,7 +891,7 @@ test "tokens are sorted and never overlap" {
         \\    Dot => 5.U8.to_str()
         \\}
     ;
-    var info = try LineInfo.init(allocator, source);
+    const info = try LineOffsets.init(allocator, source);
     defer info.deinit();
     const tokens = try semantic_tokens.extractSemanticTokens(allocator, source, &info);
     defer allocator.free(tokens);
