@@ -9126,7 +9126,7 @@ test "issue 12040: inter-token comments case 38" {
 
 test "module formatting reports ParsingFailed when the tokenizer rejects the source" {
     // The formatter refuses to rewrite sources the tokenizer rejected. Fuzz
-    // harnesses must treat this like any other unparseable input.
+    // harnesses must treat this like any other unparsable input.
     const inputs = [_][]const u8{
         "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\x14",
         "\xEF\xBB\xBF\nmain! = |_args| {\n    echo!(\"ok\")\n    Ok({})\n}\n",
