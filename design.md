@@ -12969,12 +12969,12 @@ substitution of its target's scheme or says the substitution derives from its
 callable (`derived_from_callable`). A dispatch edge that checking discharged by
 selecting a target records that instantiation, so its node carries the full
 substitution; such an edge with a polymorphic target and no record is a
-compiler bug reported at publication. Checking instantiates nothing for these
+compiler bug reported when checking outputs the module. Checking instantiates nothing for these
 targets, so their nodes derive the substitution from the callable:
 - a target reached through an exact procedure alias, whose edge instantiated
   the alias's scheme;
-- the numeric default owner publication selects for a dispatcher no edge pins;
-- the target publication resolves for a literal conversion that checking left
+- the numeric default owner checking selects for a dispatcher no edge pins;
+- the target checking resolves for a literal conversion that it left
   to each specialization;
 - a literal conversion on a builtin number or `Str`, which checking discharges
   as a primitive with no callable.
@@ -12995,11 +12995,11 @@ independently inferred dot-method calls retain separate callable relations so a
 rank-1 method scheme can be instantiated independently at each use. Operators
 and literal conversions retain one numeric/defaulting relation per method
 identity. A relation folded into a retained one selects no target of its own,
-yet its dispatch site still publishes a plan. The unifier journals each fold as
+yet its dispatch site still outputs a plan. The unifier journals each fold as
 an exact (dropped, retained) pair of raw constraint function vars, and checking
-publishes `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
+outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
 to the relation on its merge chain whose target was selected. Checked
-publication keys the folded dispatch's evidence to that relation's
+module output keys the folded dispatch's evidence to that relation's
 dispatch-target record. It never matches records by union-find root, because
 unrelated dispatches whose callables later unify would then share a record.
 Same-name relations must agree on fixed outer function properties:

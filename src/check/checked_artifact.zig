@@ -20275,7 +20275,7 @@ const EvidencePass = struct {
         };
         if (builtin.mode == .Debug) switch (plan.resolution) {
             .direct_pending => |node_id| self.verifyDirectPlanSubstitution(node_id),
-            else => {},
+            .structural, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => {},
         };
         self.plan_resolved[raw] = true;
         if (plan.resolution == .checked_error) {
@@ -20800,7 +20800,30 @@ const EvidencePass = struct {
         return switch (kind) {
             .numeral => switch (builtin_owner) {
                 .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => true,
-                else => false,
+                .list,
+                .box,
+                .dict,
+                .set,
+                .fields,
+                .field,
+                .bool,
+                .str,
+                .u8x16,
+                .i8x16,
+                .u16x8,
+                .i16x8,
+                .u32x4,
+                .i32x4,
+                .u64x2,
+                .i64x2,
+                .parse_tag_union_spec,
+                .crypto_sha256_digest,
+                .crypto_sha256_hasher,
+                .crypto_blake3_digest,
+                .crypto_blake3_hasher,
+                .iter,
+                .stream,
+                => false,
             },
             .quote, .interpolation => builtin_owner == .str,
         };

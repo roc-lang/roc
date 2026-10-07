@@ -176,12 +176,6 @@ pub const Slot = union(enum) {
     }
 };
 
-/// The store of all type variables and their descriptors
-///
-/// Each type variables (`Var`) points to a Slot.
-/// A Slot either redirects to a different slot or contains type `Content`
-///
-/// Var maps to a SlotStore.Idx internally
 /// One static-dispatch relation the unifier folded into a retained same-name
 /// relation. Both are raw constraint function vars; unification has already
 /// made their callables equal.
@@ -190,6 +184,12 @@ pub const StaticDispatchRelationMerge = struct {
     retained_fn_var: Var,
 };
 
+/// The store of all type variables and their descriptors.
+///
+/// Each type variable (`Var`) points to a Slot.
+/// A Slot either redirects to a different slot or contains type `Content`.
+///
+/// Var maps to a SlotStore.Idx internally.
 pub const Store = struct {
     const Self = @This();
 
