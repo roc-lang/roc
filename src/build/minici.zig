@@ -231,7 +231,16 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-trmc-lir" },
     .{ .name = "run-test-zig-build-helpers" },
     .{ .name = "run-test-zig-backend-llvm" },
-    .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
+    .{
+        .name = "run-test-eval",
+        .kind = .harness,
+        // Each eval process also spawns compiler workers. Avoid overlapping
+        // their committed thread stacks on the Windows CI runner (#12116).
+        .args = if (builtin.os.tag == .windows)
+            &.{ "--timeout", "120000", "--threads", "1" }
+        else
+            &.{ "--timeout", "120000" },
+    },
     .{ .name = "run-test-simd-differential", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
