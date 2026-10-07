@@ -115,9 +115,6 @@ The artifact identity check imports the actual generated compiler options into
 small objects. It verifies mode, target, CPU features and complete OS version
 ranges, including kernel bounds, glibc versions and Android API levels.
 
-See [the Zig 0.17 migration record](docs/zig-0.17-upgrade.md) for validated
-source changes, workaround decisions and remaining platform checks.
-
 ## CPU requirements
 
 Builds target the baseline instruction set for their architecture, so the `roc`
