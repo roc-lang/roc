@@ -2540,7 +2540,11 @@ pub fn compute(
         const join_bodies = &proc_joins[owner];
 
         var poison: u64 = 0;
-        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) candidate.def_stmt else null;
+        // A borrowed payload view supplies no unit of its own. Only producing
+        // its union root again restores fresh fields across a loop back edge;
+        // recreating the view still observes the same stored units.
+        const fresh_def = if (union_root) |root| root.def_stmt else candidate.def_stmt;
+        const redefinition: ?LIR.CFStmtId = if (candidate.join_starts.items.len == 0) fresh_def else null;
         try future_fields.compute(gpa, store, solution, local, &read_kinds, join_bodies, field_restitutions.items, redefinition);
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
@@ -2581,7 +2585,9 @@ pub fn compute(
                 // iteration's fresh value with every field intact; the
                 // previous value is dead past its redefinition exactly as it
                 // is past an explicit join-cell write.
-                if (cursor == candidate.def_stmt and candidate.join_starts.items.len == 0) state = .{ .may = 0, .must = 0 };
+                if (redefinition) |def_stmt| if (cursor == def_stmt) {
+                    state = .{ .may = 0, .must = 0 };
+                };
                 if (read_kinds.getPtr(cursor)) |kind| {
                     kind.visited = true;
                     if (kind.consuming) {
