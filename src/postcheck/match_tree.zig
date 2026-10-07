@@ -122,7 +122,7 @@ pub const OccId = enum(u32) {
     _,
 
     pub fn idx(self: OccId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -327,7 +327,7 @@ pub fn Compiler(comptime Ctx: type) type {
                     gop.value_ptr.* = @intCast(self.occ_entries.items.len);
                     try self.occ_entries.append(self.arena, .{ .parent = parent, .step = step, .ty = ty });
                 }
-                return @enumFromInt(gop.value_ptr.*);
+                return @fromBackingInt(@intCast(gop.value_ptr.*));
             }
 
             fn occDigest(parent: OccId, step: Step) OccDigest {
@@ -1506,7 +1506,7 @@ pub fn Compiler(comptime Ctx: type) type {
             /// every use is marked.
             fn indexScopedUses(self: *Emitter) error{OutOfMemory}!void {
                 for (0..self.occs.len) |i| {
-                    const occ: OccId = @enumFromInt(i);
+                    const occ: OccId = @fromBackingInt(@intCast(i));
                     if (!self.uses.contains(occ)) continue;
                     const needed = self.establishingScope(occ);
                     const gop = try self.scoped_uses.getOrPut(self.arena, scopeOwner(needed));
@@ -1842,7 +1842,7 @@ pub fn Compiler(comptime Ctx: type) type {
             fn lookupOcc(self: *const Emitter, parent: OccId, step: Step) ?OccId {
                 for (self.occs, 0..) |entry, i| {
                     if (entry.parent != parent) continue;
-                    if (std.meta.eql(entry.step, step)) return @enumFromInt(i);
+                    if (std.meta.eql(entry.step, step)) return @fromBackingInt(@intCast(i));
                 }
                 return null;
             }

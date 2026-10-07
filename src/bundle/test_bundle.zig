@@ -35,11 +35,11 @@ const path_corpus = [_]struct { path: []const u8, reason: ?PathReason }{
     .{ .path = "test-folder/tests.zig", .reason = null },
     .{ .path = "nested/folder/structure.txt", .reason = null },
     .{ .path = "control\x01char.txt", .reason = null },
-    .{ .path = "a" ** 255, .reason = null },
+    .{ .path = &@as([255]u8, @splat('a')), .reason = null },
     .{ .path = "console/printer.txt", .reason = null },
 
     .{ .path = "", .reason = .empty_path },
-    .{ .path = "a" ** 256, .reason = .path_too_long },
+    .{ .path = &@as([256]u8, @splat('a')), .reason = .path_too_long },
 
     .{ .path = "/etc/passwd", .reason = .absolute_path },
     .{ .path = "C:/Windows/System32", .reason = .absolute_path },

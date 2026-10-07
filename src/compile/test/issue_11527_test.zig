@@ -77,7 +77,7 @@ fn expectConstantListNotRebuilt(target: lir.CheckedPipeline.TargetConfig) (harne
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );

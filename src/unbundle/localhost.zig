@@ -88,7 +88,7 @@ pub fn resolveLoopback() Error!ResolvedFamily {
             .next = null,
         };
         var result: ?*std.c.addrinfo = null;
-        if (@intFromEnum(std.c.getaddrinfo("localhost", null, &hints, &result)) != 0) {
+        if (@backingInt(std.c.getaddrinfo("localhost", null, &hints, &result)) != 0) {
             return error.NetworkError;
         }
         defer if (result) |r| std.c.freeaddrinfo(r);

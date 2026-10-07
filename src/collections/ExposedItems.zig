@@ -30,27 +30,27 @@ pub const ExposedItemTarget = extern struct {
 
     pub fn unresolved() ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.unresolved),
+            .kind = @backingInt(Kind.unresolved),
             .node_idx = 0,
         };
     }
 
     pub fn valueDef(node_idx: u32) ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.value_def),
+            .kind = @backingInt(Kind.value_def),
             .node_idx = node_idx,
         };
     }
 
     pub fn typeDecl(node_idx: u32) ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.type_decl),
+            .kind = @backingInt(Kind.type_decl),
             .node_idx = node_idx,
         };
     }
 
     pub fn tag(self: ExposedItemTarget) Kind {
-        return @enumFromInt(self.kind);
+        return @fromBackingInt(@intCast(self.kind));
     }
 
     pub fn isResolved(self: ExposedItemTarget) bool {

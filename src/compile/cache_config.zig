@@ -45,6 +45,12 @@ fn cacheOs(os: std.Target.Os.Tag) CacheOs {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -555,10 +561,10 @@ pub fn getCacheDirName() []const u8 {
 
 /// Get a compiler version-specific directory name.
 ///
-/// Returns the human-readable compiler version string (e.g., "debug-abcd1234")
-/// to isolate cache entries between different compiler builds.
+/// Uses an explicit namespace prefix followed by the owning compiler's content
+/// identity. Older compilers recognize bare hexadecimal directories as legacy
+/// caches and delete them, so the prefix also preserves concurrent-version use.
+/// The directory spelling does not change semantic compatibility or cache keys.
 pub fn getCompilerVersionDir(allocator: Allocator) Allocator.Error![]u8 {
-    // Use build-time compiler version that includes git commit SHA
-    const version_info = build_options.compiler_version;
-    return allocator.dupe(u8, version_info);
+    return std.fmt.allocPrint(allocator, "compat-{s}", .{build_options.compiler_compatibility_id});
 }

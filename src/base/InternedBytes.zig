@@ -241,12 +241,12 @@ const CollisionOwner = struct {
     }
 
     fn textForId(self: *const CollisionOwner, id: CollisionId) []const u8 {
-        const range = self.ranges.items[@intFromEnum(id) - 1];
+        const range = self.ranges.items[@backingInt(id) - 1];
         return self.bytes.items[range.start .. range.start + range.len];
     }
 
     fn append(self: *CollisionOwner, gpa: Allocator, bytes: []const u8) Allocator.Error!CollisionId {
-        const id: CollisionId = @enumFromInt(self.ranges.items.len + 1);
+        const id: CollisionId = @fromBackingInt(@intCast(self.ranges.items.len + 1));
         const start: u32 = @intCast(self.bytes.items.len);
         try self.bytes.appendSlice(gpa, bytes);
         try self.ranges.append(gpa, .{ .start = start, .len = @intCast(bytes.len) });

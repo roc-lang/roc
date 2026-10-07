@@ -172,6 +172,10 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
         }
     }
 
+    // Zig 0.17's build configurer cannot export a temp directory to Run steps,
+    // and CI runners do not always set one, so fall back to the POSIX default.
+    if (comptime @import("builtin").os.tag != .windows) return allocator.dupe(u8, "/tmp");
+
     return error.TempDirUnavailable;
 }
 
@@ -1011,11 +1015,11 @@ fn processSnapshotContent(
 
             switch (content.meta.node_type) {
                 .expr => {
-                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
                 .statement => {
-                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const ast_stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 .file,
@@ -2363,11 +2367,11 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .header => {
-            const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+            const header = parse_ast.store.getHeader(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .expr => {
-            const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+            const expr = parse_ast.store.getExpr(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .mono => {
@@ -2375,7 +2379,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
-            const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+            const stmt = parse_ast.store.getStatement(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .package, .platform, .app => {
@@ -3753,7 +3757,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
     }
     unreachable;
@@ -3766,14 +3770,14 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
             }
             unreachable;
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
         }
         unreachable;
@@ -3785,7 +3789,7 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic(
             "snapshot invariant violated: exported platform root has no published FFI symbol",
             .{},
@@ -3802,7 +3806,7 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic(
                 "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
@@ -3974,14 +3978,14 @@ fn processDevObjectSnapshot(
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
-    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+    const roc_target_info = @typeInfo(RocTarget).@"enum";
 
-    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var hash_results: [roc_target_info.field_names.len]TargetHashResult = undefined;
     var object_compiler = backend.ObjectFileCompiler.init(allocator);
 
-    inline for (roc_target_fields, 0..) |field, i| {
-        const target: RocTarget = @enumFromInt(field.value);
-        hash_results[i].target_name = field.name;
+    inline for (roc_target_info.field_names, roc_target_info.field_values, 0..) |field_name, field_value, i| {
+        const target: RocTarget = @fromBackingInt(@intCast(field_value));
+        hash_results[i].target_name = field_name;
 
         target_snapshot: {
             const arch = target.toCpuArch();
@@ -4030,7 +4034,7 @@ fn processDevObjectSnapshot(
                 target,
                 .{ .include_provided_exports = true },
             ) catch |err| {
-                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field_name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
@@ -4330,7 +4334,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
-    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
 }
 
 fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
@@ -4651,6 +4655,7 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.ParseFailed,
         error.ParsingFailed,
         error.PathAlreadyExists,
+        error.PathExceedsLimit,
         error.PathOutsideWorkspace,
         error.PermissionDenied,
         error.PipeBusy,
@@ -4744,7 +4749,7 @@ fn renderSnapshotReplTypeProblems(
 
     const repl_expr = switch (source_kind) {
         .expr => blk: {
-            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement_idx: AST.Statement.Idx = @fromBackingInt(parse_ast.root_node_idx);
             const statement = parse_ast.store.getStatement(statement_idx);
             const expr_idx = switch (statement) {
                 .expr => |expr_stmt| expr_stmt.expr,
@@ -5365,7 +5370,7 @@ test "no Builtin module leaks in snapshots" {
     var snapshots_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "test/snapshots", .{ .iterate = true });
     defer snapshots_dir.close(std.testing.io);
 
-    var files_with_builtin: std.array_list.Managed([]const u8) = .{ .allocator = allocator, .items = &.{}, .capacity = 0 };
+    var files_with_builtin = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (files_with_builtin.items) |path| {
             allocator.free(path);

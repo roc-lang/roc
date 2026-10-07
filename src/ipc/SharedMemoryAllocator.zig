@@ -52,7 +52,7 @@ pub const Header = extern struct {
     used_size: u64 = 0,
     total_size: u64 = 0,
     data_offset: u64 = @sizeOf(Header),
-    reserved: [472]u8 = [_]u8{0} ** 472, // Pad to 512 bytes total
+    reserved: [472]u8 = @as([472]u8, @splat(0)), // Pad to 512 bytes total
 };
 
 /// Platform-specific handle for the shared memory
@@ -367,7 +367,7 @@ pub fn allocator(self: *SharedMemoryAllocator) std.mem.Allocator {
 fn alloc(ctx: *anyopaque, len: usize, ptr_align: std.mem.Alignment, _: usize) ?[*]u8 {
     const self: *SharedMemoryAllocator = @ptrCast(@alignCast(ctx));
 
-    const alignment = @as(usize, 1) << @intFromEnum(ptr_align);
+    const alignment = @as(usize, 1) << @backingInt(ptr_align);
 
     // Lock-free allocation using compare-and-swap
     while (true) {
@@ -515,7 +515,7 @@ comptime {
     // A detached image carries this header in bytes that can outlive the
     // process, so every byte of it must belong to a declared field.
     var declared: usize = 0;
-    for (@typeInfo(Header).@"struct".fields) |field| declared += @sizeOf(field.type);
+    for (@typeInfo(Header).@"struct".field_types) |field_type| declared += @sizeOf(field_type);
     std.debug.assert(declared == @sizeOf(Header));
 }
 

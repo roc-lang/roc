@@ -1295,7 +1295,7 @@ pub const Payload = extern union {
     pub const DiagInternalBuiltinType = extern struct {
         parent_name: u32, // @bitCast(Ident.Idx)
         nested_name: u32, // @bitCast(Ident.Idx)
-        kind: u32, // @intFromEnum(Diagnostic.InternalBuiltinTypeKind)
+        kind: u32, // @backingInt(Diagnostic.InternalBuiltinTypeKind)
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
@@ -1328,8 +1328,8 @@ pub const Payload = extern union {
     /// Diagnostics with two enum values.
     /// Used by: diag_deprecated_number_suffix
     pub const DiagTwoEnums = extern struct {
-        enum1: u32, // @intFromEnum
-        enum2: u32, // @intFromEnum
+        enum1: u32, // @backingInt
+        enum2: u32, // @backingInt
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 
@@ -1398,19 +1398,24 @@ test "Payload: assigning a variant defines all 16 bytes, whatever the memory hel
     // cache writes all 16 verbatim. This is the property that makes that safe: the same
     // logical variant value, written over two different poison patterns, produces the
     // same 16 bytes. A variant that stopped short of 16 bytes fails here.
-    inline for (@typeInfo(Payload).@"union".fields) |variant| {
+    inline for (@typeInfo(Payload).@"union".field_names, @typeInfo(Payload).@"union".field_types) |variant_name, variant_type| {
         var over_ones: [@sizeOf(Payload)]u8 align(@alignOf(Payload)) = undefined;
         var over_fives: [@sizeOf(Payload)]u8 align(@alignOf(Payload)) = undefined;
         @memset(&over_ones, 0xAA);
         @memset(&over_fives, 0x55);
 
-        const value = @unionInit(Payload, variant.name, std.mem.zeroes(variant.type));
+        const value = @unionInit(Payload, variant_name, std.mem.zeroes(variant_type));
         @as(*Payload, @ptrCast(&over_ones)).* = value;
         @as(*Payload, @ptrCast(&over_fives)).* = value;
 
         try std.testing.expectEqualSlices(u8, &over_ones, &over_fives);
         // A zeroed variant value writes zeros, so any surviving poison byte shows up.
-        try std.testing.expectEqualSlices(u8, &[_]u8{0} ** @sizeOf(Payload), &over_ones);
+        try std.testing.expectEqualSlices(u8, repeated: {
+            const pattern = &[_]u8{0};
+            var result: [pattern.len * (@sizeOf(Payload))]@TypeOf(pattern[0]) = undefined;
+            for (0..(@sizeOf(Payload))) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+            break :repeated &result;
+        }, &over_ones);
     }
 }
 
@@ -1547,7 +1552,12 @@ test "Node.List: serialization round-trips full-width payloads and ignores alloc
     const var_node = loaded.get(grown.var_node);
     try std.testing.expectEqual(Tag.expr_var, var_node.tag);
     try std.testing.expectEqual(@as(u32, 0x55555555), var_node.getPayload().expr_var.pattern_idx);
-    try std.testing.expectEqualSlices(u8, &[_]u8{0} ** 12, &var_node.getPayload().expr_var._padding);
+    try std.testing.expectEqualSlices(u8, repeated: {
+        const pattern = &[_]u8{0};
+        var result: [pattern.len * (12)]@TypeOf(pattern[0]) = undefined;
+        for (0..(12)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated &result;
+    }, &var_node.getPayload().expr_var._padding);
 
     const annotation = loaded.get(grown.annotation);
     try std.testing.expectEqual(Tag.annotation, annotation.tag);

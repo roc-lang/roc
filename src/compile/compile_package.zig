@@ -2,7 +2,6 @@
 //! operations used by the compilation coordinator and snapshot tooling.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
@@ -340,7 +339,7 @@ fn importedTypeModule(sibling_env: *const ModuleEnv) ?ImportedTypeModule {
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(type_ident_in_module) orelse return null;
     return .{
         .source_ident = type_ident_in_module,
-        .statement_idx = @enumFromInt(type_node_idx),
+        .statement_idx = @fromBackingInt(@intCast(type_node_idx)),
     };
 }
 
@@ -356,7 +355,7 @@ pub fn resolveSelectedType(
 ) ?can.CIR.Statement.Idx {
     const source_ident = sibling_env.common.findIdent(qualified_name) orelse return null;
     const type_node_idx = sibling_env.getExposedTypeNodeIndexById(source_ident) orelse return null;
-    return @enumFromInt(type_node_idx);
+    return @fromBackingInt(@intCast(type_node_idx));
 }
 
 /// Canonicalize one module of a package.
@@ -373,13 +372,14 @@ pub fn canonicalizeModuleWithSiblings(
     builtin_indices: can.CIR.BuiltinIndices,
     validation: Can.Validation,
     is_entry_module: bool,
+    source_pin_version: ?[]const u8,
 ) Allocator.Error!void {
     var czer = try Can.initModule(roc_ctx, env, parse_ast, .{
         .builtin_types = .{
             .builtin_module_env = builtin_module_env,
             .builtin_indices = builtin_indices,
         },
-        .compiler_version = build_options.compiler_version,
+        .compiler_version = source_pin_version,
         .validation = validation,
         .is_entry_module = is_entry_module,
     });

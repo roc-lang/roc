@@ -1002,7 +1002,7 @@ pub const Expr = union(enum) {
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, e.region);
                 const attrs = tree.beginNode();
 
-                const module_idx_int = @intFromEnum(e.module_idx);
+                const module_idx_int = @backingInt(e.module_idx);
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
@@ -1018,7 +1018,7 @@ pub const Expr = union(enum) {
             },
             .e_deferred_import_ref => |e| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-deferred-import-ref", expr_idx);
-                const entry = ir.deferred_import_refs.items.items[@intFromEnum(e.ref)];
+                const entry = ir.deferred_import_refs.items.items[@backingInt(e.ref)];
                 try tree.pushStringPair("module", ir.getIdent(entry.moduleName()));
                 try tree.pushStringPair("path", ir.getIdent(entry.path()));
                 const attrs = tree.beginNode();
@@ -1038,7 +1038,7 @@ pub const Expr = union(enum) {
                 const begin = try ir.beginSExprNodeAt(tree, "e-lookup-associated", expr_idx);
                 try tree.pushStringPair("type", ir.getIdent(e.type_ident));
                 try tree.pushStringPair("item", ir.getIdent(e.item_ident));
-                try tree.pushStringPairFmt("import", "{d}", .{@intFromEnum(e.module_idx)});
+                try tree.pushStringPairFmt("import", "{d}", .{@backingInt(e.module_idx)});
                 try tree.pushStringPairFmt("type-node", "{d}", .{e.type_node_idx});
                 try tree.endNodeWithoutChildren(begin);
             },
@@ -1054,7 +1054,7 @@ pub const Expr = union(enum) {
                     try tree.pushStringPair("target-module", module_name);
                 }
                 try tree.pushStringPairFmt("target-node", "{d}", .{e.target_node_idx});
-                try tree.pushStringPairFmt("target-def", "{d}", .{@intFromEnum(e.target_def_idx)});
+                try tree.pushStringPairFmt("target-def", "{d}", .{@backingInt(e.target_def_idx)});
                 try tree.endNodeWithoutChildren(begin);
             },
             .e_lookup_required => |e| {
@@ -1111,7 +1111,7 @@ pub const Expr = union(enum) {
             .e_call => |c| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-call", expr_idx);
                 if (c.constraint_fn_var) |constraint_fn_var| {
-                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                    try tree.pushU64Pair("constraint-fn-var", @backingInt(constraint_fn_var));
                 }
                 const attrs = tree.beginNode();
 
@@ -1211,7 +1211,7 @@ pub const Expr = union(enum) {
                 const begin = try ir.beginSExprNodeAt(tree, "e-nominal-external", expr_idx);
                 const attrs = tree.beginNode();
 
-                const module_idx_int = @intFromEnum(e.module_idx);
+                const module_idx_int = @backingInt(e.module_idx);
                 std.debug.assert(module_idx_int < ir.imports.imports.items.items.len);
                 const string_lit_idx = ir.imports.imports.items.items[module_idx_int];
                 const module_name = ir.common.strings.get(string_lit_idx);
@@ -1339,7 +1339,7 @@ pub const Expr = union(enum) {
             .e_dispatch_call => |e| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-dispatch-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
-                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                try tree.pushU64Pair("constraint-fn-var", @backingInt(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
                 const receiver_begin = try tree.beginNamedNode("receiver");
@@ -1359,10 +1359,10 @@ pub const Expr = union(enum) {
             .e_interpolation => |e| {
                 const begin = try ir.beginSExprNodeAt(tree, "e-interpolation", expr_idx);
                 if (e.constraint_fn_var) |constraint_fn_var| {
-                    try tree.pushU64Pair("constraint-fn-var", @intFromEnum(constraint_fn_var));
+                    try tree.pushU64Pair("constraint-fn-var", @backingInt(constraint_fn_var));
                 }
                 if (e.dispatcher_var) |dispatcher_var| {
-                    try tree.pushU64Pair("dispatcher-var", @intFromEnum(dispatcher_var));
+                    try tree.pushU64Pair("dispatcher-var", @backingInt(dispatcher_var));
                 }
                 const attrs = tree.beginNode();
 
@@ -1439,7 +1439,7 @@ pub const Expr = union(enum) {
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 const attrs = tree.beginNode();
 
-                try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(e.type_dispatch_stmt));
+                try tree.pushU64Pair("type-dispatch-stmt", @backingInt(e.type_dispatch_stmt));
 
                 const args_begin = try tree.beginNamedNode("args");
                 const args_attrs = tree.beginNode();
@@ -1454,10 +1454,10 @@ pub const Expr = union(enum) {
                 const begin = try ir.beginSExprNodeAt(tree, "e-type-dispatch-call", expr_idx);
                 try tree.pushStringPair("method", ir.getIdentText(e.method_name));
                 switch (e.owner) {
-                    .statement => |stmt| try tree.pushU64Pair("type-dispatch-stmt", @intFromEnum(stmt)),
-                    .dispatcher => |dispatcher| try tree.pushU64Pair("dispatcher-var", @intFromEnum(dispatcher)),
+                    .statement => |stmt| try tree.pushU64Pair("type-dispatch-stmt", @backingInt(stmt)),
+                    .dispatcher => |dispatcher| try tree.pushU64Pair("dispatcher-var", @backingInt(dispatcher)),
                 }
-                try tree.pushU64Pair("constraint-fn-var", @intFromEnum(e.constraint_fn_var));
+                try tree.pushU64Pair("constraint-fn-var", @backingInt(e.constraint_fn_var));
                 const attrs = tree.beginNode();
 
                 const args_begin = try tree.beginNamedNode("args");

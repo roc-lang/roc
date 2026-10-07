@@ -592,7 +592,7 @@ fn nameIsAtOrUnder(root: []const u8, name: []const u8) bool {
 fn documentedRootDecl(module_env: *const ModuleEnv, public_type: ?PublicTypeProjection) ?CIR.Statement.Idx {
     if (public_type) |projection| return projection.source_decl;
     return switch (module_env.module_kind) {
-        .type_module => |main_type_ident| @enumFromInt(module_env.getExposedTypeNodeIndexById(main_type_ident) orelse unreachable),
+        .type_module => |main_type_ident| @fromBackingInt(@intCast(module_env.getExposedTypeNodeIndexById(main_type_ident) orelse unreachable)),
         .default_app, .app, .package, .platform, .hosted, .module, .malformed => null,
     };
 }
@@ -667,14 +667,14 @@ fn projectedTypeReference(
         },
         .external => |external| external_blk: {
             const artifact = checked_artifact orelse unreachable;
-            const import_index = @intFromEnum(external.module_idx);
+            const import_index = @backingInt(external.module_idx);
             if (import_index >= artifact.checking_context_identity.imports.len) unreachable;
             const import_key = artifact.checking_context_identity.imports[import_index].artifact_key orelse unreachable;
-            break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @enumFromInt(external.target_node_idx)) };
+            break :external_blk .{ import_key.module_identity_hash, @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))) };
         },
         .external_identity => |external| .{
             module_env.moduleIdentityHash(external.module_identity).*,
-            @as(CIR.Statement.Idx, @enumFromInt(external.target_node_idx)),
+            @as(CIR.Statement.Idx, @fromBackingInt(@intCast(external.target_node_idx))),
         },
         .builtin => return null,
         .pending => unreachable,
@@ -722,8 +722,8 @@ fn selectPublicProjection(
 fn typeReferenceStatement(base_ref: TypeAnno.LocalOrExternal) ?CIR.Statement.Idx {
     return switch (base_ref) {
         .local => |local| local.decl_idx,
-        .external => |external| @enumFromInt(external.target_node_idx),
-        .external_identity => |external| @enumFromInt(external.target_node_idx),
+        .external => |external| @fromBackingInt(@intCast(external.target_node_idx)),
+        .external_identity => |external| @fromBackingInt(@intCast(external.target_node_idx)),
         .builtin, .pending => null,
     };
 }
@@ -1040,7 +1040,7 @@ fn extractDefEntry(
                 }
 
                 const def_var = ModuleEnv.varFrom(def_idx);
-                if (@intFromEnum(def_var) >= module_env.types.len()) break :blk null;
+                if (@backingInt(def_var) >= module_env.types.len()) break :blk null;
                 break :blk try extractDocType(
                     gpa,
                     &module_env.types,
@@ -1406,13 +1406,13 @@ fn resolveModulePathFromBase(
         else
             module_env.module_name,
         .external => |ext| blk: {
-            const idx = @intFromEnum(ext.module_idx);
+            const idx = @backingInt(ext.module_idx);
             if (idx >= module_env.imports.imports.items.items.len) break :blk "";
             const str_idx = module_env.imports.imports.items.items[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
         },
         .pending => |pend| blk: {
-            const idx = @intFromEnum(pend.module_idx);
+            const idx = @backingInt(pend.module_idx);
             if (idx >= module_env.imports.imports.items.items.len) break :blk "";
             const str_idx = module_env.imports.imports.items.items[idx];
             break :blk getModulePath(module_env.common.getString(str_idx));
@@ -1467,7 +1467,7 @@ fn sourceWhereClauseLayout(module_env: *const ModuleEnv, where_span: CIR.WhereCl
     const clauses = module_env.store.sliceWhereClauses(where_span);
     if (clauses.len == 0) return .compact;
 
-    const last_node: CIR.Node.Idx = @enumFromInt(@intFromEnum(clauses[clauses.len - 1]));
+    const last_node: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(clauses[clauses.len - 1])));
     const last_region = module_env.store.getNodeRegion(last_node);
     const source = module_env.getSourceAll();
     const start: usize = @min(last_region.end.offset, source.len);
@@ -2296,7 +2296,7 @@ fn inferredTypeReferenceDisplay(
 ) ExtractError!TypeReferenceDisplay {
     if (source_decl) |raw_statement| {
         const origin_identity = ctx.env.moduleIdentityHash(origin_module);
-        const statement: CIR.Statement.Idx = @enumFromInt(raw_statement);
+        const statement: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_statement));
         if (selectPublicProjection(
             ctx.reference_routing.current,
             ctx.reference_routing.all,
@@ -2333,13 +2333,13 @@ fn extractDocTypeInner(
     const types = ctx.types;
     const idents = ctx.idents;
 
-    if (@intFromEnum(var_) >= types.len()) {
+    if (@backingInt(var_) >= types.len()) {
         return try allocDocType(gpa, .@"error");
     }
 
     const resolved = types.resolveVar(var_);
 
-    if (@intFromEnum(resolved.var_) >= types.len()) {
+    if (@backingInt(resolved.var_) >= types.len()) {
         return try allocDocType(gpa, .@"error");
     }
 
@@ -2793,7 +2793,7 @@ fn extractTagUnion(
     const idents = ctx.idents;
 
     // Bounds check the tags range
-    const tags_start_idx = @intFromEnum(tag_union.tags.start);
+    const tags_start_idx = @backingInt(tag_union.tags.start);
     const tags_len = types.tags.len();
     if (tags_start_idx >= tags_len or tags_start_idx + tag_union.tags.count > tags_len) {
         return try allocDocType(gpa, .@"error");

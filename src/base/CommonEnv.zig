@@ -254,7 +254,7 @@ pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
 fn assertStringsInsertable(self: *const CommonEnv) void {
     if (self.strings_insertable) return;
 
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
     }
     unreachable;
@@ -349,9 +349,9 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
     {
         const expected_idx = self.line_starts.items.items.len;
         const idx = try self.line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
@@ -363,9 +363,9 @@ pub fn calcLineStarts(self: *CommonEnv, gpa: std.mem.Allocator) Allocator.Error!
             // next line starts after the newline in the current position
             const expected_idx = self.line_starts.items.items.len;
             const idx = try self.line_starts.append(gpa, pos + 1);
-            if (comptime builtin.mode == .Debug) {
-                std.debug.assert(@intFromEnum(idx) == expected_idx);
-            } else if (@intFromEnum(idx) != expected_idx) {
+            if (comptime builtin.mode == .debug) {
+                std.debug.assert(@backingInt(idx) == expected_idx);
+            } else if (@backingInt(idx) != expected_idx) {
                 unreachable;
             }
         }
@@ -427,27 +427,27 @@ test "CommonEnv.Serialized roundtrip" {
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 0);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 10);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }
     {
         const expected_idx = original.line_starts.items.items.len;
         const idx = try original.line_starts.append(gpa, 20);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(idx) == expected_idx);
-        } else if (@intFromEnum(idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(idx) == expected_idx);
+        } else if (@backingInt(idx) != expected_idx) {
             unreachable;
         }
     }

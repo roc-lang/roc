@@ -146,7 +146,7 @@ const CommittedGraphTypes = struct {
         defer pending_slots.deinit(allocator);
         for (tys, 0..) |ty, index| {
             if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
-            if (@intFromEnum(ty) >= self.source_store.epochBoundary().types) {
+            if (@backingInt(ty) >= self.source_store.epochBoundary().types) {
                 Common.compilerBug("sealed body type does not belong to its immutable store epoch");
             }
             if (destination.relocation.get(self.source_store, ty)) |mapped| {
@@ -173,7 +173,7 @@ const CommittedGraphTypes = struct {
     fn commitType(self: *CommittedGraphTypes, ty: Type.TypeId) Allocator.Error!Type.TypeId {
         if (self.graph) |graph| try graph.assertTypeHasNoActiveSnapshots(ty);
         const destination = self.destination orelse return ty;
-        if (@intFromEnum(ty) >= self.source_store.epochBoundary().types) {
+        if (@backingInt(ty) >= self.source_store.epochBoundary().types) {
             Common.compilerBug("sealed body type does not belong to its immutable store epoch");
         }
         if (destination.relocation.get(self.source_store, ty)) |mapped| return mapped;
@@ -378,8 +378,8 @@ pub const Timing = struct {
 
     pub fn snapshot(self: *const Timing) TimingSnapshot {
         var result: TimingSnapshot = .{};
-        inline for (@typeInfo(TimingSnapshot).@"struct".fields) |field| {
-            @field(result, field.name) = @field(self, field.name);
+        inline for (@typeInfo(TimingSnapshot).@"struct".field_names) |field_name| {
+            @field(result, field_name) = @field(self, field_name);
         }
         return result;
     }
@@ -664,8 +664,8 @@ const SpecJobDiagnostics = struct {
 };
 
 fn addFlatCounters(comptime T: type, destination: *T, source: T) void {
-    inline for (std.meta.fields(T)) |field| {
-        @field(destination, field.name) = @field(destination, field.name) +| @field(source, field.name);
+    inline for (@typeInfo(T).@"struct".field_names) |field_name| {
+        @field(destination, field_name) = @field(destination, field_name) +| @field(source, field_name);
     }
 }
 
@@ -744,7 +744,7 @@ pub fn run(
         try recordComptimeValueReads(allocator, &program);
         program.freeze();
 
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             verifyMonotypeTypeStore(&program);
             verifyMonotypeCompletedTypeIds(&program);
             verifyMonotypeCallTargets(&program);
@@ -1108,7 +1108,7 @@ fn templateHasInterfaceRelations(view: ModuleView, template: *const checked.Chec
 /// the template's relation table relates only cells private to its own body,
 /// so requesters never replay it.
 fn templateInterfaceIsClosed(view: ModuleView, template: *const checked.CheckedProcedureTemplate) bool {
-    const raw = @intFromEnum(template.checked_fn_root);
+    const raw = @backingInt(template.checked_fn_root);
     if (raw >= view.types.roots.len) {
         Common.invariant("procedure template interface query referenced a missing checked root");
     }
@@ -1219,7 +1219,7 @@ fn valuePositionMask(
                     for (nominal.args) |arg| try pending.append(arena, .{ .ty = arg, .value_position = false });
                     continue;
                 };
-                const key = NominalDeclarationKey{ .module = source.view.key.bytes, .declaration = @intFromEnum(source.declaration.id) };
+                const key = NominalDeclarationKey{ .module = source.view.key.bytes, .declaration = @backingInt(source.declaration.id) };
                 if (self_declaration) |current| if (std.meta.eql(current.key, key)) {
                     if (current.assumed.len != nominal.args.len) Common.invariant("checked nominal declaration arity differed from nominal type use");
                     for (nominal.args, current.assumed) |arg, is_value| try pending.append(arena, .{ .ty = arg, .value_position = visit.value_position and is_value });
@@ -1313,8 +1313,9 @@ fn normalizeMaterializedEvidence(
     };
     // Shallow contract nesting keeps its frames in place, so an unchanged
     // vector allocates nothing.
-    var frame_fallback = std.heap.stackFallback(8 * @sizeOf(Frame), arena);
-    const frame_allocator = frame_fallback.get();
+    var frame_fallback_buffer: [8 * @sizeOf(Frame)]u8 align(@alignOf(usize)) = undefined;
+    var frame_fallback = std.heap.BufferFirstAllocator.init(&frame_fallback_buffer, arena);
+    const frame_allocator = frame_fallback.allocator();
     var frames = std.ArrayList(Frame).empty;
     defer frames.deinit(frame_allocator);
     try frames.append(frame_allocator, .{ .contract = contract });
@@ -1462,7 +1463,7 @@ fn enterEvidenceScope(
     const vector = edge.vector;
     const owner = evidence.scope.owner;
     const view = builder.moduleForDigest(names.procTemplateModuleDigest(owner));
-    const raw_scope = @intFromEnum(scope_id);
+    const raw_scope = @backingInt(scope_id);
     if (raw_scope >= view.templates.dispatch_scopes.len) {
         Common.invariant("local procedure evidence scope was outside the checked scope table");
     }
@@ -2901,7 +2902,7 @@ fn specEvidenceShallowEql(
 
 fn codecEvidenceIdentity(evidence: CheckedSpecStructuralEvidence) ?static_dispatch.GeneratedCodecDerivationId {
     const id = evidence.evidence.generated_codec_derivation orelse return null;
-    return evidence.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)].identity;
+    return evidence.view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].identity;
 }
 
 fn specStructuralEvidenceEql(left: SpecStructuralEvidence, right: SpecStructuralEvidence) bool {
@@ -3025,7 +3026,7 @@ fn specEvidenceLocalOwner(
     while (try walk.next(allocator, &cursor)) |entry| switch (entry) {
         .target => |target| {
             if (target.local_proc_context) |context_id| {
-                const raw = @intFromEnum(context_id);
+                const raw = @backingInt(context_id);
                 if (raw >= draft.local_proc_contexts.items.len) {
                     Common.invariant("specialization evidence referenced an unknown local declaration context");
                 }
@@ -3070,14 +3071,14 @@ const ScopedMethodDispatch = struct {
         const owner_fields: struct { tag: u8, first: u32, second: u32, third: u32 } = switch (owner) {
             .builtin => |builtin| .{
                 .tag = 1,
-                .first = @intFromEnum(builtin),
+                .first = @backingInt(builtin),
                 .second = 0,
                 .third = 0,
             },
             .nominal => |nominal| .{
                 .tag = 0,
-                .first = @intFromEnum(nominal.module),
-                .second = @intFromEnum(nominal.type_name),
+                .first = @backingInt(nominal.module),
+                .second = @backingInt(nominal.type_name),
                 .third = if (nominal.source_decl) |source_decl| source_decl +| 1 else 0,
             },
         };
@@ -3087,7 +3088,7 @@ const ScopedMethodDispatch = struct {
             .owner_first = owner_fields.first,
             .owner_second = owner_fields.second,
             .owner_third = owner_fields.third,
-            .method = @intFromEnum(method),
+            .method = @backingInt(method),
         };
     }
 };
@@ -3173,7 +3174,7 @@ const BinderMap = struct {
     }
 
     fn checkBinder(self: *const BinderMap, binder: checked.PatternBinderId) void {
-        if (@intFromEnum(binder) >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
+        if (@backingInt(binder) >= self.binder_count) Common.invariant("pattern binder was outside its checked body store");
     }
 
     fn get(self: *const BinderMap, binder: checked.PatternBinderId) ?DraftLocalId {
@@ -3214,7 +3215,7 @@ const BinderMap = struct {
         for (entries) |*entry| entry.* = iter.next().?;
         std.mem.sort(Entry, entries, {}, struct {
             fn lessThan(_: void, left: Entry, right: Entry) bool {
-                return @intFromEnum(left.binder) < @intFromEnum(right.binder);
+                return @backingInt(left.binder) < @backingInt(right.binder);
             }
         }.lessThan);
         return entries;
@@ -3299,7 +3300,7 @@ const StoredConstFnEvidence = struct {
         head: ?u32,
         digest: Ast.EvidenceDigest,
     ) StoredConstFnEvidence {
-        if (@import("builtin").mode == .Debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
+        if (@import("builtin").mode == .debug and !std.meta.eql(digest, Ast.fnEvidenceDigest(nodes, frames, head))) {
             Common.invariant("function template evidence digest did not match its recorded topology");
         }
         return .{ .nodes = nodes, .frames = frames, .head = head, .digest = digest };
@@ -3600,7 +3601,7 @@ const SpecJobWorkspace = struct {
         if (self.next_epoch == std.math.maxInt(u64)) {
             Common.compilerBug("Monotype specialization workspace exhausted epoch identities");
         }
-        const epoch: SpecJobEpoch = @enumFromInt(self.next_epoch);
+        const epoch: SpecJobEpoch = @fromBackingInt(@intCast(self.next_epoch));
         self.next_epoch += 1;
         self.active_epoch = epoch;
         return epoch;
@@ -4142,9 +4143,9 @@ fn codecContractIdentityDigest(contract: ?Ast.CodecContractIdentity) names.TypeD
     hasher.update("roc.monotype.codec_contract.v4");
     hasher.update(&actual.module.bytes);
     var integer: [4]u8 = undefined;
-    std.mem.writeInt(u32, &integer, @intFromEnum(actual.derivation), .little);
+    std.mem.writeInt(u32, &integer, @backingInt(actual.derivation), .little);
     hasher.update(&integer);
-    hasher.update(&.{@intFromEnum(actual.kind)});
+    hasher.update(&.{@backingInt(actual.kind)});
     hasher.update(&actual.constructor_ty_digest.bytes);
     hasher.update(&actual.shape_ty_digest.bytes);
     return .{ .bytes = hasher.finalResult() };
@@ -4478,7 +4479,7 @@ const Builder = struct {
         spec_store.counters = counters;
         return .{
             .allocator = allocator,
-            .spec_job_run_id = @enumFromInt(raw_spec_job_run_id),
+            .spec_job_run_id = @fromBackingInt(@intCast(raw_spec_job_run_id)),
             .modules = modules,
             .root_view = checked.importedView(modules.root.module),
             .module_index = std.AutoHashMap([32]u8, ModuleIndexSlot).init(allocator),
@@ -4677,14 +4678,14 @@ const Builder = struct {
         const key: *const anyopaque = @ptrCast(&SpecJobLaneStateKey.value);
         if (executor_worker.lane_state.get(key)) |opaque_state| {
             const state: *SpecJobLaneState = @ptrCast(@alignCast(opaque_state));
-            if (@intFromEnum(state.worker.worker_id) != executor_worker.id) {
+            if (@backingInt(state.worker.worker_id) != executor_worker.id) {
                 Common.compilerBug("Monotype lane state moved between executor workers");
             }
             if (state.run_id != inputs.run_id) {
                 state.deinit();
                 state.* = SpecJobLaneState.init(
                     executor_worker.allocator,
-                    @enumFromInt(executor_worker.id),
+                    @fromBackingInt(@intCast(executor_worker.id)),
                     inputs.run_id,
                 );
             }
@@ -4697,7 +4698,7 @@ const Builder = struct {
         const state = try executor_worker.allocator.create(SpecJobLaneState);
         state.* = SpecJobLaneState.init(
             executor_worker.allocator,
-            @enumFromInt(executor_worker.id),
+            @fromBackingInt(@intCast(executor_worker.id)),
             inputs.run_id,
         );
         errdefer {
@@ -4801,7 +4802,7 @@ const Builder = struct {
         if (self.next_instantiation_scope == std.math.maxInt(u64)) {
             Common.invariant("Monotype instantiation scope identity exhausted");
         }
-        const id: InstantiationScopeId = @enumFromInt(self.next_instantiation_scope);
+        const id: InstantiationScopeId = @fromBackingInt(@intCast(self.next_instantiation_scope));
         self.next_instantiation_scope += 1;
         self.countBodyDiagnostic("instantiation_scopes_created");
         return id;
@@ -4998,7 +4999,7 @@ const Builder = struct {
             for (binding_view.table.bindings, 0..) |binding, dispatch_index| {
                 const entry_index = declared_by_target.get(.{
                     .checked_module_digest = binding.target_checked_module.bytes,
-                    .def_idx = @intFromEnum(binding.target_def),
+                    .def_idx = @backingInt(binding.target_def),
                 }) orelse Common.invariant("hosted section names a function with no hosted declaration in scope");
                 const entry = &entries.items[entry_index];
                 entry.binding = .{ .mapped = @intCast(dispatch_index) };
@@ -5063,7 +5064,7 @@ const Builder = struct {
                 .binding = .unavailable,
                 .order = proc.orderKey(view.hosted_procs),
                 .target_checked_module_digest = view.key.bytes,
-                .def_idx = @intFromEnum(proc.def_idx),
+                .def_idx = @backingInt(proc.def_idx),
             });
         }
     }
@@ -5428,7 +5429,7 @@ const Builder = struct {
             }
             context.completed = true;
             if (context.shard) |*shard| {
-                if (@intFromEnum(shard.worker_id) != completion.worker_id) {
+                if (@backingInt(shard.worker_id) != completion.worker_id) {
                     Common.compilerBug("post-check executor changed root worker ownership");
                 }
             }
@@ -5677,7 +5678,7 @@ const Builder = struct {
         const view = self.moduleForId(source_module);
         const callable_eval = self.callableEvalForProcedureUse(procedure);
         const template_ref = if (callable_eval) |use| blk: {
-            const raw = @intFromEnum(use.template);
+            const raw = @backingInt(use.template);
             if (raw >= use.view.callable_eval_templates.templates.len) {
                 Common.invariant("callable eval procedure use referenced a missing checked template");
             }
@@ -5909,18 +5910,18 @@ const Builder = struct {
         switch (request.const_locator.owner) {
             .top_level_binding => |owner| {
                 hasher.update("top-level-binding");
-                hashU32(&hasher, @intFromEnum(owner.pattern));
+                hashU32(&hasher, @backingInt(owner.pattern));
             },
             .hoisted_expr => |owner| {
                 hasher.update("hoisted-expr");
-                hashU32(&hasher, @intFromEnum(owner.expr));
+                hashU32(&hasher, @backingInt(owner.expr));
             },
         }
-        hashU32(&hasher, @intFromEnum(request.const_locator.template));
+        hashU32(&hasher, @backingInt(request.const_locator.template));
         hasher.update(&request.const_locator.source_scheme.bytes);
         if (request.node) |node| {
             hasher.update("node");
-            hashU32(&hasher, @intFromEnum(node));
+            hashU32(&hasher, @backingInt(node));
         } else {
             hasher.update("root");
         }
@@ -5935,7 +5936,7 @@ const Builder = struct {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.monotype.procedure-binding-root.v1");
         hasher.update(&view.key.bytes);
-        hashU32(&hasher, @intFromEnum(binding_id));
+        hashU32(&hasher, @backingInt(binding_id));
         hasher.update(&self.program.types.specializationDigest(&self.program.names, fn_ty).bytes);
         return .{ .bytes = hasher.finalResult() };
     }
@@ -5973,7 +5974,7 @@ const Builder = struct {
         template_id: checked.CallableEvalTemplateId,
         mono_fn_ty: Type.TypeId,
     ) Allocator.Error!Ast.ExprId {
-        const raw = @intFromEnum(template_id);
+        const raw = @backingInt(template_id);
         if (raw >= view.callable_eval_templates.templates.len) {
             Common.invariant("callable eval binding referenced a missing checked template");
         }
@@ -5996,7 +5997,7 @@ const Builder = struct {
     /// an exact procedure alias, which calls forward through.
     fn forwardingCallableEvalForProcedureUse(self: *Builder, proc: checked.ProcedureUseTemplate) ?CallableEvalUse {
         const callable_eval = self.callableEvalForProcedureUse(proc) orelse return null;
-        const template = callable_eval.view.callable_eval_templates.templates[@intFromEnum(callable_eval.template)];
+        const template = callable_eval.view.callable_eval_templates.templates[@backingInt(callable_eval.template)];
         return if (template.forwarded_lookup != null) callable_eval else null;
     }
 
@@ -6196,7 +6197,7 @@ const Builder = struct {
             try self.appendConstFnEvidence(&nodes, frame.vector);
             const scope: check.ConstStore.ConstFnEvidenceScope = switch (frame.scope.lexical) {
                 .root => .root,
-                .generalized => |scope_id| .{ .generalized = @intFromEnum(scope_id) },
+                .generalized => |scope_id| .{ .generalized = @backingInt(scope_id) },
             };
             try frames.append(self.allocator, check.ConstStore.ConstFnEvidenceFrame.init(
                 scope,
@@ -6753,7 +6754,7 @@ const Builder = struct {
     const FunctionMention = enum(u8) { unknown, none, some };
 
     fn knownFunctionMention(self: *const Builder, ty: Type.TypeId) ?bool {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index >= self.function_mentions.items.len) return null;
         return switch (self.function_mentions.items[index]) {
             .unknown => null,
@@ -6763,7 +6764,7 @@ const Builder = struct {
     }
 
     fn setFunctionMention(self: *Builder, ty: Type.TypeId, mentions: bool) Allocator.Error!void {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index >= self.function_mentions.items.len) {
             try self.function_mentions.appendNTimes(self.allocator, .unknown, index + 1 - self.function_mentions.items.len);
         }
@@ -7399,7 +7400,7 @@ const Builder = struct {
         }
         context.completed = true;
         if (context.shard) |*shard| {
-            if (@intFromEnum(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
+            if (@backingInt(shard.worker_id) != completion.worker_id) Common.compilerBug("post-check executor changed specialization worker ownership");
         }
         self.recordParallelWorkerWork(contexts[completion.id..][0..1]);
         self.recordRetainedSpecShardPeak(contexts, accepted, submitted);
@@ -8301,7 +8302,7 @@ const Builder = struct {
             const spec = &source_ctx.draft.template_specs.items[raw_spec];
             self.count("template_hits");
             const request_owner = source_ctx.draft.current_owner;
-            const candidate_owner = source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].parent_owner;
+            const candidate_owner = source_ctx.draft.fns.items[@backingInt(spec.fn_id)].parent_owner;
             switch (request_owner) {
                 .reserved_fn => |requesting_root| switch (candidate_owner) {
                     .reserved_fn => |candidate_root| _ = candidate_root != requesting_root,
@@ -8324,7 +8325,7 @@ const Builder = struct {
                 Common.invariant("recursive draft template request did not join its complete function interface");
             }
             if (signature_relation == .exact_graph) {
-                source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
+                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation = .exact_graph;
             }
             if (spec.state != .deferred and !runtimeDemandGuardFrameSetsEql(
                 spec.runtime_demand_guard_frames,
@@ -8576,7 +8577,7 @@ const Builder = struct {
         const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
 
-        var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
+        var completed_template = source_ctx.draft.fns.items[@backingInt(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
         _ = try source_ctx.draft.addNestedDef(.{
             .symbol = symbol,
@@ -8586,7 +8587,7 @@ const Builder = struct {
             .body = lowered.body,
             .ret = completed_ret_cell,
         });
-        source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
+        source_ctx.draft.fns.items[@backingInt(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
         try updateTemplateSpecInterfaceLookups(
             source_ctx.draft,
@@ -8663,7 +8664,7 @@ const Builder = struct {
         if (spec.lexical) |captured| try body_ctx.restoreCodecLexicalContext(captured);
 
         const root_node = try body_ctx.instNode(template.checked_fn_root);
-        if (source_ctx.draft.fns.items[@intFromEnum(fn_id)].signature_relation == .independent_roots) {
+        if (source_ctx.draft.fns.items[@backingInt(fn_id)].signature_relation == .independent_roots) {
             const public_request = source_ctx.graph.requestSourceInterface(spec.request_fn_node) orelse
                 spec.request_fn_node;
             try constrainDeferredTemplateTypeArguments(source_ctx.graph, root_node, public_request);
@@ -8676,7 +8677,7 @@ const Builder = struct {
         } else {
             try source_ctx.graph.unify(root_node, spec.request_fn_node);
         }
-        if (source_ctx.draft.fns.items[@intFromEnum(fn_id)].signature_relation != .independent_roots) {
+        if (source_ctx.draft.fns.items[@backingInt(fn_id)].signature_relation != .independent_roots) {
             try relateFunctionRequestInterface(source_ctx.graph, root_node, spec.request_fn_node);
         }
         if (spec.codec_contract) |contract| {
@@ -8709,7 +8710,7 @@ const Builder = struct {
         const completed_fn_ret = (try source_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
 
-        var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
+        var completed_template = source_ctx.draft.fns.items[@backingInt(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
         source_ctx.draft.setDef(top_level_def, .{
             .symbol = spec.symbol,
@@ -8719,7 +8720,7 @@ const Builder = struct {
             .body = .{ .roc = lowered.body },
             .ret = completed_ret_cell,
         });
-        source_ctx.draft.fns.items[@intFromEnum(fn_id)].source = completed_template;
+        source_ctx.draft.fns.items[@backingInt(fn_id)].source = completed_template;
         source_ctx.draft.template_specs.items[spec_index].request_fn_node = completed_fn_node;
         const lookup_prefix = try source_ctx.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
@@ -9093,7 +9094,7 @@ const Builder = struct {
         const address = checkedTypeAddress(view, checked_ty);
         const cache = self.activeCheckedTypeCache();
         if (cache.get(address)) |cached| return cached;
-        const raw = @intFromEnum(checked_ty);
+        const raw = @backingInt(checked_ty);
         if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
 
         const payload = view.types.payload(checked_ty);
@@ -9593,7 +9594,7 @@ const Builder = struct {
 
     fn stampSingleSourceCalls(self: *Builder) void {
         for (0..self.program.fnCount()) |raw| {
-            const id: Ast.FnId = @enumFromInt(@as(u32, @intCast(raw)));
+            const id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var source = self.program.getFn(id).source;
             if (self.singleSourceCall(source)) {
                 source.single_source_call = true;
@@ -9601,7 +9602,7 @@ const Builder = struct {
             }
         }
         for (0..self.program.defCount()) |raw| {
-            const id: Ast.DefId = @enumFromInt(@as(u32, @intCast(raw)));
+            const id: Ast.DefId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var def = self.program.getDef(id);
             var fn_def = def.fn_def orelse continue;
             if (!self.singleSourceCall(fn_def)) continue;
@@ -9610,7 +9611,7 @@ const Builder = struct {
             self.program.setDef(id, def);
         }
         for (0..self.program.nestedDefCount()) |raw| {
-            const id: Ast.NestedDefId = @enumFromInt(@as(u32, @intCast(raw)));
+            const id: Ast.NestedDefId = @fromBackingInt(@intCast(@as(u32, @intCast(raw))));
             var source = self.program.getNestedDef(id).fn_def;
             if (!self.singleSourceCall(source)) continue;
             source.single_source_call = true;
@@ -9717,8 +9718,8 @@ const Builder = struct {
         return .{
             .callable = .{ .proc_template = .{
                 .module = moduleDigestFromId(view.code_generation_key orelse view.key),
-                .proc_base = @intFromEnum(template_ref.proc_base),
-                .template = @intFromEnum(template_ref.template),
+                .proc_base = @backingInt(template_ref.proc_base),
+                .template = @backingInt(template_ref.template),
             } },
             .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
             .evidence_digest = evidence_digest,
@@ -9747,10 +9748,10 @@ const Builder = struct {
         return .{
             .callable = .{ .nested_site = .{
                 .module = moduleDigestFromId(view.code_generation_key orelse view.key),
-                .owner_proc_base = @intFromEnum(nested.owner.proc_base),
-                .owner_template = @intFromEnum(nested.owner.template),
+                .owner_proc_base = @backingInt(nested.owner.proc_base),
+                .owner_template = @backingInt(nested.owner.template),
                 .owner_fn_digest = .{ .bytes = context_hasher.finalResult() },
-                .site = @intFromEnum(nested.site),
+                .site = @backingInt(nested.site),
                 .default_root_module = nested.default_root,
             } },
             .method_scope = moduleDigestFromId(self.moduleForId(method_scope).code_generation_key orelse method_scope),
@@ -9987,7 +9988,7 @@ const Builder = struct {
             }
             if (!try self.program.types.typeEql(&self.program.names, existing.ty, use.ty)) continue;
 
-            const id: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(index)));
+            const id: Common.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             try self.static_data_ids.put(use, id);
             return id;
         }
@@ -10000,7 +10001,7 @@ const Builder = struct {
             .node = node,
             .checked_type = checked_type,
         });
-        if (@intFromEnum(id) != self.static_data_uses.items.len) {
+        if (@backingInt(id) != self.static_data_uses.items.len) {
             Common.invariant("Monotype static-data use index diverged from program id");
         }
         self.static_data_uses.appendAssumeCapacity(use);
@@ -10642,7 +10643,7 @@ const Builder = struct {
             // reference carries the declaring module's content identity so a
             // stored function value built from it stays resolvable outside
             // materialization context (const-store restore).
-            .default_root = switch (view.nested_proc_sites.sites[@intFromEnum(site)].owner) {
+            .default_root = switch (view.nested_proc_sites.sites[@backingInt(site)].owner) {
                 .template => null,
                 .default_root => .{ .bytes = view.module_identity.stable_hash },
             },
@@ -10682,7 +10683,7 @@ const Builder = struct {
             }
             Common.invariant("nested function expression reached Monotype without a checked nested function site");
         };
-        if (@intFromEnum(site) >= view.nested_proc_sites.sites.len) {
+        if (@backingInt(site) >= view.nested_proc_sites.sites.len) {
             Common.invariant("nested function site id was outside the CheckedModule procedure-site table");
         }
         return site;
@@ -10799,7 +10800,7 @@ const Builder = struct {
                     self.countBodyDiagnostic("nested_lookup_probes");
                     const spec = &source_ctx.draft.nested_specs.items[raw_spec];
                     if (signature_relation == .exact_graph and
-                        source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                        source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                     {
                         continue;
                     }
@@ -10829,7 +10830,7 @@ const Builder = struct {
                         if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                         if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                         if (signature_relation == .exact_graph and
-                            source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                            source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                         {
                             continue;
                         }
@@ -10866,7 +10867,7 @@ const Builder = struct {
                             if (!draftCaptureEntryGuardsMatch(source_ctx.graph, spec.capture_entry_guards, capture_entry_guards)) continue;
                             if (!std.meta.eql(spec.lexical_owner, source_ctx.draft.current_owner)) continue;
                             if (signature_relation == .exact_graph and
-                                source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                             {
                                 continue;
                             }
@@ -10902,7 +10903,7 @@ const Builder = struct {
                 if (spec.state != .lowering) continue;
                 if (spec.request_fn_ty != null) continue;
                 if (signature_relation == .exact_graph and
-                    source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation != .exact_graph)
+                    source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation != .exact_graph)
                 {
                     continue;
                 }
@@ -10947,7 +10948,7 @@ const Builder = struct {
                 }
             }
             if (signature_relation == .exact_graph) {
-                source_ctx.draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation = .exact_graph;
+                source_ctx.draft.fns.items[@backingInt(spec.fn_id)].signature_relation = .exact_graph;
             }
             for (spec.capture_entry_guards, capture_entry_guards) |stored, requested| {
                 if (!source_ctx.graph.sameClass(stored, requested)) {
@@ -11045,7 +11046,7 @@ const Builder = struct {
         const root_node = try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
-            const raw_site = @intFromEnum(nested.site);
+            const raw_site = @backingInt(nested.site);
             if (raw_site >= nested_ctx.view.nested_proc_sites.sites.len) {
                 Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
             }
@@ -11097,7 +11098,7 @@ const Builder = struct {
         );
         const completed_fn_ret = (try draft.nested_ctx.graph.functionNodes(completed_fn_node)).ret;
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
-        var nested_fn_template = source_ctx.draft.fns.items[@intFromEnum(draft.fn_id)].source;
+        var nested_fn_template = source_ctx.draft.fns.items[@backingInt(draft.fn_id)].source;
         nested_fn_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
         _ = try source_ctx.draft.addNestedDef(.{
             .symbol = draft.symbol,
@@ -11107,7 +11108,7 @@ const Builder = struct {
             .body = lowered.body,
             .ret = completed_ret_cell,
         });
-        source_ctx.draft.fns.items[@intFromEnum(draft.fn_id)].source = nested_fn_template;
+        source_ctx.draft.fns.items[@backingInt(draft.fn_id)].source = nested_fn_template;
         source_ctx.draft.nested_specs.items[draft.spec_index].request_fn_node = completed_fn_node;
         if (try source_ctx.graph.typeIsResolved(completed_fn_node)) {
             const completed_fn_ty = try source_ctx.activeTypeFromNode(completed_fn_node);
@@ -11186,31 +11187,31 @@ const Builder = struct {
         }
 
         fn retained(self: *const DraftCoreMaps, kind: DraftCoreKind, index: usize) bool {
-            return self.values[@intFromEnum(kind)][index] != std.math.maxInt(u32);
+            return self.values[@backingInt(kind)][index] != std.math.maxInt(u32);
         }
     };
 
     fn draftCoreBases(self: *Builder) DraftCoreLengths {
         var bases: DraftCoreLengths = @splat(0);
-        bases[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.program.stringLiteralCount());
-        bases[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.program.comptimeSiteCount());
-        bases[@intFromEnum(DraftCoreKind.expr_ids)] = @intCast(self.program.exprIdCount());
-        bases[@intFromEnum(DraftCoreKind.pat_ids)] = @intCast(self.program.patIdCount());
-        bases[@intFromEnum(DraftCoreKind.stmt_ids)] = @intCast(self.program.stmtIdCount());
-        bases[@intFromEnum(DraftCoreKind.field_exprs)] = @intCast(self.program.fieldExprCount());
-        bases[@intFromEnum(DraftCoreKind.fn_def_captures)] = @intCast(self.program.fnDefCaptureCount());
-        bases[@intFromEnum(DraftCoreKind.record_destructs)] = @intCast(self.program.recordDestructCount());
-        bases[@intFromEnum(DraftCoreKind.str_pattern_steps)] = @intCast(self.program.strPatternStepCount());
-        bases[@intFromEnum(DraftCoreKind.branches)] = @intCast(self.program.branchCount());
-        bases[@intFromEnum(DraftCoreKind.if_branches)] = @intCast(self.program.ifBranchCount());
-        bases[@intFromEnum(DraftCoreKind.locals)] = @intCast(self.program.localCount());
-        bases[@intFromEnum(DraftCoreKind.typed_locals)] = @intCast(self.program.typedLocalCount());
-        bases[@intFromEnum(DraftCoreKind.pats)] = @intCast(self.program.patCount());
-        bases[@intFromEnum(DraftCoreKind.exprs)] = @intCast(self.program.exprCount());
-        bases[@intFromEnum(DraftCoreKind.stmts)] = @intCast(self.program.stmtCount());
-        bases[@intFromEnum(DraftCoreKind.roots)] = @intCast(self.program.roots.len());
-        bases[@intFromEnum(DraftCoreKind.layout_requests)] = @intCast(self.program.layoutRequestCount());
-        bases[@intFromEnum(DraftCoreKind.runtime_schema_requests)] = @intCast(self.program.runtimeSchemaRequestCount());
+        bases[@backingInt(DraftCoreKind.string_literals)] = @intCast(self.program.stringLiteralCount());
+        bases[@backingInt(DraftCoreKind.comptime_sites)] = @intCast(self.program.comptimeSiteCount());
+        bases[@backingInt(DraftCoreKind.expr_ids)] = @intCast(self.program.exprIdCount());
+        bases[@backingInt(DraftCoreKind.pat_ids)] = @intCast(self.program.patIdCount());
+        bases[@backingInt(DraftCoreKind.stmt_ids)] = @intCast(self.program.stmtIdCount());
+        bases[@backingInt(DraftCoreKind.field_exprs)] = @intCast(self.program.fieldExprCount());
+        bases[@backingInt(DraftCoreKind.fn_def_captures)] = @intCast(self.program.fnDefCaptureCount());
+        bases[@backingInt(DraftCoreKind.record_destructs)] = @intCast(self.program.recordDestructCount());
+        bases[@backingInt(DraftCoreKind.str_pattern_steps)] = @intCast(self.program.strPatternStepCount());
+        bases[@backingInt(DraftCoreKind.branches)] = @intCast(self.program.branchCount());
+        bases[@backingInt(DraftCoreKind.if_branches)] = @intCast(self.program.ifBranchCount());
+        bases[@backingInt(DraftCoreKind.locals)] = @intCast(self.program.localCount());
+        bases[@backingInt(DraftCoreKind.typed_locals)] = @intCast(self.program.typedLocalCount());
+        bases[@backingInt(DraftCoreKind.pats)] = @intCast(self.program.patCount());
+        bases[@backingInt(DraftCoreKind.exprs)] = @intCast(self.program.exprCount());
+        bases[@backingInt(DraftCoreKind.stmts)] = @intCast(self.program.stmtCount());
+        bases[@backingInt(DraftCoreKind.roots)] = @intCast(self.program.roots.len());
+        bases[@backingInt(DraftCoreKind.layout_requests)] = @intCast(self.program.layoutRequestCount());
+        bases[@backingInt(DraftCoreKind.runtime_schema_requests)] = @intCast(self.program.runtimeSchemaRequestCount());
         return bases;
     }
 
@@ -11337,7 +11338,7 @@ const Builder = struct {
         try self.resolveDraftConstUseReservations(body_draft);
 
         for (body_draft.deferred_const_uses.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred const reservation was not filled before body sealing");
             }
         }
@@ -11347,17 +11348,17 @@ const Builder = struct {
             }
         }
         for (body_draft.deferred_structural_serializations.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data != .pending_deferred) {
                 Common.invariant("deferred structural serialization reservation was filled before final graph sealing");
             }
         }
         for (body_draft.deferred_stored_codec_restores.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data != .pending_deferred) {
                 Common.invariant("deferred stored codec restore reservation was filled before final graph sealing");
             }
         }
         for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data != .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data != .pending_deferred) {
                 Common.invariant("deferred call-site intrinsic reservation was filled before final graph sealing");
             }
         }
@@ -11402,8 +11403,8 @@ const Builder = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
         var ctx = try BodyContext.initWithMethodScope(
             self.allocator,
@@ -11433,12 +11434,12 @@ const Builder = struct {
                 break :blk try ctx.restoredHoistedConstAtNode(entry, boundary.witness_node);
             },
         };
-        const restored_expr = body_draft.exprs.items[@intFromEnum(restored)];
+        const restored_expr = body_draft.exprs.items[@backingInt(restored)];
         const restored_node = try restored_expr.ty.toGraphNode(graph);
         try relateRequestComponent(graph, boundary.witness_node, restored_node);
         try relateRequestComponent(graph, boundary.request_node, boundary.witness_node);
-        const restored_proof = body_draft.expr_impossibility_proofs.items[@intFromEnum(restored)];
-        body_draft.impossibility_proofs.items[@intFromEnum(boundary.proof_reservation)] =
+        const restored_proof = body_draft.expr_impossibility_proofs.items[@backingInt(restored)];
+        body_draft.impossibility_proofs.items[@backingInt(boundary.proof_reservation)] =
             if (restored_proof) |proof| .{ .forward = proof } else .never;
         body_draft.deferred_const_uses.items[boundary_index].restored_source = restored;
     }
@@ -11473,7 +11474,7 @@ const Builder = struct {
         for (body_draft.deferred_const_uses.items) |boundary| {
             const restored = boundary.restored_source orelse
                 Common.invariant("deferred const reservation had no explicit restored source");
-            const reservation_index = @intFromEnum(boundary.expr);
+            const reservation_index = @backingInt(boundary.expr);
             if (body_draft.exprs.items[reservation_index].data != .pending_deferred) {
                 Common.invariant("deferred const reservation was filled more than once");
             }
@@ -11487,7 +11488,7 @@ const Builder = struct {
         }
 
         for (body_draft.active_const_bindings.items) |active| {
-            const reservation_index = @intFromEnum(active.reservation);
+            const reservation_index = @backingInt(active.reservation);
             if (body_draft.exprs.items[reservation_index].data != .pending_deferred) continue;
             const restored = active.restored_source orelse
                 Common.invariant("active const reservation had no explicit restored source");
@@ -11514,8 +11515,8 @@ const Builder = struct {
     ) Allocator.Error!void {
         var depth: usize = 0;
         var cursor = start;
-        while (body_draft.exprs.items[@intFromEnum(cursor)].data == .pending_deferred) {
-            const cursor_index = @intFromEnum(cursor);
+        while (body_draft.exprs.items[@backingInt(cursor)].data == .pending_deferred) {
+            const cursor_index = @backingInt(cursor);
             switch (states[cursor_index]) {
                 .unseen => {
                     states[cursor_index] = .visiting;
@@ -11532,10 +11533,10 @@ const Builder = struct {
         while (depth > 0) {
             depth -= 1;
             const reservation = stack[depth];
-            const reservation_index = @intFromEnum(reservation);
+            const reservation_index = @backingInt(reservation);
             const restored = sources[reservation_index] orelse
                 Common.invariant("pending const reservation lost its explicit dependency");
-            const restored_index = @intFromEnum(restored);
+            const restored_index = @backingInt(restored);
             const restored_expr = body_draft.exprs.items[restored_index];
             if (restored_expr.data == .pending_deferred) {
                 Common.invariant("deferred const dependency was not resolved before its consumer");
@@ -11565,8 +11566,8 @@ const Builder = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
         var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
@@ -11721,7 +11722,7 @@ const Builder = struct {
             try self.emitDraftStructuralEq(body_draft, graph, sealer, boundary_index, boundary);
         }
         for (body_draft.deferred_structural_eqs.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred structural equality emission plan did not fill its reservation");
             }
         }
@@ -11746,8 +11747,8 @@ const Builder = struct {
             defer self.current_loc = saved_loc;
             const saved_region = self.current_region;
             defer self.current_region = saved_region;
-            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
             var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
@@ -11771,18 +11772,18 @@ const Builder = struct {
                 .encoder_for => try ctx.lowerStructuralEncoderFor(boundary.plan, callable_ty, callable.ret, &ctx, &pre_lowered, shape_ty),
                 .value, .equality, .hash, .map, .map_effectful => Common.invariant("non-serialization dispatch reached deferred structural serialization emission"),
             };
-            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
             if (!try ctx.typeStore().typeEql(ctx.nameStore(), callable.ret, lowered_ty)) {
                 Common.invariant("deferred structural serialization changed its sealed result type");
             }
             lowered_expr.ty = .{ .sealed = callable.ret };
-            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
+            body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
+                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
         for (body_draft.deferred_structural_serializations.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred structural serialization did not fill its reservation");
             }
         }
@@ -11811,8 +11812,8 @@ const Builder = struct {
             defer self.current_loc = saved_loc;
             const saved_region = self.current_region;
             defer self.current_region = saved_region;
-            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
             var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
@@ -11835,8 +11836,8 @@ const Builder = struct {
                 .encoder => try ctx.emitStoredEncoderForRuntimeBody(boundary, sealer),
             };
 
-            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
-            const reserved_ty = try body_draft.exprs.items[@intFromEnum(boundary.expr)].ty.seal(graph, sealer);
+            var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
+            const reserved_ty = try body_draft.exprs.items[@backingInt(boundary.expr)].ty.seal(graph, sealer);
             // The emitter types its result at the request cell, which IS this
             // reservation's own cell, so comparing their seals would be
             // `sealNode(n) == sealNode(n)`. Guard the property that has
@@ -11851,12 +11852,12 @@ const Builder = struct {
                 .sealed => Common.invariant("deferred stored codec restore emitted a pre-sealed body"),
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
-            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
+            body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
+                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
         for (body_draft.deferred_stored_codec_restores.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred stored codec restore did not fill its reservation");
             }
         }
@@ -11883,8 +11884,8 @@ const Builder = struct {
             defer self.current_loc = saved_loc;
             const saved_region = self.current_region;
             defer self.current_region = saved_region;
-            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
             var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
@@ -11907,20 +11908,20 @@ const Builder = struct {
                 .callable_node = boundary.callable_node,
                 .deferred_body = .{ .pre_lowered_args = boundary.pre_lowered_args },
             } })).exprValue();
-            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
-            const reserved_cell = body_draft.exprs.items[@intFromEnum(boundary.expr)].ty;
+            var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
+            const reserved_cell = body_draft.exprs.items[@backingInt(boundary.expr)].ty;
             const reserved_ty = try reserved_cell.seal(graph, sealer);
             const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
             if (!try ctx.typeStore().typeEql(ctx.nameStore(), reserved_ty, lowered_ty)) {
                 Common.invariant("deferred call-site intrinsic changed its sealed result type");
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
-            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
-            body_draft.expr_impossibility_proofs.items[@intFromEnum(boundary.expr)] =
-                body_draft.expr_impossibility_proofs.items[@intFromEnum(lowered)];
+            body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
+                body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
         for (body_draft.deferred_callsite_intrinsics.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred call-site intrinsic did not fill its reservation");
             }
         }
@@ -11959,8 +11960,8 @@ const Builder = struct {
             defer self.current_loc = saved_loc;
             const saved_region = self.current_region;
             defer self.current_region = saved_region;
-            self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-            self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+            self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+            self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
             var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
             defer ctx.deinit();
@@ -11975,12 +11976,12 @@ const Builder = struct {
                 const value_ty = try sealer.sealNode(boundary.value_node);
                 break :blk try ctx.inspectCall(boundary.value, value_ty, ret_ty);
             };
-            var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+            var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
             lowered_expr.ty = .{ .sealed = ret_ty };
-            body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
+            body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
         }
         for (body_draft.deferred_inspects.items) |boundary| {
-            if (body_draft.exprs.items[@intFromEnum(boundary.expr)].data == .pending_deferred) {
+            if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
                 Common.invariant("deferred inspect emission did not fill its reservation");
             }
         }
@@ -12001,8 +12002,8 @@ const Builder = struct {
         defer self.current_loc = saved_loc;
         const saved_region = self.current_region;
         defer self.current_region = saved_region;
-        self.current_loc = body_draft.expr_locs.items[@intFromEnum(boundary.expr)];
-        self.current_region = body_draft.expr_regions.items[@intFromEnum(boundary.expr)];
+        self.current_loc = body_draft.expr_locs.items[@backingInt(boundary.expr)];
+        self.current_region = body_draft.expr_regions.items[@backingInt(boundary.expr)];
 
         var ctx = try self.deferredBoundaryContext(body_draft, graph, boundary);
         defer ctx.deinit();
@@ -12048,13 +12049,13 @@ const Builder = struct {
                 ret_ty,
             ),
         };
-        var lowered_expr = body_draft.exprs.items[@intFromEnum(lowered)];
+        var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
         const lowered_ty = try lowered_expr.ty.seal(graph, sealer);
         if (!try ctx.typeStore().typeEql(ctx.nameStore(), ret_ty, lowered_ty)) {
             Common.invariant("deferred structural equality changed its sealed result type");
         }
         lowered_expr.ty = .{ .sealed = ret_ty };
-        body_draft.exprs.items[@intFromEnum(boundary.expr)] = lowered_expr;
+        body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
     }
 
     fn resolveDeferredTemplateSpecValueAtType(
@@ -12067,7 +12068,7 @@ const Builder = struct {
         body_scheduling: TemplateBodyScheduling,
         codec_contract: ?SealedCodecContractContext,
     ) Allocator.Error!Ast.FnSlot {
-        const draft_fn = &body_draft.fns.items[@intFromEnum(spec.fn_id)];
+        const draft_fn = &body_draft.fns.items[@backingInt(spec.fn_id)];
         draft_fn.source.mono_fn_ty = .{ .sealed = draft_fn_ty };
         const signature_relation = draft_fn.signature_relation;
 
@@ -12283,7 +12284,7 @@ const Builder = struct {
 
         var next_fn: u32 = @intCast(self.program.fnCount());
         for (body_draft.fns.items, 0..) |fn_, raw_index| {
-            const draft_id: DraftFnId = @enumFromInt(@as(u32, @intCast(raw_index)));
+            const draft_id: DraftFnId = @fromBackingInt(@intCast(@as(u32, @intCast(raw_index))));
             self.countBodyDiagnostic("draft_commit_lookup_steps");
             const template_spec = template_by_fn.get(draft_id);
             if (template_spec) |spec| {
@@ -12343,7 +12344,7 @@ const Builder = struct {
             if (lexical_owner) |owner| switch (owner) {
                 .root, .reserved_fn => {},
                 .draft_fn => |parent| {
-                    const parent_raw = @intFromEnum(parent);
+                    const parent_raw = @backingInt(parent);
                     if (parent_raw >= raw_index) {
                         Common.invariant("nested draft function did not follow its explicit lexical owner");
                     }
@@ -12383,7 +12384,7 @@ const Builder = struct {
                                     Common.invariant("duplicate draft specialization had no retained function slot");
                                 switch (prior_slot) {
                                     .local => |retained_fn| {
-                                        if (@intFromEnum(retained_fn) >= self.program.fnCount()) {
+                                        if (@backingInt(retained_fn) >= self.program.fnCount()) {
                                             for (fn_slots[0..raw_index], emit_fns[0..raw_index], 0..) |candidate_slot, emits, candidate_index| {
                                                 if (emits and std.meta.eql(candidate_slot, prior_slot)) {
                                                     body_draft.fns.items[candidate_index].signature_relation = .exact_graph;
@@ -12441,7 +12442,7 @@ const Builder = struct {
                             self.countBodyDiagnostic("lowered_nested_bodies_discarded");
                         }
                     } else {
-                        fn_slots[raw_index] = .{ .local = @enumFromInt(next_fn) };
+                        fn_slots[raw_index] = .{ .local = @fromBackingInt(@intCast(next_fn)) };
                         next_fn += 1;
                         emit_fns[raw_index] = true;
                     }
@@ -12452,7 +12453,7 @@ const Builder = struct {
                     }
                 }
             } else {
-                fn_slots[raw_index] = .{ .local = @enumFromInt(next_fn) };
+                fn_slots[raw_index] = .{ .local = @fromBackingInt(@intCast(next_fn)) };
                 next_fn += 1;
                 emit_fns[raw_index] = true;
             }
@@ -12465,7 +12466,7 @@ const Builder = struct {
                 emit_defs[raw_index] = false;
                 continue;
             }
-            def_ids[raw_index] = @enumFromInt(next_def);
+            def_ids[raw_index] = @fromBackingInt(@intCast(next_def));
             next_def += 1;
             emit_defs[raw_index] = true;
         }
@@ -12473,7 +12474,7 @@ const Builder = struct {
         for (body_draft.nested_defs.items, 0..) |def, index| {
             emit_nested_defs[index] = switch (def.fn_id) {
                 .final => true,
-                .draft => |draft_fn| emit_fns[@intFromEnum(draft_fn)],
+                .draft => |draft_fn| emit_fns[@backingInt(draft_fn)],
             };
         }
         const core_maps = try self.buildDraftCoreMaps(body_draft, emit_fns);
@@ -12907,7 +12908,7 @@ const Builder = struct {
                 }
                 self.promoteFnSignatureRelation(
                     fn_id,
-                    body_draft.fns.items[@intFromEnum(spec.fn_id)].signature_relation,
+                    body_draft.fns.items[@backingInt(spec.fn_id)].signature_relation,
                 );
                 continue;
             }
@@ -13263,9 +13264,9 @@ const Builder = struct {
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!Ast.ExprId {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
-        const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
+        const fn_value = store_view.const_store.getFn(@fromBackingInt(@intCast(raw)));
         if (fn_value.fn_def == .parser_runtime) {
             return try self.restoreConstParserRuntimeFnExpr(store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
@@ -13693,8 +13694,8 @@ const Builder = struct {
         return .{
             .store_module_bytes = store_view.key.bytes,
             .type_module_bytes = type_view.key.bytes,
-            .node = @intFromEnum(node),
-            .mono_ty = @intFromEnum(ty),
+            .node = @backingInt(node),
+            .mono_ty = @backingInt(ty),
         };
     }
 
@@ -14974,7 +14975,7 @@ const DraftDef = struct {
 const IdentitySeed = struct {
     kind: []const u8,
     cells: [4]?DraftTypeCell = .{ null, null, null, null },
-    extra: [32]u8 = [_]u8{0} ** 32,
+    extra: [32]u8 = @as([32]u8, @splat(0)),
 };
 
 /// Content identity of a sealed generated definition.
@@ -15104,7 +15105,7 @@ fn draftNestedSpecRequestNode(
     spec: *const DraftNestedSpec,
 ) Allocator.Error!NodeId {
     return switch (spec.state) {
-        .lowered => try draft.fns.items[@intFromEnum(spec.fn_id)].source.mono_fn_ty.toGraphNode(graph),
+        .lowered => try draft.fns.items[@backingInt(spec.fn_id)].source.mono_fn_ty.toGraphNode(graph),
         .deferred, .lowering, .resolved => spec.request_fn_node,
     };
 }
@@ -15236,8 +15237,8 @@ const DraftTemplateFamilyAddress = struct {
     fn init(template_ref: names.ProcTemplate, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftTemplateFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(template_ref).bytes,
-            .proc_base = @intFromEnum(template_ref.proc_base),
-            .template = @intFromEnum(template_ref.template),
+            .proc_base = @backingInt(template_ref.proc_base),
+            .template = @backingInt(template_ref.template),
             .method_scope = method_scope.bytes,
             .source_fn_key = source_fn_key.bytes,
         };
@@ -15290,10 +15291,10 @@ const DraftNestedFamilyAddress = struct {
     fn init(nested: Ast.NestedFn, method_scope: checked.ModuleId, source_fn_key: names.TypeDigest) DraftNestedFamilyAddress {
         return .{
             .module = names.procTemplateModuleDigest(nested.owner).bytes,
-            .owner_proc_base = @intFromEnum(nested.owner.proc_base),
-            .owner_template = @intFromEnum(nested.owner.template),
+            .owner_proc_base = @backingInt(nested.owner.proc_base),
+            .owner_template = @backingInt(nested.owner.template),
             .owner_fn_key = nested.context_fn_key.bytes,
-            .site = @intFromEnum(nested.site),
+            .site = @backingInt(nested.site),
             .default_root = nested.default_root != null,
             .default_root_module = if (nested.default_root) |identity| identity.bytes else @splat(0),
             .method_scope = method_scope.bytes,
@@ -15413,7 +15414,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             } orelse return null;
             return .{
                 .first = candidates.first,
-                .rest = if (candidates.overflow == .none) &.{} else self.overflow_lists.items[@intFromEnum(candidates.overflow)].items,
+                .rest = if (candidates.overflow == .none) &.{} else self.overflow_lists.items[@backingInt(candidates.overflow)].items,
             };
         }
 
@@ -15431,7 +15432,7 @@ fn DraftSpecLookup(comptime Family: type) type {
             // Reserve before updating either index so allocation failure cannot
             // leave a registered candidate absent from the prefix inventory.
             const pairs: ?*std.ArrayList(OpenPair) = switch (address) {
-                .open => |key| &self.prefixes.values()[@intFromEnum(key.prefix)],
+                .open => |key| &self.prefixes.values()[@backingInt(key.prefix)],
                 .digest => null,
             };
             if (pairs) |list| try list.ensureUnusedCapacity(self.allocator, 1);
@@ -15443,15 +15444,15 @@ fn DraftSpecLookup(comptime Family: type) type {
             }
             if (entry.value_ptr.first == raw_spec) return;
             if (entry.value_ptr.overflow != .none) {
-                const list = &self.overflow_lists.items[@intFromEnum(entry.value_ptr.overflow)];
+                const list = &self.overflow_lists.items[@backingInt(entry.value_ptr.overflow)];
                 for (list.items) |existing| if (existing == raw_spec) return;
                 try list.append(self.allocator, raw_spec);
             } else {
-                if (self.overflow_lists.items.len == @intFromEnum(OverflowId.none)) return error.OutOfMemory;
+                if (self.overflow_lists.items.len == @backingInt(OverflowId.none)) return error.OutOfMemory;
                 var list: std.ArrayList(u32) = .empty;
                 errdefer list.deinit(self.allocator);
                 try list.append(self.allocator, raw_spec);
-                const overflow: OverflowId = @enumFromInt(self.overflow_lists.items.len);
+                const overflow: OverflowId = @fromBackingInt(@intCast(self.overflow_lists.items.len));
                 try self.overflow_lists.append(self.allocator, list);
                 entry.value_ptr.overflow = overflow;
             }
@@ -15464,11 +15465,11 @@ fn DraftSpecLookup(comptime Family: type) type {
                 .evidence_digest = evidence_digest,
             });
             if (!entry.found_existing) entry.value_ptr.* = .empty;
-            return @enumFromInt(entry.index);
+            return @fromBackingInt(@intCast(entry.index));
         }
 
         fn openPairs(self: *const Self, prefix: PrefixId) []const OpenPair {
-            return self.prefixes.values()[@intFromEnum(prefix)].items;
+            return self.prefixes.values()[@backingInt(prefix)].items;
         }
     };
 }
@@ -15872,7 +15873,7 @@ const InstantiatedGeneratedCodecCall = struct {
         callable: static_dispatch.EvidenceNodeId,
         structural: static_dispatch.GeneratedCodecDerivationId,
     },
-    debug_consumed: if (@import("builtin").mode == .Debug) bool else void = if (@import("builtin").mode == .Debug) false else {},
+    debug_consumed: if (@import("builtin").mode == .debug) bool else void = if (@import("builtin").mode == .debug) false else {},
 };
 
 /// One unique checker-authored generated-call role. Repeated source
@@ -16049,7 +16050,7 @@ const FrozenPreparedCodecCalls = struct {
                     if (!entry.found_existing) entry.value_ptr.* = .empty;
                     var equivalent = false;
                     for (entry.value_ptr.items) |previous_id| {
-                        const previous = calls[@intFromEnum(previous_id)];
+                        const previous = calls[@backingInt(previous_id)];
                         const same_shape = if (call.subject_bearing)
                             try type_store.typeEql(name_store, previous.shape_ty, call.shape_ty)
                         else
@@ -16071,12 +16072,12 @@ const FrozenPreparedCodecCalls = struct {
                         equivalent = true;
                         break;
                     }
-                    if (!equivalent) try entry.value_ptr.append(allocator, @enumFromInt(index));
+                    if (!equivalent) try entry.value_ptr.append(allocator, @fromBackingInt(@intCast(index)));
                 },
                 .custom => {
                     const entry = try custom_call_ids.getOrPut(.{ .kind = call.kind, .shape_ty = call.shape_ty });
                     if (entry.found_existing) Common.invariant("frozen codec plan had multiple custom calls for one shape");
-                    entry.value_ptr.* = @enumFromInt(index);
+                    entry.value_ptr.* = @fromBackingInt(@intCast(index));
                 },
             }
         }
@@ -16111,7 +16112,7 @@ const FrozenPreparedCodecCalls = struct {
         }) orelse return null;
         var found: ?*const FrozenPreparedCodecCall = null;
         for (ids.items) |id| {
-            const index = @intFromEnum(id);
+            const index = @backingInt(id);
             if (index >= self.calls.len) Common.invariant("prepared codec call identity was outside its frozen plan");
             const call = &self.calls[index];
             if (shape_ty) |shape| {
@@ -16131,7 +16132,7 @@ const FrozenPreparedCodecCalls = struct {
         shape_ty: Type.TypeId,
     ) ?*const FrozenPreparedCodecCall {
         const id = self.custom_call_ids.get(.{ .kind = kind, .shape_ty = shape_ty }) orelse return null;
-        const index = @intFromEnum(id);
+        const index = @backingInt(id);
         if (index >= self.calls.len) Common.invariant("prepared codec call identity was outside its frozen plan");
         return &self.calls[index];
     }
@@ -16266,7 +16267,7 @@ fn runtimeDemandGuardFrame(
     draft: *const BodyDraftStore,
     id: RuntimeDemandGuardFrameId,
 ) *const RuntimeDemandGuardFrame {
-    const index = @intFromEnum(id);
+    const index = @backingInt(id);
     if (index >= draft.runtime_demand_guard_frames.items.len) {
         Common.invariant("runtime-demand guard frame ID was outside the draft frame store");
     }
@@ -16293,7 +16294,7 @@ fn pushRuntimeDemandGuardFrame(
     address: RuntimeDemandGuardFrameAddress,
     proof: RuntimeImpossibilityProofId,
 ) Allocator.Error!RuntimeDemandGuardFrameStack {
-    const id: RuntimeDemandGuardFrameId = @enumFromInt(draft.runtime_demand_guard_frames.items.len);
+    const id: RuntimeDemandGuardFrameId = @fromBackingInt(@intCast(draft.runtime_demand_guard_frames.items.len));
     try draft.runtime_demand_guard_frames.append(draft.allocator, .{
         .parent = existing.head,
         .address = address,
@@ -16359,7 +16360,7 @@ const FrozenRuntimeImpossibilityProofEvaluator = struct {
     const Eval = collections.AnyAll.Evaluation(RuntimeImpossibilityProofId, FrozenRuntimeImpossibilityProofEvaluator);
 
     pub fn enter(self: *FrozenRuntimeImpossibilityProofEvaluator, items: Eval.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Eval.Expansion {
-        const index = @intFromEnum(proof_id);
+        const index = @backingInt(proof_id);
         if (index >= self.draft.impossibility_proofs.items.len) {
             Common.invariant("runtime impossibility proof referenced a missing proof node");
         }
@@ -16391,7 +16392,7 @@ const FrozenRuntimeImpossibilityProofEvaluator = struct {
     }
 
     pub fn exit(self: *FrozenRuntimeImpossibilityProofEvaluator, proof_id: RuntimeImpossibilityProofId, result: ?bool) Allocator.Error!void {
-        const index = @intFromEnum(proof_id);
+        const index = @backingInt(proof_id);
         self.active[index] = false;
         if (result) |decided| self.memo[index] = decided;
     }
@@ -16450,24 +16451,24 @@ const SealedNestedSpec = struct {
 };
 
 fn assertCoordinatorIntentGraphFree(comptime T: type) void {
-    inline for (std.meta.fields(T)) |field| {
-        if (field.type == NodeId or
-            field.type == InstGraph or
-            field.type == GraphTypeFinals or
-            field.type == Type.Store.TypeRelocation or
-            field.type == ArgumentClassSnapshot)
+    inline for (@typeInfo(T).@"struct".field_names) |field_name| {
+        if (@FieldType(T, field_name) == NodeId or
+            @FieldType(T, field_name) == InstGraph or
+            @FieldType(T, field_name) == GraphTypeFinals or
+            @FieldType(T, field_name) == Type.Store.TypeRelocation or
+            @FieldType(T, field_name) == ArgumentClassSnapshot)
         {
-            @compileError(@typeName(T) ++ "." ++ field.name ++ " retains graph-qualified state");
+            @compileError(@typeName(T) ++ "." ++ field_name ++ " retains graph-qualified state");
         }
-        if (@typeInfo(field.type) == .pointer) {
-            const child = @typeInfo(field.type).pointer.child;
+        if (@typeInfo(@FieldType(T, field_name)) == .pointer) {
+            const child = @typeInfo(@FieldType(T, field_name)).pointer.child;
             if (child == NodeId or
                 child == InstGraph or
                 child == GraphTypeFinals or
                 child == Type.Store.TypeRelocation or
                 child == ArgumentClassSnapshot)
             {
-                @compileError(@typeName(T) ++ "." ++ field.name ++ " retains graph-qualified storage");
+                @compileError(@typeName(T) ++ "." ++ field_name ++ " retains graph-qualified storage");
             }
         }
     }
@@ -16557,7 +16558,7 @@ fn draftTemplateSpecVisibleFrom(draft: *const BodyDraftStore, spec: *const Draft
 fn draftOwnerRetained(owner: DraftOwner, emit_fns: []const bool) bool {
     return switch (owner) {
         .root, .reserved_fn => true,
-        .draft_fn => |fn_id| emit_fns[@intFromEnum(fn_id)],
+        .draft_fn => |fn_id| emit_fns[@backingInt(fn_id)],
     };
 }
 
@@ -16585,7 +16586,7 @@ const DraftCoreKind = enum(u8) {
     runtime_schema_requests,
 };
 
-const draft_core_kind_count = @typeInfo(DraftCoreKind).@"enum".fields.len;
+const draft_core_kind_count = @typeInfo(DraftCoreKind).@"enum".field_names.len;
 const DraftCoreLengths = [draft_core_kind_count]u32;
 
 const DraftOwnerRun = struct {
@@ -16853,13 +16854,13 @@ const BodyDraftStore = struct {
     }
 
     fn relocateWorkerLocalSymbol(self: *const BodyDraftStore, symbol: *Common.Symbol, symbol_base: u32) void {
-        const local: u32 = @intFromEnum(symbol.*);
+        const local: u32 = @backingInt(symbol.*);
         if (local >= self.worker_local_symbol_count) {
             Common.compilerBug("Monotype body draft retained a symbol outside its worker-local domain");
         }
         const relocated = std.math.add(u32, symbol_base, local) catch
             Common.compilerBug("Monotype worker-local symbol relocation overflow");
-        symbol.* = @enumFromInt(relocated);
+        symbol.* = @fromBackingInt(@intCast(relocated));
     }
 
     /// Exhaustive symbol-bearing storage owned by a body draft. Symbols inside
@@ -17109,32 +17110,32 @@ const BodyDraftStore = struct {
 
     fn coreLengths(self: *const BodyDraftStore) DraftCoreLengths {
         var lengths: DraftCoreLengths = undefined;
-        lengths[@intFromEnum(DraftCoreKind.string_literals)] = @intCast(self.string_literals.items.len);
-        lengths[@intFromEnum(DraftCoreKind.comptime_sites)] = @intCast(self.comptime_sites.items.len);
-        lengths[@intFromEnum(DraftCoreKind.branch_regions)] = @intCast(self.branch_regions.items.len);
-        lengths[@intFromEnum(DraftCoreKind.expr_ids)] = @intCast(self.expr_ids.items.len);
-        lengths[@intFromEnum(DraftCoreKind.pat_ids)] = @intCast(self.pat_ids.items.len);
-        lengths[@intFromEnum(DraftCoreKind.stmt_ids)] = @intCast(self.stmt_ids.items.len);
-        lengths[@intFromEnum(DraftCoreKind.field_exprs)] = @intCast(self.field_exprs.items.len);
-        lengths[@intFromEnum(DraftCoreKind.fn_def_captures)] = @intCast(self.fn_def_captures.items.len);
-        lengths[@intFromEnum(DraftCoreKind.record_destructs)] = @intCast(self.record_destructs.items.len);
-        lengths[@intFromEnum(DraftCoreKind.str_pattern_steps)] = @intCast(self.str_pattern_steps.items.len);
-        lengths[@intFromEnum(DraftCoreKind.branches)] = @intCast(self.branches.items.len);
-        lengths[@intFromEnum(DraftCoreKind.if_branches)] = @intCast(self.if_branches.items.len);
-        lengths[@intFromEnum(DraftCoreKind.locals)] = @intCast(self.locals.items.len);
-        lengths[@intFromEnum(DraftCoreKind.typed_locals)] = @intCast(self.typed_locals.items.len);
-        lengths[@intFromEnum(DraftCoreKind.pats)] = @intCast(self.pats.items.len);
-        lengths[@intFromEnum(DraftCoreKind.exprs)] = @intCast(self.exprs.items.len);
-        lengths[@intFromEnum(DraftCoreKind.stmts)] = @intCast(self.stmts.items.len);
-        lengths[@intFromEnum(DraftCoreKind.proc_debug_names)] = @intCast(self.proc_debug_names.items.len);
-        lengths[@intFromEnum(DraftCoreKind.roots)] = @intCast(self.roots.items.len);
-        lengths[@intFromEnum(DraftCoreKind.layout_requests)] = @intCast(self.layout_requests.items.len);
-        lengths[@intFromEnum(DraftCoreKind.runtime_schema_requests)] = @intCast(self.runtime_schema_requests.items.len);
+        lengths[@backingInt(DraftCoreKind.string_literals)] = @intCast(self.string_literals.items.len);
+        lengths[@backingInt(DraftCoreKind.comptime_sites)] = @intCast(self.comptime_sites.items.len);
+        lengths[@backingInt(DraftCoreKind.branch_regions)] = @intCast(self.branch_regions.items.len);
+        lengths[@backingInt(DraftCoreKind.expr_ids)] = @intCast(self.expr_ids.items.len);
+        lengths[@backingInt(DraftCoreKind.pat_ids)] = @intCast(self.pat_ids.items.len);
+        lengths[@backingInt(DraftCoreKind.stmt_ids)] = @intCast(self.stmt_ids.items.len);
+        lengths[@backingInt(DraftCoreKind.field_exprs)] = @intCast(self.field_exprs.items.len);
+        lengths[@backingInt(DraftCoreKind.fn_def_captures)] = @intCast(self.fn_def_captures.items.len);
+        lengths[@backingInt(DraftCoreKind.record_destructs)] = @intCast(self.record_destructs.items.len);
+        lengths[@backingInt(DraftCoreKind.str_pattern_steps)] = @intCast(self.str_pattern_steps.items.len);
+        lengths[@backingInt(DraftCoreKind.branches)] = @intCast(self.branches.items.len);
+        lengths[@backingInt(DraftCoreKind.if_branches)] = @intCast(self.if_branches.items.len);
+        lengths[@backingInt(DraftCoreKind.locals)] = @intCast(self.locals.items.len);
+        lengths[@backingInt(DraftCoreKind.typed_locals)] = @intCast(self.typed_locals.items.len);
+        lengths[@backingInt(DraftCoreKind.pats)] = @intCast(self.pats.items.len);
+        lengths[@backingInt(DraftCoreKind.exprs)] = @intCast(self.exprs.items.len);
+        lengths[@backingInt(DraftCoreKind.stmts)] = @intCast(self.stmts.items.len);
+        lengths[@backingInt(DraftCoreKind.proc_debug_names)] = @intCast(self.proc_debug_names.items.len);
+        lengths[@backingInt(DraftCoreKind.roots)] = @intCast(self.roots.items.len);
+        lengths[@backingInt(DraftCoreKind.layout_requests)] = @intCast(self.layout_requests.items.len);
+        lengths[@backingInt(DraftCoreKind.runtime_schema_requests)] = @intCast(self.runtime_schema_requests.items.len);
         return lengths;
     }
 
     fn ownerForCore(self: *const BodyDraftStore, kind: DraftCoreKind, index: usize) DraftOwner {
-        const raw_kind = @intFromEnum(kind);
+        const raw_kind = @backingInt(kind);
         for (self.owner_runs.items) |owner_run| {
             if (index >= owner_run.starts[raw_kind] and index < owner_run.ends[raw_kind]) return owner_run.owner;
         }
@@ -17142,7 +17143,7 @@ const BodyDraftStore = struct {
     }
 
     fn currentOwnerOwnsCore(self: *const BodyDraftStore, kind: DraftCoreKind, index: usize) bool {
-        const raw_kind = @intFromEnum(kind);
+        const raw_kind = @backingInt(kind);
         if (index >= self.owner_starts[raw_kind]) return true;
         return std.meta.eql(self.ownerForCore(kind, index), self.current_owner);
     }
@@ -17155,14 +17156,14 @@ const BodyDraftStore = struct {
         module: checked.ModuleId,
         site: Common.LiteralRejectionSite,
     ) Allocator.Error!DraftComptimeValueRootId {
-        const position: Common.LiteralRootId = @enumFromInt(@as(u32, @intCast(self.literal_roots.items.len)));
+        const position: Common.LiteralRootId = @fromBackingInt(@intCast(@as(u32, @intCast(self.literal_roots.items.len))));
         const read = try self.addComptimeValueRoot(.{ .module = module, .root = .{ .literal = position }, .const_locator = null });
         try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .site = site, .read = read });
         return read;
     }
 
     fn addComptimeValueRoot(self: *BodyDraftStore, root: Common.ComptimeValueRoot) Allocator.Error!DraftComptimeValueRootId {
-        const id: DraftComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.items.len)));
+        const id: DraftComptimeValueRootId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_value_roots.items.len))));
         try self.comptime_value_roots.append(self.allocator, root);
         return id;
     }
@@ -17174,7 +17175,7 @@ const BodyDraftStore = struct {
         root: DraftComptimeValueRootId,
     ) Allocator.Error!Common.ComptimeValueRootId {
         if (roots.get(root)) |id| return id;
-        const descriptor = self.comptime_value_roots.items[@intFromEnum(root)];
+        const descriptor = self.comptime_value_roots.items[@backingInt(root)];
         switch (descriptor.root) {
             .checked => {},
             // Committing the draft's literal roots commits their reads first.
@@ -17186,7 +17187,7 @@ const BodyDraftStore = struct {
     }
 
     fn addExpr(self: *BodyDraftStore, expr: DraftExpr) Allocator.Error!DraftExprId {
-        const id: DraftExprId = @enumFromInt(@as(u32, @intCast(self.exprs.items.len)));
+        const id: DraftExprId = @fromBackingInt(@intCast(@as(u32, @intCast(self.exprs.items.len))));
         try self.exprs.append(self.allocator, expr);
         try self.expr_impossibility_proofs.append(self.allocator, null);
         try self.expr_locs.append(self.allocator, base.SourceLoc.none);
@@ -17201,13 +17202,13 @@ const BodyDraftStore = struct {
         region: base.Region,
     ) Allocator.Error!DraftExprId {
         const id = try self.addExpr(expr);
-        self.expr_locs.items[@intFromEnum(id)] = loc;
-        self.expr_regions.items[@intFromEnum(id)] = region;
+        self.expr_locs.items[@backingInt(id)] = loc;
+        self.expr_regions.items[@backingInt(id)] = region;
         return id;
     }
 
     fn addFn(self: *BodyDraftStore, fn_: DraftFn) Allocator.Error!DraftFnId {
-        const id: DraftFnId = @enumFromInt(@as(u32, @intCast(self.fns.items.len)));
+        const id: DraftFnId = @fromBackingInt(@intCast(@as(u32, @intCast(self.fns.items.len))));
         var stored = fn_;
         stored.parent_owner = self.current_owner;
         try self.fns.append(self.allocator, stored);
@@ -17226,7 +17227,7 @@ const BodyDraftStore = struct {
                 .root, .reserved_fn => return false,
                 .draft_fn => |fn_id| {
                     if (fn_id == ancestor) return true;
-                    const raw = @intFromEnum(fn_id);
+                    const raw = @backingInt(fn_id);
                     if (raw >= self.fns.items.len) {
                         Common.invariant("draft owner ancestry referenced an unknown function");
                     }
@@ -17249,7 +17250,7 @@ const BodyDraftStore = struct {
                 .root => return false,
                 .reserved_fn => |fn_id| return fn_id == ancestor,
                 .draft_fn => |fn_id| {
-                    const raw = @intFromEnum(fn_id);
+                    const raw = @backingInt(fn_id);
                     if (raw >= self.fns.items.len) {
                         Common.invariant("draft owner ancestry referenced an unknown function");
                     }
@@ -17261,7 +17262,7 @@ const BodyDraftStore = struct {
     }
 
     fn reserveDef(self: *BodyDraftStore, owner: DraftOwner) Allocator.Error!DraftDefId {
-        const id: DraftDefId = @enumFromInt(@as(u32, @intCast(self.defs.items.len)));
+        const id: DraftDefId = @fromBackingInt(@intCast(@as(u32, @intCast(self.defs.items.len))));
         try self.defs.append(self.allocator, undefined);
         errdefer _ = self.defs.pop();
         try self.def_owners.append(self.allocator, owner);
@@ -17269,7 +17270,7 @@ const BodyDraftStore = struct {
     }
 
     fn setDef(self: *BodyDraftStore, id: DraftDefId, def: DraftDef) void {
-        const owner = self.def_owners.items[@intFromEnum(id)];
+        const owner = self.def_owners.items[@backingInt(id)];
         if (def.fn_id) |fn_id| switch (fn_id) {
             .draft => |draft_fn| if (!std.meta.eql(owner, DraftOwner{ .draft_fn = draft_fn })) {
                 Common.invariant("draft definition target disagreed with its explicit owner");
@@ -17278,24 +17279,24 @@ const BodyDraftStore = struct {
                 Common.invariant("final definition target disagreed with its explicit owner");
             },
         };
-        self.defs.items[@intFromEnum(id)] = def;
+        self.defs.items[@backingInt(id)] = def;
     }
 
     fn addNestedDef(self: *BodyDraftStore, def: DraftNestedDef) Allocator.Error!DraftNestedDefId {
-        const id: DraftNestedDefId = @enumFromInt(@as(u32, @intCast(self.nested_defs.items.len)));
+        const id: DraftNestedDefId = @fromBackingInt(@intCast(@as(u32, @intCast(self.nested_defs.items.len))));
         try self.nested_defs.append(self.allocator, def);
         return id;
     }
 
     fn addPat(self: *BodyDraftStore, pat: DraftPat) Allocator.Error!DraftPatId {
-        const id: DraftPatId = @enumFromInt(@as(u32, @intCast(self.pats.items.len)));
+        const id: DraftPatId = @fromBackingInt(@intCast(@as(u32, @intCast(self.pats.items.len))));
         try self.pats.append(self.allocator, pat);
         try self.pat_impossibility_proofs.append(self.allocator, null);
         return id;
     }
 
     fn addStmt(self: *BodyDraftStore, stmt: DraftStmt) Allocator.Error!DraftStmtId {
-        const id: DraftStmtId = @enumFromInt(@as(u32, @intCast(self.stmts.items.len)));
+        const id: DraftStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(self.stmts.items.len))));
         try self.stmts.append(self.allocator, stmt);
         try self.stmt_impossibility_proofs.append(self.allocator, null);
         try self.stmt_locs.append(self.allocator, base.SourceLoc.none);
@@ -17310,8 +17311,8 @@ const BodyDraftStore = struct {
         region: base.Region,
     ) Allocator.Error!DraftStmtId {
         const id = try self.addStmt(stmt);
-        self.stmt_locs.items[@intFromEnum(id)] = loc;
-        self.stmt_regions.items[@intFromEnum(id)] = region;
+        self.stmt_locs.items[@backingInt(id)] = loc;
+        self.stmt_regions.items[@backingInt(id)] = region;
         return id;
     }
 
@@ -17322,11 +17323,11 @@ const BodyDraftStore = struct {
         binder: ?checked.PatternBinderId,
         inherited_capture_id: ?checked.CaptureId,
     ) Allocator.Error!DraftLocalId {
-        const id: DraftLocalId = @enumFromInt(@as(u32, @intCast(self.locals.items.len)));
+        const id: DraftLocalId = @fromBackingInt(@intCast(@as(u32, @intCast(self.locals.items.len))));
         const checked_capture_id = if (binder) |b| checked.CaptureId.fromBinder(b) else null;
         const capture_id = if (binder != null) blk: {
             if (inherited_capture_id) |inherited| break :blk inherited;
-            const index = @intFromEnum(id);
+            const index = @backingInt(id);
             if (index > checked.CaptureId.max_generated_index) {
                 Common.invariant("Monotype body had too many locals for provisional capture identity");
             }
@@ -17355,7 +17356,7 @@ const BodyDraftStore = struct {
         ty: DraftTypeCell,
     ) Allocator.Error!DraftLocalId {
         const id = try self.addLocal(symbol, ty, null, null);
-        const index = @intFromEnum(id);
+        const index = @backingInt(id);
         if (index > checked.CaptureId.max_generated_index) {
             Common.invariant("Monotype body had too many locals for provisional capture identity");
         }
@@ -17537,7 +17538,7 @@ const BodyDraftStore = struct {
         if (offset_usize > backing.len or len_usize > backing.len - offset_usize) {
             Common.invariant("body draft string literal view exceeded backing bytes");
         }
-        const id: DraftStringLiteralId = @enumFromInt(@as(u32, @intCast(self.string_literals.items.len)));
+        const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.string_literals.items.len))));
         const backing_span = try self.addStringBytes(backing);
         try self.string_literals.append(self.allocator, .{
             .backing = backing_span,
@@ -17561,7 +17562,7 @@ const BodyDraftStore = struct {
         checked_site: ?checked.CheckedExhaustivenessSiteId,
         branch_regions: []const base.Region,
     ) Allocator.Error!DraftComptimeSiteId {
-        const id: DraftComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        const id: DraftComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         const branch_region_span = try self.addBranchRegionSpan(branch_regions);
         try self.comptime_sites.append(self.allocator, .{
             .kind = kind,
@@ -17581,17 +17582,17 @@ const BodyDraftStore = struct {
 
     fn setLocalName(self: *BodyDraftStore, id: DraftLocalId, name: []const u8) Allocator.Error!void {
         if (name.len == 0) return;
-        self.local_names.items[@intFromEnum(id)] = try self.addSourceText(name);
+        self.local_names.items[@backingInt(id)] = try self.addSourceText(name);
     }
 
     fn setLocalCaptureId(self: *BodyDraftStore, id: DraftLocalId, capture_id: u32) void {
         const checked_id = checked.CaptureId.generatedCheck(capture_id);
-        self.locals.items[@intFromEnum(id)].capture_id = checked_id;
-        self.locals.items[@intFromEnum(id)].checked_capture_id = checked_id;
+        self.locals.items[@backingInt(id)].capture_id = checked_id;
+        self.locals.items[@backingInt(id)].checked_capture_id = checked_id;
     }
 
     fn setLocalType(self: *BodyDraftStore, id: DraftLocalId, ty: DraftTypeCell) void {
-        self.locals.items[@intFromEnum(id)].ty = ty;
+        self.locals.items[@backingInt(id)].ty = ty;
         for (self.typed_locals.items) |*typed_local| {
             if (typed_local.local == id) {
                 typed_local.ty = ty;
@@ -17897,7 +17898,7 @@ const BodyDraftStore = struct {
                 try program.addConstBlobView(blob.module_bytes, blob.data, blob.bytes, literal.offset, literal.len)
             else
                 try program.addStringView(self.stringBytes(literal.backing), literal.offset, literal.len);
-            if (@intFromEnum(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {
+            if (@backingInt(id) != ids.core(.string_literals, @intCast(index), ids.string_literal_start)) {
                 Common.invariant("Monotype body draft string literal id did not append contiguously");
             }
         }
@@ -17905,7 +17906,7 @@ const BodyDraftStore = struct {
         for (self.comptime_sites.items, 0..) |site, index| {
             if (!ids.retained(.comptime_sites, index)) continue;
             const id = try program.addComptimeSite(site.kind, site.owner, site.region, site.checked_site, self.branchRegions(site.branch_regions));
-            if (@intFromEnum(id) != ids.core(.comptime_sites, @intCast(index), ids.comptime_site_start)) {
+            if (@backingInt(id) != ids.core(.comptime_sites, @intCast(index), ids.comptime_site_start)) {
                 Common.invariant("Monotype body draft compile-time site id did not append contiguously");
             }
         }
@@ -17982,10 +17983,10 @@ const BodyDraftStore = struct {
         defer durable_capture_ids.deinit();
         for (self.locals.items, 0..) |local, index| {
             if (!ids.retained(.locals, index)) continue;
-            const expected = ids.local(@enumFromInt(@as(u32, @intCast(index))));
+            const expected = ids.local(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             const sealed_ty = try local.ty.sealCommitted(committed_types);
             const durable_capture_id = if (local.capture_id) |provisional| blk: {
-                const final_index = @intFromEnum(expected);
+                const final_index = @backingInt(expected);
                 if (final_index > checked.CaptureId.max_generated_index) {
                     Common.invariant("Monotype program had too many locals for durable capture identity");
                 }
@@ -18045,17 +18046,17 @@ const BodyDraftStore = struct {
         // first one's root, and its read's representation evidence calls the
         // first one's definition, whose callables the root's value holds.
         for (self.literal_roots.items) |root| {
-            if (emit_defs) |emit| if (!emit[@intFromEnum(root.def)]) continue;
-            const def = self.defs.items[@intFromEnum(root.def)];
+            if (emit_defs) |emit| if (!emit[@backingInt(root.def)]) continue;
+            const def = self.defs.items[@backingInt(root.def)];
             const seed = def.identity_seed orelse Common.invariant("literal root definition had no identity seed");
             const identity = try sealedDefIdentity(program, committed_types, seed, ids.typedLocalSpan(def.args), try def.ret.sealCommitted(committed_types));
             const entry = try program.literal_root_by_identity.getOrPut(program.allocator, identity);
             if (entry.found_existing) {
-                try shared_literal_root_defs.put(root.def, program.literal_roots.get(@intFromEnum(entry.value_ptr.*)).def);
+                try shared_literal_root_defs.put(root.def, program.literal_roots.get(@backingInt(entry.value_ptr.*)).def);
             } else {
                 entry.value_ptr.* = try program.addLiteralRoot(.{ .def = ids.def(root.def), .module = root.module, .site = root.site });
             }
-            var descriptor = self.comptime_value_roots.items[@intFromEnum(root.read)];
+            var descriptor = self.comptime_value_roots.items[@backingInt(root.read)];
             descriptor.root = .{ .literal = entry.value_ptr.* };
             try comptime_roots.put(root.read, try program.addComptimeValueRoot(descriptor));
         }
@@ -18385,7 +18386,7 @@ const BodyDraftStore = struct {
             loc,
             region,
         );
-        const backing_id: Ast.ExprId = @enumFromInt(pending_start + @as(u32, @intCast(pending.items.len)));
+        const backing_id: Ast.ExprId = @fromBackingInt(@intCast(pending_start + @as(u32, @intCast(pending.items.len))));
         try pending.append(program.allocator, .{
             .expr = backing_expr,
             .loc = loc,
@@ -18409,7 +18410,7 @@ const BodyDraftStore = struct {
         defer program.allocator.free(operands);
 
         for (self.expr_ids.items[span.start..][0..span.len], operands) |draft_value, *operand| {
-            const raw_expr = @intFromEnum(draft_value);
+            const raw_expr = @backingInt(draft_value);
             if (raw_expr >= self.exprs.items.len) {
                 Common.invariant("Monotype direct-call capture referenced an unknown expression");
             }
@@ -18508,7 +18509,7 @@ const BodyDraftStore = struct {
                 .initializer = ids.expr(value.initializer),
             } },
             .static_data_candidate => |candidate| blk: {
-                const index = @intFromEnum(candidate.static_data);
+                const index = @backingInt(candidate.static_data);
                 if (index >= static_data_ids.len) {
                     Common.invariant("Monotype body draft static-data request was not committed");
                 }
@@ -18607,7 +18608,7 @@ const BodyDraftStore = struct {
                 .try_expr = ids.expr(try_.try_expr),
                 .ok_local = ids.local(try_.ok_local),
                 .err_is_cold = try_.err_is_cold,
-                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
+                .err_target = if (try_.err_target) |target| @fromBackingInt(@intCast(@backingInt(ids.expr(target)))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .try_record_sequence => |try_| .{ .try_record_sequence = .{
@@ -18617,7 +18618,7 @@ const BodyDraftStore = struct {
                 .rest_local = ids.local(try_.rest_local),
                 .rest_field = try committed_types.commitRecordFieldName(try_.rest_field),
                 .err_is_cold = try_.err_is_cold,
-                .err_target = if (try_.err_target) |target| @enumFromInt(@intFromEnum(ids.expr(target))) else null,
+                .err_target = if (try_.err_target) |target| @fromBackingInt(@intCast(@backingInt(ids.expr(target)))) else null,
                 .ok_body = ids.expr(try_.ok_body),
             } },
             .block => |block| .{ .block = .{
@@ -18634,14 +18635,14 @@ const BodyDraftStore = struct {
                 .values = ids.exprSpan(continue_.values),
             } },
             .join_point => |join_point| .{ .join_point = .{
-                .id = @enumFromInt(@intFromEnum(ids.expr(join_point.id))),
+                .id = @fromBackingInt(@intCast(@backingInt(ids.expr(join_point.id)))),
                 .params = ids.typedLocalSpan(join_point.params),
                 .retained = ids.typedLocalSpan(join_point.retained),
                 .body = ids.expr(join_point.body),
                 .remainder = ids.expr(join_point.remainder),
             } },
             .jump => |jump| .{ .jump = .{
-                .target = @enumFromInt(@intFromEnum(ids.expr(jump.target))),
+                .target = @fromBackingInt(@intCast(@backingInt(ids.expr(jump.target)))),
                 .args = ids.exprSpan(jump.args),
                 .loop_params = ids.typedLocalSpan(jump.loop_params),
                 .loop_values = ids.exprSpan(jump.loop_values),
@@ -18701,12 +18702,12 @@ test "ordered worker-local symbol relocation reserves distinct deterministic dom
     var first_symbols: Common.SymbolGen = .{};
     var second_symbols: Common.SymbolGen = .{};
     try first.locals.append(allocator, .{
-        .id = @enumFromInt(@as(u32, @intCast(first.locals.items.len))),
+        .id = @fromBackingInt(@intCast(@as(u32, @intCast(first.locals.items.len)))),
         .symbol = first_symbols.fresh(),
         .ty = undefined,
     });
     try second.locals.append(allocator, .{
-        .id = @enumFromInt(@as(u32, @intCast(second.locals.items.len))),
+        .id = @fromBackingInt(@intCast(@as(u32, @intCast(second.locals.items.len)))),
         .symbol = second_symbols.fresh(),
         .ty = undefined,
     });
@@ -18717,8 +18718,8 @@ test "ordered worker-local symbol relocation reserves distinct deterministic dom
     first.relocateWorkerLocalSymbols(&coordinator);
     second.relocateWorkerLocalSymbols(&coordinator);
 
-    try std.testing.expectEqual(@as(u32, 41), @intFromEnum(first.locals.items[0].symbol));
-    try std.testing.expectEqual(@as(u32, 42), @intFromEnum(second.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 41), @backingInt(first.locals.items[0].symbol));
+    try std.testing.expectEqual(@as(u32, 42), @backingInt(second.locals.items[0].symbol));
     try std.testing.expectEqual(@as(u32, 43), coordinator.next);
     try std.testing.expectEqual(SymbolDomain.coordinator, first.symbol_domain);
     try std.testing.expectEqual(SymbolDomain.coordinator, second.symbol_domain);
@@ -18761,7 +18762,7 @@ const FinalIdOffsets = struct {
         return switch (self.core_id_mode) {
             .identity => identity_start + raw,
             .remapped => |maps| blk: {
-                const mapped = maps.values[@intFromEnum(kind)][raw];
+                const mapped = maps.values[@backingInt(kind)][raw];
                 if (mapped == std.math.maxInt(u32)) {
                     Common.invariant("retained body draft content referenced suppressed owned content");
                 }
@@ -18790,21 +18791,21 @@ const FinalIdOffsets = struct {
     }
 
     fn fn_(self: FinalIdOffsets, id: DraftFnId) Ast.FnId {
-        if (self.fn_slots.len != 0) return switch (self.fn_slots[@intFromEnum(id)] orelse
+        if (self.fn_slots.len != 0) return switch (self.fn_slots[@backingInt(id)] orelse
             Common.invariant("unreachable draft function required a final function id")) {
             .local => |fn_id| fn_id,
         };
-        return @enumFromInt(self.fn_start + @intFromEnum(id));
+        return @fromBackingInt(@intCast(self.fn_start + @backingInt(id)));
     }
 
     fn fnSlot(self: FinalIdOffsets, id: DraftFnId) Ast.FnSlot {
-        if (self.fn_slots.len != 0) return self.fn_slots[@intFromEnum(id)] orelse
+        if (self.fn_slots.len != 0) return self.fn_slots[@backingInt(id)] orelse
             Common.invariant("unreachable draft function required a final function slot");
-        return .{ .local = @enumFromInt(self.fn_start + @intFromEnum(id)) };
+        return .{ .local = @fromBackingInt(@intCast(self.fn_start + @backingInt(id))) };
     }
 
     fn hasFnSlot(self: FinalIdOffsets, id: DraftFnId) bool {
-        return self.fn_slots.len == 0 or self.fn_slots[@intFromEnum(id)] != null;
+        return self.fn_slots.len == 0 or self.fn_slots[@backingInt(id)] != null;
     }
 
     fn fnTarget(self: FinalIdOffsets, id: DraftFnTarget) Ast.FnId {
@@ -18816,9 +18817,9 @@ const FinalIdOffsets = struct {
 
     fn def(self: FinalIdOffsets, id: DraftDefId) Ast.DefId {
         if (self.shared_literal_root_defs) |shared| if (shared.get(id)) |root_def| return root_def;
-        if (self.def_ids.len != 0) return self.def_ids[@intFromEnum(id)] orelse
+        if (self.def_ids.len != 0) return self.def_ids[@backingInt(id)] orelse
             Common.invariant("draft definition required a local id after its function converged to an imported specialization");
-        return @enumFromInt(self.def_start + @intFromEnum(id));
+        return @fromBackingInt(@intCast(self.def_start + @backingInt(id)));
     }
 
     fn defTarget(self: FinalIdOffsets, id: DraftDefTarget) Ast.DefId {
@@ -18829,27 +18830,27 @@ const FinalIdOffsets = struct {
     }
 
     fn expr(self: FinalIdOffsets, id: DraftExprId) Ast.ExprId {
-        return @enumFromInt(self.core(.exprs, @intFromEnum(id), self.expr_start));
+        return @fromBackingInt(@intCast(self.core(.exprs, @backingInt(id), self.expr_start)));
     }
 
     fn pat(self: FinalIdOffsets, id: DraftPatId) Ast.PatId {
-        return @enumFromInt(self.core(.pats, @intFromEnum(id), self.pat_start));
+        return @fromBackingInt(@intCast(self.core(.pats, @backingInt(id), self.pat_start)));
     }
 
     fn stmt(self: FinalIdOffsets, id: DraftStmtId) Ast.StmtId {
-        return @enumFromInt(self.core(.stmts, @intFromEnum(id), self.stmt_start));
+        return @fromBackingInt(@intCast(self.core(.stmts, @backingInt(id), self.stmt_start)));
     }
 
     fn local(self: FinalIdOffsets, id: DraftLocalId) Ast.LocalId {
-        return @enumFromInt(self.core(.locals, @intFromEnum(id), self.local_start));
+        return @fromBackingInt(@intCast(self.core(.locals, @backingInt(id), self.local_start)));
     }
 
     fn stringLiteral(self: FinalIdOffsets, id: DraftStringLiteralId) Ast.StringLiteralId {
-        return @enumFromInt(self.core(.string_literals, @intFromEnum(id), self.string_literal_start));
+        return @fromBackingInt(@intCast(self.core(.string_literals, @backingInt(id), self.string_literal_start)));
     }
 
     fn comptimeSite(self: FinalIdOffsets, id: DraftComptimeSiteId) Ast.ComptimeSiteId {
-        return @enumFromInt(self.core(.comptime_sites, @intFromEnum(id), self.comptime_site_start));
+        return @fromBackingInt(@intCast(self.core(.comptime_sites, @backingInt(id), self.comptime_site_start)));
     }
 
     fn exprSpan(self: FinalIdOffsets, span: DraftSpan(DraftExprId)) Ast.Span(Ast.ExprId) {
@@ -18976,7 +18977,7 @@ fn appendRuntimeImpossibilityProof(
     allocator: Allocator,
     proof: RuntimeImpossibilityProof,
 ) Allocator.Error!RuntimeImpossibilityProofId {
-    const id: RuntimeImpossibilityProofId = @enumFromInt(@as(u32, @intCast(draft.impossibility_proofs.items.len)));
+    const id: RuntimeImpossibilityProofId = @fromBackingInt(@intCast(@as(u32, @intCast(draft.impossibility_proofs.items.len))));
     try draft.impossibility_proofs.append(allocator, proof);
     return id;
 }
@@ -18988,7 +18989,7 @@ fn anyRuntimeImpossibilityProof(
 ) Allocator.Error!?RuntimeImpossibilityProofId {
     var active_count: usize = 0;
     var sole: RuntimeImpossibilityProofId = undefined;
-    for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+    for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@backingInt(id)]) {
         // `any(false, x) == x`. False proofs are represented canonically as
         // null outside the proof store, so never retain an explicit `.never`
         // leaf in a composite proof.
@@ -19008,7 +19009,7 @@ fn anyRuntimeImpossibilityProof(
             const start: u32 = @intCast(draft.impossibility_proof_ids.items.len);
             const ids = try draft.impossibility_proof_ids.addManyAsSlice(allocator, active_count);
             var index: usize = 0;
-            for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+            for (candidates) |candidate| if (candidate) |id| switch (draft.impossibility_proofs.items[@backingInt(id)]) {
                 .never => {},
                 .always => unreachable,
                 .node, .pending, .forward, .any, .all => {
@@ -19032,7 +19033,7 @@ fn allRuntimeImpossibilityProof(
     var sole: RuntimeImpossibilityProofId = undefined;
     for (candidates) |candidate| {
         const id = candidate orelse return null;
-        switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+        switch (draft.impossibility_proofs.items[@backingInt(id)]) {
             // `all(false, x) == false`, represented canonically as null.
             .never => return null,
             // `all(true, x) == x`.
@@ -19052,7 +19053,7 @@ fn allRuntimeImpossibilityProof(
             var index: usize = 0;
             for (candidates) |candidate| {
                 const id = candidate orelse unreachable;
-                switch (draft.impossibility_proofs.items[@intFromEnum(id)]) {
+                switch (draft.impossibility_proofs.items[@backingInt(id)]) {
                     .never => unreachable,
                     .always => {},
                     .node, .pending, .forward, .any, .all => {
@@ -19114,7 +19115,7 @@ const InterfaceReplayAddress = struct {
 };
 
 fn interfaceRequestBucket(bytes: []const u8) [32]u8 {
-    var bucket = [_]u8{0} ** 32;
+    var bucket = @as([32]u8, @splat(0));
     std.mem.writeInt(u64, bucket[0..8], std.hash.Wyhash.hash(0, bytes), .little);
     return bucket;
 }
@@ -20046,7 +20047,7 @@ const BodyContext = struct {
         if (entry.found_existing) return entry.value_ptr.*;
         errdefer _ = self.draft.static_data_request_ids.remove(address);
         const id: DraftStaticDataId =
-            @enumFromInt(@as(u32, @intCast(self.draft.static_data_requests.items.len)));
+            @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.static_data_requests.items.len))));
         self.draft.static_data_requests.appendAssumeCapacity(.{
             .const_locator = const_locator,
             .node = node,
@@ -20721,11 +20722,11 @@ const BodyContext = struct {
     }
 
     fn exprImpossibilityProof(self: *BodyContext, expr: DraftExprId) ?RuntimeImpossibilityProofId {
-        return self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)];
+        return self.draft.expr_impossibility_proofs.items[@backingInt(expr)];
     }
 
     fn stmtImpossibilityProof(self: *BodyContext, stmt: DraftStmtId) ?RuntimeImpossibilityProofId {
-        return self.draft.stmt_impossibility_proofs.items[@intFromEnum(stmt)];
+        return self.draft.stmt_impossibility_proofs.items[@backingInt(stmt)];
     }
 
     fn anyExprSpanImpossibilityProof(
@@ -20745,7 +20746,7 @@ const BodyContext = struct {
     ) Allocator.Error!?RuntimeImpossibilityProofId {
         var active_count: usize = 0;
         var sole: RuntimeImpossibilityProofId = undefined;
-        for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@intFromEnum(id)]) {
+        for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@backingInt(id)]) {
             .never => {},
             .always => return id,
             .node, .pending, .forward, .any, .all => {
@@ -20760,7 +20761,7 @@ const BodyContext = struct {
                 const start: u32 = @intCast(self.draft.impossibility_proof_ids.items.len);
                 const ids = try self.draft.impossibility_proof_ids.addManyAsSlice(self.allocator, active_count);
                 var index: usize = 0;
-                for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@intFromEnum(id)]) {
+                for (stmts) |stmt| if (self.stmtImpossibilityProof(stmt)) |id| switch (self.draft.impossibility_proofs.items[@backingInt(id)]) {
                     .never => {},
                     .always => unreachable,
                     .node, .pending, .forward, .any, .all => {
@@ -20779,7 +20780,7 @@ const BodyContext = struct {
         self: *BodyContext,
         pat: DraftPatId,
     ) ?RuntimeImpossibilityProofId {
-        return self.draft.pat_impossibility_proofs.items[@intFromEnum(pat)];
+        return self.draft.pat_impossibility_proofs.items[@backingInt(pat)];
     }
 
     /// Build a proof leaf without importing a sealed type back into the
@@ -21012,8 +21013,8 @@ const BodyContext = struct {
             self.builder.current_loc,
             self.builder.current_region,
         );
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(
-            self.draft.exprs.items[@intFromEnum(id)].ty,
+        self.draft.expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof(
+            self.draft.exprs.items[@backingInt(id)].ty,
             expr.data,
         );
         return id;
@@ -21043,7 +21044,7 @@ const BodyContext = struct {
             self.builder.current_loc,
             self.builder.current_region,
         );
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(id)] = try self.exprDataImpossibilityProof(ty, data);
+        self.draft.expr_impossibility_proofs.items[@backingInt(id)] = try self.exprDataImpossibilityProof(ty, data);
         return id;
     }
 
@@ -21269,7 +21270,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         const ty = try self.draftTypeCell(pat.ty);
         const id = try self.draft.addPat(.{ .ty = ty, .data = pat.data });
-        self.draft.pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof(ty, pat.data);
+        self.draft.pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof(ty, pat.data);
         return id;
     }
 
@@ -21285,12 +21286,12 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addPat(.{ .ty = ty, .data = data });
-        self.draft.pat_impossibility_proofs.items[@intFromEnum(id)] = try self.patDataImpossibilityProof(ty, data);
+        self.draft.pat_impossibility_proofs.items[@backingInt(id)] = try self.patDataImpossibilityProof(ty, data);
         return id;
     }
 
     fn addLocal(self: *BodyContext, symbol: Common.Symbol, ty: Type.TypeId) Allocator.Error!DraftLocalId {
-        if (@intFromEnum(ty) >= self.typeStore().epochBoundary().types) {
+        if (@backingInt(ty) >= self.typeStore().epochBoundary().types) {
             Common.invariant("body context added a local with a type from another store");
         }
         return try self.addLocalWithBinder(symbol, ty, null);
@@ -21312,7 +21313,7 @@ const BodyContext = struct {
         binder: ?checked.PatternBinderId,
     ) Allocator.Error!DraftLocalId {
         switch (ty) {
-            .sealed => |sealed| if (@intFromEnum(sealed) >= self.typeStore().epochBoundary().types) {
+            .sealed => |sealed| if (@backingInt(sealed) >= self.typeStore().epochBoundary().types) {
                 Common.invariant("body context added a local cell with a type from another store");
             },
             .graph_node => {},
@@ -21321,7 +21322,7 @@ const BodyContext = struct {
         defer timing_scope.end();
         const inherited_capture_id = if (binder) |source_binder| blk: {
             const existing = self.binders.get(source_binder) orelse break :blk null;
-            break :blk self.draft.locals.items[@intFromEnum(existing)].capture_id;
+            break :blk self.draft.locals.items[@backingInt(existing)].capture_id;
         } else null;
         return try self.draft.addLocal(symbol, ty, binder, inherited_capture_id);
     }
@@ -21346,7 +21347,7 @@ const BodyContext = struct {
         binder: checked.PatternBinderId,
     ) Allocator.Error!DraftLocalId {
         switch (ty) {
-            .sealed => |sealed| if (@intFromEnum(sealed) >= self.typeStore().epochBoundary().types) {
+            .sealed => |sealed| if (@backingInt(sealed) >= self.typeStore().epochBoundary().types) {
                 Common.invariant("body context added a fresh local cell with a type from another store");
             },
             .graph_node => {},
@@ -21423,7 +21424,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .draft_ir);
         defer timing_scope.end();
         const id = try self.draft.addStmtWithSource(stmt, self.builder.current_loc, self.builder.current_region);
-        self.draft.stmt_impossibility_proofs.items[@intFromEnum(id)] = try self.stmtDataImpossibilityProof(stmt);
+        self.draft.stmt_impossibility_proofs.items[@backingInt(id)] = try self.stmtDataImpossibilityProof(stmt);
         return id;
     }
 
@@ -21440,7 +21441,7 @@ const BodyContext = struct {
     /// Record a declared capture slot's key while its binding context is known.
     /// Supplying expressions never determine the target key during lifting.
     fn captureKey(self: *const BodyContext, local: DraftLocalId) checked.CaptureId {
-        const target = self.draft.locals.items[@intFromEnum(local)];
+        const target = self.draft.locals.items[@backingInt(local)];
         return target.checked_capture_id orelse target.capture_id orelse
             Common.invariant("declared capture slot has no capture identity");
     }
@@ -21470,7 +21471,7 @@ const BodyContext = struct {
     }
 
     fn addConstBlobView(self: *BodyContext, module_bytes: [32]u8, data: check.ConstStore.ConstBlobDataId, bytes: []const u8, offset: u32, len: u32) Allocator.Error!DraftStringLiteralId {
-        const id: DraftStringLiteralId = @enumFromInt(@as(u32, @intCast(self.draft.string_literals.items.len)));
+        const id: DraftStringLiteralId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.string_literals.items.len))));
         try self.draft.string_literals.append(self.allocator, .{ .backing = .empty(), .const_blob = .{ .module_bytes = module_bytes, .data = data, .bytes = bytes }, .offset = offset, .len = len });
         return id;
     }
@@ -21485,18 +21486,18 @@ const BodyContext = struct {
     }
 
     fn exprLoc(self: *BodyContext, id: DraftExprId) base.SourceLoc {
-        return self.draft.expr_locs.items[@intFromEnum(id)];
+        return self.draft.expr_locs.items[@backingInt(id)];
     }
 
     fn exprRegion(self: *BodyContext, id: DraftExprId) base.Region {
-        return self.draft.expr_regions.items[@intFromEnum(id)];
+        return self.draft.expr_regions.items[@backingInt(id)];
     }
 
     /// Frozen Phase-B emission reads a draft expression's type through the one
     /// final sealer, exactly as `localType` does: a graph-node cell has no
     /// active view once relation production has ended.
     fn exprType(self: *BodyContext, id: DraftExprId) Allocator.Error!Type.TypeId {
-        const cell = self.draft.exprs.items[@intFromEnum(id)].ty;
+        const cell = self.draft.exprs.items[@backingInt(id)].ty;
         if (self.frozen_sealed_emission) {
             const finals = self.frozen_type_finals orelse
                 Common.invariant("frozen Monotype emission had no graph type finalizer");
@@ -21506,15 +21507,15 @@ const BodyContext = struct {
     }
 
     fn exprTypeCell(self: *BodyContext, id: DraftExprId) DraftTypeCell {
-        return self.draft.exprs.items[@intFromEnum(id)].ty;
+        return self.draft.exprs.items[@backingInt(id)].ty;
     }
 
     fn patData(self: *BodyContext, id: DraftPatId) DraftPatData {
-        return self.draft.pats.items[@intFromEnum(id)].data;
+        return self.draft.pats.items[@backingInt(id)].data;
     }
 
     fn localType(self: *BodyContext, id: DraftLocalId) Allocator.Error!Type.TypeId {
-        const cell = self.draft.locals.items[@intFromEnum(id)].ty;
+        const cell = self.draft.locals.items[@backingInt(id)].ty;
         if (self.frozen_sealed_emission) {
             const finals = self.frozen_type_finals orelse
                 Common.invariant("frozen Monotype emission had no graph type finalizer");
@@ -21524,7 +21525,7 @@ const BodyContext = struct {
     }
 
     fn localTypeCell(self: *BodyContext, id: DraftLocalId) DraftTypeCell {
-        return self.draft.locals.items[@intFromEnum(id)].ty;
+        return self.draft.locals.items[@backingInt(id)].ty;
     }
 
     fn setLocalCaptureId(self: *BodyContext, id: DraftLocalId, capture_id: u32) void {
@@ -21532,7 +21533,7 @@ const BodyContext = struct {
     }
 
     fn setLocalType(self: *BodyContext, id: DraftLocalId, ty: Type.TypeId) Allocator.Error!void {
-        if (@intFromEnum(ty) >= self.typeStore().epochBoundary().types) {
+        if (@backingInt(ty) >= self.typeStore().epochBoundary().types) {
             Common.invariant("body context updated a local with a type from another store");
         }
         self.draft.setLocalType(id, try self.draftTypeCell(ty));
@@ -21756,8 +21757,8 @@ const BodyContext = struct {
             .def => |*def| {
                 if (!started) {
                     const address = GeneratedHelperDefAddress{
-                        .value_ty = @intFromEnum(def.value_ty),
-                        .result_ty = @intFromEnum(str_ty),
+                        .value_ty = @backingInt(def.value_ty),
+                        .result_ty = @backingInt(str_ty),
                     };
                     if (self.inspect_defs.get(address)) |entry| return .{ .done = .{ .def = entry.id() } };
 
@@ -21778,8 +21779,8 @@ const BodyContext = struct {
                     .ret = try self.draftTypeCell(str_ty),
                 });
                 try self.inspect_defs.put(.{
-                    .value_ty = @intFromEnum(def.value_ty),
-                    .result_ty = @intFromEnum(str_ty),
+                    .value_ty = @backingInt(def.value_ty),
+                    .result_ty = @backingInt(str_ty),
                 }, .{ .ready = def.def_id });
                 return .{ .done = .{ .def = def.def_id } };
             },
@@ -22371,7 +22372,7 @@ const BodyContext = struct {
     /// once, indexing its substitution directly; no enclosing type map is
     /// copied and no checked type is searched for by identity.
     fn bindNestedTypes(self: *BodyContext, site_id: names.NestedProcSiteId, constructing_scope: bool) Allocator.Error!void {
-        const site = self.view.nested_proc_sites.sites[@intFromEnum(site_id)];
+        const site = self.view.nested_proc_sites.sites[@backingInt(site_id)];
         const span = site.type_bindings;
         const bindings = self.view.nested_proc_sites.type_bindings[span.start .. span.start + span.len];
         var frame: *const EvidenceChain = &self.evidence;
@@ -22507,9 +22508,9 @@ const BodyContext = struct {
         hasher.update(&binder_key.bytes);
         for (lexical.local_procs) |proc| {
             hasher.update(&proc.declaration.module);
-            hashU32(&hasher, @intFromEnum(proc.declaration.binder));
-            hashU32(&hasher, @intFromEnum(proc.declaration.expr));
-            hashU32(&hasher, @intFromEnum(proc.context));
+            hashU32(&hasher, @backingInt(proc.declaration.binder));
+            hashU32(&hasher, @backingInt(proc.declaration.expr));
+            hashU32(&hasher, @backingInt(proc.context));
         }
         return .{ .bytes = hasher.finalResult() };
     }
@@ -22520,12 +22521,12 @@ const BodyContext = struct {
                 const module_order = std.mem.order(u8, &left.declaration.module, &right.declaration.module);
                 if (module_order != .eq) return module_order == .lt;
                 if (left.declaration.binder != right.declaration.binder) {
-                    return @intFromEnum(left.declaration.binder) < @intFromEnum(right.declaration.binder);
+                    return @backingInt(left.declaration.binder) < @backingInt(right.declaration.binder);
                 }
                 if (left.declaration.expr != right.declaration.expr) {
-                    return @intFromEnum(left.declaration.expr) < @intFromEnum(right.declaration.expr);
+                    return @backingInt(left.declaration.expr) < @backingInt(right.declaration.expr);
                 }
-                return @intFromEnum(left.context) < @intFromEnum(right.context);
+                return @backingInt(left.context) < @backingInt(right.context);
             }
         };
         std.mem.sort(DraftCodecLocalProcContext, contexts, {}, SortContext.lessThan);
@@ -22537,11 +22538,11 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         if (moduleBytesEqual(lexical.view, self.view.key.bytes)) {
             for (lexical.binders) |entry| switch (entry.kind) {
-                0 => try self.binders.put(@enumFromInt(entry.binder), @enumFromInt(entry.local)),
+                0 => try self.binders.put(@fromBackingInt(@intCast(entry.binder)), @fromBackingInt(@intCast(entry.local))),
                 1 => try self.typed_binders.put(.{
-                    .binder = @enumFromInt(entry.binder),
+                    .binder = @fromBackingInt(@intCast(entry.binder)),
                     .type_digest = entry.type_digest,
-                }, @enumFromInt(entry.local)),
+                }, @fromBackingInt(@intCast(entry.local))),
                 else => Common.invariant("deferred lexical context had an unknown binder kind"),
             };
         }
@@ -22577,13 +22578,13 @@ const BodyContext = struct {
         for (context.entries) |entry| {
             switch (entry.kind) {
                 0 => {
-                    const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
+                    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(entry.binder));
                     _ = self.binders.get(binder) orelse
                         Common.invariant("local procedure use was missing a declaration-context binder");
                 },
                 1 => {
                     const key = TypedBinder{
-                        .binder = @enumFromInt(entry.binder),
+                        .binder = @fromBackingInt(@intCast(entry.binder)),
                         .type_digest = entry.type_digest,
                     };
                     _ = self.typed_binders.get(key) orelse
@@ -22613,8 +22614,8 @@ const BodyContext = struct {
             fn lessThan(_: void, left: DraftLocalProcAddress, right: DraftLocalProcAddress) bool {
                 const module_order = std.mem.order(u8, &left.module, &right.module);
                 if (module_order != .eq) return module_order == .lt;
-                if (left.binder != right.binder) return @intFromEnum(left.binder) < @intFromEnum(right.binder);
-                return @intFromEnum(left.expr) < @intFromEnum(right.expr);
+                if (left.binder != right.binder) return @backingInt(left.binder) < @backingInt(right.binder);
+                return @backingInt(left.expr) < @backingInt(right.expr);
             }
         }.lessThan);
 
@@ -22625,15 +22626,15 @@ const BodyContext = struct {
                 Common.invariant("local procedure context disappeared while its digest was produced");
             const context = self.validateLocalProcContext(context_id, address.module, address.binder, address.expr, null);
             hasher.update(&address.module);
-            hashU32(&hasher, @intFromEnum(address.binder));
-            hashU32(&hasher, @intFromEnum(address.expr));
+            hashU32(&hasher, @backingInt(address.binder));
+            hashU32(&hasher, @backingInt(address.expr));
             if (context.declaration.context_anchor) |anchor| {
                 hasher.update(&.{1});
-                hashU32(&hasher, @intFromEnum(anchor));
+                hashU32(&hasher, @backingInt(anchor));
             } else hasher.update(&.{0});
             hasher.update(&names.procTemplateModuleDigest(context.owner_template).bytes);
-            hashU32(&hasher, @intFromEnum(context.owner_template.proc_base));
-            hashU32(&hasher, @intFromEnum(context.owner_template.template));
+            hashU32(&hasher, @backingInt(context.owner_template.proc_base));
+            hashU32(&hasher, @backingInt(context.owner_template.template));
             hasher.update(&context.base_key.bytes);
             if (context.restored_specialization_key) |key| {
                 hasher.update(&.{1});
@@ -22708,13 +22709,13 @@ const BodyContext = struct {
         errdefer installed.deinit();
 
         for (context.entries) |entry| {
-            const local: DraftLocalId = @enumFromInt(entry.local);
-            if (@intFromEnum(local) >= self.draft.locals.items.len) {
+            const local: DraftLocalId = @fromBackingInt(@intCast(entry.local));
+            if (@backingInt(local) >= self.draft.locals.items.len) {
                 Common.invariant("local procedure declaration context named a local outside its body draft");
             }
             switch (entry.kind) {
                 0 => {
-                    const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
+                    const binder: checked.PatternBinderId = @fromBackingInt(entry.binder);
                     if (self.binders.get(binder)) |requesting| {
                         // A captured reassignable binder's value is its
                         // snapshot at the declaration
@@ -22733,7 +22734,7 @@ const BodyContext = struct {
                 },
                 1 => {
                     const binder = TypedBinder{
-                        .binder = @enumFromInt(entry.binder),
+                        .binder = @fromBackingInt(@intCast(entry.binder)),
                         .type_digest = entry.type_digest,
                     };
                     if (self.typed_binders.contains(binder)) continue;
@@ -22758,9 +22759,9 @@ const BodyContext = struct {
         while (iter.next()) |entry| {
             entries[index] = .{
                 .kind = 0,
-                .binder = @intFromEnum(entry.binder),
-                .local = @intFromEnum(entry.local),
-                .type_digest = .{ .bytes = [_]u8{0} ** 32 },
+                .binder = @backingInt(entry.binder),
+                .local = @backingInt(entry.local),
+                .type_digest = .{ .bytes = @as([32]u8, @splat(0)) },
             };
             index += 1;
         }
@@ -22768,8 +22769,8 @@ const BodyContext = struct {
         while (typed_iter.next()) |entry| {
             entries[index] = .{
                 .kind = 1,
-                .binder = @intFromEnum(entry.key_ptr.binder),
-                .local = @intFromEnum(entry.value_ptr.*),
+                .binder = @backingInt(entry.key_ptr.binder),
+                .local = @backingInt(entry.value_ptr.*),
                 .type_digest = entry.key_ptr.type_digest,
             };
             index += 1;
@@ -22864,7 +22865,7 @@ const BodyContext = struct {
         try pending.append(self.allocator, root);
         while (pending.pop()) |expr_id| {
             const start = pending.items.len;
-            switch (self.draft.exprs.items[@intFromEnum(expr_id)].data) {
+            switch (self.draft.exprs.items[@backingInt(expr_id)].data) {
                 .fn_def => return true,
                 .list, .tuple => |items| try pending.appendSlice(self.allocator, self.exprSpan(items)),
                 .record => |fields| for (self.fieldExprSpan(fields)) |field| try pending.append(self.allocator, field.value),
@@ -23057,7 +23058,7 @@ const BodyContext = struct {
                     .pat => |pat_id| pat_id,
                 };
                 const start = visits.items.len;
-                switch (ctx.draft.pats.items[@intFromEnum(pat_id)].data) {
+                switch (ctx.draft.pats.items[@backingInt(pat_id)].data) {
                     .bind => |local| try search.bind(local),
                     .wildcard,
                     .int_lit,
@@ -23087,7 +23088,7 @@ const BodyContext = struct {
         }
 
         fn expandStmt(search: *DraftFreeLocalSearch, stmt_id: DraftStmtId) Allocator.Error!void {
-            switch (search.ctx.draft.stmts.items[@intFromEnum(stmt_id)]) {
+            switch (search.ctx.draft.stmts.items[@backingInt(stmt_id)]) {
                 .uninitialized => |pat| try search.push(.{ .bind_pat = pat }),
                 .let_ => |let_| if (let_.recursive) {
                     try search.push(.{ .bind_pat = let_.pat });
@@ -23110,7 +23111,7 @@ const BodyContext = struct {
         fn expandExpr(search: *DraftFreeLocalSearch, expr_id: DraftExprId) Allocator.Error!bool {
             const ctx = search.ctx;
             const mark = search.bound_log.items.len;
-            switch (ctx.draft.exprs.items[@intFromEnum(expr_id)].data) {
+            switch (ctx.draft.exprs.items[@backingInt(expr_id)].data) {
                 .pending_deferred => Common.invariant("pending deferred expression reached draft free-local analysis"),
                 .local => |local| return try ctx.localDependsOnTarget(local, search.target, &search.bound),
                 .@"unreachable",
@@ -23269,8 +23270,8 @@ const BodyContext = struct {
 
     fn sameLocalIdentity(self: *BodyContext, lhs: DraftLocalId, rhs: DraftLocalId) Allocator.Error!bool {
         if (lhs == rhs) return true;
-        const lhs_data = self.draft.locals.items[@intFromEnum(lhs)];
-        const rhs_data = self.draft.locals.items[@intFromEnum(rhs)];
+        const lhs_data = self.draft.locals.items[@backingInt(lhs)];
+        const rhs_data = self.draft.locals.items[@backingInt(rhs)];
         if (lhs_data.binder == null or rhs_data.binder == null or lhs_data.binder.? != rhs_data.binder.?) {
             return false;
         }
@@ -24184,7 +24185,7 @@ const BodyContext = struct {
             try self.graph.unify(task.placeholder, input.?.get(.node));
             return .{ .ret = .{ .node = task.placeholder } };
         }
-        const declaration_id: u32 = @intFromEnum(source.declaration.id);
+        const declaration_id: u32 = @backingInt(source.declaration.id);
         if (self.graph.nominalBackingNode(source.view.key.bytes, declaration_id, task.args)) |cached| {
             self.builder.count("nominal_backing_reuses");
             return .{ .ret = .{ .node = cached } };
@@ -24687,7 +24688,7 @@ const BodyContext = struct {
                     }
                 },
                 .local_proc_use => |ref_id| {
-                    const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+                    const record = self.view.resolved_refs.records[@backingInt(ref_id)];
                     const local = switch (record.ref) {
                         .local_proc => |local| local,
                         .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => Common.invariant("checked local specialization relation targeted a non-local procedure"),
@@ -24786,7 +24787,7 @@ const BodyContext = struct {
         self: *BodyContext,
         scope_id: checked.DispatchScopeId,
     ) Allocator.Error!NodeId {
-        const raw_scope = @intFromEnum(scope_id);
+        const raw_scope = @backingInt(scope_id);
         if (raw_scope >= self.view.templates.dispatch_scopes.len) {
             Common.invariant("checked specialization relation named an unknown local scope");
         }
@@ -24975,7 +24976,7 @@ const BodyContext = struct {
         replay_state: *InterfaceReplayState,
     ) Allocator.Error!?*DirectCalleeExpansion {
         self.builder.count("interface_relation_requests");
-        const record = self.view.resolved_refs.records[@intFromEnum(target)];
+        const record = self.view.resolved_refs.records[@backingInt(target)];
         const procedure, const root_evidence = switch (record.ref) {
             .top_level_proc,
             .imported_proc,
@@ -25405,7 +25406,7 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
             break :blk ret_cell;
         };
-        self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
+        self.draft.exprs.items[@backingInt(body)].ty = produced_ret_cell;
         return .{ .args = .empty(), .body = body, .ret = produced_ret_cell };
     }
 
@@ -25428,7 +25429,7 @@ const BodyContext = struct {
         var added_crash = false;
         for (refs, scopes) |plan_id, dispatch_scope| {
             if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
-            const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
             switch (self.dispatchRuntimePlan(plan)) {
                 .callable => {},
                 .crash => {
@@ -25440,7 +25441,7 @@ const BodyContext = struct {
 
         for (refs, scopes, kinds) |plan_id, dispatch_scope, relation_kind| {
             if (!dispatchRefBelongsToScope(dispatch_scope, scope_id)) continue;
-            const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
             if (self.checkedExprDivergesInLoweredRuntime(plan.expr)) continue;
             if (relation_kind == .conversion) continue;
             const callable_plan = switch (self.dispatchRuntimePlan(plan)) {
@@ -25494,7 +25495,7 @@ const BodyContext = struct {
             self.owns_specialization_dispatch_crashes = true;
         }
         const crashes = self.specialization_dispatch_crashes.?;
-        const raw = @intFromEnum(expr);
+        const raw = @backingInt(expr);
         if (raw >= crashes.len) Common.invariant("specialization dispatch crash referenced a missing checked expression");
         if (crashes[raw]) return false;
         crashes[raw] = true;
@@ -26821,7 +26822,7 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, declared_ret_node, body_ret_node);
             break :blk ret_cell;
         };
-        self.draft.exprs.items[@intFromEnum(body)].ty = produced_ret_cell;
+        self.draft.exprs.items[@backingInt(body)].ty = produced_ret_cell;
 
         return .{
             .args = try self.draft.addTypedLocalSpan(lowering.args),
@@ -27836,7 +27837,7 @@ const BodyContext = struct {
 
         if (from_plan) {
             const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-            const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+            const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
             if (try self.closedDirectGraphFreeResultNode(task.checked_ret_ty, plan, task.expected_ret_node)) |ret_node| {
                 return .{ .ret = .{ .node = ret_node } };
             }
@@ -29232,11 +29233,11 @@ const BodyContext = struct {
             try self.includeControlFlowResult(&task.selection, final_else);
             for (task.branches) |branch| {
                 if (self.exprImpossibilityProof(branch.body) == null) {
-                    self.draft.exprs.items[@intFromEnum(branch.body)].ty = task.selection.selected;
+                    self.draft.exprs.items[@backingInt(branch.body)].ty = task.selection.selected;
                 }
             }
             if (self.exprImpossibilityProof(final_else) == null) {
-                self.draft.exprs.items[@intFromEnum(final_else)].ty = task.selection.selected;
+                self.draft.exprs.items[@backingInt(final_else)].ty = task.selection.selected;
             }
         }
         const data: BodyExprData = .{ .if_ = .{
@@ -29376,7 +29377,7 @@ const BodyContext = struct {
         if (task.select) {
             for (task.pending.items) |entry| {
                 if (self.exprImpossibilityProof(entry.body) == null) {
-                    self.draft.exprs.items[@intFromEnum(entry.body)].ty = task.selection.selected;
+                    self.draft.exprs.items[@backingInt(entry.body)].ty = task.selection.selected;
                 }
             }
         }
@@ -30032,11 +30033,11 @@ const BodyContext = struct {
         snippet: checked.CheckedStringLiteralId,
         str_ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
-        const snippet_index = @intFromEnum(snippet);
+        const snippet_index = @backingInt(snippet);
         if (snippet_index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
-        const snippet_text = self.view.bodies.stringLiteral(@enumFromInt(snippet_index));
+        const snippet_text = self.view.bodies.stringLiteral(@fromBackingInt(@intCast(snippet_index)));
         const prefix_text = try std.fmt.allocPrint(
             self.builder.allocator,
             "The `?` operator in `{s}` evaluated an `Err` inside an `expect`. The value was: Err(",
@@ -30397,7 +30398,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
         const plan_id = maybe_plan orelse Common.invariant("divergent checked dispatch expression did not contain its checked plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
         const operands = try self.dispatchOperandExprs(plan);
         defer self.allocator.free(operands);
         return switch (self.dispatchRuntimePlan(plan)) {
@@ -30516,7 +30517,7 @@ const BodyContext = struct {
                 switch (task.kind) {
                     .for_ => |for_| {
                         const plan_id = for_.plan orelse Common.invariant("checked iterator for reached Monotype without an iterator dispatch plan");
-                        task.plan = self.view.static_dispatch_plans.iterator_for_plans[@intFromEnum(plan_id)];
+                        task.plan = self.view.static_dispatch_plans.iterator_for_plans[@backingInt(plan_id)];
                         // An `iter` call that cannot run evaluates the
                         // iterable it receives and then crashes; a `next`
                         // call that cannot run crashes once `iter` has
@@ -31419,7 +31420,7 @@ const BodyContext = struct {
                     // requested at.
                     const element_cell = DraftTypeCell.fromGraphNode(element_witness);
                     for (task.lowered) |element| {
-                        self.draft.exprs.items[@intFromEnum(element)].ty = element_cell;
+                        self.draft.exprs.items[@backingInt(element)].ty = element_cell;
                     }
                     break :blk try self.relateCheckedNodeToProducedValue(list_node, witness);
                 } else list_node;
@@ -31725,7 +31726,7 @@ const BodyContext = struct {
                     expected_node,
                     try self.exprTypeCell(lowered).toGraphNode(self.graph),
                 );
-                self.draft.exprs.items[@intFromEnum(lowered)].ty = cell;
+                self.draft.exprs.items[@backingInt(lowered)].ty = cell;
                 return loweredExprStep(lowered);
             },
             // A dispatch or call lowered at this node.
@@ -32328,7 +32329,7 @@ const BodyContext = struct {
                     prefix_ty = self.recordFieldType(prefix_ty, field_name);
                     self.draft.field_access_segments.appendAssumeCapacity(.{ .field = field_name });
                 }
-                if (@import("builtin").mode == .Debug and !self.sameType(ty, prefix_ty)) {
+                if (@import("builtin").mode == .debug and !self.sameType(ty, prefix_ty)) {
                     Common.invariant("Monotype field access path type differed from its final receiver field type");
                 }
                 task.field_access_start = start;
@@ -32390,7 +32391,7 @@ const BodyContext = struct {
         const expected_ret_cell = task.expected_ret_cell;
         const checked_ret_ty = task.checked_ret_ty;
         const plan_id = task.maybe_plan orelse Common.invariant("checked dispatch expression reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
         switch (frame.cursor) {
             0 => {},
             dispatch_drafts_cursor => return try self.nextDispatchDraft(frame, task),
@@ -33528,7 +33529,7 @@ const BodyContext = struct {
             );
             break :blk lowered_node;
         } else try self.relateCheckedNodeToProducedValue(expected_node, lowered_node);
-        self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(
+        self.draft.exprs.items[@backingInt(lowered)].ty = DraftTypeCell.fromGraphNode(
             result_node,
         );
         return lowered;
@@ -33931,14 +33932,14 @@ const BodyContext = struct {
     }
 
     fn lowerStringLiteral(self: *BodyContext, id: checked.CheckedStringLiteralId) Allocator.Error!DraftStringLiteralId {
-        const index = @intFromEnum(id);
+        const index = @backingInt(id);
         if (index >= self.view.bodies.stringLiteralCount()) {
             Common.invariant("checked string literal id outside checked body string store");
         }
         return try self.draft.addCheckedStringLiteral(
             self.view.key.bytes,
             id,
-            self.view.bodies.stringLiteral(@enumFromInt(index)),
+            self.view.bodies.stringLiteral(@fromBackingInt(@intCast(index))),
         );
     }
 
@@ -34212,7 +34213,7 @@ const BodyContext = struct {
         if (task.deferred_body == null) {
             const callable = try self.graph.functionNodes(task.callable_node);
             if (try self.graph.containsGeneratedPrivate(callable.ret)) {
-                self.draft.exprs.items[@intFromEnum(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
+                self.draft.exprs.items[@backingInt(lowered)].ty = DraftTypeCell.fromGraphNode(callable.ret);
             }
         }
         self.allocator.free(task.args);
@@ -34253,7 +34254,7 @@ const BodyContext = struct {
                 return loweredExprStep(try self.addExpr(.{ .ty = local_ty, .data = .{ .local = local_id } }));
             }
 
-            const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+            const record = self.view.resolved_refs.records[@backingInt(ref_id)];
             switch (record.ref) {
                 .local_proc => |local| {
                     const request_fn_node = try self.activeNodeFromType(ty);
@@ -34357,7 +34358,7 @@ const BodyContext = struct {
         self.restore_evidence = rootEvidence(self.owner_template, evidence);
         defer self.restore_evidence = previous_restore_evidence;
 
-        const raw = @intFromEnum(template_id);
+        const raw = @backingInt(template_id);
         if (raw >= view.callable_eval_templates.templates.len) {
             Common.invariant("callable eval binding referenced a missing checked template");
         }
@@ -35893,7 +35894,7 @@ const BodyContext = struct {
         if (topologies.len != std.enums.values(static_dispatch.IteratorOwner).len) {
             Common.invariant("checked module omitted an iterator representation topology");
         }
-        const topology = topologies[@intFromEnum(owner)];
+        const topology = topologies[@backingInt(owner)];
         return .{
             .len_field = try self.recordFieldName(self.view, topology.len_field),
             .step_field = try self.recordFieldName(self.view, topology.step_field),
@@ -36268,7 +36269,7 @@ const BodyContext = struct {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.lambda");
         hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @intFromEnum(expr_id));
+        hashU32(&hasher, @backingInt(expr_id));
         hashU32(&hasher, @intCast(arg_count));
         hashU32(&hasher, 0);
         return .{ .bytes = hasher.finalResult() };
@@ -36282,11 +36283,11 @@ const BodyContext = struct {
         var hasher = TypeDigestHasher.init();
         hasher.update("roc.generated_iterator.callable.closure");
         hasher.update(self.view.key.bytes[0..]);
-        hashU32(&hasher, @intFromEnum(expr_id));
-        hashU32(&hasher, @intFromEnum(closure.lambda));
+        hashU32(&hasher, @backingInt(expr_id));
+        hashU32(&hasher, @backingInt(closure.lambda));
         hashU32(&hasher, @intCast(closure.captures.len));
         for (closure.captures) |capture| {
-            hashU32(&hasher, @intFromEnum(capture.capture_id));
+            hashU32(&hasher, @backingInt(capture.capture_id));
             hashU32(&hasher, capture.scope_depth);
             const binder = checkedCaptureBinder(self.view, capture.pattern);
             const checked_type_key = self.view.types.rootKey(checkedBinderType(self.view, binder));
@@ -39057,9 +39058,9 @@ const BodyContext = struct {
         precomputed_plan: ?*const ParserPrecomputedPlan,
     ) Allocator.Error!DraftDefId {
         const address = GeneratedParserDefAddress{
-            .value_ty = @intFromEnum(shape_ty),
-            .encoding_ty = @intFromEnum(encoding_ty),
-            .state_ty = @intFromEnum(state_ty),
+            .value_ty = @backingInt(shape_ty),
+            .encoding_ty = @backingInt(encoding_ty),
+            .state_ty = @backingInt(state_ty),
             .result = self.typeStore().typeDigestCached(self.nameStore(), ret_ty, null),
         };
         if (self.parser_defs.get(address)) |entry| return entry.id();
@@ -40580,8 +40581,8 @@ const BodyContext = struct {
         rest_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const address = GeneratedParseResultOkTypeAddress{
-            .value_ty = @intFromEnum(value_ty),
-            .rest_ty = @intFromEnum(rest_ty),
+            .value_ty = @backingInt(value_ty),
+            .rest_ty = @backingInt(rest_ty),
         };
         if (self.draft.parse_result_ok_types.get(address)) |ty| return ty;
 
@@ -41395,7 +41396,7 @@ const BodyContext = struct {
         body: DraftExprId,
         remainder: DraftExprId,
     ) Allocator.Error!void {
-        const reserved = &self.draft.exprs.items[@intFromEnum(reservation)];
+        const reserved = &self.draft.exprs.items[@backingInt(reservation)];
         if (reserved.data != .pending_deferred) {
             Common.invariant("compiler-generated join reservation was filled more than once");
         }
@@ -41407,7 +41408,7 @@ const BodyContext = struct {
             .remainder = remainder,
         } };
         reserved.data = data;
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(reservation)] =
+        self.draft.expr_impossibility_proofs.items[@backingInt(reservation)] =
             try self.exprDataImpossibilityProof(reserved.ty, data);
     }
 
@@ -41590,7 +41591,7 @@ const BodyContext = struct {
         target: checked.ResolvedValueId,
         fallback: checked.CheckedTypeId,
     ) checked.CheckedTypeId {
-        const raw = @intFromEnum(target);
+        const raw = @backingInt(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
@@ -41843,7 +41844,7 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?NodeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         local: {
             switch (record.ref) {
                 // A selected hoisted constant has a local binder only while
@@ -41886,7 +41887,7 @@ const BodyContext = struct {
         expected_ty: ?Type.TypeId,
     ) Allocator.Error!?Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         switch (record.ref) {
             .selected_hoisted_const => |selected| {
                 // A selected hoisted constant's binder has a local only while
@@ -41965,7 +41966,7 @@ const BodyContext = struct {
             try self.constrainCheckedInterfaceToCell(checked_ty, self.localTypeCell(local_id));
             return node;
         }
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         switch (record.ref) {
             .selected_hoisted_const => |selected| return try self.constUseTypeNode(checked_ty, selected.const_use),
             .top_level_const, .imported_const => |const_use| return try self.constUseTypeNode(checked_ty, const_use),
@@ -41981,7 +41982,7 @@ const BodyContext = struct {
         maybe_ref: ?checked.ResolvedValueId,
     ) Allocator.Error!Type.TypeId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         switch (record.ref) {
             .local_value,
             .pattern_binder,
@@ -42175,7 +42176,7 @@ const BodyContext = struct {
         source_fn_key: names.TypeDigest,
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
-        const raw = @intFromEnum(target);
+        const raw = @backingInt(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
@@ -42239,7 +42240,7 @@ const BodyContext = struct {
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(use_expr, request_fn_node);
         const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
-        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
         const previous_instantiation = self.instantiation;
         const previous_evidence = self.evidence;
         self.instantiation = TypeInstantiationContext.init(self.allocator, self.builder.allocateInstantiationScope(), self.view.key.bytes);
@@ -42264,7 +42265,7 @@ const BodyContext = struct {
         request_fn_node: NodeId,
     ) Allocator.Error!DraftFnSlot {
         const view = alias.view;
-        const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+        const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
         const lookup = template.forwarded_lookup orelse
             Common.invariant("forwarded callable-eval alias had no checked lookup");
         const root = view.compile_time_roots.root(template.root);
@@ -42326,7 +42327,7 @@ const BodyContext = struct {
     };
 
     fn finalDirectTarget(self: *BodyContext, target: checked.ResolvedValueId) FinalDirectTarget {
-        const raw = @intFromEnum(target);
+        const raw = @backingInt(target);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked direct call target is outside resolved value table");
         }
@@ -42337,7 +42338,7 @@ const BodyContext = struct {
                 .local_proc => |local| if (local.is_alias) {
                     const final = local.alias_target orelse
                         Common.invariant("callable alias has no published target");
-                    record = view.resolved_refs.records[@intFromEnum(final)];
+                    record = view.resolved_refs.records[@backingInt(final)];
                     continue;
                 },
                 .top_level_proc,
@@ -42346,18 +42347,18 @@ const BodyContext = struct {
                 .promoted_top_level_proc,
                 => |proc| if (self.builder.forwardingCallableEvalForProcedureUse(proc)) |alias| {
                     view = alias.view;
-                    const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+                    const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records[@intFromEnum(lookup)];
+                    record = view.resolved_refs.records[@backingInt(lookup)];
                     continue;
                 },
                 .platform_required_proc => |required| if (self.builder.forwardingCallableEvalForProcedureUse(required.procedure)) |alias| {
                     view = alias.view;
-                    const template = view.callable_eval_templates.templates[@intFromEnum(alias.template)];
+                    const template = view.callable_eval_templates.templates[@backingInt(alias.template)];
                     const lookup = view.resolved_refs.lookupIdByCheckedExpr(template.forwarded_lookup.?) orelse
                         Common.invariant("forwarded procedure alias lookup had no resolved value");
-                    record = view.resolved_refs.records[@intFromEnum(lookup)];
+                    record = view.resolved_refs.records[@backingInt(lookup)];
                     continue;
                 },
                 .local_param, .local_value, .local_mutable_version, .pattern_binder, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => {},
@@ -42503,8 +42504,8 @@ const BodyContext = struct {
         errdefer bindings.deinit(self.allocator);
 
         for (context.entries) |entry| {
-            const local: DraftLocalId = @enumFromInt(entry.local);
-            const raw = @intFromEnum(local);
+            const local: DraftLocalId = @fromBackingInt(@intCast(entry.local));
+            const raw = @backingInt(local);
             if (raw >= self.draft.locals.items.len) {
                 Common.invariant("local procedure context capture referenced an unknown local");
             }
@@ -42626,7 +42627,7 @@ const BodyContext = struct {
     }
 
     fn currentLocalBindingForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) ?CurrentLocal {
-        const raw = @intFromEnum(ref_id);
+        const raw = @backingInt(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
         }
@@ -42663,7 +42664,7 @@ const BodyContext = struct {
     fn currentConstLocalForResolvedValue(self: *BodyContext, ref_id: checked.ResolvedValueId) Allocator.Error!?DraftLocalId {
         var active_id = self.active_const_binding;
         if (active_id == null) return null;
-        const raw = @intFromEnum(ref_id);
+        const raw = @backingInt(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
         }
@@ -42674,7 +42675,7 @@ const BodyContext = struct {
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_checked_error, .platform_required_proc, .promoted_top_level_proc => return null,
         };
         while (active_id) |id| {
-            const index = @intFromEnum(id);
+            const index = @backingInt(id);
             const active = self.draft.active_const_bindings.items[index];
             if (constUseEql(active.const_use, const_use.const_ref)) {
                 self.draft.active_const_bindings.items[index].used = true;
@@ -42689,7 +42690,7 @@ const BodyContext = struct {
     fn markActiveConstBinderUsed(self: *BodyContext, binder: checked.PatternBinderId) Allocator.Error!void {
         var active_id = self.active_const_binding;
         while (active_id) |id| {
-            const index = @intFromEnum(id);
+            const index = @backingInt(id);
             const active = self.draft.active_const_bindings.items[index];
             if (moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes) and active.binder == binder) {
                 self.draft.active_const_bindings.items[index].used = true;
@@ -42713,7 +42714,7 @@ const BodyContext = struct {
                 }
                 const entry = store_view.hoisted_constants.lookupByExpr(hoisted.expr) orelse return null;
                 const pattern = entry.pattern orelse return null;
-                const raw_pattern = @intFromEnum(pattern);
+                const raw_pattern = @backingInt(pattern);
                 if (raw_pattern >= store_view.bodies.pattern_binder_by_pattern.len) {
                     Common.invariant("hoisted const result pattern was outside the binder index");
                 }
@@ -42754,12 +42755,12 @@ const BodyContext = struct {
         var cursor = active_id;
         while (cursor) |id| {
             try chain.append(self.allocator, id);
-            cursor = self.draft.active_const_bindings.items[@intFromEnum(id)].parent;
+            cursor = self.draft.active_const_bindings.items[@backingInt(id)].parent;
         }
         var index = chain.items.len;
         while (index > 0) {
             index -= 1;
-            const active = self.draft.active_const_bindings.items[@intFromEnum(chain.items[index])];
+            const active = self.draft.active_const_bindings.items[@backingInt(chain.items[index])];
             if (!moduleBytesEqual(checked.constModuleId(active.const_use).bytes, self.view.key.bytes)) continue;
             try self.binders.put(active.binder, active.local);
         }
@@ -42780,7 +42781,7 @@ const BodyContext = struct {
         );
         try self.bindLocalNameFromView(store_view, local, binder);
         const reservation = try self.addExprWithTypeCell(cell, .pending_deferred);
-        const active_id: ActiveConstBindingId = @enumFromInt(@as(u32, @intCast(self.draft.active_const_bindings.items.len)));
+        const active_id: ActiveConstBindingId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.active_const_bindings.items.len))));
         try self.draft.active_const_bindings.append(self.allocator, .{
             .parent = self.active_const_binding,
             .const_use = const_use,
@@ -42815,8 +42816,8 @@ const BodyContext = struct {
     }
 
     fn copyActiveConstReservation(self: *BodyContext, reservation: DraftExprId, source: DraftExprId) void {
-        const reservation_index = @intFromEnum(reservation);
-        const source_index = @intFromEnum(source);
+        const reservation_index = @backingInt(reservation);
+        const source_index = @backingInt(source);
         self.draft.exprs.items[reservation_index] = self.draft.exprs.items[source_index];
         self.draft.expr_locs.items[reservation_index] = self.draft.expr_locs.items[source_index];
         self.draft.expr_regions.items[reservation_index] = self.draft.expr_regions.items[source_index];
@@ -42824,7 +42825,7 @@ const BodyContext = struct {
     }
 
     fn finishActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId, source: DraftExprId) Allocator.Error!DraftExprId {
-        const index = @intFromEnum(active_id);
+        const index = @backingInt(active_id);
         if (self.draft.active_const_bindings.items[index].restored_source != null) {
             Common.invariant("active const binding was finished more than once");
         }
@@ -42836,7 +42837,7 @@ const BodyContext = struct {
     }
 
     fn materializeActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId) Allocator.Error!void {
-        const index = @intFromEnum(active_id);
+        const index = @backingInt(active_id);
         const active = self.draft.active_const_bindings.items[index];
         if (!active.used or active.wrapped) return;
         const source = active.restored_source orelse return;
@@ -42847,14 +42848,14 @@ const BodyContext = struct {
         defer self.builder.current_loc = saved_loc;
         const saved_region = self.builder.current_region;
         defer self.builder.current_region = saved_region;
-        self.builder.current_loc = self.draft.expr_locs.items[@intFromEnum(source)];
-        self.builder.current_region = self.draft.expr_regions.items[@intFromEnum(source)];
+        self.builder.current_loc = self.draft.expr_locs.items[@backingInt(source)];
+        self.builder.current_region = self.draft.expr_regions.items[@backingInt(source)];
 
         const wrapped = try self.wrapRecursiveConstLocalAtTypeCell(active.local, active.cell, source);
         self.copyActiveConstReservation(active.reservation, wrapped);
-        self.draft.expr_locs.items[@intFromEnum(active.reservation)] = self.draft.expr_locs.items[@intFromEnum(source)];
-        self.draft.expr_regions.items[@intFromEnum(active.reservation)] = self.draft.expr_regions.items[@intFromEnum(source)];
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(active.reservation)] = self.draft.expr_impossibility_proofs.items[@intFromEnum(source)];
+        self.draft.expr_locs.items[@backingInt(active.reservation)] = self.draft.expr_locs.items[@backingInt(source)];
+        self.draft.expr_regions.items[@backingInt(active.reservation)] = self.draft.expr_regions.items[@backingInt(source)];
+        self.draft.expr_impossibility_proofs.items[@backingInt(active.reservation)] = self.draft.expr_impossibility_proofs.items[@backingInt(source)];
         self.draft.active_const_bindings.items[index].wrapped = true;
     }
 
@@ -42880,7 +42881,7 @@ const BodyContext = struct {
         ref_id: checked.ResolvedValueId,
         ty: Type.TypeId,
     ) ?CurrentLocal {
-        const raw = @intFromEnum(ref_id);
+        const raw = @backingInt(ref_id);
         if (raw >= self.view.resolved_refs.records.len) {
             Common.invariant("checked lookup resolved value id was outside resolved value table");
         }
@@ -42953,7 +42954,7 @@ const BodyContext = struct {
         ty: Type.TypeId,
     ) Allocator.Error!DraftExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         switch (record.ref) {
             .platform_required_checked_error => return try self.addExpr(.{ .ty = ty, .data = .{ .checked_error = try self.addStringLiteral("platform requirement failed checking") } }),
             .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .top_level_proc, .imported_proc, .hosted_proc, .platform_required_declaration, .platform_required_const, .platform_required_proc, .promoted_top_level_proc => {},
@@ -43120,7 +43121,7 @@ const BodyContext = struct {
     }
 
     fn checkedTypeIsClosed(self: *const BodyContext, ty: checked.CheckedTypeId) bool {
-        const raw = @intFromEnum(ty);
+        const raw = @backingInt(ty);
         if (raw >= self.view.types.roots.len) {
             Common.invariant("checked type closure query referenced a missing root");
         }
@@ -43131,7 +43132,7 @@ const BodyContext = struct {
     /// `expected_node`, when it names a generalized callable alias.
     fn schemeAliasLookupTask(self: *BodyContext, maybe_ref: ?checked.ResolvedValueId, expected_node: NodeId) ?LowerTask {
         const ref_id = maybe_ref orelse return null;
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         return switch (record.ref) {
             .local_proc => |local| if (local.is_alias) .{ .scheme_alias = .{
                 .alias = local,
@@ -43158,7 +43159,7 @@ const BodyContext = struct {
         maybe_ref: ?checked.ResolvedValueId,
         ty: Type.TypeId,
     ) Allocator.Error!LowerStep {
-        if (maybe_ref) |ref_id| switch (self.view.resolved_refs.records[@intFromEnum(ref_id)].ref) {
+        if (maybe_ref) |ref_id| switch (self.view.resolved_refs.records[@backingInt(ref_id)].ref) {
             .local_proc => |local| if (local.is_alias) {
                 return requestLowerTask(self, self.schemeAliasLookupTask(maybe_ref, try self.activeNodeFromType(ty)).?);
             },
@@ -43177,7 +43178,7 @@ const BodyContext = struct {
             Common.invariant("generalized callable alias has no checked scheme scope");
         const edge = try self.evidenceForUseSiteAtNode(task.use_expr, task.expected_node);
         const evidence = try enterEvidenceScope(self.builder, self.evidence, scope_id, alias.expr, edge);
-        const scope = self.view.templates.dispatch_scopes[@intFromEnum(scope_id)];
+        const scope = self.view.templates.dispatch_scopes[@backingInt(scope_id)];
         const saved = try self.allocator.create(SchemeAliasSavedScope);
         saved.* = .{ .instantiation = self.instantiation, .evidence = self.evidence };
         task.saved = saved;
@@ -43267,7 +43268,7 @@ const BodyContext = struct {
         expected_node: NodeId,
     ) Allocator.Error!DraftExprId {
         const ref_id = maybe_ref orelse Common.invariant("checked lookup reached Monotype without resolved value ref");
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         if (self.currentLocalBindingForResolvedValue(ref_id)) |binding| {
             return try self.lowerLocalBindingAtNode(
                 binding,
@@ -43413,7 +43414,7 @@ const BodyContext = struct {
             .pending_deferred,
         );
         const proof_reservation = try self.addImpossibilityProof(.pending);
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = proof_reservation;
+        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = proof_reservation;
         const lexical = try self.captureCodecLexicalContext();
         errdefer {
             self.allocator.free(lexical.binders);
@@ -43576,7 +43577,7 @@ const BodyContext = struct {
         self: *BodyContext,
         draft_fn: DraftFnId,
     ) Allocator.Error!NodeId {
-        const current_node = try self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
+        const current_node = try self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
         const current_fn = try self.graph.functionNodes(current_node);
         const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
         const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
@@ -43651,10 +43652,10 @@ const BodyContext = struct {
 
         const raw_spec: u32 = @intCast(spec_index);
         _ = try self.adoptCompletedIteratorResult(current_node, completed_node);
-        self.draft.fns.items[@intFromEnum(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
+        self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_node);
         self.draft.template_specs.items[spec_index].request_fn_node = completed_node;
         const completed_spec = self.draft.template_specs.items[spec_index];
-        const completed_source = self.draft.fns.items[@intFromEnum(draft_fn)].source;
+        const completed_source = self.draft.fns.items[@backingInt(draft_fn)].source;
         const lookup_prefix = try self.draft.template_spec_lookup.internPrefix(
             DraftTemplateFamilyAddress.init(
                 completed_spec.template_ref,
@@ -44837,9 +44838,9 @@ const BodyContext = struct {
         request_fn_node: NodeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
-        const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
+        const fn_value = store_view.const_store.getFn(@fromBackingInt(@intCast(raw)));
         switch (fn_value.fn_def) {
             .parser_runtime => return try self.restoreConstCodecRuntimeFnAtNode(
                 .parser,
@@ -45113,9 +45114,9 @@ const BodyContext = struct {
         ty: Type.TypeId,
         static_data_const_locator: ?checked.ConstLocator,
     ) Allocator.Error!DraftExprId {
-        const raw = @intFromEnum(fn_id);
+        const raw = @backingInt(fn_id);
         if (raw >= store_view.const_store.fns.items.len) Common.invariant("ConstStore function id is out of range");
-        const fn_value = store_view.const_store.getFn(@enumFromInt(raw));
+        const fn_value = store_view.const_store.getFn(@fromBackingInt(@intCast(raw)));
         if (fn_value.fn_def == .parser_runtime) {
             return try self.restoreConstCodecRuntimeFn(.parser, store_view, fn_id, fn_value, ty, static_data_const_locator);
         }
@@ -45350,7 +45351,7 @@ const BodyContext = struct {
             // build instead of reporting.
             Common.compilerBug("stored parser runtime body differed from its sealed return type");
         }
-        self.draft.exprs.items[@intFromEnum(parsed)].ty = ret_cell;
+        self.draft.exprs.items[@backingInt(parsed)].ty = ret_cell;
 
         const stored_evidence = try self.storedEvidence(self.evidence);
         const evidence_digest = stored_evidence.digest;
@@ -45490,7 +45491,7 @@ const BodyContext = struct {
             // build instead of reporting.
             Common.compilerBug("stored encoder_for runtime body differed from its sealed return type");
         }
-        self.draft.exprs.items[@intFromEnum(encoded)].ty = ret_cell;
+        self.draft.exprs.items[@backingInt(encoded)].ty = ret_cell;
 
         const stored_evidence = try self.storedEvidence(self.evidence);
         const evidence_digest = stored_evidence.digest;
@@ -45629,7 +45630,7 @@ const BodyContext = struct {
         // carries the encoding operand's impossibility proof from deferral
         // until Phase B replaces it with the emitted body's. Without this the
         // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+        fn_ctx.draft.expr_impossibility_proofs.items[@backingInt(runtime_boundary)] =
             fn_ctx.exprImpossibilityProof(encoding_expr);
 
         const boundary = DraftDeferredStoredCodecRestore{
@@ -45774,7 +45775,7 @@ const BodyContext = struct {
         // carries the encoding operand's impossibility proof from deferral
         // until Phase B replaces it with the emitted body's. Without this the
         // boundary is proof-less for the whole of Phase A.
-        fn_ctx.draft.expr_impossibility_proofs.items[@intFromEnum(runtime_boundary)] =
+        fn_ctx.draft.expr_impossibility_proofs.items[@backingInt(runtime_boundary)] =
             fn_ctx.exprImpossibilityProof(encoding_expr);
 
         var boundary = DraftDeferredStoredCodecRestore{
@@ -45889,7 +45890,7 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, local_node, expected_node);
             return;
         }
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         const const_use: ?checked.ConstUseTemplate = switch (record.ref) {
             .selected_hoisted_const => |selected| selected.const_use,
             .top_level_const, .imported_const => |value| value,
@@ -47714,7 +47715,7 @@ const BodyContext = struct {
         defer work.deinit(self.allocator);
         try work.append(self.allocator, root);
         while (work.pop()) |expr_id| {
-            switch (self.draft.exprs.items[@intFromEnum(expr_id)].data) {
+            switch (self.draft.exprs.items[@backingInt(expr_id)].data) {
                 .local,
                 .unit,
                 .int_lit,
@@ -47984,7 +47985,7 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         request_fn_node: NodeId,
     ) Allocator.Error!NestedSiteEvidence {
-        const raw_site = @intFromEnum(nested.site);
+        const raw_site = @backingInt(nested.site);
         if (raw_site >= self.view.nested_proc_sites.sites.len) {
             Common.invariant("nested function referenced a site absent from the CheckedModule procedure-site table");
         }
@@ -48005,7 +48006,7 @@ const BodyContext = struct {
         const owned_scope: ?checked.DispatchScopeId = switch (site.lexical_scope) {
             .root => null,
             .generalized => |scope_id| blk: {
-                const raw_scope = @intFromEnum(scope_id);
+                const raw_scope = @backingInt(scope_id);
                 if (raw_scope >= self.view.templates.dispatch_scopes.len) {
                     Common.invariant("nested function site referenced an unknown checked dispatch scope");
                 }
@@ -48026,7 +48027,7 @@ const BodyContext = struct {
             .root => Common.invariant("root nested function site was lowered from a non-root evidence scope"),
             .generalized => Common.invariant("nested function site was lowered outside its checked lexical evidence scope"),
         };
-        const raw_scope = @intFromEnum(scope_id);
+        const raw_scope = @backingInt(scope_id);
         const scope = self.view.templates.dispatch_scopes[raw_scope];
         const params = self.view.templates.evidence_params_pool[scope.evidence_params.start .. scope.evidence_params.start + scope.evidence_params.len];
         const edge = switch (site.evidence_source) {
@@ -48159,7 +48160,7 @@ const BodyContext = struct {
     /// procedure, as its target or anywhere in that target's nested evidence.
     fn dispatchPlanSelectsLocalProc(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) bool {
         const id = plan_id orelse return false;
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(id)];
+        const plan = self.view.static_dispatch_plans.plans[@backingInt(id)];
         return switch (plan.resolution) {
             .direct_closed => false,
             .direct_parametric => |direct| self.checkedEvidenceNodeSelectsLocalProc(direct.evidence),
@@ -48240,7 +48241,7 @@ const BodyContext = struct {
     fn literalRejectionSite(self: *BodyContext, expr_id: checked.CheckedExprId) Common.LiteralRejectionSite {
         return .{
             .owner = self.builder.loweringModuleId(self.view.key),
-            .checked_expr = @intFromEnum(expr_id),
+            .checked_expr = @backingInt(expr_id),
             .kind = switch (self.view.bodies.expr(expr_id).data) {
                 .numeral => .numeral,
                 .str_from_quote => .quote,
@@ -48262,7 +48263,7 @@ const BodyContext = struct {
     /// The checked `Try` result type of a literal's conversion call.
     fn literalConversionTryType(self: *BodyContext, plan_id: ?static_dispatch.StaticDispatchPlanId) checked.CheckedTypeId {
         const id = plan_id orelse Common.invariant("checked literal conversion reached Monotype without a dispatch plan");
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(id)];
+        const plan = self.view.static_dispatch_plans.plans[@backingInt(id)];
         if (plan.result_mode != .value) Common.invariant("checked literal conversion plan had a non-value result mode");
         return self.checkedFunctionType(plan.callable_ty).ret;
     }
@@ -49003,7 +49004,7 @@ const BodyContext = struct {
             // An interpolation's value is its conversion result's `Ok` payload.
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         } orelse return null;
-        const plan = self.view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+        const plan = self.view.static_dispatch_plans.plans[@backingInt(plan_id)];
         return try self.closedDirectGraphFreeResultType(expr.ty, plan);
     }
 
@@ -49036,7 +49037,7 @@ const BodyContext = struct {
             const vector = try self.materializeConstFnEvidenceVector(fn_value.evidence, &cursor, frame.roots_len);
             const scope: LexicalDispatchScope = switch (frame.scope()) {
                 .root => .root,
-                .generalized => |scope_id| .{ .generalized = @enumFromInt(scope_id) },
+                .generalized => |scope_id| .{ .generalized = @fromBackingInt(@intCast(scope_id)) },
             };
             if (index == 0) {
                 if (scope != .root or frame.parent != null) {
@@ -49050,7 +49051,7 @@ const BodyContext = struct {
                 Common.invariant("stored function evidence frame did not name its immediate lexical parent");
             }
             const scope_id = scope.generalized;
-            const raw_scope = @intFromEnum(scope_id);
+            const raw_scope = @backingInt(scope_id);
             if (raw_scope >= owner_view.templates.dispatch_scopes.len) {
                 Common.invariant("stored function evidence referenced an unknown checked scope");
             }
@@ -49085,7 +49086,7 @@ const BodyContext = struct {
                     self.builder.moduleForConstFnDef(fn_value.fn_def)
                 else
                     owner_view;
-                const raw_site = @intFromEnum(nested.site);
+                const raw_site = @backingInt(nested.site);
                 if (raw_site >= site_view.nested_proc_sites.sites.len) {
                     Common.invariant("stored nested function referenced an unknown checked site");
                 }
@@ -49267,7 +49268,7 @@ const BodyContext = struct {
                             Common.invariant("stored structural evidence checked type identity changed during restoration");
                         }
                         const identity = if (stored_checked.generated_codec_derivation) |id|
-                            view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(id)].identity
+                            view.static_dispatch_plans.generated_codec_derivations[@backingInt(id)].identity
                         else
                             null;
                         if (identity != stored_checked.generated_codec_identity)
@@ -49432,7 +49433,7 @@ const BodyContext = struct {
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .func, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .record_field => switch (content) {
-                .record => return try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @enumFromInt(step.data))),
+                .record => return try self.graph.recordFieldValueNode(node, try self.recordFieldName(view, @fromBackingInt(step.data))),
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .empty_tag_union, .empty_record, .named, .erased, .zst => return null,
             },
             .tag_payload_tag => switch (content) {
@@ -49447,7 +49448,7 @@ const BodyContext = struct {
                 return switch (content) {
                     .tag_union => try self.graph.tagPayloadNode(
                         node,
-                        try self.tagName(view, @enumFromInt(tag_step.data)),
+                        try self.tagName(view, @fromBackingInt(@intCast(tag_step.data))),
                         step.data,
                     ),
                     .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => null,
@@ -49577,10 +49578,10 @@ const BodyContext = struct {
     /// procedure's declaration scope's, or the const's evaluation entry
     /// template's.
     fn useSiteSchema(self: *BodyContext, expr: checked.CheckedExprId) Allocator.Error!SchemeRequirements {
-        const raw_expr = @intFromEnum(expr);
+        const raw_expr = @backingInt(expr);
         if (raw_expr >= self.view.resolved_refs.by_checked_expr.len) return emptySchema(self.view);
         const ref_id = self.view.resolved_refs.by_checked_expr[raw_expr] orelse return emptySchema(self.view);
-        const record = self.view.resolved_refs.records[@intFromEnum(ref_id)];
+        const record = self.view.resolved_refs.records[@backingInt(ref_id)];
         return switch (record.ref) {
             .top_level_proc, .imported_proc, .hosted_proc, .promoted_top_level_proc => |proc| self.procedureUseSchema(proc),
             .platform_required_proc => |proc| self.procedureUseSchema(proc.procedure),
@@ -49599,7 +49600,7 @@ const BodyContext = struct {
     /// without a scope has no requirements and no quantified variables.
     fn scopeSchema(_: *BodyContext, view: ModuleView, maybe_scope: ?checked.DispatchScopeId) SchemeRequirements {
         const scope_id = maybe_scope orelse return emptySchema(view);
-        const raw_scope = @intFromEnum(scope_id);
+        const raw_scope = @backingInt(scope_id);
         if (raw_scope >= view.templates.dispatch_scopes.len) {
             Common.invariant("local procedure named a dispatch scope outside its checked template table");
         }
@@ -49617,7 +49618,7 @@ const BodyContext = struct {
         if (self.builder.callableEvalForProcedureUse(proc)) |callable_eval| {
             // A callable-eval binding lowers through its root's entry wrapper,
             // whose scheme is the binding's own.
-            const raw_template = @intFromEnum(callable_eval.template);
+            const raw_template = @backingInt(callable_eval.template);
             if (raw_template >= callable_eval.view.callable_eval_templates.templates.len) {
                 Common.invariant("callable eval binding referenced a missing checked template");
             }
@@ -51469,7 +51470,7 @@ const BodyContext = struct {
         expr: checked.CheckedExprId,
         context_anchor: ?checked.CheckedStatementId,
     ) LocalProcContext {
-        const raw_context = @intFromEnum(context_id);
+        const raw_context = @backingInt(context_id);
         if (raw_context >= self.draft.local_proc_contexts.items.len) {
             Common.invariant("local procedure use referenced an unknown declaration context");
         }
@@ -52255,7 +52256,7 @@ const BodyContext = struct {
         const encoding = self.preLoweredOperandAt(pre_lowered, 0) orelse
             Common.invariant("structural serialization encoding operand was not lowered before deferral");
         const expr = try self.addExprWithTypeCell(DraftTypeCell.fromGraphNode(callable.ret), .pending_deferred);
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = self.exprImpossibilityProof(encoding);
+        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = self.exprImpossibilityProof(encoding);
         const lexical = try self.captureCodecLexicalContext();
         var lexical_needs_cleanup = true;
         errdefer if (lexical_needs_cleanup) {
@@ -53587,9 +53588,9 @@ const BodyContext = struct {
         input: ?EncodeResult,
     ) Allocator.Error!EncodeStep {
         const address = GeneratedEncoderDefAddress{
-            .value_ty = @intFromEnum(task.value_ty),
-            .encoding_ty = @intFromEnum(task.inputs.encoding_ty),
-            .state_ty = @intFromEnum(task.state_ty),
+            .value_ty = @backingInt(task.value_ty),
+            .encoding_ty = @backingInt(task.inputs.encoding_ty),
+            .state_ty = @backingInt(task.state_ty),
             .result = self.typeStore().typeDigestCached(self.nameStore(), task.ret_ty, null),
         };
         if (stage == 0) {
@@ -54468,9 +54469,9 @@ const BodyContext = struct {
         err_ty: Type.TypeId,
     ) Allocator.Error!Type.TypeId {
         const address = GeneratedTryTypeAddress{
-            .template_ty = @intFromEnum(template_try_ty),
-            .ok_ty = @intFromEnum(ok_ty),
-            .err_ty = @intFromEnum(err_ty),
+            .template_ty = @backingInt(template_try_ty),
+            .ok_ty = @backingInt(ok_ty),
+            .err_ty = @backingInt(err_ty),
         };
         if (self.draft.generated_try_types.get(address)) |ty| return ty;
 
@@ -55245,10 +55246,10 @@ const BodyContext = struct {
             Common.invariant("structural codec reached Monotype without its checked derivation contract");
         const derivation_id = checked_structural.evidence.generated_codec_derivation orelse
             Common.invariant("checked structural codec evidence had no generated derivation contract");
-        if (@intFromEnum(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(derivation_id) >= checked_structural.view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked structural codec evidence referenced a missing generated derivation");
         }
-        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        const derivation = checked_structural.view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
         const kind: CodecKind = switch (structural.derivation.kind()) {
             .parser => .parser,
             .encoder => .encoder,
@@ -55276,10 +55277,10 @@ const BodyContext = struct {
         constructor_node: NodeId,
         shape_node: NodeId,
     ) Allocator.Error!void {
-        if (@intFromEnum(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(anchor.derivation) >= anchor.view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked codec call anchor referenced a missing derivation");
         }
-        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(anchor.derivation)];
+        const derivation = anchor.view.static_dispatch_plans.generated_codec_derivations[@backingInt(anchor.derivation)];
         if (anchor.call_index >= derivation.calls.len) {
             Common.invariant("checked codec call anchor referenced a missing generated call");
         }
@@ -55304,7 +55305,7 @@ const BodyContext = struct {
     ) Allocator.Error!NodeId {
         const active = self.active_codec_contract orelse
             Common.invariant("generated codec subject selection had no active contract");
-        const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(active.derivation)];
+        const derivation = active.view.static_dispatch_plans.generated_codec_derivations[@backingInt(active.derivation)];
         if (derivation.body_shape_ty == derivation.shape_ty) return shape_node;
         const boundary_shape_node = active.shape_node;
         return if (self.graph.sameClass(boundary_shape_node, shape_node)) structural_node else shape_node;
@@ -55432,10 +55433,10 @@ const BodyContext = struct {
         kind: CodecKind,
         boundary: CodecContractBoundary,
     ) Allocator.Error!ActiveCodecContract {
-        if (@intFromEnum(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.len) {
+        if (@backingInt(derivation_id) >= checked_view.static_dispatch_plans.generated_codec_derivations.len) {
             Common.invariant("checked codec anchor referenced a missing generated derivation");
         }
-        const derivation = checked_view.static_dispatch_plans.generated_codec_derivations[@intFromEnum(derivation_id)];
+        const derivation = checked_view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
         const checked_kind: static_dispatch.GeneratedCodecDerivationKind = switch (kind) {
             .parser => .parser,
             .encoder => .encoder,
@@ -55659,7 +55660,7 @@ const BodyContext = struct {
         if (slot.call_index >= calls.len) {
             Common.invariant("checked generated codec direct call slot was out of bounds");
         }
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             for (calls) |*candidate| {
                 if (candidate.checked.method != slot.method or
                     candidate.checked.method_role != slot.method_role or
@@ -55692,7 +55693,7 @@ const BodyContext = struct {
         self: *BodyContext,
         active: ActiveCodecContract,
     ) void {
-        if (@import("builtin").mode != .Debug or active.grounding_call_index != null) return;
+        if (@import("builtin").mode != .debug or active.grounding_call_index != null) return;
         if (active.calls_start > self.instantiated_codec_calls.items.len or
             active.calls_len > self.instantiated_codec_calls.items.len - active.calls_start)
         {
@@ -57887,7 +57888,7 @@ const BodyContext = struct {
         mode: DraftStructuralDerivationMode,
     ) Allocator.Error!DraftExprId {
         const expr = try self.addExprWithTypeCell(.{ .sealed = ret_ty }, .pending_deferred);
-        self.draft.expr_impossibility_proofs.items[@intFromEnum(expr)] = try self.anyImpossibilityProof(&.{
+        self.draft.expr_impossibility_proofs.items[@backingInt(expr)] = try self.anyImpossibilityProof(&.{
             self.exprImpossibilityProof(lhs),
             self.exprImpossibilityProof(rhs),
         });
@@ -59849,7 +59850,7 @@ const BodyContext = struct {
         pattern_id: checked.CheckedPatternId,
         kind: RuntimeDemandGuardFrameKind,
     ) RuntimeDemandGuardFrameAddress {
-        return self.runtimeDemandGuardFrameAddressRaw(@intFromEnum(pattern_id), kind);
+        return self.runtimeDemandGuardFrameAddressRaw(@backingInt(pattern_id), kind);
     }
 
     fn runtimeDemandGuardFrameAddressRaw(
@@ -59860,8 +59861,8 @@ const BodyContext = struct {
         return .{
             .module = self.view.key.bytes,
             .owner_module = names.procTemplateModuleDigest(self.owner_template).bytes,
-            .owner_proc_base = @intFromEnum(self.owner_template.proc_base),
-            .owner_template = @intFromEnum(self.owner_template.template),
+            .owner_proc_base = @backingInt(self.owner_template.proc_base),
+            .owner_template = @backingInt(self.owner_template.template),
             .pattern = site,
             .kind = kind,
         };
@@ -59935,7 +59936,7 @@ const BodyContext = struct {
         return try pushRuntimeDemandGuardFrame(
             self.draft,
             self.runtime_demand_guard_frames,
-            self.runtimeDemandGuardFrameAddressRaw(@intFromEnum(statement_id), .statement_success),
+            self.runtimeDemandGuardFrameAddressRaw(@backingInt(statement_id), .statement_success),
             proof,
         );
     }
@@ -60179,7 +60180,7 @@ const BodyContext = struct {
                 Common.invariant("match alternative binder remap referenced an unbound candidate binder");
             // All alternatives implement the arm's one checked capture slot.
             // Preserve each local's separate runtime identity and lexical binder.
-            self.draft.locals.items[@intFromEnum(local)].checked_capture_id =
+            self.draft.locals.items[@backingInt(local)].checked_capture_id =
                 checked.CaptureId.fromBinder(remap.representative_binder);
             try self.binders.put(remap.representative_binder, local);
         }
@@ -60341,7 +60342,7 @@ const BodyContext = struct {
             }
         }
         selection.has_value = true;
-        self.draft.exprs.items[@intFromEnum(value)].ty = selection.selected;
+        self.draft.exprs.items[@backingInt(value)].ty = selection.selected;
     }
 
     fn finishControlFlowResultSelection(
@@ -61274,11 +61275,11 @@ const BodyContext = struct {
     fn checkedStatementHasRuntimeEffect(self: *BodyContext, statement_id: checked.CheckedStatementId) bool {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
-        const raw = @intFromEnum(statement_id);
+        const raw = @backingInt(statement_id);
         if (raw >= self.view.bodies.statementCount()) {
             Common.invariant("checked runtime statement filter referenced a missing statement");
         }
-        return switch (self.view.bodies.statement(@enumFromInt(raw)).data) {
+        return switch (self.view.bodies.statement(@fromBackingInt(@intCast(raw))).data) {
             .decl => |decl| switch (self.view.bodies.expr(decl.expr).data) {
                 // A dangling annotation carries diagnostics and checked type
                 // information but has no runtime value to bind.
@@ -61335,7 +61336,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
-            const raw = @intFromEnum(statement_id);
+            const raw = @backingInt(statement_id);
             if (raw >= divergence.statements.len) Common.invariant("specialization divergence referenced a missing checked statement");
             return switch (self.checkedInlineExpectMode()) {
                 .run => divergence.statements[raw],
@@ -61349,7 +61350,7 @@ const BodyContext = struct {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .reachability);
         defer timing_scope.end();
         if (self.specializationDispatchDivergence()) |divergence| {
-            const raw = @intFromEnum(expr_id);
+            const raw = @backingInt(expr_id);
             if (raw >= divergence.exprs.len) Common.invariant("specialization divergence referenced a missing checked expression");
             return switch (self.checkedInlineExpectMode()) {
                 .run => divergence.exprs[raw],
@@ -62256,7 +62257,7 @@ const BodyContext = struct {
         binder: checked.PatternBinderId,
     ) ?DraftLocalId {
         const local = self.binders.get(binder) orelse return null;
-        return if (self.draft.currentOwnerOwnsCore(.locals, @intFromEnum(local))) local else null;
+        return if (self.draft.currentOwnerOwnsCore(.locals, @backingInt(local))) local else null;
     }
 
     fn materializePatternBinderAtCell(
@@ -62268,7 +62269,7 @@ const BodyContext = struct {
             const local = self.currentOwnerPatternBinderLocal(binder) orelse
                 Common.invariant("pattern binder was not pre-registered before materialization");
             switch (cell) {
-                .sealed => |sealed| if (@intFromEnum(sealed) >= self.typeStore().epochBoundary().types) {
+                .sealed => |sealed| if (@backingInt(sealed) >= self.typeStore().epochBoundary().types) {
                     Common.invariant("pattern binder adopted a type from another store");
                 },
                 .graph_node => {},
@@ -62352,7 +62353,7 @@ const BodyContext = struct {
         const current = try self.captureLocalProcContext(declaration);
         defer self.releaseLocalProcContext(current);
         const existing_context: ?LocalProcContext = if (self.local_proc_contexts.get(address)) |existing_id| blk: {
-            const raw_existing = @intFromEnum(existing_id);
+            const raw_existing = @backingInt(existing_id);
             if (raw_existing >= self.draft.local_proc_contexts.items.len) {
                 Common.invariant("local procedure binder referenced an unknown declaration context");
             }
@@ -62371,7 +62372,7 @@ const BodyContext = struct {
                 Common.invariant("local procedure binder had two declaration contexts");
             }
         } else {
-            const context_id: DraftLocalProcContextId = @enumFromInt(@as(u32, @intCast(self.draft.local_proc_contexts.items.len)));
+            const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
             try self.draft.local_proc_contexts.append(self.allocator, try self.cloneLocalProcContext(current));
             try self.local_proc_contexts.putPermanent(address, context_id);
         }
@@ -62405,16 +62406,16 @@ const BodyContext = struct {
     ) Allocator.Error!void {
         for (entries, 0..) |*entry, index| {
             if (entry.kind != 0) continue;
-            const binder: checked.PatternBinderId = @enumFromInt(entry.binder);
+            const binder: checked.PatternBinderId = @fromBackingInt(entry.binder);
             if (!self.localProcSnapshotsBinder(expr, binder)) continue;
 
-            const current: DraftLocalId = @enumFromInt(entry.local);
+            const current: DraftLocalId = @fromBackingInt(entry.local);
             const cell = self.localTypeCell(current);
             const snapshot: DraftLocalId = if (existing) |recorded| blk: {
                 if (recorded.len != entries.len or recorded[index].binder != entry.binder) {
                     Common.invariant("local procedure declaration lowered again with a different lexical context");
                 }
-                break :blk @enumFromInt(recorded[index].local);
+                break :blk @fromBackingInt(recorded[index].local);
             } else blk: {
                 const local = try self.draft.addCaptureSnapshotLocal(self.builder.symbols.fresh(), cell);
                 try self.bindLocalName(local, binder);
@@ -62424,7 +62425,7 @@ const BodyContext = struct {
                 .pat = try self.addPatWithTypeCell(cell, .{ .bind = snapshot }),
                 .value = try self.addExprWithTypeCell(cell, .{ .local = current }),
             } }));
-            entry.local = @intFromEnum(snapshot);
+            entry.local = @backingInt(snapshot);
         }
     }
 
@@ -62458,7 +62459,7 @@ const BodyContext = struct {
             .expr = expr,
             .context_anchor = context_anchor,
         };
-        const context_id: DraftLocalProcContextId = @enumFromInt(@as(u32, @intCast(self.draft.local_proc_contexts.items.len)));
+        const context_id: DraftLocalProcContextId = @fromBackingInt(@intCast(@as(u32, @intCast(self.draft.local_proc_contexts.items.len))));
         const entries = try self.allocator.dupe(LexicalBinderEntry, restored.entries);
         self.draft.local_proc_contexts.append(self.allocator, .{
             .declaration = declaration,
@@ -62499,7 +62500,7 @@ const BodyContext = struct {
         const wanted: LexicalDispatchScope = switch (nested_site.lexical_scope) {
             .root => .root,
             .generalized => |scope_id| blk: {
-                const raw_scope = @intFromEnum(scope_id);
+                const raw_scope = @backingInt(scope_id);
                 if (raw_scope >= view.templates.dispatch_scopes.len) {
                     Common.invariant("restored local procedure nested site named an unknown evidence scope");
                 }
@@ -62880,7 +62881,7 @@ const BodyContext = struct {
         rebind_existing: bool,
     ) Allocator.Error!void {
         if (binders.get(binder)) |existing| {
-            if (self.draft.currentOwnerOwnsCore(.locals, @intFromEnum(existing))) {
+            if (self.draft.currentOwnerOwnsCore(.locals, @backingInt(existing))) {
                 if (rebind_existing) {
                     self.draft.setLocalType(existing, DraftTypeCell.fromGraphNode(node));
                     return;
@@ -63868,14 +63869,14 @@ test "completion path retains ancestors across distinct sibling visits" {
     var path = BodyContext.RequestCompletionPath.init(std.testing.allocator);
     defer path.deinit();
     const ancestor: BodyContext.RequestCompletionPair = .{
-        .request = @enumFromInt(1),
-        .produced = @enumFromInt(2),
+        .request = @fromBackingInt(1),
+        .produced = @fromBackingInt(2),
     };
     try std.testing.expect(try path.enter(ancestor));
     for (3..4096) |index| {
         const sibling: BodyContext.RequestCompletionPair = .{
-            .request = @enumFromInt(index),
-            .produced = @enumFromInt(index + 4096),
+            .request = @fromBackingInt(@intCast(index)),
+            .produced = @fromBackingInt(@intCast(index + 4096)),
         };
         try std.testing.expect(try path.enter(sibling));
         try std.testing.expect(!try path.enter(ancestor));
@@ -63971,8 +63972,8 @@ test "materialized evidence normalization copies once and preserves unconsumed n
     const nested_target: SpecEvidenceTarget = .{
         .view = undefined,
         .target = undefined,
-        .instantiation = .{ .view = undefined, .callable_ty = @enumFromInt(1) },
-        .local_proc_context = @enumFromInt(7),
+        .instantiation = .{ .view = undefined, .callable_ty = @fromBackingInt(@intCast(1)) },
+        .local_proc_context = @fromBackingInt(@intCast(7)),
         .nested = .synthesize,
     };
     const nested = [_]SpecEvidence{.{ .target = &nested_target }};
@@ -64108,10 +64109,10 @@ test "queued specialization skips a body claimed immediately before dispatch" {
             ty_: Type.TypeId,
             dispatch_index: u64,
         ) Allocator.Error!PendingSpecJob {
-            const fn_id: Ast.FnId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
-            const def_id: Ast.DefId = @enumFromInt(@as(u32, @intCast(dispatch_index)));
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index))));
+            const def_id: Ast.DefId = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index))));
             const identity = Ast.SpecIdentity{
-                .callable = .{ .generated = @enumFromInt(@as(u32, @intCast(dispatch_index))) },
+                .callable = .{ .generated = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index)))) },
                 .method_scope = .{},
                 .evidence_digest = .{},
                 .codec_contract_digest = .{},
@@ -64140,7 +64141,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
                 .reservation = .{
                     .def = def_id,
                     .fn_id = fn_id,
-                    .symbol = @enumFromInt(@as(u32, @intCast(dispatch_index))),
+                    .symbol = @fromBackingInt(@intCast(@as(u32, @intCast(dispatch_index)))),
                 },
                 .fn_template = fn_template_,
                 .template_ref = template_ref_,
@@ -64191,12 +64192,12 @@ test "queued specialization skips a body claimed immediately before dispatch" {
 
 test "sealed record omission takes its default identity from the monotype field" {
     const expected: Type.FieldDefault = .{
-        .module = @enumFromInt(17),
+        .module = @fromBackingInt(@intCast(17)),
         .expr_node = 23,
     };
     const field: Type.Field = .{
-        .name = @enumFromInt(5),
-        .ty = @enumFromInt(11),
+        .name = @fromBackingInt(@intCast(5)),
+        .ty = @fromBackingInt(@intCast(11)),
         .default = expected,
     };
 
@@ -64229,7 +64230,7 @@ test "draft specialization lookup preserves family evidence and request identity
         var lookup = Lookup.init(allocator);
         defer lookup.deinit();
         const family = std.mem.zeroes(Family);
-        const evidence = [_]u8{0} ** 32;
+        const evidence = @as([32]u8, @splat(0));
         const prefix = try lookup.internPrefix(family, evidence);
         try std.testing.expectEqual(prefix, try lookup.internPrefix(family, evidence));
 
@@ -64248,16 +64249,16 @@ test "draft specialization lookup preserves family evidence and request identity
 
         // Every family qualifier and evidence byte contributes to identity.
         // Growing the prefix table must also preserve previously issued IDs.
-        inline for (std.meta.fields(Family)) |field| {
-            const changes = if (@typeInfo(field.type) == .array) @typeInfo(field.type).array.len else 1;
+        inline for (@typeInfo(Family).@"struct".field_names) |field_name| {
+            const changes = if (@typeInfo(@FieldType(Family, field_name)) == .array) @typeInfo(@FieldType(Family, field_name)).array.len else 1;
             for (0..changes) |byte| {
                 var different_family = family;
-                if (@typeInfo(field.type) == .array) {
-                    @field(different_family, field.name)[byte] = 1;
-                } else if (field.type == u32) {
-                    @field(different_family, field.name) = 1;
-                } else if (field.type == bool) {
-                    @field(different_family, field.name) = true;
+                if (@typeInfo(@FieldType(Family, field_name)) == .array) {
+                    @field(different_family, field_name)[byte] = 1;
+                } else if (@FieldType(Family, field_name) == u32) {
+                    @field(different_family, field_name) = 1;
+                } else if (@FieldType(Family, field_name) == bool) {
+                    @field(different_family, field_name) = true;
                 } else {
                     @compileError("unsupported specialization family qualifier");
                 }
@@ -64431,8 +64432,8 @@ test "open draft recursive provenance joins fresh interface cells only while low
         .ret = recursive_ret,
     } });
     const shared_frame = RuntimeDemandGuardFrameAddress{
-        .module = [_]u8{1} ** 32,
-        .owner_module = [_]u8{2} ** 32,
+        .module = @as([32]u8, @splat(1)),
+        .owner_module = @as([32]u8, @splat(2)),
         .owner_proc_base = 3,
         .owner_template = 4,
         .pattern = 5,
@@ -64616,7 +64617,7 @@ test "runtime impossibility proof constructors canonicalize boolean constants" {
         try allRuntimeImpossibilityProof(&draft, gpa, &.{ always_proof, dynamic_proof }),
     );
     const empty_all = (try allRuntimeImpossibilityProof(&draft, gpa, &.{})).?;
-    try std.testing.expect(draft.impossibility_proofs.items[@intFromEnum(empty_all)] == .always);
+    try std.testing.expect(draft.impossibility_proofs.items[@backingInt(empty_all)] == .always);
 }
 
 test "monotype sameType keeps failed alias alternatives out of recursion stack" {
@@ -64625,9 +64626,9 @@ test "monotype sameType keeps failed alias alternatives out of recursion stack" 
     const graph = try InstGraph.create(std.testing.allocator, &program.types, &program.names);
     defer graph.destroy();
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try program.names.internTypeName("Alias");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const alias_i64 = try program.types.add(.{ .named = .{
@@ -64673,7 +64674,7 @@ test "body context inspects graph-owned types despite program TypeId collisions"
 
     const program_ty = try program.types.add(.{ .primitive = .bool });
     const graph_ty = try graph_types.add(.{ .primitive = .u64 });
-    try std.testing.expectEqual(@intFromEnum(program_ty), @intFromEnum(graph_ty));
+    try std.testing.expectEqual(@backingInt(program_ty), @backingInt(graph_ty));
 
     var draft = BodyDraftStore.init(gpa);
     defer draft.deinit();
@@ -64740,15 +64741,15 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
     // table entries unrelated to the format-index behavior under test.
     const target: static_dispatch.MethodTarget = .{
         .module_idx = 0,
-        .def_idx = @enumFromInt(1),
+        .def_idx = @fromBackingInt(@intCast(1)),
         .kind = .{ .procedure = .{
-            .proc = .{ .proc_base = @enumFromInt(2) },
-            .template = .{ .proc_base = @enumFromInt(2), .template = @enumFromInt(3) },
+            .proc = .{ .proc_base = @fromBackingInt(@intCast(2)) },
+            .template = .{ .proc_base = @fromBackingInt(@intCast(2)), .template = @fromBackingInt(@intCast(3)) },
         } },
-        .callable_ty = @enumFromInt(4),
+        .callable_ty = @fromBackingInt(@intCast(4)),
     };
     const lookup = MethodLookup{ .view = view, .target = target };
-    const callee = DraftFnSlot{ .local = .{ .draft = @enumFromInt(5) } };
+    const callee = DraftFnSlot{ .local = .{ .draft = @fromBackingInt(@intCast(5)) } };
     const calls = try gpa.alloc(FrozenPreparedCodecCall, 2);
     calls[0] = .{
         .kind = .parser,
@@ -64756,8 +64757,8 @@ test "frozen codec format index resolves equivalent TypeIds only for agreeing ro
         .method_name = "parse_record_field",
         .method_role = 0,
         .subject_bearing = true,
-        .contract_view = [_]u8{0} ** 32,
-        .contract_derivation = @enumFromInt(6),
+        .contract_view = @as([32]u8, @splat(0)),
+        .contract_derivation = @fromBackingInt(@intCast(6)),
         .shape_ty = first_shape,
         .lookup = lookup,
         .callable_ty = first_str,
@@ -64790,13 +64791,13 @@ test "graph constructor representation follows aliases and preserves nominal lay
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAC))));
     const alias_name = try name_store.internTypeName("Alias");
     const nominal_name = try name_store.internTypeName("Nominal");
     const outer_alias_name = try name_store.internTypeName("OuterAlias");
     const structural = try graph.newNode(.empty_tag_union);
     const alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -64804,7 +64805,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = structural, .use = .inspectable },
     }));
     const nominal = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = module_identity, .type_name = nominal_name },
         .kind = .nominal,
         .builtin_owner = null,
@@ -64812,7 +64813,7 @@ test "graph constructor representation follows aliases and preserves nominal lay
         .backing = .{ .node = alias, .use = .inspectable },
     }));
     const outer_alias = try graph.newNode(try graph.namedContent(.{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(3) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) },
         .def = .{ .module = module_identity, .type_name = outer_alias_name },
         .kind = .alias,
         .builtin_owner = null,
@@ -64860,7 +64861,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     };
     var sites = std.array_list.Managed(checked.NestedProcSite).init(gpa);
     defer sites.deinit();
-    const site_id: names.NestedProcSiteId = @enumFromInt(sites.items.len);
+    const site_id: names.NestedProcSiteId = @fromBackingInt(@intCast(sites.items.len));
     try sites.append(site);
     const nested_sites = checked.NestedProcSiteTable{ .sites = sites.items, .type_bindings = &bindings };
 
@@ -65021,7 +65022,7 @@ test "issue 11265: forwarded evidence compares methods in their owning name stor
 test "specialization evidence equality includes exact target instantiation" {
     var roots: [11]checked.CheckedTypeRoot = undefined;
     for (&roots, 0..) |*root, index| {
-        root.* = .{ .id = @enumFromInt(@as(u32, @intCast(index))), .key = .{} };
+        root.* = .{ .id = @fromBackingInt(@intCast(@as(u32, @intCast(index)))), .key = .{} };
         root.key.bytes[0] = @intCast(index);
     }
     // A fresh checked identity may have a distinct raw id while retaining the
@@ -65051,17 +65052,17 @@ test "specialization evidence equality includes exact target instantiation" {
 
     const method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
-        .def_idx = @enumFromInt(6),
+        .def_idx = @fromBackingInt(@intCast(6)),
         .kind = .{ .procedure = .{
-            .proc = .{ .proc_base = @enumFromInt(7) },
-            .template = .{ .proc_base = @enumFromInt(7), .template = @enumFromInt(8) },
+            .proc = .{ .proc_base = @fromBackingInt(@intCast(7)) },
+            .template = .{ .proc_base = @fromBackingInt(@intCast(7)), .template = @fromBackingInt(@intCast(8)) },
         } },
-        .callable_ty = @enumFromInt(7),
+        .callable_ty = @fromBackingInt(@intCast(7)),
     };
     const exact: SpecEvidenceTarget = .{
         .view = target_view,
         .target = method,
-        .instantiation = .{ .view = instantiation_view, .callable_ty = @enumFromInt(8) },
+        .instantiation = .{ .view = instantiation_view, .callable_ty = @fromBackingInt(@intCast(8)) },
         .local_proc_context = null,
         .nested = .{ .resolved = &.{.{ .structural = .{ .derivation = .equality } }} },
     };
@@ -65076,11 +65077,11 @@ test "specialization evidence equality includes exact target instantiation" {
     try std.testing.expect(!try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &different_instantiation_view }));
 
     var different_callable = exact;
-    different_callable.instantiation.?.callable_ty = @enumFromInt(9);
+    different_callable.instantiation.?.callable_ty = @fromBackingInt(@intCast(9));
     try std.testing.expect(!try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &different_callable }));
 
     var equivalent_fresh_callable = exact;
-    equivalent_fresh_callable.instantiation.?.callable_ty = @enumFromInt(10);
+    equivalent_fresh_callable.instantiation.?.callable_ty = @fromBackingInt(@intCast(10));
     try std.testing.expect(try specEvidenceEql(std.testing.allocator, .{ .target = &exact }, .{ .target = &equivalent_fresh_callable }));
 
     var unresolved_nested = exact;
@@ -65100,18 +65101,18 @@ test "specialization evidence equality includes exact target instantiation" {
 
     const local_method: static_dispatch.MethodTarget = .{
         .module_idx = 5,
-        .def_idx = @enumFromInt(6),
+        .def_idx = @fromBackingInt(@intCast(6)),
         .kind = .{ .local_proc = .{
-            .binder = @enumFromInt(7),
-            .expr = @enumFromInt(8),
-            .context_anchor = @enumFromInt(9),
+            .binder = @fromBackingInt(@intCast(7)),
+            .expr = @fromBackingInt(@intCast(8)),
+            .context_anchor = @fromBackingInt(@intCast(9)),
         } },
-        .callable_ty = @enumFromInt(10),
+        .callable_ty = @fromBackingInt(@intCast(10)),
     };
     var first_local = monomorphic;
     first_local.target = local_method;
-    const first_context: DraftLocalProcContextId = @enumFromInt(1);
-    const second_context: DraftLocalProcContextId = @enumFromInt(2);
+    const first_context: DraftLocalProcContextId = @fromBackingInt(@intCast(1));
+    const second_context: DraftLocalProcContextId = @fromBackingInt(@intCast(2));
     first_local.local_proc_context = first_context;
     var second_local = first_local;
     second_local.local_proc_context = second_context;
@@ -65144,7 +65145,7 @@ const EqDeriver = struct {
     }
 
     fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) GeneratedHelperDefAddress {
-        return .{ .value_ty = @intFromEnum(value_ty), .result_ty = @intFromEnum(result_ty) };
+        return .{ .value_ty = @backingInt(value_ty), .result_ty = @backingInt(result_ty) };
     }
 
     fn fnType(self: *BodyContext, value_ty: Type.TypeId, result_ty: Type.TypeId) Allocator.Error!DraftTypeCell {
@@ -65370,7 +65371,7 @@ const HashDeriver = struct {
     }
 
     fn defAddress(value_ty: Type.TypeId, result_ty: Type.TypeId) GeneratedHelperDefAddress {
-        return .{ .value_ty = @intFromEnum(value_ty), .result_ty = @intFromEnum(result_ty) };
+        return .{ .value_ty = @backingInt(value_ty), .result_ty = @backingInt(result_ty) };
     }
 
     fn fnType(self: *BodyContext, value_ty: Type.TypeId, result_ty: Type.TypeId) Allocator.Error!DraftTypeCell {
@@ -65801,7 +65802,7 @@ fn generatedCodecRuntimeKey(
     var hasher = TypeDigestHasher.init();
     hasher.update(domain);
     hasher.update(&current_fn_key.bytes);
-    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @backingInt(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
     return .{ .bytes = hasher.finalResult() };
 }
@@ -65814,7 +65815,7 @@ fn generatedEncoderCallbackKey(
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_structural_encoder_callback");
     hasher.update(&current_fn_key.bytes);
-    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @backingInt(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
     var index_bytes = std.mem.nativeToLittle(u64, index);
     hasher.update(std.mem.asBytes(&index_bytes));
@@ -65830,7 +65831,7 @@ fn restoredConstFnContextKey(
     hasher.update("roc.restored_const_fn_context");
     hasher.update(&module_key.bytes);
     hasher.update(&source_fn_key.bytes);
-    var fn_id_bytes = std.mem.nativeToLittle(u32, @intFromEnum(fn_id));
+    var fn_id_bytes = std.mem.nativeToLittle(u32, @backingInt(fn_id));
     hasher.update(std.mem.asBytes(&fn_id_bytes));
     return .{ .bytes = hasher.finalResult() };
 }
@@ -65844,7 +65845,7 @@ fn restoredLocalProcUseContextKey(
     hasher.update("roc.monotype.restored_local_proc_context");
     hasher.update(&restored_fn_key.bytes);
     hasher.update(&source_contexts.bytes);
-    hashU32(&hasher, @intFromEnum(binder));
+    hashU32(&hasher, @backingInt(binder));
     return .{ .bytes = hasher.finalResult() };
 }
 
@@ -65869,7 +65870,7 @@ fn generatedFieldNamesIterStepKey(
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.generated_fields_iter_step");
     hasher.update(&current_fn_key.bytes);
-    var source_expr_bytes = std.mem.nativeToLittle(u32, @intFromEnum(source_expr_id));
+    var source_expr_bytes = std.mem.nativeToLittle(u32, @backingInt(source_expr_id));
     hasher.update(std.mem.asBytes(&source_expr_bytes));
     var index_bytes = std.mem.nativeToLittle(u64, @intCast(index));
     hasher.update(std.mem.asBytes(&index_bytes));
@@ -65891,7 +65892,7 @@ fn fieldAccessAnySegmentOptional(segments: []const checked.CheckedFieldAccessSeg
 }
 
 fn checkedPayload(view: ModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
-    const raw = @intFromEnum(checked_ty);
+    const raw = @backingInt(checked_ty);
     if (raw >= view.types.payloadCount()) Common.invariant("checked type id outside checked type store");
     return view.types.payload(checked_ty);
 }
@@ -65978,16 +65979,16 @@ fn checkedNestedSite(view: ModuleView, nested: anytype) checked.NestedProcSite {
 }
 
 fn checkedBinderType(view: ModuleView, binder: checked.PatternBinderId) checked.CheckedTypeId {
-    const raw = @intFromEnum(binder);
+    const raw = @backingInt(binder);
     if (raw >= view.bodies.patternBinderCount()) Common.invariant("stored function capture binder is outside checked body store");
-    const pattern = view.bodies.patternBinder(@enumFromInt(raw)).pattern;
-    const pattern_raw = @intFromEnum(pattern);
+    const pattern = view.bodies.patternBinder(@fromBackingInt(@intCast(raw))).pattern;
+    const pattern_raw = @backingInt(pattern);
     if (pattern_raw >= view.bodies.patternCount()) Common.invariant("stored function capture pattern is outside checked body store");
-    return view.bodies.pattern(@enumFromInt(pattern_raw)).ty;
+    return view.bodies.pattern(@fromBackingInt(@intCast(pattern_raw))).ty;
 }
 
 fn checkedCaptureBinder(view: ModuleView, pattern: checked.CheckedPatternId) checked.PatternBinderId {
-    const raw = @intFromEnum(pattern);
+    const raw = @backingInt(pattern);
     if (raw >= view.bodies.pattern_binder_by_pattern.len) Common.invariant("checked closure capture pattern was outside the binder index");
     return view.bodies.pattern_binder_by_pattern[raw] orelse
         Common.invariant("checked closure capture pattern had no binder");
@@ -66049,7 +66050,7 @@ fn constStrNodeBytes(view: ModuleView, node: checked.ConstNodeId) []const u8 {
 
 fn dispatchPlanForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchCallPlan {
     const plan_id = dispatchPlanIdForRuntimeExpr(view, expr_id);
-    return view.static_dispatch_plans.plans[@intFromEnum(plan_id)];
+    return view.static_dispatch_plans.plans[@backingInt(plan_id)];
 }
 
 fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId) static_dispatch.StaticDispatchPlanId {
@@ -66059,7 +66060,7 @@ fn dispatchPlanIdForRuntimeExpr(view: ModuleView, expr_id: checked.CheckedExprId
         .type_dispatch_call => |maybe| maybe orelse Common.invariant("stored serialization type dispatch expression had no dispatch plan"),
         .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .interpolation, .structural_eq, .structural_hash, .method_eq, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => Common.invariant("stored serialization runtime function did not reference a dispatch expression"),
     };
-    const plan_raw = @intFromEnum(plan_id);
+    const plan_raw = @backingInt(plan_id);
     if (plan_raw >= view.static_dispatch_plans.plans.len) Common.invariant("stored serialization dispatch plan is outside plan table");
     return plan_id;
 }
@@ -66086,7 +66087,7 @@ fn literalRootIdentity(module: checked.ModuleId, expr_id: checked.CheckedExprId)
     var hasher = TypeDigestHasher.init();
     hasher.update("roc.monotype.literal-root.v1");
     hasher.update(&module.bytes);
-    hashU32(&hasher, @intFromEnum(expr_id));
+    hashU32(&hasher, @backingInt(expr_id));
     return hasher.finalResult();
 }
 
@@ -66097,15 +66098,15 @@ fn procedureUseRootIdentity(request: checked.RootRequest, procedure: checked.Pro
     hasher.update(@tagName(request.kind));
     hasher.update(@tagName(request.source));
     switch (request.source) {
-        .def => |def| hashU32(&hasher, @intFromEnum(def)),
-        .expr => |expr| hashU32(&hasher, @intFromEnum(expr)),
-        .statement => |statement| hashU32(&hasher, @intFromEnum(statement)),
+        .def => |def| hashU32(&hasher, @backingInt(def)),
+        .expr => |expr| hashU32(&hasher, @backingInt(expr)),
+        .statement => |statement| hashU32(&hasher, @backingInt(statement)),
         .required_binding => |binding| hashU32(&hasher, binding),
         .hoisted => {},
     }
     if (request.compile_time_root) |root| {
         hasher.update("compile-time-root");
-        hashU32(&hasher, @intFromEnum(root));
+        hashU32(&hasher, @backingInt(root));
     }
     hasher.update(&procedure.source_fn_ty_template.bytes);
     return hasher.finalResult();
@@ -66148,13 +66149,13 @@ const NodeUninhabitedScan = struct {
     const Evaluation = AnyAll.Evaluation(NodeId, NodeUninhabitedScan);
 
     fn settled(self: *NodeUninhabitedScan) *std.AutoHashMapUnmanaged(NodeId, bool) {
-        return &self.body.settled_node_uninhabited[@intFromEnum(self.backing_access)];
+        return &self.body.settled_node_uninhabited[@backingInt(self.backing_access)];
     }
 
     pub fn enter(self: *NodeUninhabitedScan, items: Evaluation.Items, node: NodeId) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
         const root = body.graph.rootNode(node);
-        const root_index = @intFromEnum(root);
+        const root_index = @backingInt(root);
         if (body.inhabitation_visiting.bit_length <= root_index) {
             try body.inhabitation_visiting.resize(body.allocator, root_index + 1, false);
         }
@@ -66225,7 +66226,7 @@ const NodeUninhabitedScan = struct {
     pub fn exit(self: *NodeUninhabitedScan, node: NodeId, result: ?bool) std.mem.Allocator.Error!void {
         const body = self.body;
         const root = body.graph.rootNode(node);
-        body.inhabitation_visiting.unset(@intFromEnum(root));
+        body.inhabitation_visiting.unset(@backingInt(root));
         const hits_before = (body.inhabitation_entered.fetchRemove(root) orelse return).value;
         const answer = result orelse return;
         if (self.unsettled_hits == hits_before) try self.settled().put(body.allocator, root, answer);
@@ -66243,7 +66244,7 @@ const ImpossibilityProofScan = struct {
 
     pub fn enter(self: *ImpossibilityProofScan, items: Evaluation.Items, proof_id: RuntimeImpossibilityProofId) Allocator.Error!Evaluation.Expansion {
         const body = self.body;
-        const index = @intFromEnum(proof_id);
+        const index = @backingInt(proof_id);
         if (index >= body.draft.impossibility_proofs.items.len) {
             Common.invariant("runtime impossibility proof referenced a missing active proof node");
         }
@@ -66275,7 +66276,7 @@ const ImpossibilityProofScan = struct {
     }
 
     pub fn exit(self: *ImpossibilityProofScan, proof_id: RuntimeImpossibilityProofId, result: ?bool) std.mem.Allocator.Error!void {
-        const index = @intFromEnum(proof_id);
+        const index = @backingInt(proof_id);
         self.active[index] = false;
         if (result) |value| self.memo[index] = value;
     }
@@ -66522,7 +66523,7 @@ const CheckedTypeAddress = struct {
 fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
     return .{
         .module_bytes = view.key.bytes,
-        .type_id = @intFromEnum(checked_ty),
+        .type_id = @backingInt(checked_ty),
     };
 }
 
@@ -66546,9 +66547,9 @@ const NestedSiteAddress = struct {
     ) NestedSiteAddress {
         return .{
             .module_bytes = module_key.bytes,
-            .owner_proc_base = @intFromEnum(owner.proc_base),
-            .owner_template = @intFromEnum(owner.template),
-            .expr = @intFromEnum(expr_id),
+            .owner_proc_base = @backingInt(owner.proc_base),
+            .owner_template = @backingInt(owner.template),
+            .expr = @backingInt(expr_id),
         };
     }
 };
@@ -66563,7 +66564,7 @@ test "hosted Try adapter narrows requested private representations by declared l
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xA7} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xA7))));
     const opaque_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("HostedPrivate"),
@@ -66572,8 +66573,8 @@ test "hosted Try adapter narrows requested private representations by declared l
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
     };
-    const opaque_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(1) };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(2) };
+    const opaque_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
     const public_opaque = try program.types.add(.{ .named = .{
@@ -66700,7 +66701,7 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xB2} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xB2))));
     const try_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
@@ -66709,8 +66710,8 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
         .module = module_identity,
         .type_name = try program.names.internTypeName("HostFailure"),
     };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(1) };
-    const failure_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(2) };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
+    const failure_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
 
     const i64_ty = try program.types.add(.{ .primitive = .i64 });
     const str_ty = try program.types.add(.{ .primitive = .str });
@@ -66821,14 +66822,14 @@ test "hosted Try graph walk crosses transparent alias layers to the Try nominal"
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xC4} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC4))));
     const try_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("Try") };
     const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("IoResult") };
     const outer_alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("OuterResult") };
     const impostor_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("UserResult") };
-    const try_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(1) };
-    const alias_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
-    const outer_alias_named: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };
+    const try_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
+    const alias_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
+    const outer_alias_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) };
 
     const ok_node = try graph.newNode(.{ .primitive = .str });
     const err_node = try graph.newNode(.empty_tag_union);
@@ -66900,12 +66901,12 @@ test "hosted extern boundary admits only the declared host ABI type" {
     builder.program = &program;
     builder.active_body_draft = null;
 
-    const module_identity = try program.names.internModuleIdentity(&([_]u8{0xC3} ** 32));
+    const module_identity = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xC3))));
     const try_def = Type.TypeDef{
         .module = module_identity,
         .type_name = try program.names.internTypeName("Try"),
     };
-    const try_named = Type.NamedType{ .module = .{}, .ty = @enumFromInt(4) };
+    const try_named = Type.NamedType{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
     const str_ty = try program.types.add(.{ .primitive = .str });
     const i32_ty = try program.types.add(.{ .primitive = .i32 });
 
@@ -67024,7 +67025,7 @@ test "hosted extern boundary admits only the declared host ABI type" {
     try std.testing.expect(std.mem.find(u8, message, "host ABI") != null);
 
     // An over-long symbol still reports; the message stays inside its buffer.
-    const long_symbol = "roc_" ++ ("x" ** 400);
+    const long_symbol = "roc_" ++ (@as([400]u8, @splat('x')));
     const long_message = hostedExternAbiViolationMessage(
         &message_buf,
         long_symbol,
@@ -67047,11 +67048,11 @@ test "request component relation follows root authority before nested private ev
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE1} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE1))));
     const type_name = try name_store.internTypeName("OuterEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(8) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(9) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(8)) };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(9)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const private_arg = try graph.newNode(try graph.namedContent(.{
@@ -67106,11 +67107,11 @@ test "request component relation descends through matching private-bearing conta
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xE2} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xE2))));
     const type_name = try name_store.internTypeName("ElementEvidence");
     const inner_type_name = try name_store.internTypeName("InnerEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(10) };
-    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(11) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(10)) };
+    const inner_named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(11)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const inner_def: Type.TypeDef = .{ .module = module_identity, .type_name = inner_type_name };
     const shared_private_arg = try graph.newNode(try graph.namedContent(.{
@@ -67172,9 +67173,9 @@ test "checked-to-mono relation preserves generated-private evidence inside a com
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCE} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("CompositeEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(1) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -67224,10 +67225,10 @@ test "checked-to-mono relation joins exact tag request roots without collapsing 
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCF} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCF))));
     const type_name = try name_store.internTypeName("PayloadEvidence");
     const tag_name = try name_store.internTagLabel("One");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const checked_backing = try graph.newNode(.empty_record);
     const mono_backing = try graph.newNode(.empty_record);
@@ -67319,9 +67320,9 @@ test "direct call request preserves generated-private return provenance" {
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD3} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD3))));
     const type_name = try name_store.internTypeName("DirectReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(4) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(4)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -67366,9 +67367,9 @@ test "dispatch call target relation preserves generated-private return provenanc
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD4} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD4))));
     const type_name = try name_store.internTypeName("DispatchReturnEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(5) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(5)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -67416,9 +67417,9 @@ test "iterator request nodes preserve generated-private operand and result prove
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD1} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD1))));
     const type_name = try name_store.internTypeName("IteratorEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(2) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -67470,9 +67471,9 @@ test "partial synthetic request nodes preserve generated-private argument and re
     const graph = try InstGraph.create(gpa, &type_store, &name_store);
     defer graph.destroy();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xD2} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xD2))));
     const type_name = try name_store.internTypeName("PartialEvidence");
-    const named_type: Type.NamedType = .{ .module = .{}, .ty = @enumFromInt(3) };
+    const named_type: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) };
     const def: Type.TypeDef = .{ .module = module_identity, .type_name = type_name };
     const public_backing = try graph.newNode(.empty_record);
     const private_backing = try graph.newNode(.empty_record);
@@ -67664,24 +67665,24 @@ test "body draft store appends draft-local ids spans and type cells" {
     try std.testing.expectEqual(@as(usize, 1), draft.comptime_sites.items.len);
     try std.testing.expectEqual(@as(u32, 0), source_file);
     try std.testing.expectEqual(@as(usize, 1), draft.local_names.items.len);
-    try std.testing.expect(draft.local_names.items[@intFromEnum(local)].len != 0);
+    try std.testing.expect(draft.local_names.items[@backingInt(local)].len != 0);
 
     try graph.freezeRelations();
     var sealer = GraphTypeFinals.init(graph);
     defer sealer.deinit();
     try draft.sealCoreIntoProgram(&program, graph, &sealer);
 
-    const sealed_local: Ast.LocalId = @enumFromInt(@intFromEnum(local));
-    const sealed_pat: Ast.PatId = @enumFromInt(@intFromEnum(pat));
-    const sealed_record_pat: Ast.PatId = @enumFromInt(@intFromEnum(record_pat));
-    const sealed_str_pat: Ast.PatId = @enumFromInt(@intFromEnum(str_pat));
-    const sealed_expr: Ast.ExprId = @enumFromInt(@intFromEnum(expr));
-    const sealed_record_expr: Ast.ExprId = @enumFromInt(@intFromEnum(record_expr));
-    const sealed_match_expr: Ast.ExprId = @enumFromInt(@intFromEnum(match_expr));
-    const sealed_if_expr: Ast.ExprId = @enumFromInt(@intFromEnum(if_expr));
-    const sealed_field_access_expr: Ast.ExprId = @enumFromInt(@intFromEnum(field_access_expr));
-    const sealed_literal: Ast.StringLiteralId = @enumFromInt(@intFromEnum(literal));
-    const sealed_site: Ast.ComptimeSiteId = @enumFromInt(@intFromEnum(site));
+    const sealed_local: Ast.LocalId = @fromBackingInt(@intCast(@backingInt(local)));
+    const sealed_pat: Ast.PatId = @fromBackingInt(@intCast(@backingInt(pat)));
+    const sealed_record_pat: Ast.PatId = @fromBackingInt(@intCast(@backingInt(record_pat)));
+    const sealed_str_pat: Ast.PatId = @fromBackingInt(@intCast(@backingInt(str_pat)));
+    const sealed_expr: Ast.ExprId = @fromBackingInt(@intCast(@backingInt(expr)));
+    const sealed_record_expr: Ast.ExprId = @fromBackingInt(@intCast(@backingInt(record_expr)));
+    const sealed_match_expr: Ast.ExprId = @fromBackingInt(@intCast(@backingInt(match_expr)));
+    const sealed_if_expr: Ast.ExprId = @fromBackingInt(@intCast(@backingInt(if_expr)));
+    const sealed_field_access_expr: Ast.ExprId = @fromBackingInt(@intCast(@backingInt(field_access_expr)));
+    const sealed_literal: Ast.StringLiteralId = @fromBackingInt(@intCast(@backingInt(literal)));
+    const sealed_site: Ast.ComptimeSiteId = @fromBackingInt(@intCast(@backingInt(site)));
 
     try std.testing.expectEqual(@as(usize, 1), program.localCount());
     try std.testing.expectEqual(@as(usize, 3), program.patCount());
@@ -67794,9 +67795,9 @@ test "body draft static data candidates use ordered commit ids" {
     var draft = BodyDraftStore.init(allocator);
     defer draft.deinit();
 
-    const draft_static: DraftStaticDataId = @enumFromInt(@as(u32, @intCast(0)));
-    const draft_runtime: DraftExprId = @enumFromInt(@as(u32, @intCast(0)));
-    const committed_static: Common.StaticDataId = @enumFromInt(@as(u32, @intCast(17)));
+    const draft_static: DraftStaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(0))));
+    const draft_runtime: DraftExprId = @fromBackingInt(@intCast(@as(u32, @intCast(0))));
+    const committed_static: Common.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(17))));
     var comptime_roots = collections.DenseMap(DraftComptimeValueRootId, Common.ComptimeValueRootId).init(allocator);
     defer comptime_roots.deinit();
     const sealed = try draft.sealCoreExprData(
@@ -67815,7 +67816,7 @@ test "body draft static data candidates use ordered commit ids" {
     try std.testing.expectEqual(committed_static, sealed.static_data_candidate.static_data);
     try std.testing.expectEqual(@as(u64, 23), sealed.static_data_candidate.storage.string_backing);
     try std.testing.expectEqual(
-        @as(Ast.ExprId, @enumFromInt(@as(u32, @intCast(0)))),
+        @as(Ast.ExprId, @fromBackingInt(@intCast(@as(u32, @intCast(0))))),
         sealed.static_data_candidate.runtime_expr,
     );
 }
@@ -68019,7 +68020,7 @@ test "specialization store epochs survive workspace teardown and absorb cumulati
         // capture, then destroy the workspace before coordinator absorption.
         var index: u32 = 0;
         while (index < 256) : (index += 1) {
-            var digest = [_]u8{0} ** 32;
+            var digest = @as([32]u8, @splat(0));
             std.mem.writeInt(u32, digest[0..4], index, .little);
             _ = try workspace.types.internErased(
                 &workspace.name_store,
@@ -68213,7 +68214,7 @@ test "executor lane retains Monotype state within a run and resets it between ru
         .lane_state = &lane_state,
     };
     var inputs: SpecJobWorkerInputs = undefined;
-    inputs.run_id = @enumFromInt(1);
+    inputs.run_id = @fromBackingInt(@intCast(1));
 
     const first = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
     first.worker.tasks_started = 7;
@@ -68221,7 +68222,7 @@ test "executor lane retains Monotype state within a run and resets it between ru
     try std.testing.expectEqual(first, same_run);
     try std.testing.expectEqual(@as(u64, 7), same_run.worker.tasks_started);
 
-    inputs.run_id = @enumFromInt(2);
+    inputs.run_id = @fromBackingInt(@intCast(2));
     const next_run = try Builder.ensureSpecJobLaneState(executor_worker, &inputs);
     try std.testing.expectEqual(first, next_run);
     try std.testing.expectEqual(@as(u64, 0), next_run.worker.tasks_started);
@@ -68235,17 +68236,17 @@ test "body draft comptime roots relocate independent shards and survive source d
     const descriptors = [_]Common.ComptimeValueRoot{
         .{
             .module = .{ .bytes = @splat(0x31) },
-            .root = .{ .checked = @enumFromInt(7) },
+            .root = .{ .checked = @fromBackingInt(@intCast(7)) },
             .const_locator = .{
                 .artifact = .{ .bytes = @splat(0x41) },
-                .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @enumFromInt(23) } },
-                .template = @enumFromInt(29),
+                .owner = .{ .hoisted_expr = .{ .module_idx = 19, .expr = @fromBackingInt(@intCast(23)) } },
+                .template = @fromBackingInt(@intCast(29)),
                 .source_scheme = .{ .bytes = @splat(0x51) },
             },
         },
         .{
             .module = .{ .bytes = @splat(0x32) },
-            .root = .{ .checked = @enumFromInt(11) },
+            .root = .{ .checked = @fromBackingInt(@intCast(11)) },
             .const_locator = null,
         },
     };
@@ -68256,7 +68257,7 @@ test "body draft comptime roots relocate independent shards and survive source d
         var draft = BodyDraftStore.init(allocator);
         defer draft.deinit();
         const root = try draft.addComptimeValueRoot(descriptor);
-        try std.testing.expectEqual(@as(u32, 0), @intFromEnum(root));
+        try std.testing.expectEqual(@as(u32, 0), @backingInt(root));
         const graph = try InstGraph.create(allocator, &program.types, &program.names);
         defer graph.destroy();
         const unit_node = try graph.newNode(.zst);
@@ -68279,13 +68280,13 @@ test "body draft comptime roots relocate independent shards and survive source d
         const second = program.getExprAt(shard_index * 3 + 2).data.comptime_value;
         try std.testing.expectEqual(first.root, second.root);
         try std.testing.expectEqual(first.initializer, second.initializer);
-        try std.testing.expectEqual(@as(u32, @intCast(shard_index * 3)), @intFromEnum(first.initializer));
+        try std.testing.expectEqual(@as(u32, @intCast(shard_index * 3)), @backingInt(first.initializer));
         committed[shard_index] = first.root;
     }
     // Both source owners are dead. Equal local ordinals must not alias, and
     // duplicate references must have copied each exact descriptor only once.
     try std.testing.expect(committed[0] != committed[1]);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(committed[1]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(committed[1]));
     for (descriptors, committed) |descriptor, root| {
         try std.testing.expectEqualDeep(descriptor, program.getComptimeValueRoot(root));
     }
@@ -68300,7 +68301,7 @@ test "body draft commit relocates core type and name fields out of private store
     _ = try program.names.internRecordFieldLabel("unrelated");
     _ = try program.names.internTagLabel("Unrelated");
     _ = try program.names.internTypeName("Unrelated");
-    _ = try program.names.internModuleIdentity(&([_]u8{0xFF} ** 32));
+    _ = try program.names.internModuleIdentity(&(@as([32]u8, @splat(0xFF))));
     _ = try program.names.internExportName("unrelated");
 
     var sealed_list: Type.TypeId = undefined;
@@ -68350,7 +68351,7 @@ test "body draft commit relocates core type and name fields out of private store
             .symbol = debug_symbol,
             .name = try private_names.internExportName("helper"),
         });
-        const module_bytes = [_]u8{0xAB} ** 32;
+        const module_bytes = @as([32]u8, @splat(0xAB));
         const module = try private_names.internModuleIdentity(&module_bytes);
         const type_name = try private_names.internTypeName("Model");
         try draft.runtime_schema_requests.append(allocator, .{
@@ -68389,7 +68390,7 @@ test "body draft commit relocates core type and name fields out of private store
             null,
             null,
         );
-        sealed_list = program.getLocal(@enumFromInt(@intFromEnum(local))).ty;
+        sealed_list = program.getLocal(@fromBackingInt(@intCast(@backingInt(local)))).ty;
     }
 
     // Program storage must remain self-contained after all private owners die.
@@ -68420,7 +68421,7 @@ test "body draft commit relocates core type and name fields out of private store
     try std.testing.expectEqualStrings("helper", program.names.exportNameText(program.procDebugName(debug_symbol).?));
     try std.testing.expectEqual(@as(usize, 1), program.runtimeSchemaRequestsView().len);
     const schema = program.runtimeSchemaRequestsView()[0];
-    try std.testing.expectEqualSlices(u8, &([_]u8{0xAB} ** 32), program.names.moduleIdentityBytes(schema.def.module));
+    try std.testing.expectEqualSlices(u8, &(@as([32]u8, @splat(0xAB))), program.names.moduleIdentityBytes(schema.def.module));
     try std.testing.expectEqualStrings("Model", program.names.typeNameText(schema.def.type_name));
     const sealed_stmt = program.getStmtAt(0);
     if (sealed_stmt != .return_) return error.TestExpectedEqual;
@@ -68431,27 +68432,27 @@ test "body draft commit relocates core type and name fields out of private store
 
 test "body draft ownership runs restore the parent across nested lowering" {
     const allocator = std.testing.allocator;
-    const outer_fn: DraftFnId = @enumFromInt(10);
-    const inner_fn: DraftFnId = @enumFromInt(11);
+    const outer_fn: DraftFnId = @fromBackingInt(@intCast(10));
+    const inner_fn: DraftFnId = @fromBackingInt(@intCast(11));
     var draft = BodyDraftStore.init(allocator);
     defer draft.deinit();
 
-    try draft.expr_ids.append(allocator, @enumFromInt(20));
+    try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(20)));
     {
         const outer = try draft.enterOwner(.{ .draft_fn = outer_fn });
         defer outer.leave();
-        try draft.expr_ids.append(allocator, @enumFromInt(1));
+        try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(1)));
         {
             const inner = try draft.enterOwner(.{ .draft_fn = inner_fn });
             defer inner.leave();
-            try draft.expr_ids.append(allocator, @enumFromInt(2));
+            try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(2)));
         }
-        try draft.expr_ids.append(allocator, @enumFromInt(3));
+        try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(3)));
     }
     try draft.finishOwnerRuns();
 
     try std.testing.expectEqual(@as(usize, 4), draft.owner_runs.items.len);
-    const kind = @intFromEnum(DraftCoreKind.expr_ids);
+    const kind = @backingInt(DraftCoreKind.expr_ids);
     try std.testing.expect(std.meta.eql(DraftOwner.root, draft.owner_runs.items[0].owner));
     try std.testing.expect(std.meta.eql(DraftOwner{ .draft_fn = outer_fn }, draft.owner_runs.items[1].owner));
     try std.testing.expect(std.meta.eql(DraftOwner{ .draft_fn = inner_fn }, draft.owner_runs.items[2].owner));
@@ -68465,29 +68466,29 @@ test "body draft ownership runs restore the parent across nested lowering" {
 test "body draft owner scopes leave without allocating under allocation failure" {
     const Scenario = struct {
         fn run(allocator: std.mem.Allocator) Allocator.Error!void {
-            const outer_fn: DraftFnId = @enumFromInt(10);
-            const inner_fn: DraftFnId = @enumFromInt(11);
+            const outer_fn: DraftFnId = @fromBackingInt(@intCast(10));
+            const inner_fn: DraftFnId = @fromBackingInt(@intCast(11));
             var draft = BodyDraftStore.init(allocator);
             defer draft.deinit();
 
-            try draft.expr_ids.append(allocator, @enumFromInt(20));
+            try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(20)));
             {
                 const outer = try draft.enterOwner(.{ .draft_fn = outer_fn });
                 defer outer.leave();
-                try draft.expr_ids.append(allocator, @enumFromInt(1));
+                try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(1)));
                 {
                     // Re-entering the current owner records no run on entry,
                     // yet its exit still needs a reserved slot.
                     const same = try draft.enterOwner(.{ .draft_fn = outer_fn });
                     defer same.leave();
-                    try draft.expr_ids.append(allocator, @enumFromInt(2));
+                    try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(2)));
                     {
                         const inner = try draft.enterOwner(.{ .draft_fn = inner_fn });
                         defer inner.leave();
-                        try draft.expr_ids.append(allocator, @enumFromInt(3));
+                        try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(3)));
                     }
                 }
-                try draft.expr_ids.append(allocator, @enumFromInt(4));
+                try draft.expr_ids.append(allocator, @fromBackingInt(@intCast(4)));
             }
             try draft.finishOwnerRuns();
         }
@@ -68497,29 +68498,29 @@ test "body draft owner scopes leave without allocating under allocation failure"
 
 test "body draft core ownership distinguishes sibling materializations" {
     const allocator = std.testing.allocator;
-    const first_fn: DraftFnId = @enumFromInt(1);
-    const second_fn: DraftFnId = @enumFromInt(2);
+    const first_fn: DraftFnId = @fromBackingInt(@intCast(1));
+    const second_fn: DraftFnId = @fromBackingInt(@intCast(2));
     var draft = BodyDraftStore.init(allocator);
     defer draft.deinit();
 
     const first_scope = try draft.enterOwner(.{ .draft_fn = first_fn });
     const first_literal = try draft.addStringLiteral("first");
-    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @backingInt(first_literal)));
 
     const second_scope = try draft.enterOwner(.{ .draft_fn = second_fn });
-    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @backingInt(first_literal)));
     const second_literal = try draft.addStringLiteral("second");
-    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(second_literal)));
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @backingInt(second_literal)));
     second_scope.leave();
 
-    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(first_literal)));
-    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @intFromEnum(second_literal)));
+    try std.testing.expect(draft.currentOwnerOwnsCore(.string_literals, @backingInt(first_literal)));
+    try std.testing.expect(!draft.currentOwnerOwnsCore(.string_literals, @backingInt(second_literal)));
     first_scope.leave();
 }
 
 test "body draft definition retention follows explicit reservation ownership" {
-    const retained_fn: DraftFnId = @enumFromInt(1);
-    const suppressed_fn: DraftFnId = @enumFromInt(2);
+    const retained_fn: DraftFnId = @fromBackingInt(@intCast(1));
+    const suppressed_fn: DraftFnId = @fromBackingInt(@intCast(2));
     const emit_fns = [_]bool{ false, true, false };
 
     var draft = BodyDraftStore.init(std.testing.allocator);
@@ -68528,8 +68529,8 @@ test "body draft definition retention follows explicit reservation ownership" {
     const retained_def = try draft.reserveDef(.{ .draft_fn = retained_fn });
     const suppressed_def = try draft.reserveDef(.{ .draft_fn = suppressed_fn });
 
-    try std.testing.expect(draftOwnerRetained(draft.def_owners.items[@intFromEnum(retained_def)], &emit_fns));
-    try std.testing.expect(!draftOwnerRetained(draft.def_owners.items[@intFromEnum(suppressed_def)], &emit_fns));
+    try std.testing.expect(draftOwnerRetained(draft.def_owners.items[@backingInt(retained_def)], &emit_fns));
+    try std.testing.expect(!draftOwnerRetained(draft.def_owners.items[@backingInt(suppressed_def)], &emit_fns));
 }
 
 test "body draft block statement spans use the retained compaction map" {
@@ -68537,7 +68538,7 @@ test "body draft block statement spans use the retained compaction map" {
     var values: [draft_core_kind_count][]u32 = undefined;
     for (&values) |*value| value.* = empty[0..];
     var stmt_ids = [_]u32{ std.math.maxInt(u32), 40, 41 };
-    values[@intFromEnum(DraftCoreKind.stmt_ids)] = stmt_ids[0..];
+    values[@backingInt(DraftCoreKind.stmt_ids)] = stmt_ids[0..];
     var maps = Builder.DraftCoreMaps{ .values = values };
 
     var ids: FinalIdOffsets = undefined;
@@ -68577,8 +68578,8 @@ test "binder map initializes only touched IDs in a large checked module" {
     var binders = try BinderMap.init(std.testing.allocator, 1_000_000);
     defer binders.deinit();
 
-    const binder: checked.PatternBinderId = @enumFromInt(2);
-    const local: DraftLocalId = @enumFromInt(7);
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(2));
+    const local: DraftLocalId = @fromBackingInt(@intCast(7));
     try std.testing.expect(binders.values.store == null);
     try std.testing.expectEqual(@as(?DraftLocalId, null), binders.get(binder));
     try std.testing.expect(!binders.remove(binder));
@@ -68593,24 +68594,24 @@ test "binder map initializes only touched IDs in a large checked module" {
 test "issue 11322: independent binder versions never initialize the checked module domain" {
     var parent = try BinderMap.init(std.testing.allocator, 1_000_000);
     defer parent.deinit();
-    const binder: checked.PatternBinderId = @enumFromInt(999_999);
-    try parent.put(binder, @enumFromInt(1));
+    const binder: checked.PatternBinderId = @fromBackingInt(@intCast(999_999));
+    try parent.put(binder, @fromBackingInt(@intCast(1)));
     const store = parent.values.store.?;
     try std.testing.expectEqual(@as(usize, 1), store.index.sparse_chunks.items.len);
     var siblings: [50]BinderMap = undefined;
     for (&siblings) |*sibling| sibling.* = parent.fork();
     defer for (&siblings) |*sibling| sibling.deinit();
     try std.testing.expectEqual(@as(usize, 0), store.changes.items.len);
-    for (&siblings, 0..) |*sibling, index| try sibling.put(binder, @enumFromInt(@as(u32, @intCast(index + 2))));
-    try parent.put(binder, @enumFromInt(100));
+    for (&siblings, 0..) |*sibling, index| try sibling.put(binder, @fromBackingInt(@intCast(@as(u32, @intCast(index + 2)))));
+    try parent.put(binder, @fromBackingInt(@intCast(100)));
     for (0..4) |_| {
         for (&siblings, 0..) |*sibling, index| {
-            try std.testing.expectEqual(@as(DraftLocalId, @enumFromInt(@as(u32, @intCast(index + 2)))), sibling.get(binder).?);
+            try std.testing.expectEqual(@as(DraftLocalId, @fromBackingInt(@intCast(@as(u32, @intCast(index + 2))))), sibling.get(binder).?);
             var iterator = sibling.iterator();
             try std.testing.expectEqual(binder, iterator.next().?.binder);
             try std.testing.expect(iterator.next() == null);
         }
-        try std.testing.expectEqual(@as(DraftLocalId, @enumFromInt(100)), parent.get(binder).?);
+        try std.testing.expectEqual(@as(DraftLocalId, @fromBackingInt(@intCast(100))), parent.get(binder).?);
     }
     try std.testing.expectEqual(@as(usize, 1), store.slots.items.len);
     try std.testing.expectEqual(@as(usize, 51), store.changes.items.len);
@@ -68621,19 +68622,19 @@ test "copied binder relations keep checked binder order after branch mutation" {
     const allocator = std.testing.allocator;
     var parent = try BinderMap.init(allocator, 100);
     defer parent.deinit();
-    try parent.put(@enumFromInt(90), @enumFromInt(9));
-    try parent.put(@enumFromInt(2), @enumFromInt(1));
-    try parent.put(@enumFromInt(20), @enumFromInt(2));
+    try parent.put(@fromBackingInt(@intCast(90)), @fromBackingInt(@intCast(9)));
+    try parent.put(@fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(1)));
+    try parent.put(@fromBackingInt(@intCast(20)), @fromBackingInt(@intCast(2)));
     var child = parent.fork();
     defer child.deinit();
-    try child.put(@enumFromInt(2), @enumFromInt(10));
-    try std.testing.expect(child.remove(@enumFromInt(2)));
-    try child.put(@enumFromInt(2), @enumFromInt(11));
+    try child.put(@fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(10)));
+    try std.testing.expect(child.remove(@fromBackingInt(@intCast(2))));
+    try child.put(@fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(11)));
     const entries = try child.sortedEntries(allocator);
     defer allocator.free(entries);
     for (entries, [_]u32{ 2, 20, 90 }, [_]u32{ 11, 2, 9 }) |entry, binder, local| {
-        try std.testing.expectEqual(binder, @intFromEnum(entry.binder));
-        try std.testing.expectEqual(local, @intFromEnum(entry.local));
+        try std.testing.expectEqual(binder, @backingInt(entry.binder));
+        try std.testing.expectEqual(local, @backingInt(entry.local));
     }
 }
 
@@ -68641,33 +68642,33 @@ test "branch type versions inherit completed nodes without construction placehol
     const allocator = std.testing.allocator;
     var parent = InstantiatingNodeMap.init(allocator);
     defer parent.deinit();
-    const ready: checked.CheckedTypeId = @enumFromInt(10);
-    const unfinished: checked.CheckedTypeId = @enumFromInt(11);
-    try parent.put(ready, .{ .node = @enumFromInt(100) });
+    const ready: checked.CheckedTypeId = @fromBackingInt(@intCast(10));
+    const unfinished: checked.CheckedTypeId = @fromBackingInt(@intCast(11));
+    try parent.put(ready, .{ .node = @fromBackingInt(@intCast(100)) });
     try parent.put(unfinished, .{ .building = null });
     var child = parent.forkCompleted();
     defer child.deinit();
-    try std.testing.expectEqual(@as(NodeId, @enumFromInt(100)), child.get(ready).?.node);
+    try std.testing.expectEqual(@as(NodeId, @fromBackingInt(@intCast(100))), child.get(ready).?.node);
     try std.testing.expect(child.get(unfinished) == null);
-    try parent.put(unfinished, .{ .node = @enumFromInt(101) });
-    try child.put(unfinished, .{ .node = @enumFromInt(102) });
-    try std.testing.expectEqual(@as(NodeId, @enumFromInt(101)), parent.get(unfinished).?.node);
-    try std.testing.expectEqual(@as(NodeId, @enumFromInt(102)), child.get(unfinished).?.node);
+    try parent.put(unfinished, .{ .node = @fromBackingInt(@intCast(101)) });
+    try child.put(unfinished, .{ .node = @fromBackingInt(@intCast(102)) });
+    try std.testing.expectEqual(@as(NodeId, @fromBackingInt(@intCast(101))), parent.get(unfinished).?.node);
+    try std.testing.expectEqual(@as(NodeId, @fromBackingInt(@intCast(102))), child.get(unfinished).?.node);
 }
 
 test "checked string literal cache is shared only within one draft owner" {
     var draft = BodyDraftStore.init(std.testing.allocator);
     defer draft.deinit();
 
-    const literal: checked.CheckedStringLiteralId = @enumFromInt(3);
-    const first_module = [_]u8{1} ** 32;
-    const other_module = [_]u8{2} ** 32;
+    const literal: checked.CheckedStringLiteralId = @fromBackingInt(@intCast(3));
+    const first_module = @as([32]u8, @splat(1));
+    const other_module = @as([32]u8, @splat(2));
 
     const first = try draft.addCheckedStringLiteral(first_module, literal, "same");
     const reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
     const other_module_literal = try draft.addCheckedStringLiteral(other_module, literal, "same");
 
-    const owner_scope = try draft.enterOwner(.{ .draft_fn = @enumFromInt(7) });
+    const owner_scope = try draft.enterOwner(.{ .draft_fn = @fromBackingInt(@intCast(7)) });
     defer owner_scope.leave();
     const other_owner = try draft.addCheckedStringLiteral(first_module, literal, "same");
     const other_owner_reused = try draft.addCheckedStringLiteral(first_module, literal, "same");
@@ -68697,7 +68698,7 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     const alias = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(2) }, true);
     try checked_types.fillSyntheticTypeRoot(gpa, alias, .{ .alias = .{
         .name = try name_store.internTypeName("Callback"),
-        .origin_module = try name_store.internModuleIdentity(&([_]u8{2} ** 32)),
+        .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(2)))),
         .owner_module = .{},
         .args = try gpa.dupe(checked.CheckedTypeId, &.{variable}),
         .backing = function,
@@ -68807,15 +68808,15 @@ test "checked type instantiation scopes have exact isolated identities" {
     builder.diagnostics = &diagnostics;
     builder.active_spec_job_diagnostics = null;
 
-    const module_bytes = [_]u8{7} ** 32;
+    const module_bytes = @as([32]u8, @splat(7));
     var first = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
     defer first.deinit();
     var second = TypeInstantiationContext.init(std.testing.allocator, builder.allocateInstantiationScope(), module_bytes);
     defer second.deinit();
 
     try std.testing.expect(first.id != second.id);
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(11);
-    const node: NodeId = @enumFromInt(13);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(11));
+    const node: NodeId = @fromBackingInt(@intCast(13));
     try first.node_map.put(checked_ty, .{ .node = node });
     try std.testing.expectEqual(node, first.node_map.get(checked_ty).?.node);
     try std.testing.expectEqual(@as(?InstantiatingNode, null), second.node_map.get(checked_ty));
@@ -68863,8 +68864,8 @@ test "specialization shard diagnostics remain private until coordinator commit" 
 }
 
 test "function context identity excludes draft local allocation ids" {
-    const base_key = names.TypeDigest{ .bytes = [_]u8{1} ** 32 };
-    const type_digest = names.TypeDigest{ .bytes = [_]u8{2} ** 32 };
+    const base_key = names.TypeDigest{ .bytes = @as([32]u8, @splat(1)) };
+    const type_digest = names.TypeDigest{ .bytes = @as([32]u8, @splat(2)) };
     const original = [_]LexicalBinderEntry{.{
         .kind = 1,
         .binder = 17,
@@ -68909,7 +68910,7 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{ .bytes = @splat(2) }, false);
     try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
         .name = try name_store.internTypeName("Alias"),
-        .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
+        .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0)))),
         .owner_module = .{},
         .backing = acyclic,
     } });
@@ -68989,7 +68990,7 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     const pair = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .tuple = try gpa.dupe(checked.CheckedTypeId, &.{ leaf, leaf }) });
     const alias = try checked_types.appendSyntheticPayloadRoot(gpa, &name_store, .{ .alias = .{
         .name = try name_store.internTypeName("Pair"),
-        .origin_module = try name_store.internModuleIdentity(&([_]u8{0x62} ** 32)),
+        .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x62)))),
         .owner_module = .{},
         .backing = pair,
     } });
@@ -69197,7 +69198,7 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             const alias = try checked_types.reserveSyntheticTypeRoot(std.testing.allocator, .{}, true);
             try checked_types.fillSyntheticTypeRoot(std.testing.allocator, alias, .{ .alias = .{
                 .name = try name_store.internTypeName("Alias"),
-                .origin_module = try name_store.internModuleIdentity(&([_]u8{0} ** 32)),
+                .origin_module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0)))),
                 .owner_module = .{},
                 .backing = function,
                 .args = try std.testing.allocator.dupe(checked.CheckedTypeId, &.{variable}),
@@ -69299,7 +69300,7 @@ test "issue 11453: direct alias lowering shares runtime types without wrapper al
     defer source_names.deinit();
     var checked_types = checked.CheckedTypeStore{};
     defer checked_types.deinit(gpa);
-    const origin = try source_names.internModuleIdentity(&([_]u8{7} ** 32));
+    const origin = try source_names.internModuleIdentity(&(@as([32]u8, @splat(7))));
     const alias_name = try source_names.internTypeName("Alias");
     const unit = try checked_types.reserveSyntheticTypeRoot(gpa, .{ .bytes = @splat(1) }, false);
     try checked_types.fillSyntheticTypeRoot(gpa, unit, .empty_record);
@@ -69416,7 +69417,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     const gpa = std.testing.allocator;
     var source_names = names.NameStore.init(gpa);
     defer source_names.deinit();
-    const origin = try source_names.internModuleIdentity(&([_]u8{9} ** 32));
+    const origin = try source_names.internModuleIdentity(&(@as([32]u8, @splat(9))));
     const type_name = try source_names.internTypeName("Wrapper");
     var constants = check.ConstStore.ConstStore.init(gpa);
     defer constants.deinit();
@@ -69424,8 +69425,8 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     // Two distinct synthetic checked types: the opaque nominal, and the alias
     // chain that wraps it. This test resolves neither against a checked module;
     // they only have to stay distinct from each other.
-    const nominal_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
-    const alias_checked_ty: checked.CheckedTypeId = @enumFromInt(2);
+    const nominal_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
+    const alias_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
     const str = try stored_types.append(.{ .primitive = .str });
     const nominal = try stored_types.append(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = nominal_checked_ty },
@@ -69446,7 +69447,7 @@ test "issue 11453: stored aliases preserve sharing recursion and nominal backing
     }
     const recursive = try stored_types.reserve();
     const recursive_alias = try stored_types.append(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = origin, .type_name = type_name },
         .kind = .alias,
         .args = .{},
@@ -69520,9 +69521,9 @@ test "issue 11737: independent call selects its own nested contract without copy
 /// Write `src` into `dest`, copying only the active variant's payload.
 fn writeActiveVariant(comptime U: type, dest: *U, src: U) void {
     const tag = std.meta.activeTag(src);
-    inline for (@typeInfo(U).@"union".fields) |field| {
-        if (tag == @field(std.meta.Tag(U), field.name)) {
-            dest.* = @unionInit(U, field.name, @field(src, field.name));
+    inline for (@typeInfo(U).@"union".field_names) |field_name| {
+        if (tag == @field(std.meta.Tag(U), field_name)) {
+            dest.* = @unionInit(U, field_name, @field(src, field_name));
             return;
         }
     }

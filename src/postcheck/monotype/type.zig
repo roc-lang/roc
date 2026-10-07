@@ -451,7 +451,7 @@ pub const Store = struct {
         inline for (.{ "full", "equality", "representation", "specialization", "iterator" }) |query| {
             if (@field(queries, query) and !@field(self.read_sharing_coverage, query)) {
                 for (0..self.types.len()) |index| {
-                    const ty: TypeId = @enumFromInt(index);
+                    const ty: TypeId = @fromBackingInt(@intCast(index));
                     if (comptime std.mem.eql(u8, query, "iterator")) {
                         _ = try self.containsIteratorInterface(ty);
                     } else {
@@ -619,7 +619,7 @@ pub const Store = struct {
         try self.generated_private_cache.append(self.allocator, null);
         errdefer _ = self.generated_private_cache.pop();
         try self.iterator_interface_visit_epochs.append(self.allocator, 0);
-        return @enumFromInt(@as(u32, @intCast(index)));
+        return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
     }
 
     /// Add one recursive type without returning its id to the caller until the
@@ -666,14 +666,14 @@ pub const Store = struct {
 
     fn reserveSlot(self: *Store) std.mem.Allocator.Error!TypeId {
         const reserved = try self.add(.zst);
-        self.constructing.set(@intFromEnum(reserved), true);
+        self.constructing.set(@backingInt(reserved), true);
         self.unfinished_type_count += 1;
         return reserved;
     }
 
     fn fillReservedSlot(self: *Store, ty: TypeId, content: Content) void {
         self.assertMutable();
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (!self.constructing.unsafeRawItemsForView()[index]) {
             Common.invariant("filled a Monotype type slot that was not under construction");
         }
@@ -688,7 +688,7 @@ pub const Store = struct {
     }
 
     pub fn get(self: *const Store, ty: TypeId) Content {
-        return self.types.unsafeRawItemsForView()[@intFromEnum(ty)];
+        return self.types.unsafeRawItemsForView()[@backingInt(ty)];
     }
 
     /// Number of types this store holds. A structural walk that follows stored
@@ -739,7 +739,7 @@ pub const Store = struct {
     fn containsAt(self: *Store, root: TypeId, comptime query: ContainmentQuery) std.mem.Allocator.Error!bool {
         const cache = self.containmentCache(query);
         self.requireConstructed(root);
-        const root_index = @intFromEnum(root);
+        const root_index = @backingInt(root);
         if (cache.unsafeRawItemsForView()[root_index]) |cached| return cached;
         if (self.borrowed_read_only) Common.invariant("borrowed Monotype containment cache miss");
 
@@ -756,7 +756,7 @@ pub const Store = struct {
         const visit_epoch = self.iterator_interface_visit_epoch;
         try self.iterator_interface_pending.append(self.allocator, root);
         while (self.iterator_interface_pending.pop()) |ty| {
-            const ty_index = @intFromEnum(ty);
+            const ty_index = @backingInt(ty);
             if (self.iterator_interface_visit_epochs.unsafeRawItemsForView()[ty_index] == visit_epoch) continue;
             self.iterator_interface_visit_epochs.set(ty_index, visit_epoch);
             try self.iterator_interface_visited.append(self.allocator, ty);
@@ -832,7 +832,7 @@ pub const Store = struct {
             }
         }
         for (self.iterator_interface_visited.items) |visited| {
-            cache.set(@intFromEnum(visited), false);
+            cache.set(@backingInt(visited), false);
         }
         return false;
     }
@@ -1022,20 +1022,20 @@ pub const Store = struct {
                 self.declared_fields,
             ) catch unreachable;
             for (self.types, 0..) |content, offset| {
-                const expected: TypeId = @enumFromInt(self.begin.types + @as(u32, @intCast(offset)));
+                const expected: TypeId = @fromBackingInt(@intCast(self.begin.types + @as(u32, @intCast(offset))));
                 const added = destination.add(content) catch unreachable;
                 std.debug.assert(added == expected);
-                destination.type_digests.set(@intFromEnum(added), self.type_digests[offset]);
+                destination.type_digests.set(@backingInt(added), self.type_digests[offset]);
                 destination.specialization_digests.set(
-                    @intFromEnum(added),
+                    @backingInt(added),
                     self.specialization_digests[offset],
                 );
                 destination.equality_digests.set(
-                    @intFromEnum(added),
+                    @backingInt(added),
                     self.equality_digests[offset],
                 );
                 destination.representation_digests.set(
-                    @intFromEnum(added),
+                    @backingInt(added),
                     self.representation_digests[offset],
                 );
             }
@@ -1133,7 +1133,7 @@ pub const Store = struct {
     }
 
     fn requireEpochType(ty: TypeId, limit: u32) void {
-        std.debug.assert(@intFromEnum(ty) < limit);
+        std.debug.assert(@backingInt(ty) < limit);
     }
 
     fn requireEpochSpan(span_: Span, limit: u32) void {
@@ -1247,7 +1247,7 @@ pub const Store = struct {
 
         pub fn fill(self: Transaction, store: *Store, ty: TypeId, content: Content) void {
             self.requireOwner(store);
-            const index = @intFromEnum(ty);
+            const index = @backingInt(ty);
             if (index < self.mark_.types_len or index >= store.types.len()) {
                 Common.compilerBug("recursive transaction filled a type outside its suffix");
             }
@@ -1282,7 +1282,7 @@ pub const Store = struct {
         /// speculative ids resolve through the remap, so callers translate
         /// held ids without ever handling the store's private mark.
         pub fn remapType(self: TransactionResult, ty: TypeId) TypeId {
-            const index = @intFromEnum(ty);
+            const index = @backingInt(ty);
             if (index < self.suffix_start) return ty;
             const offset = index - self.suffix_start;
             if (offset >= self.remap.len) {
@@ -1424,7 +1424,7 @@ pub const Store = struct {
         }
         const mark_ = transaction.mark_;
         const suffix_len = self.types.len() - mark_.types_len;
-        const root_index = @intFromEnum(root);
+        const root_index = @backingInt(root);
         if (root_index < mark_.types_len or root_index >= self.types.len()) {
             Common.compilerBug("recursive transaction root is outside its suffix");
         }
@@ -1474,7 +1474,7 @@ pub const Store = struct {
         const resolver = SuffixClasses{ .start = @intCast(mark_.types_len), .classes = classes };
 
         for (order) |offset| {
-            const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
             // Fallible rather than `typeDigestCached`: inside a transaction an
             // exhausted allocator has a correct answer (roll the seal back),
             // so it must not become the digest path's panic.
@@ -1497,7 +1497,7 @@ pub const Store = struct {
                 if (group.value_ptr.items.len != 0) {
                     const earlier = group.value_ptr.items[0];
                     if (std.debug.runtime_safety) {
-                        const earlier_ty: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + earlier)));
+                        const earlier_ty: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + earlier))));
                         std.debug.assert(try typeViewEql(self.view(), self.allocator, name_store, earlier_ty, candidate, .exact, resolver));
                     }
                     class = classes[earlier];
@@ -1516,9 +1516,9 @@ pub const Store = struct {
         var class_representatives = collections.DenseMap(TypeId, TypeId).init(self.allocator);
         defer class_representatives.deinit();
         for (0..suffix_len) |offset| {
-            const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
             const class = classes[offset].?;
-            if (@intFromEnum(class) < mark_.types_len) {
+            if (@backingInt(class) < mark_.types_len) {
                 interned_original[offset] = class;
                 continue;
             }
@@ -1552,12 +1552,12 @@ pub const Store = struct {
         // Durable ids are decided before anything is mutated: representative
         // `i` takes the `i`th id at the transaction's mark.
         for (interned_original, 0..) |interned, offset| {
-            const interned_index = @intFromEnum(interned);
+            const interned_index = @backingInt(interned);
             if (interned_index < mark_.types_len) {
                 result_remap[offset] = interned;
             } else {
                 const representative_index = representative_of_offset[interned_index - mark_.types_len];
-                result_remap[offset] = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+                result_remap[offset] = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_index))));
             }
         }
 
@@ -1572,7 +1572,7 @@ pub const Store = struct {
 
         for (captured.items, 0..) |node, representative_index| {
             const rebuilt = try self.rebuildTransactionContent(mark_, node, result_remap);
-            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
+            const durable: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_index))));
             self.fillReservedSlot(durable, rebuilt);
         }
 
@@ -1583,9 +1583,9 @@ pub const Store = struct {
         // Children before parents, so each safety recomputation reads its
         // children's digests from the cache instead of re-walking them.
         for (order) |offset| {
-            const original: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+            const original: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
             if (interned_original[offset] != original) continue;
-            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_of_offset[offset])));
+            const durable: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_of_offset[offset]))));
             const digest = digests[offset];
             if (std.debug.runtime_safety) {
                 const rebuilt_digest = try self.computeDigest(name_store, durable, .full, null);
@@ -1596,8 +1596,8 @@ pub const Store = struct {
             self.setCachedDigest(durable, .full, digest);
         }
         for (representatives.items, 0..) |original, representative_index| {
-            const durable: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + representative_index)));
-            const digest = digests[@intFromEnum(original) - mark_.types_len];
+            const durable: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + representative_index))));
+            const digest = digests[@backingInt(original) - mark_.types_len];
             const bucket = self.full_digest_interned.getPtr(DigestBucketKey.from(digest)) orelse
                 Common.compilerBug("recursive transaction indexed a digest with no preflighted bucket");
             bucket.appendAssumeCapacity(durable);
@@ -1784,7 +1784,7 @@ pub const Store = struct {
         allocator: std.mem.Allocator,
         ty: TypeId,
     ) std.mem.Allocator.Error!void {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index >= source.types.len()) {
             Common.compilerBug("Monotype import source id does not belong to the source store");
         }
@@ -2094,11 +2094,11 @@ pub const Store = struct {
                 states[visit.offset] = .open;
                 try stack.append(self.allocator, .{ .offset = visit.offset, .expanded = true });
                 children.clearRetainingCapacity();
-                try self.appendChildTypes(@enumFromInt(start + visit.offset), &children);
+                try self.appendChildTypes(@fromBackingInt(@intCast(start + visit.offset)), &children);
                 var index = children.items.len;
                 while (index > 0) {
                     index -= 1;
-                    const child_index = @intFromEnum(children.items[index]);
+                    const child_index = @backingInt(children.items[index]);
                     if (child_index < start or child_index - start >= suffix_len) continue;
                     const child_offset = child_index - start;
                     if (states[child_offset] != .unvisited) continue;
@@ -2167,7 +2167,7 @@ pub const Store = struct {
         while (groups.next()) |entry| {
             var needed: usize = 0;
             for (entry.value_ptr.items) |offset| {
-                const candidate: TypeId = @enumFromInt(@as(u32, @intCast(mark_.types_len + offset)));
+                const candidate: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(mark_.types_len + offset))));
                 if (interned_original[offset] == candidate) needed += 1;
             }
             if (needed == 0) continue;
@@ -2257,7 +2257,7 @@ pub const Store = struct {
         frozen: bool,
 
         pub fn get(self: View, ty: TypeId) Content {
-            return self.types[@intFromEnum(ty)];
+            return self.types[@backingInt(ty)];
         }
 
         pub fn span(self: View, span_: Span) []const TypeId {
@@ -2345,7 +2345,7 @@ pub const Store = struct {
         }
 
         fn typeRefInBounds(self: View, ty: TypeId) bool {
-            return @intFromEnum(ty) < self.types.len;
+            return @backingInt(ty) < self.types.len;
         }
 
         fn spanInBounds(_: View, len: usize, span_: Span) bool {
@@ -2586,7 +2586,7 @@ pub const Store = struct {
     /// Intern a function while reusing an argument span already owned by this
     /// store. Immutable side-pool spans may be shared between type nodes.
     pub fn internFuncFromSpan(self: *Store, name_store: *const names.NameStore, args: Span, ret: TypeId) std.mem.Allocator.Error!TypeId {
-        if (builtin.mode == .Debug) requireEpochSpan(args, @intCast(self.spans.len()));
+        if (builtin.mode == .debug) requireEpochSpan(args, @intCast(self.spans.len()));
         const mark_ = self.mark();
         const ty = try self.add(.{ .func = .{ .args = args, .ret = ret } });
         return try self.internCandidate(name_store, mark_, ty);
@@ -2746,7 +2746,7 @@ pub const Store = struct {
     }
 
     fn transactionType(mark_: Mark, remap: []const TypeId, ty: TypeId) TypeId {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index < mark_.types_len) return ty;
         const offset = index - mark_.types_len;
         // A reference past the remap means the node escaped the suffix the
@@ -2930,7 +2930,7 @@ pub const Store = struct {
     }
 
     fn requireConstructed(self: *const Store, ty: TypeId) void {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index >= self.constructing.len() or self.constructing.unsafeRawItemsForView()[index]) {
             Common.invariant("Monotype digest requested for an unfinished type slot");
         }
@@ -2939,7 +2939,7 @@ pub const Store = struct {
     /// Cache lookup for one digest mode. Filled nodes are immutable, so a
     /// cached digest is permanently valid.
     fn cachedDigest(self: *const Store, ty: TypeId, mode: NamedDigestMode) ?names.TypeDigest {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         // A captured input snapshot carries type rows without digest slots.
         const slots = switch (mode) {
             .full => self.type_digests.unsafeRawItemsForView(),
@@ -2958,7 +2958,7 @@ pub const Store = struct {
         if (self.cachedDigest(ty, mode)) |existing| {
             std.debug.assert(std.mem.eql(u8, &existing.bytes, &digest.bytes));
         }
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         switch (mode) {
             .full => self.type_digests.set(index, digest),
             .identity_only => self.specialization_digests.set(index, digest),
@@ -3055,7 +3055,7 @@ pub const Store = struct {
             .named => |named| {
                 try sink.writeBytes("named");
                 try sink.writeBytes(&named.named_type.module.bytes);
-                if (mode == .full or mode == .identity_only) try sink.writeU32(@intFromEnum(named.named_type.ty));
+                if (mode == .full or mode == .identity_only) try sink.writeU32(@backingInt(named.named_type.ty));
                 try sink.writeBytes(name_store.moduleIdentityBytes(named.def.module));
                 try sinkOptionalU32(sink, named.def.source_decl);
                 if (mode != .equality or named.def.source_decl == null) {
@@ -3350,7 +3350,7 @@ pub const Store = struct {
         }
 
         fn nodeKey(ty: TypeId, mode: NamedDigestMode) u64 {
-            return (@as(u64, @intFromEnum(ty)) << 2) | @as(u64, @intFromEnum(mode));
+            return (@as(u64, @backingInt(ty)) << 2) | @as(u64, @backingInt(mode));
         }
 
         fn internNode(self: *DigestEngine, raw_ty: TypeId, mode: NamedDigestMode) std.mem.Allocator.Error!u32 {
@@ -3822,7 +3822,7 @@ const SuffixClasses = struct {
     classes: []const ?TypeId,
 
     fn resolve(self: SuffixClasses, ty: TypeId) TypeId {
-        const index = @intFromEnum(ty);
+        const index = @backingInt(ty);
         if (index < self.start) return ty;
         const offset = index - self.start;
         if (offset >= self.classes.len) return ty;
@@ -4060,12 +4060,12 @@ pub fn writeFieldDefaultDigest(name_store: *const names.NameStore, hasher: *Type
 /// Order-preserving pair key, for a match mode whose two sides mean different
 /// things.
 fn orderedTypePairKey(lhs: TypeId, rhs: TypeId) u64 {
-    return (@as(u64, @intFromEnum(lhs)) << 32) | @as(u64, @intFromEnum(rhs));
+    return (@as(u64, @backingInt(lhs)) << 32) | @as(u64, @backingInt(rhs));
 }
 
 fn typePairKey(lhs: TypeId, rhs: TypeId) u64 {
-    const lhs_int = @intFromEnum(lhs);
-    const rhs_int = @intFromEnum(rhs);
+    const lhs_int = @backingInt(lhs);
+    const rhs_int = @backingInt(rhs);
     const low = @min(lhs_int, rhs_int);
     const high = @max(lhs_int, rhs_int);
     return (@as(u64, low) << 32) | @as(u64, high);
@@ -4225,10 +4225,10 @@ test "monotype iterator relation uses complete minted producer identity" {
         builtin_owner: ?static_dispatch.BuiltinOwner = .iter,
     };
     const list = Iterator{ .def = .{
-        .module = try name_store.internModuleIdentity(&([_]u8{21} ** 32)),
+        .module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(21)))),
         .type_name = try name_store.internTypeName("Iter"),
         .source_decl = 62,
-        .generated = .{ .bytes = [_]u8{7} ** 32 },
+        .generated = .{ .bytes = @as([32]u8, @splat(7)) },
         .iterator_representation = .minted,
         .iterator_kind = .list,
         .iterator_depth = 1,
@@ -4243,7 +4243,7 @@ test "monotype iterator relation uses complete minted producer identity" {
     other.def.iterator_depth += 1;
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
     other = list;
-    other.def.generated = .{ .bytes = [_]u8{8} ** 32 };
+    other.def.generated = .{ .bytes = @as([32]u8, @splat(8)) };
     try std.testing.expectEqual(IteratorRelation.minted_join, iteratorRelation(list, other));
 
     other.def.source_decl = 63;
@@ -4263,7 +4263,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
 
     const field_name = try name_store.internRecordFieldLabel("value");
     const tag_name = try name_store.internTagLabel("Value");
-    const module_bytes = [_]u8{21} ** 32;
+    const module_bytes = @as([32]u8, @splat(21));
     const module = try name_store.internModuleIdentity(&module_bytes);
     const type_name = try name_store.internTypeName("Model");
 
@@ -4292,7 +4292,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
         },
     });
     const named = try source.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(7) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(7)) },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = &.{tag_union},
@@ -4318,7 +4318,7 @@ test "monotype type epoch deltas own consecutive suffixes" {
     // segments must continue to own both their main nodes and side pools.
     var iteration: u32 = 0;
     while (iteration < 512) : (iteration += 1) {
-        var digest_bytes = [_]u8{0} ** 32;
+        var digest_bytes = @as([32]u8, @splat(0));
         digest_bytes[0] = @truncate(iteration);
         digest_bytes[1] = @truncate(iteration >> 8);
         _ = try source.internErased(&name_store, .{ .bytes = digest_bytes });
@@ -4384,9 +4384,9 @@ test "monotype cross-store import relocates names, side pools, sharing, and recu
     _ = try destination_names.internRecordFieldLabel("unrelated");
     _ = try destination_names.internTagLabel("Unrelated");
     _ = try destination_names.internTypeName("Unrelated");
-    _ = try destination_names.internModuleIdentity(&([_]u8{99} ** 32));
+    _ = try destination_names.internModuleIdentity(&(@as([32]u8, @splat(99))));
 
-    const module_bytes = [_]u8{7} ** 32;
+    const module_bytes = @as([32]u8, @splat(7));
     const source_module = try source_names.internModuleIdentity(&module_bytes);
     const field_name = try source_names.internRecordFieldLabel("value");
     const tag_name = try source_names.internTagLabel("Node");
@@ -4475,7 +4475,7 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     defer source_names.deinit();
     var destination_names = names.NameStore.init(std.testing.allocator);
     defer destination_names.deinit();
-    const module_bytes = [_]u8{11} ** 32;
+    const module_bytes = @as([32]u8, @splat(11));
     const module = try source_names.internModuleIdentity(&module_bytes);
     const type_name = try source_names.internTypeName("Iterator");
     const len_field = try source_names.internRecordFieldLabel("len");
@@ -4491,13 +4491,13 @@ test "monotype cross-store import preserves named metadata and deduplicates repe
     _ = try destination_names.internRecordFieldLabel("unrelated");
     _ = try destination_names.internTagLabel("Unrelated");
     _ = try destination_names.internTypeName("Unrelated");
-    _ = try destination_names.internModuleIdentity(&([_]u8{98} ** 32));
+    _ = try destination_names.internModuleIdentity(&(@as([32]u8, @splat(98))));
 
     var source = Store.init(std.testing.allocator);
     defer source.deinit();
     const unit = try source.internZst(&source_names);
     const named = try source.internNamed(&source_names, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{
             .module = module,
             .type_name = type_name,
@@ -4577,7 +4577,7 @@ test "monotype cross-store import preserves every acyclic content form" {
     defer destination.deinit();
 
     const primitive = try source.internPrimitive(&source_names, .u64);
-    const erased_digest = names.TypeDigest{ .bytes = [_]u8{42} ** 32 };
+    const erased_digest = names.TypeDigest{ .bytes = @as([32]u8, @splat(42)) };
     const erased = try source.internErased(&source_names, erased_digest);
     const unit = try source.internZst(&source_names);
     const list = try source.internList(&source_names, primitive);
@@ -4713,7 +4713,7 @@ test "monotype cross-store import is atomic under allocation failure" {
     defer source_names.deinit();
     var source = Store.init(std.testing.allocator);
     defer source.deinit();
-    const module = try source_names.internModuleIdentity(&([_]u8{17} ** 32));
+    const module = try source_names.internModuleIdentity(&(@as([32]u8, @splat(17))));
     const field_name = try source_names.internRecordFieldLabel("field");
     const declared_name = try source_names.internRecordFieldLabel("declared");
     const tag_name = try source_names.internTagLabel("Node");
@@ -4734,7 +4734,7 @@ test "monotype cross-store import is atomic under allocation failure" {
         .payloads = try source.addSpan(&.{ record, unit }),
     }}) });
     const named = try source.internNamed(&source_names, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = &.{recursive},
@@ -4854,12 +4854,12 @@ test "monotype type store acyclic interning reuses child-first function nodes" {
 
     try std.testing.expectEqual(first, second);
     try std.testing.expectEqual(@as(usize, 2), store.view().types.len);
-    try std.testing.expect(store.view().type_digests[@intFromEnum(first)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@intFromEnum(first)] == null);
+    try std.testing.expect(store.view().type_digests[@backingInt(first)] != null);
+    try std.testing.expect(store.specializationDigestsView()[@backingInt(first)] == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, first, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@intFromEnum(first)].?);
+    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(first)].?);
 }
 
 test "monotype type store function interning reuses an existing argument span" {
@@ -4900,12 +4900,12 @@ test "monotype type store recursive transaction interns equal SCC positions" {
     try std.testing.expectEqual(result.remap[0], result.remap[1]);
     try std.testing.expectEqual(result.root, result.remap[0]);
     try std.testing.expectEqual(@as(usize, 1), store.view().types.len);
-    try std.testing.expect(store.view().type_digests[@intFromEnum(result.root)] != null);
-    try std.testing.expect(store.specializationDigestsView()[@intFromEnum(result.root)] == null);
+    try std.testing.expect(store.view().type_digests[@backingInt(result.root)] != null);
+    try std.testing.expect(store.specializationDigestsView()[@backingInt(result.root)] == null);
     var stats: Store.DigestStats = .{};
     const digest = store.specializationDigestCached(&name_store, result.root, &stats);
     try std.testing.expect(stats.cache_misses > 0);
-    try std.testing.expectEqual(digest, store.specializationDigestsView()[@intFromEnum(result.root)].?);
+    try std.testing.expectEqual(digest, store.specializationDigestsView()[@backingInt(result.root)].?);
 }
 
 test "monotype transaction retains full digests and counts only requested modes" {
@@ -4927,7 +4927,7 @@ test "monotype transaction retains full digests and counts only requested modes"
     const misses = stats.cache_misses;
     for (result.remap) |ty| {
         _ = store.typeDigestCached(&name_store, ty, null);
-        try std.testing.expect(store.specializationDigestsView()[@intFromEnum(ty)] == null);
+        try std.testing.expect(store.specializationDigestsView()[@backingInt(ty)] == null);
     }
     try std.testing.expectEqual(misses, stats.cache_misses);
     const default_requests = stats.root_requests;
@@ -5094,7 +5094,7 @@ test "monotype type store recursive transaction seals atomically under allocatio
             var buckets = store.full_digest_interned.valueIterator();
             while (buckets.next()) |bucket| {
                 for (bucket.items) |indexed| {
-                    try std.testing.expect(@intFromEnum(indexed) < baseline_types);
+                    try std.testing.expect(@backingInt(indexed) < baseline_types);
                 }
             }
             try std.testing.expect(store.verify(&name_store) == null);
@@ -5109,11 +5109,11 @@ test "monotype type store recursive transaction seals atomically under allocatio
     defer result.deinit();
     try std.testing.expect(store.verify(&name_store) == null);
     try std.testing.expectEqual(unit, result.remapType(unit));
-    try std.testing.expectEqual(unit, result.remapType(@enumFromInt(baseline_types + 2)));
+    try std.testing.expectEqual(unit, result.remapType(@fromBackingInt(@intCast(baseline_types + 2))));
 
     const committed_types = store.types.len();
     const reinterned = try store.internBox(&name_store, result.root);
-    try std.testing.expectEqual(result.remapType(@enumFromInt(baseline_types + 1)), reinterned);
+    try std.testing.expectEqual(result.remapType(@fromBackingInt(@intCast(baseline_types + 1))), reinterned);
     try std.testing.expectEqual(committed_types, store.types.len());
 }
 
@@ -5127,7 +5127,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0x5A} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0x5A))));
     const type_name = try name_store.internTypeName("Tree");
     const next_field = try name_store.internRecordFieldLabel("next");
     const more_tag = try name_store.internTagLabel("More");
@@ -5145,7 +5145,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
         .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ named, unit }) },
     }) });
     transaction.fill(&store, named, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{unit}),
@@ -5193,7 +5193,7 @@ test "monotype type store recursive transaction preserves captured side-pool row
         .{ .name = more_tag, .checked_name = more_tag, .payloads = try store.addSpan(&.{ second_named, unit }) },
     }) });
     second.fill(&store, second_named, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{unit}),
@@ -5245,7 +5245,7 @@ test "monotype type store restores keep durable iterator containment answers" {
     defer store.deinit();
 
     const unit = try store.internZst(&name_store);
-    const unit_index = @intFromEnum(unit);
+    const unit_index = @backingInt(unit);
     try std.testing.expect(!(try store.containsIteratorInterface(unit)));
     try std.testing.expectEqual(@as(?bool, false), store.iterator_interface_cache.unsafeRawItemsForView()[unit_index]);
 
@@ -5335,7 +5335,7 @@ test "monotype type store acyclic interning keeps distinct backing-less aliases"
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
@@ -5343,19 +5343,19 @@ test "monotype type store acyclic interning keeps distinct backing-less aliases"
     defer store.deinit();
 
     const first = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
     });
     const second = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .backing = null,
     });
     const repeat_first = try store.internNamed(&name_store, .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .backing = null,
@@ -5373,7 +5373,7 @@ test "monotype named type digest includes generic arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Box");
 
     var store = Store.init(std.testing.allocator);
@@ -5383,7 +5383,7 @@ test "monotype named type digest includes generic arguments" {
     const str = try store.add(.{ .primitive = .str });
     const i64_args = try store.addSpan(&.{i64_ty});
     const str_args = try store.addSpan(&.{str});
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const named_i64 = try store.add(.{ .named = .{
         .named_type = .{ .module = .{}, .ty = checked_ty },
@@ -5409,14 +5409,14 @@ test "monotype cached digest visits nested parameterized nominals once" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("W");
 
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
     const depth = 64;
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     var nested = try store.add(.{ .primitive = .u64 });
     var ladder: [depth]TypeId = undefined;
     for (&ladder) |*ty| {
@@ -5454,7 +5454,7 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCD} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCD))));
     const type_name = try name_store.internTypeName("V");
     const tag_name = try name_store.internTagLabel("Node");
 
@@ -5462,7 +5462,7 @@ test "monotype recursive nominal digest ignores how deep the knot is tied" {
     defer store.deinit();
 
     const u64_ty = try store.add(.{ .primitive = .u64 });
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const Context = struct {
         store: *Store,
@@ -5522,7 +5522,7 @@ test "monotype recursive nominal digest still separates different arguments" {
     var name_store = names.NameStore.init(std.testing.allocator);
     defer name_store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xCE} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xCE))));
     const type_name = try name_store.internTypeName("V");
     const tag_name = try name_store.internTagLabel("Node");
 
@@ -5531,7 +5531,7 @@ test "monotype recursive nominal digest still separates different arguments" {
 
     const u64_ty = try store.add(.{ .primitive = .u64 });
     const str_ty = try store.add(.{ .primitive = .str });
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const inner_args = try store.addSpan(&.{str_ty});
     const inner_backing = try store.add(.{ .tag_union = try store.addTagVariants(&name_store, &.{.{
@@ -5607,8 +5607,8 @@ test "monotype empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
-    const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(2), .checked_name = @enumFromInt(2), .payloads = nonempty_span }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = null }});
+    const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(2)), .checked_name = @fromBackingInt(@intCast(2)), .payloads = nonempty_span }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_tags.len == 1);
@@ -5670,7 +5670,7 @@ test "monotype type verifier rejects malformed rows and references" {
         var store = Store.init(std.testing.allocator);
         defer store.deinit();
 
-        const bad_fields = try store.addFields(&.{.{ .name = a_field, .ty = @enumFromInt(99), .default = null }});
+        const bad_fields = try store.addFields(&.{.{ .name = a_field, .ty = @fromBackingInt(@intCast(99)), .default = null }});
         _ = try store.add(.{ .record = bad_fields });
         try std.testing.expectEqual(Store.VerifyError.type_ref_out_of_bounds, store.verify(&name_store).?);
     }
@@ -5760,10 +5760,10 @@ test "monotype iterator containment cache is invalidated by rollback" {
     try std.testing.expect(!try store.containsIteratorInterface(survivor));
 
     store.restore(mark_);
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Iter");
     const replacement = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .builtin_owner = .iter,
@@ -5839,9 +5839,9 @@ test "monotype digest keeps aliases opaque" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pretty");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
@@ -5892,9 +5892,9 @@ test "monotype type equality treats aliases as their backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pretty");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
 
     const str = try store.add(.{ .primitive = .str });
     const aliased = try store.add(.{ .named = .{
@@ -5925,19 +5925,19 @@ test "monotype type equality and digests separate aliases without backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const first_name = try name_store.internTypeName("First");
     const second_name = try name_store.internTypeName("Second");
 
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = first_name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = null,
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = module_identity, .type_name = second_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -5957,9 +5957,9 @@ test "monotype named type digest includes backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Wrap");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
 
@@ -5994,9 +5994,9 @@ test "monotype specialization identity includes generated backing without builti
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("GeneratedEvidence");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
 
@@ -6028,11 +6028,11 @@ test "monotype named backing authority participates in durable identity" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAC} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAC))));
     const type_name = try name_store.internTypeName("UnownedEvidence");
     const backing = try store.add(.{ .record = Span.empty() });
     const base = NamedContent{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .@"opaque",
         .args = Span.empty(),
@@ -6056,11 +6056,11 @@ test "monotype named type digest includes nested named backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const outer_type_name = try name_store.internTypeName("Outer");
     const inner_type_name = try name_store.internTypeName("Inner");
-    const outer_checked_ty: checked.CheckedTypeId = @enumFromInt(1);
-    const inner_checked_ty: checked.CheckedTypeId = @enumFromInt(2);
+    const outer_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
+    const inner_checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(2));
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
 
@@ -6105,11 +6105,11 @@ test "monotype named type digest includes declared field order" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Pair");
     const field_a = try name_store.internRecordFieldLabel("a");
     const field_b = try name_store.internRecordFieldLabel("b");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const fields = try store.addFields(&.{
         .{ .name = field_a, .ty = i64_ty, .default = null },
@@ -6360,18 +6360,18 @@ test "monotype equality digest caches alias queries without rehashing their back
     var store = Store.init(allocations.allocator());
     defer store.deinit();
 
-    const module = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const name = try name_store.internTypeName("Text");
     const str = try store.add(.{ .primitive = .str });
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module, .type_name = name },
         .kind = .alias,
         .args = Span.empty(),
         .backing = .{ .ty = str, .use = .inspectable },
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = module, .type_name = name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6400,17 +6400,17 @@ test "monotype digest separates named types by checked type id" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Reentrant");
 
     const first = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(1) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
     } });
     const second = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(2) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) },
         .def = .{ .module = module_identity, .type_name = type_name },
         .kind = .nominal,
         .args = Span.empty(),
@@ -6481,9 +6481,9 @@ test "monotype named type digest includes padding backing" {
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
 
-    const module_identity = try name_store.internModuleIdentity(&([_]u8{0xAB} ** 32));
+    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xAB))));
     const type_name = try name_store.internTypeName("Padded");
-    const checked_ty: checked.CheckedTypeId = @enumFromInt(1);
+    const checked_ty: checked.CheckedTypeId = @fromBackingInt(@intCast(1));
     const i64_ty = try store.add(.{ .primitive = .i64 });
     const str_ty = try store.add(.{ .primitive = .str });
     const order_i64 = try store.addDeclaredFields(&.{.{ .padding = i64_ty }});
@@ -6532,7 +6532,7 @@ test "frozen monotype clone owns fresh iterator traversal slots for uncached que
     };
     try Attempt.run(allocator, &source, recursive);
     try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &source, recursive });
-    try std.testing.expectEqual(@as(?bool, null), source.iterator_interface_cache.get(@intFromEnum(recursive)));
+    try std.testing.expectEqual(@as(?bool, null), source.iterator_interface_cache.get(@backingInt(recursive)));
 }
 
 test "monotype read sharing borrows prepared recursive and alias queries without allocation" {
@@ -6540,12 +6540,12 @@ test "monotype read sharing borrows prepared recursive and alias queries without
     defer name_store.deinit();
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    const module = try name_store.internModuleIdentity(&([_]u8{42} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(42))));
     const type_name = try name_store.internTypeName("Alias");
     const recursive = try store.reserveSlot();
     store.fillReservedSlot(recursive, .{ .list = recursive });
     const alias = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(17) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6573,9 +6573,9 @@ test "monotype read sharing borrows prepared recursive and alias queries without
         try std.testing.expect(borrowed.digest_stats == null);
         try std.testing.expectEqual(store.types.unsafeRawItemsForView().ptr, borrowed.types.unsafeRawItemsForView().ptr);
         for ([_]TypeId{ recursive, alias }) |ty| {
-            try std.testing.expectEqual(full_before[@intFromEnum(ty)].?, borrowed.typeDigest(&name_store, ty));
-            try std.testing.expectEqual(equality_before[@intFromEnum(ty)].?, borrowed.equalityDigest(&name_store, ty));
-            try std.testing.expectEqual(identity_before[@intFromEnum(ty)].?, borrowed.specializationDigest(&name_store, ty));
+            try std.testing.expectEqual(full_before[@backingInt(ty)].?, borrowed.typeDigest(&name_store, ty));
+            try std.testing.expectEqual(equality_before[@backingInt(ty)].?, borrowed.equalityDigest(&name_store, ty));
+            try std.testing.expectEqual(identity_before[@backingInt(ty)].?, borrowed.specializationDigest(&name_store, ty));
             try std.testing.expect(!try borrowed.containsIteratorInterface(ty));
         }
         try std.testing.expect(try borrowed.view().typeEql(std.testing.allocator, &name_store, recursive, alias));
@@ -6609,10 +6609,10 @@ test "monotype read sharing explicit queries leave omitted caches cold and inval
     defer store.deinit();
     const recursive = try store.reserveSlot();
     store.fillReservedSlot(recursive, .{ .list = recursive });
-    const module = try name_store.internModuleIdentity(&([_]u8{42} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(42))));
     const type_name = try name_store.internTypeName("Alias");
     const alias = try store.add(.{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(17) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .alias,
         .args = Span.empty(),
@@ -6754,7 +6754,7 @@ test "monotype read sharing preparation retries recursive digest publication aft
             try std.testing.expect(!store.hasSpeculativeConstruction());
             // Every answer published before failure must already be correct.
             for (0..store.types.len()) |index| {
-                const ty: TypeId = @enumFromInt(index);
+                const ty: TypeId = @fromBackingInt(@intCast(index));
                 for ([_]Store.NamedDigestMode{ .full, .identity_only, .equality }) |mode| {
                     if (store.cachedDigest(ty, mode)) |digest| {
                         try std.testing.expectEqual(expected.cachedDigest(ty, mode).?, digest);
@@ -6781,8 +6781,8 @@ test "monotype read sharing preparation retries recursive digest publication aft
         var borrowed = store.borrowReadOnly(failing.allocator());
         defer borrowed.deinit();
         for ([_][2]u32{ .{ 0, 1 }, .{ 2, 4 }, .{ 3, 5 } }) |pair| {
-            const root: TypeId = @enumFromInt(pair[0]);
-            const unfolded: TypeId = @enumFromInt(pair[1]);
+            const root: TypeId = @fromBackingInt(@intCast(pair[0]));
+            const unfolded: TypeId = @fromBackingInt(@intCast(pair[1]));
             try std.testing.expectEqual(expected.typeDigest(&name_store, root), borrowed.typeDigest(&name_store, unfolded));
             try std.testing.expectEqual(borrowed.typeDigest(&name_store, root), borrowed.typeDigest(&name_store, unfolded));
             try std.testing.expectEqual(borrowed.equalityDigest(&name_store, root), borrowed.equalityDigest(&name_store, unfolded));
@@ -6798,7 +6798,7 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
     defer name_store.deinit();
     var store = Store.init(std.testing.allocator);
     defer store.deinit();
-    const module = try name_store.internModuleIdentity(&([_]u8{42} ** 32));
+    const module = try name_store.internModuleIdentity(&(@as([32]u8, @splat(42))));
     const type_name = try name_store.internTypeName("Tree");
     const field = try name_store.internRecordFieldLabel("children");
     const scalar = try store.add(.{ .primitive = .i64 });
@@ -6806,7 +6806,7 @@ test "monotype digest byte fixtures preserve scalar and recursive encodings" {
     const list = try store.add(.{ .list = tree });
     const record = try store.add(.{ .record = try store.addFields(&.{.{ .name = field, .ty = list, .default = null }}) });
     store.fillReservedSlot(tree, .{ .named = .{
-        .named_type = .{ .module = .{}, .ty = @enumFromInt(17) },
+        .named_type = .{ .module = .{}, .ty = @fromBackingInt(@intCast(17)) },
         .def = .{ .module = module, .type_name = type_name },
         .kind = .nominal,
         .args = try store.addSpan(&.{scalar}),

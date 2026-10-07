@@ -19,7 +19,7 @@ pub const Bool = enum(c_int) {
 
     /// Converts a Zig bool to LLVM Bool.
     pub fn fromBool(b: bool) Bool {
-        return @enumFromInt(@intFromBool(b));
+        return @fromBackingInt(@intCast(@intFromBool(b)));
     }
 
     /// Converts an LLVM Bool to a Zig bool.

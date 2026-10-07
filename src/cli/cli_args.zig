@@ -127,7 +127,12 @@ pub const ReplaceDepArg = struct {
 /// The `--replace-dep` occurrences of one invocation. Held by value so
 /// argument structs stay copyable without owning an allocation.
 pub const ReplaceDepArgs = struct {
-    items: [max]ReplaceDepArg = [_]ReplaceDepArg{.{ .old = "", .new = "" }} ** max,
+    items: [max]ReplaceDepArg = repeated: {
+        const pattern = [_]ReplaceDepArg{.{ .old = "", .new = "" }};
+        var result: [pattern.len * (max)]@TypeOf(pattern[0]) = undefined;
+        for (0..(max)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    },
     len: usize = 0,
 
     pub const max: usize = 32;
@@ -451,12 +456,33 @@ fn optLevelList(comptime levels: []const OptLevel, comptime style: enum { names,
     return text;
 }
 
+/// A struct field's name, type and default, in the shape the argument checks read.
+const FieldInfo = struct {
+    name: [:0]const u8,
+    type: type,
+    default_value_ptr: ?*const anyopaque,
+
+    fn defaultValue(comptime self: FieldInfo) ?self.type {
+        const pointer: *const self.type = @ptrCast(@alignCast(self.default_value_ptr orelse return null));
+        return pointer.*;
+    }
+};
+
+fn structFieldInfos(comptime T: type) [@typeInfo(T).@"struct".field_names.len]FieldInfo {
+    const info = @typeInfo(T).@"struct";
+    var fields: [info.field_names.len]FieldInfo = undefined;
+    for (info.field_names, info.field_types, info.field_attrs, 0..) |name, field_type, attrs, index| {
+        fields[index] = .{ .name = name, .type = field_type, .default_value_ptr = attrs.default_value_ptr };
+    }
+    return fields;
+}
+
 /// The declaration of the struct field at a dotted `path` under `Parsed`.
-fn fieldInfoAt(comptime Parsed: type, comptime path: []const u8) std.builtin.Type.StructField {
+fn fieldInfoAt(comptime Parsed: type, comptime path: []const u8) FieldInfo {
     if (mem.findScalar(u8, path, '.')) |dot| {
         return fieldInfoAt(@FieldType(Parsed, path[0..dot]), path[dot + 1 ..]);
     }
-    for (@typeInfo(Parsed).@"struct".fields) |field| {
+    for (structFieldInfos(Parsed)) |field| {
         if (mem.eql(u8, field.name, path)) return field;
     }
     @compileError(@typeName(Parsed) ++ " has no field `" ++ path ++ "` for a flag or argument to set");
@@ -563,7 +589,7 @@ const Command = struct {
                 @compileError(@typeName(Parsed) ++ "." ++ name ++ " is derived, so it needs a default");
             }
         }
-        for (@typeInfo(Parsed).@"struct".fields) |field| {
+        for (structFieldInfos(Parsed)) |field| {
             var setters: usize = 0;
             for (cmd.derived) |name| setters += @intFromBool(mem.eql(u8, name, field.name));
             if (cmd.rest) |name| setters += @intFromBool(mem.eql(u8, name, field.name));
@@ -621,8 +647,8 @@ fn optionLines(comptime Parsed: type, comptime flags: []const Flag, comptime col
     for (flags) |flag| {
         if (flag.help == null) continue;
         var lines = mem.splitScalar(u8, flag.description(Parsed), '\n');
-        text = text ++ flag.spelling() ++ " " ** (column - flag.spelling().len) ++ lines.first() ++ "\n";
-        while (lines.next()) |line| text = text ++ " " ** column ++ line ++ "\n";
+        text = text ++ flag.spelling() ++ &@as([column - flag.spelling().len]u8, @splat(' ')) ++ lines.first() ++ "\n";
+        while (lines.next()) |line| text = text ++ &@as([column]u8, @splat(' ')) ++ line ++ "\n";
     }
     return text;
 }
@@ -1079,7 +1105,7 @@ const default_command: Command = .{
         var width: usize = 0;
         for (commands) |cmd| width = @max(width, cmd.name.len + 1);
         var lines: []const u8 = "";
-        for (commands) |cmd| lines = lines ++ "\n  " ++ cmd.name ++ " " ** (width - cmd.name.len) ++ cmd.summary;
+        for (commands) |cmd| lines = lines ++ "\n  " ++ cmd.name ++ &@as([width - cmd.name.len]u8, @splat(' ')) ++ cmd.summary;
         break :command_roster lines;
     },
     .arguments = "  [ROC_FILE]         The .roc file of an app to run [default: " ++ default_roc_file ++ "]\n" ++
@@ -1213,11 +1239,11 @@ fn parseArgsFor(comptime cmd: Command, alloc: mem.Allocator, args: []const []con
 
     var parsed: Parsed = undefined;
     if (Parsed != void) {
-        inline for (@typeInfo(Parsed).@"struct".fields) |field| {
+        inline for (structFieldInfos(Parsed)) |field| {
             if (comptime field.defaultValue()) |default| @field(parsed, field.name) = default;
         }
     }
-    var flags_given = [_]bool{false} ** flags.len;
+    var flags_given = @as([flags.len]bool, @splat(false));
     var positional_count: usize = 0;
     var rest = std.array_list.Managed([]const u8).init(alloc);
     defer rest.deinit();

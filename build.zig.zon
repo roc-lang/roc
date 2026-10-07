@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     // CPU baseline notes for each dependency.
     //
     // Dependencies fall into two groups that behave differently under `-Dcpu`:
@@ -49,43 +49,43 @@
         // Net effect: these stay correct on any CPU of their architecture no
         // matter which `-Dcpu` roc itself is built with.
         .roc_deps_aarch64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-macos-none.tar.xz",
-            .hash = "N-V-__8AAI7KVRG6J1Tp9i70olobTIwsFtoF_O54b2H3PnHZ",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-macos-none.tar.xz",
+            .hash = "N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO",
             .lazy = true,
         },
         .roc_deps_aarch64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAHzIKhc4RFMeZgW2iBmdo3tsRO5ZpNElA4Fm7THu",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAI28HhhG0Nx8NG4UWcEadzHaIBt4m-lIs_M-xRNP",
             .lazy = true,
         },
         .roc_deps_aarch64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/aarch64-windows-gnu.zip",
-            .hash = "N-V-__8AAHIzNhjDkOXYZnta3YtR_7LrghBqs1jXUvmCpjCu",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/aarch64-windows-gnu.zip",
+            .hash = "N-V-__8AAILeexlcrD3R0nKDv_nFeowG7dLWpZuQCMjeMgN_",
             .lazy = true,
         },
         .roc_deps_arm_linux_musleabihf = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/arm-linux-musleabihf.tar.xz",
-            .hash = "N-V-__8AAGa9PxcZ8NvCQI5IquwW3ml3U9eoLBVIsRf28aBF",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/arm-linux-musleabihf.tar.xz",
+            .hash = "N-V-__8AAMGvTxiyNmCHtvc7ThHsFU25_TnBjl1zIDWh_0g_",
             .lazy = true,
         },
         .roc_deps_x86_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86-linux-musl.tar.xz",
-            .hash = "N-V-__8AAHRLihScN14ACLeAAXmQB7hKYq8Ii5wPWSXn18cl",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86-linux-musl.tar.xz",
+            .hash = "N-V-__8AAFEjaRWoQd3IMN0XCm8oziHcSolDSrLVXTQgcIWd",
             .lazy = true,
         },
         .roc_deps_x86_64_linux_musl = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-linux-musl.tar.xz",
-            .hash = "N-V-__8AAGRcMhjhLwO3ey8ICFyBlvCT3_7XhM1xrEzWIBRD",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-linux-musl.tar.xz",
+            .hash = "N-V-__8AAFRVFhloG5rlb8GkGn4-7ays_ZfWOq4W_pi1ETcU",
             .lazy = true,
         },
         .roc_deps_x86_64_macos_none = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-macos-none.tar.xz",
-            .hash = "N-V-__8AANLT0hHDnp788OOENaNTO0osBQU25xaf6WT4g75U",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-macos-none.tar.xz",
+            .hash = "N-V-__8AADTKtxK-zH-_M4lsXzYzvaCcHdcoPvm_kQvmKaoG",
             .lazy = true,
         },
         .roc_deps_x86_64_windows_gnu = .{
-            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/llvm-21.1.8-scaling-2/x86_64-windows-gnu.zip",
-            .hash = "N-V-__8AALjVZhvbkIwdq0GDQB5m6lsopY3B2XZ2awlF4i2c",
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.17.0/x86_64-windows-gnu.zip",
+            .hash = "N-V-__8AAG24mBxL085Yl7ox-jj-YgHWzMXsf6uj7SH6LnxQ",
             .lazy = true,
         },
         // No runtime dispatch, and nothing that would benefit from it: every
@@ -93,8 +93,8 @@
         // which is already the natural SSE2 lowering. A lower `-Dcpu` costs it
         // nothing.
         .bytebox = .{
-            .url = "https://github.com/rtfeldman/bytebox/archive/6565220e5d16eb230b05a85fd9609f280dc249c6.tar.gz",
-            .hash = "bytebox-0.0.1-SXc2sTB9DwDob3McsuMCelmt_O2h3mKZAnX2kVO1Hw5l",
+            .url = "https://github.com/lukewilliamboswell/bytebox/archive/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87.tar.gz",
+            .hash = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN",
         },
         // Used for `roc bundle`, `roc unbundle`, and downloading .tar.zst bundles.
         //
@@ -114,8 +114,8 @@
         },
         // Coverage tooling only, and lazy, so it never reaches a release binary.
         .kcov = .{
-            .url = "https://github.com/roc-lang/zig-kcov/archive/5e1954e53ce775a6ecf65abd03ae67deee64ac3c.tar.gz",
-            .hash = "kcov-42.0.1-EuAG4XacCwBu0G8YHvv6sFHfbMPZuwyBuZGqcRMi8IXq",
+            .url = "https://github.com/roc-lang/zig-kcov/archive/4dc312bec352c449d90a79341614b2f341073a19.tar.gz",
+            .hash = "kcov-42.0.1-EuAG4RCgCwAXgKvyR-26UJR6tVET7mPTBDDQDFWQO9Ra",
             .lazy = true,
         },
     },
@@ -124,6 +124,7 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "vendor",
         "LICENSE",
         "legal_details",
     },

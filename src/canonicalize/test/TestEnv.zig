@@ -42,7 +42,7 @@ pub fn init(source: []const u8) Allocator.Error!TestEnv {
 
     // Phase 4: AST Structure Validation
     if (parse_ast.root_node_idx >= 0) {
-        const root_expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+        const root_expr = parse_ast.store.getExpr(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
         if (root_expr == .tag) {}
     }
 
@@ -78,7 +78,7 @@ pub fn deinit(self: *TestEnv) void {
 
 /// Canonicalizes the root expression from the parsed AST, returning null if there are parse errors.
 pub fn canonicalizeExpr(self: *TestEnv) Allocator.Error!?Can.CanonicalizedExpr {
-    const expr_idx: parse.AST.Expr.Idx = @enumFromInt(self.parse_ast.root_node_idx);
+    const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(self.parse_ast.root_node_idx));
 
     if (self.parse_ast.parse_diagnostics.items.len > 0 or
         self.parse_ast.tokenize_diagnostics.items.len > 0)

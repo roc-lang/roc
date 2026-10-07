@@ -62,7 +62,7 @@ pub const GeneralReg = enum(u5) {
 
     /// Get the 5-bit register encoding
     pub fn enc(self: GeneralReg) u5 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     /// Get the 64-bit register name
@@ -144,7 +144,7 @@ pub const FloatReg = enum(u5) {
 
     /// Get the 5-bit register encoding
     pub fn enc(self: FloatReg) u5 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -165,7 +165,7 @@ pub const RegisterWidth = enum(u1) {
 
     /// Get the sf (size flag) bit for instruction encoding
     pub fn sf(self: RegisterWidth) u1 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 

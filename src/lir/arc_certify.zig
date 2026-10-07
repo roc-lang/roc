@@ -261,7 +261,7 @@ fn certifyStoreWithWorkStats(
     defer certifier.deinit();
 
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
         try certifier.certifyProc(proc_id, proc, body);
@@ -284,7 +284,7 @@ fn certifyProcAbiMetadata(
     diag: *Diagnostic,
 ) CertifyError!void {
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
         const args = store.getLocalSpan(proc.args);
 
@@ -357,7 +357,7 @@ fn certifyErasedCallArgsPlan(
     explicit_count: usize,
     diag: *Diagnostic,
 ) CertifyError!void {
-    if (@intFromEnum(plan_id) >= store.erasedCallArgsPlanCount()) {
+    if (@backingInt(plan_id) >= store.erasedCallArgsPlanCount()) {
         diag.set("erased-call argument plan index is out of bounds", .{});
         return error.Certification;
     }
@@ -410,7 +410,7 @@ fn certifyRcAtomicity(
     defer visible.deinit(allocator);
 
     for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         const checked: struct { value: LIR.LocalId, atomicity: LIR.RcAtomicity } = if (stmt == .incref)
             .{ .value = stmt.incref.value, .atomicity = stmt.incref.atomicity }
         else if (stmt == .decref)
@@ -422,7 +422,7 @@ fn certifyRcAtomicity(
         else
             continue;
         if (checked.atomicity == .atomic) continue;
-        const index = @intFromEnum(checked.value);
+        const index = @backingInt(checked.value);
         if (index < visible.capacity() and visible.isSet(index)) {
             diag.set("stmt={d}: single-thread RC statement on host-visible local {d}", .{ stmt_index, index });
             return error.Certification;
@@ -466,7 +466,7 @@ fn certifyUniqueArgs(
             locals: *std.ArrayList(LIR.LocalId),
             local: LIR.LocalId,
         ) Allocator.Error!void {
-            const raw = @intFromEnum(local);
+            const raw = @backingInt(local);
             if (raw >= rc.len or !rc[raw] or mapping[raw] != no_dense) return;
             mapping[raw] = @intCast(locals.items.len);
             try locals.append(alloc, local);
@@ -474,12 +474,12 @@ fn certifyUniqueArgs(
     }.go;
 
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const proc = store.getProcSpec(proc_id);
         const body = proc.body orelse continue;
         const sig = sigs.get(proc_id);
 
-        for (dense_locals.items) |local| local_to_dense[@intFromEnum(local)] = no_dense;
+        for (dense_locals.items) |local| local_to_dense[@backingInt(local)] = no_dense;
         dense_locals.clearRetainingCapacity();
         const params = store.getLocalSpan(proc.args);
         for (0..GuardedList.borrowLen(params)) |index| {
@@ -510,13 +510,13 @@ fn certifyUniqueArgs(
             if (stmt == .assign_literal and stmt.assign_literal.fresh_alternative != null) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
-                diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@intFromEnum(current)});
+                diag.set("stmt={d}: a read still names a fresh form after ARC chose", .{@backingInt(current)});
                 return error.Certification;
             }
             if (stmt != .assign_low_level) continue;
             const assign = stmt.assign_low_level;
             if (assign.unique_args == 0) continue;
-            const stmt_index = @intFromEnum(current);
+            const stmt_index = @backingInt(current);
             if ((assign.unique_args & ~assign.rc_effect.may_runtime_uniqueness_check_args) != 0) {
                 diag.context_proc = proc_id;
                 diag.context_stmt = current;
@@ -529,7 +529,7 @@ fn certifyUniqueArgs(
                 if (position >= 64) break;
                 const bit = @as(u64, 1) << @as(u6, @intCast(position));
                 if ((assign.unique_args & bit) == 0) continue;
-                const raw = @intFromEnum(arg);
+                const raw = @backingInt(arg);
                 const dense = if (raw < local_to_dense.len) local_to_dense[raw] else no_dense;
                 // The birth must hold under the parameter positions this
                 // emission's signature seeds born-unique.
@@ -612,12 +612,12 @@ fn writeFailureContext(
     extra_locals: []const LIR.LocalId,
 ) void {
     const proc = store.getProcSpec(proc_id);
-    context.append("\nfailure context: proc={d}", .{@intFromEnum(proc_id)});
+    context.append("\nfailure context: proc={d}", .{@backingInt(proc_id)});
     if (store.procDebugName(proc_id)) |name| context.append(" name={s}", .{name});
     if (local) |l| {
         context.append(" local={d} layout={d}", .{
-            @intFromEnum(l),
-            @intFromEnum(store.getLocal(l).layout_idx),
+            @backingInt(l),
+            @backingInt(store.getLocal(l).layout_idx),
         });
         if (store.localName(l)) |name| context.append(" local_name={s}", .{name});
     }
@@ -625,7 +625,7 @@ fn writeFailureContext(
     const proc_args = store.getLocalSpan(proc.args);
     for (0..GuardedList.borrowLen(proc_args)) |arg_index| {
         const arg = GuardedList.at(proc_args, arg_index);
-        context.append(" {d}", .{@intFromEnum(arg)});
+        context.append(" {d}", .{@backingInt(arg)});
     }
     context.append("\n", .{});
 
@@ -680,8 +680,8 @@ fn writeFailureContext(
     }
 
     for (0..store.cfStmtCount()) |index| {
-        if (!reachable.contains(@enumFromInt(@as(u32, @intCast(index))))) continue;
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(index))));
+        if (!reachable.contains(@fromBackingInt(@intCast(@as(u32, @intCast(index)))))) continue;
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         var mentions = if (local) |l| stmtMentionsLocal(store, stmt, l) else false;
         if (local) |l| {
             if (stmt == .join) {
@@ -695,70 +695,70 @@ fn writeFailureContext(
             mentions = mentions or stmtMentionsLocal(store, stmt, extra);
         }
         const structural = false;
-        const nearby = if (stmt_id) |focus_stmt| if (index > @intFromEnum(focus_stmt))
-            index - @intFromEnum(focus_stmt) <= 50
+        const nearby = if (stmt_id) |focus_stmt| if (index > @backingInt(focus_stmt))
+            index - @backingInt(focus_stmt) <= 50
         else
-            @intFromEnum(focus_stmt) - index <= 50 else false;
+            @backingInt(focus_stmt) - index <= 50 else false;
         if (!mentions and !structural and !nearby) continue;
         context.append("  stmt {d}: {s}", .{ index, @tagName(stmt) });
         switch (stmt) {
             .join => |j| {
                 context.append(" id={d} body={d} remainder={d} params=[", .{
-                    @intFromEnum(j.id), @intFromEnum(j.body), @intFromEnum(j.remainder),
+                    @backingInt(j.id), @backingInt(j.body), @backingInt(j.remainder),
                 });
                 const jp = store.getLocalSpan(j.params);
                 for (0..GuardedList.borrowLen(jp)) |jpi| {
-                    context.append(" {d}", .{@intFromEnum(GuardedList.at(jp, jpi))});
+                    context.append(" {d}", .{@backingInt(GuardedList.at(jp, jpi))});
                 }
                 context.append(" ]", .{});
             },
-            .jump => |j| context.append(" target={d}", .{@intFromEnum(j.target)}),
+            .jump => |j| context.append(" target={d}", .{@backingInt(j.target)}),
             .assign_ref => |a| {
-                context.append(" target={d} op=", .{@intFromEnum(a.target)});
+                context.append(" target={d} op=", .{@backingInt(a.target)});
                 appendRefOp(context, a.op);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .set_local => |a| context.append(" target={d} value={d} mode={s} next={d}", .{
-                @intFromEnum(a.target), @intFromEnum(a.value), @tagName(a.mode), @intFromEnum(a.next),
+                @backingInt(a.target), @backingInt(a.value), @tagName(a.mode), @backingInt(a.next),
             }),
-            .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
-            .incref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
-            .decref => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .init_uninitialized => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
+            .incref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
+            .decref => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .decref_if_initialized => |rc| context.append(" cond={d}/0x{x} value={d} next={d}", .{
-                @intFromEnum(rc.cond),
+                @backingInt(rc.cond),
                 rc.cond_mask,
-                @intFromEnum(rc.value),
-                @intFromEnum(rc.next),
+                @backingInt(rc.value),
+                @backingInt(rc.next),
             }),
-            .free => |rc| context.append(" value={d} next={d}", .{ @intFromEnum(rc.value), @intFromEnum(rc.next) }),
+            .free => |rc| context.append(" value={d} next={d}", .{ @backingInt(rc.value), @backingInt(rc.next) }),
             .assign_call => |a| {
                 const sig = sigs.get(a.proc);
                 context.append(" target={d} proc={d} sig(borrowed=0x{x}, ret={s}) args=", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(a.proc),
+                    @backingInt(a.target),
+                    @backingInt(a.proc),
                     sig.borrowed_params,
                     @tagName(sig.ret_mode),
                 });
                 appendLocalSpan(context, store, a.args);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_call_erased => |a| {
-                context.append(" target={d} closure={d} args=", .{ @intFromEnum(a.target), @intFromEnum(a.closure) });
+                context.append(" target={d} closure={d} args=", .{ @backingInt(a.target), @backingInt(a.closure) });
                 appendLocalSpan(context, store, a.args);
                 if (a.result_desc) |result_desc| {
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
-                if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@intFromEnum(out_desc)});
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                if (a.out_desc) |out_desc| context.append(" out_desc={d}", .{@backingInt(out_desc)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_low_level => |a| {
-                context.append(" target={d} op={s} args=", .{ @intFromEnum(a.target), @tagName(a.op) });
+                context.append(" target={d} op={s} args=", .{ @backingInt(a.target), @tagName(a.op) });
                 appendLocalSpan(context, store, a.args);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_call_dict => |a| {
-                context.append(" target={d} method={d} slot={d} args=", .{ @intFromEnum(a.target), @intFromEnum(a.method), a.method_slot });
+                context.append(" target={d} method={d} slot={d} args=", .{ @backingInt(a.target), @backingInt(a.method), a.method_slot });
                 appendLocalSpan(context, store, a.args);
                 context.append(" arg_descs=", .{});
                 appendLocalSpan(context, store, a.arg_descs);
@@ -768,141 +768,141 @@ fn writeFailureContext(
                     context.append(" result_desc=", .{});
                     appendBoxyDescRef(context, result_desc);
                 }
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .str_match => |a| context.append(" source={d} match={d} miss={d}", .{
-                @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
+                @backingInt(a.source), @backingInt(a.on_match), @backingInt(a.on_miss),
             }),
             .boxy_tag_match => |a| context.append(" source={d} match={d} miss={d}", .{
-                @intFromEnum(a.source), @intFromEnum(a.on_match), @intFromEnum(a.on_miss),
+                @backingInt(a.source), @backingInt(a.on_match), @backingInt(a.on_miss),
             }),
             .str_match_set => |a| context.append(" source={d} arms={d} miss={d}", .{
-                @intFromEnum(a.source), a.arms.len, @intFromEnum(a.on_miss),
+                @backingInt(a.source), a.arms.len, @backingInt(a.on_miss),
             }),
             .switch_stmt => |s| {
-                context.append(" cond={d} default={d}", .{ @intFromEnum(s.cond), @intFromEnum(s.default_branch) });
+                context.append(" cond={d} default={d}", .{ @backingInt(s.cond), @backingInt(s.default_branch) });
                 const branches = store.getCFSwitchBranches(s.branches);
                 for (0..GuardedList.borrowLen(branches)) |branch_index| {
                     const branch = GuardedList.at(branches, branch_index);
-                    context.append(" branch({d}->{d})", .{ branch.value, @intFromEnum(branch.body) });
+                    context.append(" branch({d}->{d})", .{ branch.value, @backingInt(branch.body) });
                 }
-                if (s.continuation) |continuation| context.append(" continuation={d}", .{@intFromEnum(continuation)});
+                if (s.continuation) |continuation| context.append(" continuation={d}", .{@backingInt(continuation)});
             },
             .switch_initialized_payload => |s| context.append(" cond={d}/0x{x} payload={d} initialized={d} uninitialized={d}", .{
-                @intFromEnum(s.cond),
+                @backingInt(s.cond),
                 s.cond_mask,
-                @intFromEnum(s.payload),
-                @intFromEnum(s.initialized_branch),
-                @intFromEnum(s.uninitialized_branch),
+                @backingInt(s.payload),
+                @backingInt(s.initialized_branch),
+                @backingInt(s.uninitialized_branch),
             }),
-            .ret => |r| context.append(" value={d}", .{@intFromEnum(r.value)}),
+            .ret => |r| context.append(" value={d}", .{@backingInt(r.value)}),
             .assign_list => |a| {
-                context.append(" target={d} elems=", .{@intFromEnum(a.target)});
+                context.append(" target={d} elems=", .{@backingInt(a.target)});
                 appendLocalSpan(context, store, a.elems);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_struct => |a| {
-                context.append(" target={d} fields=", .{@intFromEnum(a.target)});
+                context.append(" target={d} fields=", .{@backingInt(a.target)});
                 appendLocalSpan(context, store, a.fields);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_boxy_tag => |a| {
                 const target_layout_idx = store.getLocal(a.target).layout_idx;
                 const target_layout = layouts.getLayout(target_layout_idx);
                 context.append(" target={d} target_layout={d}:{s}:rc={}", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(target_layout_idx),
+                    @backingInt(a.target),
+                    @backingInt(target_layout_idx),
                     @tagName(target_layout.tag),
                     layouts.layoutContainsRefcounted(target_layout),
                 });
                 if (a.payload) |payload| context.append(" payload={d} payload_layout={d} mode={s}", .{
-                    @intFromEnum(payload),
-                    @intFromEnum(store.getLocal(payload).layout_idx),
+                    @backingInt(payload),
+                    @backingInt(store.getLocal(payload).layout_idx),
                     @tagName(a.payload_mode),
                 });
                 if (a.payload_desc) |desc| {
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_boxy_box => |a| {
                 context.append(" target={d} payload={d} payload_layout={d} mode={s}", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(a.payload),
-                    @intFromEnum(a.payload_layout),
+                    @backingInt(a.target),
+                    @backingInt(a.payload),
+                    @backingInt(a.payload_layout),
                     @tagName(a.payload_mode),
                 });
                 if (a.payload_desc) |desc| {
                     context.append(" payload_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_boxy_record_update => |a| {
                 context.append(" target={d} base={d} fields={d} fields_layout={d} base_desc=", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(a.base),
-                    @intFromEnum(a.fields),
-                    @intFromEnum(a.fields_layout),
+                    @backingInt(a.target),
+                    @backingInt(a.base),
+                    @backingInt(a.fields),
+                    @backingInt(a.fields_layout),
                 });
                 appendBoxyDescRef(context, a.base_desc);
                 context.append(" fields_desc=", .{});
                 appendBoxyDescRef(context, a.fields_desc);
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_tag => |a| {
                 const target_layout_idx = store.getLocal(a.target).layout_idx;
                 const target_layout = layouts.getLayout(target_layout_idx);
                 context.append(" target={d} target_layout={d}:{s}:rc={}", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(target_layout_idx),
+                    @backingInt(a.target),
+                    @backingInt(target_layout_idx),
                     @tagName(target_layout.tag),
                     layouts.layoutContainsRefcounted(target_layout),
                 });
                 if (a.payload) |payload| context.append(" payload={d} payload_layout={d}", .{
-                    @intFromEnum(payload),
-                    @intFromEnum(store.getLocal(payload).layout_idx),
+                    @backingInt(payload),
+                    @backingInt(store.getLocal(payload).layout_idx),
                 });
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_boxy_unbox => |a| {
                 context.append(" target={d} source={d} mode={s}", .{
-                    @intFromEnum(a.target),
-                    @intFromEnum(a.source),
+                    @backingInt(a.target),
+                    @backingInt(a.source),
                     @tagName(a.source_mode),
                 });
                 if (a.target_desc) |desc| {
                     context.append(" target_desc=", .{});
                     appendBoxyDescRef(context, desc);
                 }
-                context.append(" next={d}", .{@intFromEnum(a.next)});
+                context.append(" next={d}", .{@backingInt(a.next)});
             },
             .assign_boxy_tag_payload => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @intFromEnum(a.target),
-                @intFromEnum(a.source),
+                @backingInt(a.target),
+                @backingInt(a.source),
                 @tagName(a.source_mode),
-                @intFromEnum(a.next),
+                @backingInt(a.next),
             }),
             .assign_boxy_inspect => |a| context.append(" target={d} source={d} mode={s} next={d}", .{
-                @intFromEnum(a.target),
-                @intFromEnum(a.source),
+                @backingInt(a.target),
+                @backingInt(a.source),
                 @tagName(a.source_mode),
-                @intFromEnum(a.next),
+                @backingInt(a.next),
             }),
             .assign_boxy_eq => |a| context.append(" target={d} lhs={d} rhs={d} next={d}", .{
-                @intFromEnum(a.target),
-                @intFromEnum(a.lhs),
-                @intFromEnum(a.rhs),
-                @intFromEnum(a.next),
+                @backingInt(a.target),
+                @backingInt(a.lhs),
+                @backingInt(a.rhs),
+                @backingInt(a.next),
             }),
             .assign_boxy_hash => |a| context.append(" target={d} value={d} hasher={d} next={d}", .{
-                @intFromEnum(a.target),
-                @intFromEnum(a.value),
-                @intFromEnum(a.hasher),
-                @intFromEnum(a.next),
+                @backingInt(a.target),
+                @backingInt(a.value),
+                @backingInt(a.hasher),
+                @backingInt(a.next),
             }),
-            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @intFromEnum(a.target), @intFromEnum(a.next) }),
+            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .store_struct,
             .store_tag,
             .debug,
@@ -922,18 +922,18 @@ fn writeFailureContext(
 
 fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
     switch (desc) {
-        .static => |id| context.append("static:{d}", .{@intFromEnum(id)}),
-        .local => |local| context.append("local:{d}", .{@intFromEnum(local)}),
+        .static => |id| context.append("static:{d}", .{@backingInt(id)}),
+        .local => |local| context.append("local:{d}", .{@backingInt(local)}),
         .runtime => |id| context.append("runtime:{d}", .{id}),
         .dict_method_arg => |projection| context.append("dict-arg:{d}:{d}:{d}:{d}", .{
-            @intFromEnum(projection.dict),
-            @intFromEnum(projection.method),
+            @backingInt(projection.dict),
+            @backingInt(projection.method),
             projection.method_slot,
             projection.arg_index,
         }),
         .dict_method_hidden => |projection| context.append("dict-hidden:{d}:{d}:{d}:{d}:{s}", .{
-            @intFromEnum(projection.dict),
-            @intFromEnum(projection.method),
+            @backingInt(projection.dict),
+            @backingInt(projection.method),
             projection.method_slot,
             projection.hidden_index,
             @tagName(projection.shape),
@@ -947,29 +947,29 @@ fn appendLocalSpan(context: *FailureContext, store: *const LirStore, span: LIR.L
     for (0..GuardedList.borrowLen(locals)) |index| {
         const local = GuardedList.at(locals, index);
         if (index > 0) context.append(", ", .{});
-        context.append("{d}", .{@intFromEnum(local)});
+        context.append("{d}", .{@backingInt(local)});
     }
     context.append("]", .{});
 }
 
 fn appendRefOp(context: *FailureContext, op: LIR.RefOp) void {
     switch (op) {
-        .local => |source| context.append("local({d})", .{@intFromEnum(source)}),
-        .discriminant => |ref| context.append("discriminant({d})", .{@intFromEnum(ref.source)}),
-        .field => |ref| context.append("field({d}, {d})", .{ @intFromEnum(ref.source), ref.field_idx }),
+        .local => |source| context.append("local({d})", .{@backingInt(source)}),
+        .discriminant => |ref| context.append("discriminant({d})", .{@backingInt(ref.source)}),
+        .field => |ref| context.append("field({d}, {d})", .{ @backingInt(ref.source), ref.field_idx }),
         .tag_payload => |ref| context.append("tag_payload({d}, variant={d}, payload={d}, disc={d})", .{
-            @intFromEnum(ref.source),
+            @backingInt(ref.source),
             ref.variant_index,
             ref.payload_idx,
             ref.tag_discriminant,
         }),
         .tag_payload_struct => |ref| context.append("tag_payload_struct({d}, variant={d}, disc={d})", .{
-            @intFromEnum(ref.source),
+            @backingInt(ref.source),
             ref.variant_index,
             ref.tag_discriminant,
         }),
-        .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@intFromEnum(ref.backing_ref)}),
-        .nominal => |ref| context.append("nominal({d})", .{@intFromEnum(ref.backing_ref)}),
+        .list_reinterpret => |ref| context.append("list_reinterpret({d})", .{@backingInt(ref.backing_ref)}),
+        .nominal => |ref| context.append("nominal({d})", .{@backingInt(ref.backing_ref)}),
     }
 }
 
@@ -1127,7 +1127,7 @@ const MaybeUninitializedConditions = struct {
         @memset(mask, 0);
 
         for (0..store.cfStmtCount()) |stmt_index| {
-            const stmt_id: LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(stmt_index)));
+            const stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(@as(u32, @intCast(stmt_index))));
             const stmt = store.getCFStmt(stmt_id);
             if (stmt != .join) continue;
 
@@ -1144,16 +1144,16 @@ const MaybeUninitializedConditions = struct {
                 const param = GuardedList.at(params, index);
                 const presence = GuardedList.at(conditions, index);
                 const presence_mask = GuardedList.at(masks, index);
-                const param_index = @intFromEnum(param);
-                if (param_index >= condition.len or @intFromEnum(presence) >= condition.len) {
+                const param_index = @backingInt(param);
+                if (param_index >= condition.len or @backingInt(presence) >= condition.len) {
                     diag.context_stmt = stmt_id;
                     diag.set("stmt={d}: maybe-uninitialized join metadata names an out-of-bounds local", .{stmt_index});
                     return error.Certification;
                 }
                 if (condition[param_index] == no_dense) {
-                    condition[param_index] = @intFromEnum(presence);
+                    condition[param_index] = @backingInt(presence);
                     mask[param_index] = presence_mask;
-                } else if (condition[param_index] != @intFromEnum(presence) or mask[param_index] != presence_mask) {
+                } else if (condition[param_index] != @backingInt(presence) or mask[param_index] != presence_mask) {
                     diag.context_stmt = stmt_id;
                     diag.context_local = param;
                     diag.set("stmt={d}: maybe-uninitialized local {d} has conflicting presence conditions", .{ stmt_index, param_index });
@@ -1171,10 +1171,10 @@ const MaybeUninitializedConditions = struct {
     }
 
     fn get(self: *const MaybeUninitializedConditions, local: LIR.LocalId) ?PresenceCondition {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.condition.len or self.condition[index] == no_dense) return null;
         return .{
-            .local = @enumFromInt(self.condition[index]),
+            .local = @fromBackingInt(@intCast(self.condition[index])),
             .mask = self.mask[index],
         };
     }
@@ -1386,7 +1386,7 @@ const State = struct {
     }
 
     fn variantDiscriminant(self: *const State, local: LIR.LocalId) ?ValueId {
-        const value = self.variant_discriminants.get(@intFromEnum(local));
+        const value = self.variant_discriminants.get(@backingInt(local));
         return if (value == no_value) null else value;
     }
 
@@ -1399,7 +1399,7 @@ const State = struct {
     }
 
     fn denseIndex(self: *const State, local: LIR.LocalId) usize {
-        const raw = @intFromEnum(local);
+        const raw = @backingInt(local);
         if (raw >= self.local_dense.len or self.local_dense[raw] == no_dense) {
             base.invariant("ARC certifier invariant violated: local {d} is outside the current proc-local map", .{raw});
         }
@@ -1446,7 +1446,7 @@ const State = struct {
     fn conditionalConditionOf(self: *const State, value: ValueId) ?PresenceCondition {
         const entry = self.conditional.get(value);
         if (entry.condition == no_dense) return null;
-        return .{ .local = @enumFromInt(entry.condition), .mask = entry.mask };
+        return .{ .local = @fromBackingInt(@intCast(entry.condition)), .mask = entry.mask };
     }
 
     fn addBalance(self: *State, value: ValueId, delta: i32) Allocator.Error!void {
@@ -1466,7 +1466,7 @@ const State = struct {
     }
 
     fn setConditional(self: *State, value: ValueId, condition: PresenceCondition) Allocator.Error!void {
-        try self.put(&self.conditional, value, ConditionalEntry{ .condition = @intFromEnum(condition.local), .mask = condition.mask });
+        try self.put(&self.conditional, value, ConditionalEntry{ .condition = @backingInt(condition.local), .mask = condition.mask });
     }
 
     fn markDefinitelyInitialized(self: *State, value: ValueId) Allocator.Error!void {
@@ -1478,7 +1478,7 @@ const State = struct {
     }
 
     fn outcomeDiscriminant(self: *const State, local: LIR.LocalId) ?ValueId {
-        const value = self.outcome_discriminants.get(@intFromEnum(local));
+        const value = self.outcome_discriminants.get(@backingInt(local));
         return if (value == no_value) null else value;
     }
 
@@ -1487,13 +1487,13 @@ const State = struct {
     }
 
     fn setOutcomeDiscriminant(self: *State, local: LIR.LocalId, value: ValueId) Allocator.Error!void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (self.outcome_discriminants.get(index) == no_value) self.outcome_discriminant_count += 1;
         try self.put(&self.outcome_discriminants, index, value);
     }
 
     fn removeOutcomeDiscriminant(self: *State, local: LIR.LocalId) Allocator.Error!void {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (self.outcome_discriminants.get(index) == no_value) return;
         try self.put(&self.outcome_discriminants, index, no_value);
         self.outcome_discriminant_count -= 1;
@@ -1514,10 +1514,10 @@ test "forked state preserves independent tag-union variant witnesses" {
     const discriminant = try store.addLocal(.{ .layout_idx = .u8 });
     var source = try State.init(arena.allocator(), &.{0}, 1);
     try source.setKnownVariant(0, 1);
-    try source.put(&source.variant_discriminants, @intFromEnum(discriminant), @as(ValueId, 0));
+    try source.put(&source.variant_discriminants, @backingInt(discriminant), @as(ValueId, 0));
     var forked = try source.clone();
     try forked.setKnownVariant(0, 2);
-    try forked.put(&forked.variant_discriminants, @intFromEnum(discriminant), no_value);
+    try forked.put(&forked.variant_discriminants, @backingInt(discriminant), no_value);
 
     try testing.expectEqual(@as(?u32, 1), source.knownVariant(0));
     try testing.expectEqual(@as(?u32, 2), forked.knownVariant(0));
@@ -1608,7 +1608,12 @@ test "certifier join attribution visits each constraint edge once" {
 }
 
 test "certifier join attribution rejects inconsistent and undetermined intersections" {
-    var left = [_]LocalSummary{.{ .class = .owned, .repr = 0, .balance = 2, .condition = no_dense, .condition_mask = 0 }} ** 4;
+    var left = repeated: {
+        const pattern = [_]LocalSummary{.{ .class = .owned, .repr = 0, .balance = 2, .condition = no_dense, .condition_mask = 0 }};
+        var result: [pattern.len * (4)]@TypeOf(pattern[0]) = undefined;
+        for (0..(4)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     var right = left;
     // Two crossing two-element classes have no forcing equation.
     left[2].repr = 2;
@@ -2324,8 +2329,8 @@ const Certifier = struct {
 
     fn fail(self: *Certifier, comptime fmt: []const u8, args: anytype) error{Certification} {
         const full_args = .{
-            @intFromEnum(self.current_proc),
-            @intFromEnum(self.current_stmt),
+            @backingInt(self.current_proc),
+            @backingInt(self.current_stmt),
         } ++ args;
         self.diag.context_proc = self.current_proc;
         self.diag.context_stmt = self.current_stmt;
@@ -2335,13 +2340,13 @@ const Certifier = struct {
     }
 
     fn isRc(self: *const Certifier, local: LIR.LocalId) bool {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.rc_local.len) return false;
         return self.rc_local[index];
     }
 
     fn denseOf(self: *const Certifier, local: LIR.LocalId) u32 {
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.local_dense.items.len) return no_dense;
         return self.local_dense.items[index];
     }
@@ -2505,7 +2510,7 @@ const Certifier = struct {
         if (value == no_value) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("use of unbound refcounted local {d}", .{@intFromEnum(local)});
+            return self.fail("use of unbound refcounted local {d}", .{@backingInt(local)});
         }
         if (!try self.valueIsLive(state, value)) {
             self.diag.context_local = local;
@@ -2513,11 +2518,11 @@ const Certifier = struct {
             self.describeValueChain(state, value);
             if (self.current_origin_join) |join_id| {
                 return self.fail("use of dead refcounted local {d} (walking body of join {d})", .{
-                    @intFromEnum(local),
-                    @intFromEnum(join_id),
+                    @backingInt(local),
+                    @backingInt(join_id),
                 });
             }
-            return self.fail("use of dead refcounted local {d}", .{@intFromEnum(local)});
+            return self.fail("use of dead refcounted local {d}", .{@backingInt(local)});
         }
         return value;
     }
@@ -2539,7 +2544,7 @@ const Certifier = struct {
         if (!self.isListRepresentation(local)) return self.fail("list representation read has non-list operand", .{});
         if (!self.isRc(local)) return no_value;
         const value = state.valueOf(local);
-        if (value == no_value) return self.fail("use of unbound list representation {d}", .{@intFromEnum(local)});
+        if (value == no_value) return self.fail("use of unbound list representation {d}", .{@backingInt(local)});
         return value;
     }
 
@@ -2558,7 +2563,7 @@ const Certifier = struct {
         if (value == no_value) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("use of unbound aggregate representation {d}", .{@intFromEnum(local)});
+            return self.fail("use of unbound aggregate representation {d}", .{@backingInt(local)});
         }
         return value;
     }
@@ -2581,12 +2586,12 @@ const Certifier = struct {
         if (value == no_value) return;
         if (!state.claimsOf(value).isEmpty()) {
             if (try self.consumeIntactSurplusUnit(state, value, mutations)) return;
-            return self.fail("consumed partially dismantled local {d}", .{@intFromEnum(local)});
+            return self.fail("consumed partially dismantled local {d}", .{@backingInt(local)});
         }
         if (state.balanceOf(value) < 1) {
             const seen = try self.valueWalkScratch();
             if (try self.tryClaimSeen(state, value, seen, mutations)) return;
-            return self.fail("consumed local {d} without an ownership unit", .{@intFromEnum(local)});
+            return self.fail("consumed local {d} without an ownership unit", .{@backingInt(local)});
         }
         const before = state.balanceOf(value);
         try state.addBalance(value, -1);
@@ -2855,7 +2860,7 @@ const Certifier = struct {
             if (!try self.consumeIntactSurplusUnit(state, value, null)) {
                 return self.fail(
                     "partially dismantled value originating at local {d} moved into an aggregate",
-                    .{@intFromEnum(self.values.items[value].origin)},
+                    .{@backingInt(self.values.items[value].origin)},
                 );
             }
         } else {
@@ -2934,12 +2939,12 @@ const Certifier = struct {
                     self.describeValueChain(state, @intCast(value_index));
                     return self.fail(
                         "partially dismantled value originating at local {d} ended with balance {d}",
-                        .{ @intFromEnum(origin), units },
+                        .{ @backingInt(origin), units },
                     );
                 }
                 return self.fail(
                     "dismantled value originating at local {d} left stored units unspent",
-                    .{@intFromEnum(origin)},
+                    .{@backingInt(origin)},
                 );
             }
             if (units == 0) continue;
@@ -2950,12 +2955,12 @@ const Certifier = struct {
                 self.describeValueChain(state, @intCast(value_index));
                 return self.fail(
                     "leaked {d} ownership unit(s) of value originating at local {d}",
-                    .{ units, @intFromEnum(origin) },
+                    .{ units, @backingInt(origin) },
                 );
             }
             return self.fail(
                 "negative ownership balance for value originating at local {d}",
-                .{@intFromEnum(origin)},
+                .{@backingInt(origin)},
             );
         }
     }
@@ -3106,7 +3111,7 @@ const Certifier = struct {
                             .class = .conditional_owned,
                             .repr = repr,
                             .balance = @intCast(units),
-                            .condition = @intFromEnum(condition.local),
+                            .condition = @backingInt(condition.local),
                             .condition_mask = condition.mask,
                         };
                     } else {
@@ -3513,7 +3518,7 @@ const Certifier = struct {
                 .owned => try self.bindFresh(&state, local, @intCast(entry.balance), &.{}),
                 .conditional_owned => blk: {
                     const conditional = try self.bindFresh(&state, local, 1, &.{});
-                    try state.setConditional(conditional, .{ .local = @enumFromInt(entry.condition), .mask = entry.condition_mask });
+                    try state.setConditional(conditional, .{ .local = @fromBackingInt(@intCast(entry.condition)), .mask = entry.condition_mask });
                     break :blk conditional;
                 },
                 .borrowed, .representation => try self.bindFresh(&state, local, 0, &.{}),
@@ -3546,11 +3551,11 @@ const Certifier = struct {
             dependency_values.clearRetainingCapacity();
             for (provenance.lender_reprs) |lender_dense| {
                 if (lender_dense >= self.proc_locals.items.len) {
-                    return self.fail("local {d} crossed a join with an invalid lender", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join with an invalid lender", .{@backingInt(origin)});
                 }
                 const lender = state.valueAtDense(lender_dense);
                 if (lender == no_value) {
-                    return self.fail("local {d} crossed a join without a live lender local", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join without a live lender local", .{@backingInt(origin)});
                 }
                 try dependency_values.append(self.allocator, lender);
             }
@@ -3561,11 +3566,11 @@ const Certifier = struct {
             dependency_values.clearRetainingCapacity();
             for (provenance.holder_reprs) |holder_dense| {
                 if (holder_dense >= self.proc_locals.items.len) {
-                    return self.fail("local {d} crossed a join with an invalid holder", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join with an invalid holder", .{@backingInt(origin)});
                 }
                 const holder_anchor = state.valueAtDense(holder_dense);
                 if (holder_anchor == no_value) {
-                    return self.fail("local {d} crossed a join without a live holder local", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join without a live holder local", .{@backingInt(origin)});
                 }
                 try dependency_values.append(self.allocator, holder_anchor);
             }
@@ -3578,11 +3583,11 @@ const Certifier = struct {
 
             if (provenance.payload_source != no_dense) {
                 if (provenance.payload_source >= self.proc_locals.items.len) {
-                    return self.fail("local {d} crossed a join with an invalid payload source", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join with an invalid payload source", .{@backingInt(origin)});
                 }
                 const container = state.valueAtDense(provenance.payload_source);
                 if (container == no_value) {
-                    return self.fail("local {d} crossed a join without its payload source", .{@intFromEnum(origin)});
+                    return self.fail("local {d} crossed a join without its payload source", .{@backingInt(origin)});
                 }
                 self.values.items[value].payload_source = container;
                 self.values.items[value].payload_projection = provenance.payload_projection;
@@ -3596,7 +3601,7 @@ const Certifier = struct {
             if (entry.class != .borrowed or entry.repr != dense) continue;
             const value = state.valueAtDense(dense);
             if (!try self.valueIsLive(&state, value)) {
-                return self.fail("borrowed local {d} crossed a join without a live owner local", .{@intFromEnum(self.proc_locals.items[dense])});
+                return self.fail("borrowed local {d} crossed a join without a live owner local", .{@backingInt(self.proc_locals.items[dense])});
             }
         }
         return state;
@@ -3648,7 +3653,7 @@ const Certifier = struct {
                             self.diag.context_proc = self.current_proc;
                             return self.fail(
                                 "ownership balance grows without bound across jumps to join {d}: per-iteration accumulation",
-                                .{@intFromEnum(join_id)},
+                                .{@backingInt(join_id)},
                             );
                         }
                     }
@@ -3837,13 +3842,13 @@ const Certifier = struct {
             self.current_stmt = check.stmt;
             return self.fail(
                 "erased call closure local {d} and reuse source local {d} do not denote the same allocation",
-                .{ @intFromEnum(check.closure), @intFromEnum(check.reuse_source) },
+                .{ @backingInt(check.closure), @backingInt(check.reuse_source) },
             );
         }
     }
 
     fn collectProcLocals(self: *Certifier, proc: LIR.LirProcSpec, body: LIR.CFStmtId) CertifyError!void {
-        for (self.proc_locals.items) |local| self.local_dense.items[@intFromEnum(local)] = no_dense;
+        for (self.proc_locals.items) |local| self.local_dense.items[@backingInt(local)] = no_dense;
         self.proc_locals.clearRetainingCapacity();
         self.erased_owners.clear();
         self.erased_call_owner_checks.clearRetainingCapacity();
@@ -3886,7 +3891,7 @@ const Certifier = struct {
         while (stack.pop()) |entry| {
             const current = entry.stmt;
             const region = entry.region;
-            const region_visit = try region_visits.getOrPut(self.allocator, (@as(u64, @intFromEnum(current)) << 32) | region);
+            const region_visit = try region_visits.getOrPut(self.allocator, (@as(u64, @backingInt(current)) << 32) | region);
             if (region_visit.found_existing) continue;
             const first_visit = !visited.contains(current);
             if (first_visit) try visited.put(current, {});
@@ -4802,7 +4807,7 @@ const Certifier = struct {
         }
 
         const cached = self.reads_before_rebind_cache.getPtr(start) orelse {
-            base.invariant("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@intFromEnum(start)});
+            base.invariant("ARC borrow certifier invariant violated: read-before-rebind cache missing stmt {d}", .{@backingInt(start)});
         };
         return cached;
     }
@@ -5090,7 +5095,7 @@ const Certifier = struct {
                         if (!actual_condition.eql(condition)) {
                             return self.fail(
                                 "maybe-uninitialized local {d} carried a conflicting presence condition",
-                                .{@intFromEnum(local)},
+                                .{@backingInt(local)},
                             );
                         }
                     }
@@ -5100,7 +5105,7 @@ const Certifier = struct {
                     .class = .conditional_owned,
                     .repr = self.denseOf(local),
                     .balance = 1,
-                    .condition = @intFromEnum(condition.local),
+                    .condition = @backingInt(condition.local),
                     .condition_mask = condition.mask,
                 };
             } else if (value != no_value) {
@@ -5115,7 +5120,7 @@ const Certifier = struct {
                             .repr = repr,
                             .balance = @intCast(units),
                             .abi_live = abi_live,
-                            .condition = @intFromEnum(condition.local),
+                            .condition = @backingInt(condition.local),
                             .condition_mask = condition.mask,
                         };
                     } else {
@@ -5183,7 +5188,7 @@ const Certifier = struct {
             if (units < 0) {
                 return self.fail(
                     "negative ownership balance for value originating at local {d} at jump to join {d}",
-                    .{ @intFromEnum(origin), @intFromEnum(join_id) },
+                    .{ @backingInt(origin), @backingInt(join_id) },
                 );
             }
             if (!self.repr_scratch.contains(@intCast(value_index)) and !self.carrier_scratch.contains(@intCast(value_index))) {
@@ -5191,7 +5196,7 @@ const Certifier = struct {
                 self.diag.context_local = origin;
                 return self.fail(
                     "ownership unit of value originating at local {d} not carried into join {d}",
-                    .{ @intFromEnum(origin), @intFromEnum(join_id) },
+                    .{ @backingInt(origin), @backingInt(join_id) },
                 );
             }
         }
@@ -5209,7 +5214,7 @@ const Certifier = struct {
 
     fn noteProcLocal(self: *Certifier, local: LIR.LocalId) Allocator.Error!void {
         if (!self.isRc(local)) return;
-        const index = @intFromEnum(local);
+        const index = @backingInt(local);
         if (index >= self.local_dense.items.len) return;
         if (self.local_dense.items[index] == no_dense) {
             self.local_dense.items[index] = @intCast(self.proc_locals.items.len);
@@ -5543,7 +5548,7 @@ const Certifier = struct {
         const walk = self.walks.items[walk_index];
         const walk_region: u32 = if (walk.join) |join| self.region_of_join.get(join).? else 0;
         const record = self.records.getPtr(target) orelse {
-            return self.fail("jump to join {d} before its definition", .{@intFromEnum(target)});
+            return self.fail("jump to join {d} before its definition", .{@backingInt(target)});
         };
         // A join is visible from its body and from its remainder, at any
         // depth. Only a walk of a region holding the join's statement sees
@@ -5554,7 +5559,7 @@ const Certifier = struct {
         const entry = !back_edge and self.regionHoldsJoinStatement(record.region, walk_region);
         if (!back_edge and !entry) {
             if (!try self.regionNestedIn(record.region, walk_region) and !try self.regionNestedIn(self.region_parent.items[record.region], walk_region)) {
-                return self.fail("jump to join {d} outside every enclosing region", .{@intFromEnum(target)});
+                return self.fail("jump to join {d} outside every enclosing region", .{@backingInt(target)});
             }
             try self.addFrameRecord(work, walk_index, target, try state.clone());
             return;
@@ -5734,12 +5739,12 @@ const Certifier = struct {
         const walk = self.walks.items[walk_index];
         const join = walk.join.?;
         const target_record = self.records.getPtr(target) orelse {
-            return self.fail("jump to join {d} before its definition", .{@intFromEnum(target)});
+            return self.fail("jump to join {d} before its definition", .{@backingInt(target)});
         };
         // Recorded states are stored forked, so a copy shares their tree.
         var probe = state;
         const summary = try self.summarizeForJoin(&probe, target_record, target, false);
-        const key = FrameRecordKey{ .target = @intFromEnum(target), .digest = summaryDigest(target_record.body, summary) };
+        const key = FrameRecordKey{ .target = @backingInt(target), .digest = summaryDigest(target_record.body, summary) };
         const group = &self.records.getPtr(join).?.groups.items[walk.group];
         var covered_version: ?u32 = null;
         const record_index: u32 = if (group.record_lookup.get(key)) |existing| blk: {
@@ -5799,7 +5804,7 @@ const Certifier = struct {
 
             if (self.memo_points.contains(cursor)) {
                 const summary = try self.summarize(&state);
-                const memo_entry = MemoEntry{ .stmt = @intFromEnum(cursor), .walk = segment.walk, .digest = summaryDigest(cursor, summary) };
+                const memo_entry = MemoEntry{ .stmt = @backingInt(cursor), .walk = segment.walk, .digest = summaryDigest(cursor, summary) };
                 const seen = try self.memo.getOrPut(memo_entry);
                 if (seen.found_existing) return;
             }
@@ -5845,9 +5850,9 @@ const Certifier = struct {
                             {
                                 try state.setOutcomeDiscriminant(assign.target, source_value);
                             }
-                            try state.put(&state.variant_discriminants, @intFromEnum(assign.target), no_value);
+                            try state.put(&state.variant_discriminants, @backingInt(assign.target), no_value);
                             if (source_value != no_value) {
-                                try state.put(&state.variant_discriminants, @intFromEnum(assign.target), source_value);
+                                try state.put(&state.variant_discriminants, @backingInt(assign.target), source_value);
                             }
                         },
                         .field => |op| try self.bindPayloadRead(
@@ -6151,7 +6156,7 @@ const Certifier = struct {
                 },
                 .incref => |rc| {
                     if (!self.isRc(rc.value)) {
-                        return self.fail("incref of non-refcounted local {d}", .{@intFromEnum(rc.value)});
+                        return self.fail("incref of non-refcounted local {d}", .{@backingInt(rc.value)});
                     }
                     const value = try self.requireLive(&state, rc.value);
                     try state.addBalance(value, std.math.cast(i32, rc.count) orelse return error.OutOfMemory);
@@ -6164,13 +6169,13 @@ const Certifier = struct {
                 .decref_if_initialized => |rc| {
                     _ = try self.requireLive(&state, rc.cond);
                     if (!self.isRc(rc.value)) {
-                        return self.fail("decref_if_initialized of non-refcounted local {d}", .{@intFromEnum(rc.value)});
+                        return self.fail("decref_if_initialized of non-refcounted local {d}", .{@backingInt(rc.value)});
                     }
                     const dense = self.denseOf(rc.value);
                     if (dense != no_dense and state.maybeUninitializedMayBeReleased(dense)) {
                         return self.fail(
                             "conditional payload local {d} may already have been released",
-                            .{@intFromEnum(rc.value)},
+                            .{@backingInt(rc.value)},
                         );
                     }
                     if (state.valueOf(rc.value) != no_value) {
@@ -6232,7 +6237,7 @@ const Certifier = struct {
                         if (payload_dense != no_dense and state.maybeUninitializedMayBeReleased(payload_dense)) {
                             return self.fail(
                                 "initialized-payload switch reads local {d} after its conditional unit may have been released",
-                                .{@intFromEnum(switch_stmt.payload)},
+                                .{@backingInt(switch_stmt.payload)},
                             );
                         }
                         const payload_value = state.valueOf(switch_stmt.payload);
@@ -6241,7 +6246,7 @@ const Certifier = struct {
                                 if (!condition.eql(.{ .local = switch_stmt.cond, .mask = switch_stmt.cond_mask })) {
                                     return self.fail(
                                         "initialized-payload switch condition l{d}/0x{x} did not match payload l{d} condition l{d}/0x{x}",
-                                        .{ @intFromEnum(switch_stmt.cond), switch_stmt.cond_mask, @intFromEnum(switch_stmt.payload), @intFromEnum(condition.local), condition.mask },
+                                        .{ @backingInt(switch_stmt.cond), switch_stmt.cond_mask, @backingInt(switch_stmt.payload), @backingInt(condition.local), condition.mask },
                                     );
                                 }
 
@@ -6341,7 +6346,7 @@ const Certifier = struct {
                     const record = try self.records.getOrPut(join_stmt.id);
                     if (record.found_existing) {
                         if (record.value_ptr.body != join_stmt.body) {
-                            return self.fail("join {d} redefined with a different body", .{@intFromEnum(join_stmt.id)});
+                            return self.fail("join {d} redefined with a different body", .{@backingInt(join_stmt.id)});
                         }
                     } else {
                         // Relevance is every refcounted local the body reads
@@ -6364,7 +6369,7 @@ const Certifier = struct {
                 },
                 .jump => |jump_stmt| {
                     const record = self.records.getPtr(jump_stmt.target) orelse {
-                        return self.fail("jump to join {d} before its definition", .{@intFromEnum(jump_stmt.target)});
+                        return self.fail("jump to join {d} before its definition", .{@backingInt(jump_stmt.target)});
                     };
                     if (self.current_return_local) |return_local| {
                         const target_stmt = self.store.getCFStmt(record.body);
@@ -6515,7 +6520,7 @@ const Certifier = struct {
         self.diag.context_stmt = self.current_stmt;
         return self.fail(
             "refcounted read into local {d} through local {d} after the field's stored unit was taken",
-            .{ @intFromEnum(target), @intFromEnum(source) },
+            .{ @backingInt(target), @backingInt(source) },
         );
     }
 
@@ -6597,7 +6602,7 @@ const Certifier = struct {
             self.diag.context_stmt = self.current_stmt;
             return self.fail(
                 "reinterpret into refcounted local {d} from non-refcounted source {d}",
-                .{ @intFromEnum(target), @intFromEnum(source) },
+                .{ @backingInt(target), @backingInt(source) },
             );
         }
         try state.bindValue(target, source_value);
@@ -6615,7 +6620,7 @@ const Certifier = struct {
             self.diag.context_stmt = self.current_stmt;
             return self.fail(
                 "reinterpret into refcounted local {d} from non-refcounted source {d}",
-                .{ @intFromEnum(target), @intFromEnum(source) },
+                .{ @backingInt(target), @backingInt(source) },
             );
         }
         try state.bindValue(target, source_value);
@@ -6623,25 +6628,25 @@ const Certifier = struct {
 
     fn applyRelease(self: *Certifier, state: *State, local: LIR.LocalId) CertifyError!void {
         if (!self.isRc(local)) {
-            return self.fail("release of non-refcounted local {d}", .{@intFromEnum(local)});
+            return self.fail("release of non-refcounted local {d}", .{@backingInt(local)});
         }
         const value = state.valueOf(local);
         if (value == no_value) {
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("release of unbound local {d}", .{@intFromEnum(local)});
+            return self.fail("release of unbound local {d}", .{@backingInt(local)});
         }
         if (!state.claimsOf(value).isEmpty()) {
             if (try self.consumeIntactSurplusUnit(state, value, null)) return;
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("whole release of partially dismantled local {d}", .{@intFromEnum(local)});
+            return self.fail("whole release of partially dismantled local {d}", .{@backingInt(local)});
         }
         if (state.balanceOf(value) < 1) {
             if (try self.tryClaim(state, value)) return;
             self.diag.context_local = local;
             self.diag.context_proc = self.current_proc;
-            return self.fail("release of local {d} without an ownership unit", .{@intFromEnum(local)});
+            return self.fail("release of local {d} without an ownership unit", .{@backingInt(local)});
         }
         try state.addBalance(value, -1);
     }
@@ -6662,7 +6667,7 @@ const Certifier = struct {
         }
 
         var arg_values_buffer: [arc_sig.tracked_param_count]ValueId = undefined;
-        var receipts_buffer = [_]RestitutionReceipt{.{}} ** arc_sig.tracked_param_count;
+        var receipts_buffer = @as([arc_sig.tracked_param_count]RestitutionReceipt, @splat(.{}));
         for (0..GuardedList.borrowLen(arg_locals)) |index| {
             const arg = GuardedList.at(arg_locals, index);
             const value = try self.requireLive(state, arg);
@@ -7039,8 +7044,8 @@ test "certify list metadata from a container requires extraction before release"
 const testing = std.testing;
 
 test "certifier state indexes explicit proc locals" {
-    const first: LIR.LocalId = @enumFromInt(1);
-    const second: LIR.LocalId = @enumFromInt(3);
+    const first: LIR.LocalId = @fromBackingInt(@intCast(1));
+    const second: LIR.LocalId = @fromBackingInt(@intCast(3));
     const local_dense = [_]u32{ no_dense, 0, no_dense, 1 };
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
@@ -7093,7 +7098,7 @@ const CertifyTest = struct {
     }
 
     fn freshJoinPointId(self: *CertifyTest) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
         self.next_join_point += 1;
         return id;
     }
@@ -7151,7 +7156,7 @@ const CertifyTest = struct {
         var frame_locals = try std.ArrayList(LIR.LocalId).initCapacity(self.allocator, self.store.localCount());
         defer frame_locals.deinit(self.allocator);
         for (0..self.store.localCount()) |index| {
-            frame_locals.appendAssumeCapacity(@enumFromInt(@as(u32, @intCast(index))));
+            frame_locals.appendAssumeCapacity(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         }
         return try self.store.addProcSpec(.{
             .name = self.store.freshSyntheticSymbol(),
@@ -7181,7 +7186,7 @@ const CertifyTest = struct {
         const rc_local = try self.allocator.alloc(bool, self.store.localCount());
         defer self.allocator.free(rc_local);
         for (0..self.store.localCount()) |index| {
-            const lir_local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(index))));
+            const lir_local = self.store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             rc_local[index] = self.layouts.layoutContainsRefcounted(self.layouts.getLayout(lir_local.layout_idx));
         }
         return certifyUniqueArgs(self.allocator, &self.store, &self.layouts, rc_local, arc_sig.SigTable.all_owned, &self.diag);
@@ -8579,7 +8584,7 @@ fn certifyDistinctBorrowLenders(release_last_lender: bool) (CertifyError || erro
         try testing.expectError(error.Certification, f.certify());
         errdefer std.debug.print("{s}\n", .{f.diag.message()});
         var buffer: [96]u8 = undefined;
-        const expected = try std.fmt.bufPrint(&buffer, "use of unbound refcounted local {d}", .{@intFromEnum(field)});
+        const expected = try std.fmt.bufPrint(&buffer, "use of unbound refcounted local {d}", .{@backingInt(field)});
         try testing.expect(std.mem.find(u8, f.diag.message(), expected) != null);
     } else {
         f.certify() catch |err| {

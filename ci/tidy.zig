@@ -199,11 +199,14 @@ const SetupZigPins = struct {
 
 /// The `<major>_<minor>` of the `pkgs.zig_<major>_<minor>` package a Nix flake selects.
 fn flakeZigPin(text: []const u8) ?ZigPin {
-    const prefix = "pkgs.zig_";
-    const start = (std.mem.find(u8, text, prefix) orelse return null) + prefix.len;
-    var end = start;
-    while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '_')) end += 1;
-    return .{ .offset = start, .version = text[start..end] };
+    // A flake may instead build Zig from a local `zig-<major>.<minor>.nix` derivation.
+    for ([_][]const u8{ "pkgs.zig_", "./zig-" }) |prefix| {
+        const start = (std.mem.find(u8, text, prefix) orelse continue) + prefix.len;
+        var end = start;
+        while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '_' or text[end] == '.')) end += 1;
+        return .{ .offset = start, .version = std.mem.trimEnd(u8, text[start..end], ".") };
+    }
+    return null;
 }
 
 /// Whether nixpkgs' `<major>_<minor>` spelling names the major and minor of `version`.
@@ -211,7 +214,7 @@ fn isMajorMinorOf(pin: []const u8, version: []const u8) bool {
     var parts = std.mem.splitScalar(u8, version, '.');
     const major = parts.next() orelse return false;
     const minor = parts.next() orelse return false;
-    const pin_major, const pin_minor = cut(pin, "_") orelse return false;
+    const pin_major, const pin_minor = cut(pin, "_") orelse cut(pin, ".") orelse return false;
     return std.mem.eql(u8, pin_major, major) and std.mem.eql(u8, pin_minor, minor);
 }
 
@@ -565,7 +568,7 @@ fn tidyFile(
         tidyBannedIndexOf(file, errors);
         tidyBannedCoreCtxCreation(file, errors);
 
-        var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file.text, .{ .mode = .zig });
         defer tree.deinit(gpa);
 
         tidyDeadDeclarations(file, &tree, counter, errors);
@@ -1183,14 +1186,14 @@ fn tidyAst(
         const node: u32 = @intCast(node_usize);
         if (isBinOp(tag)) { // Forbid mixing bitops and arithmetics without parentheses.
             // In Zig 0.15, binary operations use node_and_node data layout
-            const data = tree.nodeData(@enumFromInt(node));
+            const data = tree.nodeData(@fromBackingInt(@intCast(node)));
             const children = data.node_and_node;
             inline for (children) |child| {
-                const child_tag = tags[@intFromEnum(child)];
+                const child_tag = tags[@backingInt(child)];
                 if ((isBinOpBitwise(tag) and isBinOpArithmetic(child_tag)) or
                     (isBinOpArithmetic(tag) and isBinOpBitwise(child_tag)))
                 {
-                    const token_opening = tree.nodeMainToken(@enumFromInt(node));
+                    const token_opening = tree.nodeMainToken(@fromBackingInt(@intCast(node)));
                     const line_opening = tree.tokenLocation(0, token_opening).line;
                     errors.addAmbiguousPrecedence(file, line_opening);
                 }
@@ -1227,7 +1230,7 @@ fn tidyInferredErrorUnion(file: SourceFile, tree: *const Ast, errors: *Errors) v
         // here (that would double-count).
         if (tag != .fn_proto and tag != .fn_proto_multi and tag != .fn_proto_one and tag != .fn_proto_simple) continue;
 
-        const node: Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
         const fn_proto = tree.fullFnProto(&buffer, node) orelse continue;
         const return_type = fn_proto.ast.return_type.unwrap() orelse continue;
 

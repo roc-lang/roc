@@ -1243,7 +1243,7 @@ fn reportFindings(case_name: []const u8) usize {
 }
 
 fn exemptOps() rc_conformance.OpSet {
-    var set = rc_conformance.OpSet.initEmpty();
+    var set = rc_conformance.OpSet.empty;
     for (exemptions) |exemption| set.insert(exemption.op);
     return set;
 }
@@ -1264,7 +1264,7 @@ test "rc effect conformance: every executed op matches its row" {
     if (!rc_conformance.enabled) return error.SkipZigTest;
 
     const allocator = base.defaultGpa();
-    var covered = rc_conformance.OpSet.initEmpty();
+    var covered = rc_conformance.OpSet.empty;
     var failures: usize = 0;
 
     for (cases) |case| {
@@ -1291,7 +1291,7 @@ test "rc effect conformance: every executed op matches its row" {
         failures += reportFindings("zeroed box cell");
     }
 
-    var gaps = rc_conformance.OpSet.initEmpty();
+    var gaps = rc_conformance.OpSet.empty;
     rc_conformance.coverageGaps(covered, exemptOps(), &gaps);
     if (gaps.count() > 0) {
         var it = gaps.iterator();
@@ -1304,7 +1304,7 @@ test "rc effect conformance: every executed op matches its row" {
         failures += gaps.count();
     }
 
-    var stale = rc_conformance.OpSet.initEmpty();
+    var stale = rc_conformance.OpSet.empty;
     rc_conformance.staleExemptions(covered, exemptOps(), &stale);
     if (stale.count() > 0) {
         var it = stale.iterator();

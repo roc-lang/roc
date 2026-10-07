@@ -842,7 +842,7 @@ pub fn Emit(comptime target: RocTarget) type {
             nv = 0b1111, // Never (reserved)
 
             pub fn invert(self: Condition) Condition {
-                return @enumFromInt(@intFromEnum(self) ^ 1);
+                return @fromBackingInt(@intCast(@backingInt(self) ^ 1));
             }
         };
 
@@ -855,7 +855,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inst: u32 = (0b01010100 << 24) |
                 (@as(u32, imm19) << 5) |
                 (0 << 4) |
-                @intFromEnum(cond);
+                @backingInt(cond);
             try self.emit32(inst);
         }
 
@@ -867,7 +867,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0011010100 << 21) |
                 (@as(u32, src2.enc()) << 16) |
-                (@as(u32, @intFromEnum(cond)) << 12) |
+                (@as(u32, @backingInt(cond)) << 12) |
                 (0b00 << 10) |
                 (@as(u32, src1.enc()) << 5) |
                 dst.enc();
@@ -882,7 +882,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b0011010100 << 21) |
                 (@as(u32, src2.enc()) << 16) |
-                (@as(u32, @intFromEnum(cond)) << 12) |
+                (@as(u32, @backingInt(cond)) << 12) |
                 (0b01 << 10) |
                 (@as(u32, src1.enc()) << 5) |
                 dst.enc();
@@ -1564,11 +1564,11 @@ pub fn Emit(comptime target: RocTarget) type {
         /// FMOV from general register to float register
         pub fn fmovFloatFromGen(self: *Self, ftype: FloatType, dst: FloatReg, src: GeneralReg) Allocator.Error!void {
             // FMOV <Sd>, <Wn> (single) or FMOV <Dd>, <Xn> (double)
-            const sf: u1 = @intFromEnum(ftype);
+            const sf: u1 = @backingInt(ftype);
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b00 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b111 << 16) |
@@ -1581,11 +1581,11 @@ pub fn Emit(comptime target: RocTarget) type {
         /// FMOV from float register to general register
         pub fn fmovGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg) Allocator.Error!void {
             // FMOV <Wd>, <Sn> (single) or FMOV <Xd>, <Dn> (double)
-            const sf: u1 = @intFromEnum(ftype);
+            const sf: u1 = @backingInt(ftype);
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b00 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b110 << 16) |
@@ -1600,7 +1600,7 @@ pub fn Emit(comptime target: RocTarget) type {
         fn emitFloatBinary(self: *Self, ftype: FloatType, opcode: u4, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (@as(u32, src2.enc()) << 16) |
                 (@as(u32, opcode) << 12) |
@@ -1615,7 +1615,7 @@ pub fn Emit(comptime target: RocTarget) type {
         fn emitFloatUnary(self: *Self, ftype: FloatType, opcode: u2, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (0b0000 << 17) |
                 (@as(u32, opcode) << 15) |
@@ -1680,7 +1680,7 @@ pub fn Emit(comptime target: RocTarget) type {
             // 0 0 0 11110 ftype 1 Rm 00 1000 Rn 0 0 000
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (@as(u32, rhs.enc()) << 16) |
                 (0b00 << 14) |
@@ -1697,7 +1697,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b00 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b010 << 16) |
@@ -1715,7 +1715,7 @@ pub fn Emit(comptime target: RocTarget) type {
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b00 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (@as(u32, @backingInt(ftype)) << 22) |
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b011 << 16) |
@@ -1729,10 +1729,10 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn fcvtFloatFloat(self: *Self, dst_type: FloatType, dst: FloatReg, src_type: FloatType, src: FloatReg) Allocator.Error!void {
             // FCVT <Sd>, <Dn> or FCVT <Dd>, <Sn>
             // 0 0 0 11110 src_type 1 0001 dst_type 10000 Rn Rd
-            const opc: u2 = @intFromEnum(dst_type);
+            const opc: u2 = @backingInt(dst_type);
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
-                (@as(u32, @intFromEnum(src_type)) << 22) |
+                (@as(u32, @backingInt(src_type)) << 22) |
                 (0b1 << 21) |
                 (0b0001 << 17) |
                 (@as(u32, opc) << 15) |
@@ -1982,22 +1982,22 @@ test "signed-offset memory helpers use exact byte offsets" {
 
     try asm_buf.ldrRegMemSoff(.w64, .X0, .FP, 260);
     try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+    try std.testing.expectEqual(@as(u32, @backingInt(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 
     asm_buf.buf.clearRetainingCapacity();
     try asm_buf.fldrRegMemSoff(.double, .V0, .FP, 260);
     try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+    try std.testing.expectEqual(@as(u32, @backingInt(Registers.GeneralReg.IP0)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 
     asm_buf.buf.clearRetainingCapacity();
     try asm_buf.strhRegMemSoff(.IP0, .FP, 257);
     try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+    try std.testing.expectEqual(@as(u32, @backingInt(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 
     asm_buf.buf.clearRetainingCapacity();
     try asm_buf.ldrbRegMemSoff(.X0, .IP0, 5000);
     try std.testing.expectEqual(@as(usize, 12), asm_buf.buf.items.len);
-    try std.testing.expectEqual(@as(u32, @intFromEnum(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
+    try std.testing.expectEqual(@as(u32, @backingInt(Registers.GeneralReg.IP1)), testInstBaseReg(testReadInst(asm_buf.buf.items, 2)));
 }
 
 test "condition invert" {

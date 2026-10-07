@@ -143,7 +143,7 @@ pub const StaticDataImage = struct {
         @memset(addresses, 0);
         for (self.symbols) |symbol| {
             if (symbol.data_export.value_id) |id| {
-                const index = @intFromEnum(id);
+                const index = @backingInt(id);
                 std.debug.assert(index < count and addresses[index] == 0);
                 addresses[index] = symbol.address(self.allocation);
             }
@@ -168,7 +168,7 @@ pub const StaticDataImage = struct {
             for (symbol.data_export.relocations) |relocation| {
                 if (relocation.kind != .address) continue;
                 const target = switch (relocation.target) {
-                    .data_symbol => |id| self.symbols[@intFromEnum(id)].address(self.allocation),
+                    .data_symbol => |id| self.symbols[@backingInt(id)].address(self.allocation),
                     .named => self.symbolAddress(relocation.target_symbol_name) orelse return error.MissingStaticDataSymbol,
                 };
                 try self.writeRelocation(symbol, relocation, target);
@@ -213,7 +213,7 @@ fn alignForwardChecked(value: usize, alignment: usize) ?usize {
 test "static data image resolves data relocations and compact LIR addresses" {
     const allocator = std.testing.allocator;
     var target_bytes = [_]u8{ 10, 20, 30, 40 };
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes = @as([@sizeOf(usize)]u8, @splat(0));
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "payload",
@@ -235,7 +235,7 @@ test "static data image resolves data relocations and compact LIR addresses" {
 
     // The fixture's dense root table names the export representing each LIR value.
     const roots = [_]usize{1};
-    for (roots, 0..) |export_index, value_index| exports[export_index].value_id = @enumFromInt(value_index);
+    for (roots, 0..) |export_index, value_index| exports[export_index].value_id = @fromBackingInt(@intCast(value_index));
     var image = try StaticDataImage.init(allocator, &exports);
     defer image.deinit();
     const addresses = try image.lirValueAddresses(allocator, roots.len);
@@ -248,13 +248,13 @@ test "static data image resolves data relocations and compact LIR addresses" {
 
 test "static data image resolves function relocations explicitly" {
     const allocator = std.testing.allocator;
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes = @as([@sizeOf(usize)]u8, @splat(0));
     const root_relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "roc__p1",
         .kind = .function_pointer,
         .callable_capture_offset = 16,
-        .procedure = @enumFromInt(1),
+        .procedure = @fromBackingInt(@intCast(1)),
     }};
     const exports = [_]StaticDataExport{.{
         .symbol_name = "callable",
@@ -269,7 +269,7 @@ test "static data image resolves function relocations explicitly" {
         fn resolve(_: ?*anyopaque, relocation: StaticDataRelocation) ?usize {
             if (!std.mem.eql(u8, relocation.target_symbol_name, "roc__p1")) return null;
             if (relocation.callable_capture_offset != 16) return null;
-            if (@intFromEnum(relocation.procedure orelse return null) != 1) return null;
+            if (@backingInt(relocation.procedure orelse return null) != 1) return null;
             return 0x1234;
         }
     };
@@ -280,7 +280,7 @@ test "static data image resolves function relocations explicitly" {
 }
 
 test "static data image rejects and releases an unresolved data graph" {
-    var root_bytes = [_]u8{0} ** @sizeOf(usize);
+    var root_bytes = @as([@sizeOf(usize)]u8, @splat(0));
     const relocations = [_]StaticDataRelocation{.{
         .offset = 0,
         .target_symbol_name = "missing",
@@ -299,13 +299,13 @@ test "static data image rejects and releases an unresolved data graph" {
 }
 
 test "static data image resolves cyclic allocation identities" {
-    const bytes = [_]u8{0} ** @sizeOf(usize);
+    const bytes = @as([@sizeOf(usize)]u8, @splat(0));
     const names = [_][]const u8{ "first", "second" };
     var relocations: [names.len]StaticDataRelocation = undefined;
     var exports: [names.len]StaticDataExport = undefined;
     for (names, &exports, &relocations, 0..) |name, *data_export, *relocation, i| {
         const next = (i + 1) % names.len;
-        relocation.* = .{ .offset = 0, .target_symbol_name = names[next], .target = .{ .data_symbol = @enumFromInt(next) } };
+        relocation.* = .{ .offset = 0, .target_symbol_name = names[next], .target = .{ .data_symbol = @fromBackingInt(@intCast(next)) } };
         data_export.* = .{ .symbol_name = name, .bytes = &bytes, .alignment = @alignOf(usize), .relocations = relocations[i..][0..1] };
     }
     var image = try StaticDataImage.init(std.testing.allocator, &exports);
