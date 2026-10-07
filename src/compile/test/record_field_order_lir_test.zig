@@ -51,7 +51,7 @@ fn lowerToLir(app_body: []const u8, inline_mode: lir.CheckedPipeline.InlineMode,
 /// The work a LIR dump performs, independent of its order: every procedure's
 /// statements with local, procedure, and join identities erased, sorted
 /// within the procedure, and the procedures sorted.
-fn workOf(gpa: std.mem.Allocator, dump: []const u8) ![]const u8 {
+fn workOf(gpa: std.mem.Allocator, dump: []const u8) std.mem.Allocator.Error![]const u8 {
     var procs: std.ArrayList([]const u8) = .empty;
     defer {
         for (procs.items) |proc| gpa.free(proc);
@@ -65,7 +65,7 @@ fn workOf(gpa: std.mem.Allocator, dump: []const u8) ![]const u8 {
 
     var rest = dump;
     while (rest.len != 0) {
-        const end = std.mem.indexOfScalar(u8, rest, '\n') orelse rest.len;
+        const end = std.mem.findScalar(u8, rest, '\n') orelse rest.len;
         const line = std.mem.trim(u8, rest[0..end], " ");
         rest = if (end < rest.len) rest[end + 1 ..] else rest[rest.len..];
         if (std.mem.startsWith(u8, line, "proc ") and lines.items.len != 0) {
@@ -78,7 +78,7 @@ fn workOf(gpa: std.mem.Allocator, dump: []const u8) ![]const u8 {
 }
 
 /// Drop the digits of every `l`, `p`, and `j` identity that starts a word.
-fn eraseIdentities(gpa: std.mem.Allocator, line: []const u8) ![]const u8 {
+fn eraseIdentities(gpa: std.mem.Allocator, line: []const u8) std.mem.Allocator.Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(gpa);
     var index: usize = 0;
@@ -99,7 +99,7 @@ fn lessThan(_: void, a: []const u8, b: []const u8) bool {
 }
 
 /// Sort `items`, join them with newlines, and free and clear them.
-fn sortedJoin(gpa: std.mem.Allocator, items: *std.ArrayList([]const u8)) ![]const u8 {
+fn sortedJoin(gpa: std.mem.Allocator, items: *std.ArrayList([]const u8)) std.mem.Allocator.Error![]const u8 {
     std.mem.sort([]const u8, items.items, {}, lessThan);
     const joined = try std.mem.join(gpa, "\n", items.items);
     for (items.items) |item| gpa.free(item);
@@ -123,9 +123,9 @@ test "a record written out of layout order lowers to the same LIR work as in lay
         // inlines its producers: `List.repeat` becomes a loop over a list
         // allocated with its final capacity, and `List.append` reserves and
         // appends in place.
-        try std.testing.expect(std.mem.indexOf(u8, in_order, "list_with_capacity") != null);
-        try std.testing.expect(std.mem.indexOf(u8, in_order, "list_reserve_for_append(") != null);
-        try std.testing.expect(std.mem.indexOf(u8, in_order, ") unique=") != null);
+        try std.testing.expect(std.mem.find(u8, in_order, "list_with_capacity") != null);
+        try std.testing.expect(std.mem.find(u8, in_order, "list_reserve_for_append(") != null);
+        try std.testing.expect(std.mem.find(u8, in_order, ") unique=") != null);
 
         const in_order_work = try workOf(gpa, in_order);
         defer gpa.free(in_order_work);
