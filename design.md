@@ -10285,7 +10285,17 @@ Other solved-graph mutations:
   Static Dispatch At The Checked Boundary ("Evidence params"). The duplicate
   callable is unified with the retained one through an ordinary committed
   probe before the receiver's constraint list is rewritten without it; a probe
-  that cannot establish the pair rolls back and keeps both.
+  that cannot establish the pair rolls back and keeps both. Deciding whether a
+  scheme has anything to deduplicate is mechanism: the walk skips classes the
+  type store records as settled (`TypeStore.markSettled`), which hold no
+  identity with more than one constraint and no row, and when nothing can merge
+  it settles the row-free classes it visited. Every class reachable from a
+  settled class is settled, and any change to a settled class's content, any
+  merge that changes what a settled class's variables observe, and any rollback
+  empties the set, so the answer, and the rows normalized on the way, are those
+  of the full walk. A scheme with candidates is deduplicated over its whole
+  type exactly as before. Each nested lambda's generalization thus walks only
+  the part of its type its enclosed lambdas have not already settled.
 
 Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
@@ -11743,19 +11753,42 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
-Nested procedure sites carry a compact checked inventory of the quantified type
-bindings their bodies consume, including use-site substitutions whose hidden
-receivers are absent from captured value types. Each binding names its checked
-type, lexical dispatch scope, and substitution slot. The existing nested-site
-walk produces this inventory from checked expression, pattern, and dispatch
-interfaces; it does not add a second body scan. Type visitation is cycle-safe,
-and nested sites propagate their required bindings to their lexical parents.
-Before instantiating a nested body, Monotype installs these exact bindings from
-its selected lexical evidence frames. Locally quantified variables consume that
-nested specialization's own substitution; they never share another request's
-cells. Construction of a new generalized scope imports only bindings owned by
-its enclosing scopes. Work at each specialization is proportional to the
-recorded bindings, not to the size of the enclosing scheme or its type-node map.
+A nested body's instantiation answers each quantified variable of an enclosing
+scope when the instantiation first reaches it: the innermost frame of its
+lexical evidence chain whose scheme quantifies the variable supplies the
+substitution slot, found through that scheme's variable index, which is built
+once per compilation. A variable no frame quantifies, or whose slot is a checked
+error, stays fresh. Locally quantified variables consume that nested
+specialization's own substitution; they never share another request's cells.
+Construction of a new generalized scope keeps the scope's own quantified
+variables fresh until the construction request determines them, and answers
+only variables its enclosing scopes quantify. Work at each specialization is
+proportional to the variables its instantiation actually reaches, not to the
+size of the enclosing scheme, its type-node map, or the types of the bodies
+nested inside it; no per-site inventory is recorded, so a site's checked data
+does not grow with the depth of the lambdas nested inside it.
+
+An instance of a checked type is pure under a context's evidence when every
+variable it reaches is the substitution that evidence gives the variable, and
+every other part is a function, tuple, empty row, or primitive. A pure instance
+has no cell of its own that a later relation could refine: its variables are the
+evidence's shared cells, and no representation evidence can attach to the rest.
+Two pure instances of one checked type under one evidence chain are therefore
+the same type wherever they occur. Each specialization graph indexes the first
+pure instance of each checked type under each evidence chain (named by its head
+frame's substitution and parent). When a nested function's request already
+belongs to the class of that function's pure instance under the nested evidence,
+and the request carries no generated-private evidence, the nested body uses the
+request as its instance of the checked function instead of instantiating it
+afresh and relating the copy to the request, which would add nothing to the
+request's class. Likewise an indirect call's callee is a value of the caller, so
+when its checked function type admits no representation evidence (it is built
+only from functions, tuples, empty rows, primitives, and variables), no explicit
+result is requested, and the caller's instance carries no generated-private
+evidence, every relation the call makes is plain unification and a fresh instance
+would join the caller's entirely; the call uses the caller's instance directly.
+A curried chain of nested lambdas therefore costs each level work proportional to
+its own arguments, not to the remaining depth of its function type.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
@@ -13523,6 +13556,23 @@ on one explicit work stack. A backing relation isolates an interned structural
 operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
+
+Monotype Lifted types enter the solved store as lazy leaves that materialize one
+level when unification or a shape read touches them. A leaf that has never
+expanded stands for a fresh clone of its Monotype whose callable slots nothing
+else references when its expansion would be unobservable: the leaf has no clone
+context yet, or it is the only unexpanded leaf of a clone context whose every
+expansion registered at most one callable-bearing child, so every other entry
+of that context lies on its ancestor chain and no other expansion can reach the
+context again. Unifying such a leaf with a class already instantiated from the
+same Monotype only joins the clone's fresh callable slots to the class's, so the
+leaf joins the class without materializing. A Monotype that reaches a cycle, or
+that is uninhabited, keeps the ordinary relation. Leaves that survive solving
+were never unified: their callable slots all close empty and their
+forced-dynamic marks depend only on their Monotype, so finalization gives every
+untouched leaf of one Monotype one shared clone. Solving a chain of nested
+lambdas therefore relates each lambda's function type to its body's in constant
+work, however deep the chain is.
 
 Monotype may carry both the definition-private nominal view and the opaque
 interface view of one checked `TypeDef`. Lambda solving relates those views only

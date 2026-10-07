@@ -898,7 +898,7 @@ pub fn solveWithOptions(
     @memset(solver.maybe_uninitialized_condition_mask, 0);
 
     try liftReachableStatements(&solver);
-    resolveJumpIndices(&solver);
+    try resolveJumpIndices(&solver);
     try computePins(&solver, roots);
     try computeSccs(&solver);
 
@@ -2227,16 +2227,30 @@ fn liftProcStmtFacts(
 /// contribution slot assigned by the same structural lift. Join ids are
 /// producer identities, not an indexing domain; downstream ARC code only
 /// consumes these dense indices.
-fn resolveJumpIndices(solver: *Solver) void {
+fn resolveJumpIndices(solver: *Solver) Allocator.Error!void {
+    // Each procedure's joins by id, so a jump finds its join without scanning
+    // every join of its procedure. A repeated id is recorded, and is an
+    // invariant violation only for a jump that targets it.
+    const JoinKey = struct { proc: u32, id: LIR.JoinPointId };
+    const JoinSlot = struct { index: u32, repeated: bool };
+    var join_slots: std.AutoHashMapUnmanaged(JoinKey, JoinSlot) = .empty;
+    defer join_slots.deinit(solver.allocator);
+    for (solver.proc_join_bodies, 0..) |joins, proc_index| {
+        for (joins.items, 0..) |join, join_index| {
+            const entry = try join_slots.getOrPut(solver.allocator, .{ .proc = @intCast(proc_index), .id = join.id });
+            if (entry.found_existing) {
+                entry.value_ptr.repeated = true;
+            } else {
+                entry.value_ptr.* = .{ .index = @intCast(join_index), .repeated = false };
+            }
+        }
+    }
     for (solver.pending_jumps.items) |pending| {
         const joins = &solver.proc_join_bodies[pending.proc];
-        var target_index: ?u32 = null;
-        for (joins.items, 0..) |join, join_index| {
-            if (join.id != pending.target) continue;
-            if (target_index != null) solveInvariant("ARC lift found duplicate join ids in one procedure");
-            target_index = @intCast(join_index);
-        }
-        const join_index = target_index orelse solveInvariant("ARC jump targeted a join absent from its lifted procedure");
+        const slot = join_slots.get(.{ .proc = pending.proc, .id = pending.target }) orelse
+            solveInvariant("ARC jump targeted a join absent from its lifted procedure");
+        if (slot.repeated) solveInvariant("ARC lift found duplicate join ids in one procedure");
+        const join_index = slot.index;
         const join = &joins.items[join_index];
         const stmt_index = @intFromEnum(pending.stmt);
         if (solver.jump_target_join_index_by_stmt[stmt_index] == no_local) {

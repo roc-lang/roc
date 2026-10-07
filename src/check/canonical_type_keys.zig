@@ -364,6 +364,20 @@ pub const TypeWriter = struct {
         return self.identityVarsFromVar(var_);
     }
 
+    /// Like `identityVarsFromVarIgnoringConstraints`, except that a class the
+    /// store records as settled (`TypeStore.markSettled`) is a leaf the walk
+    /// neither enters nor enumerates.
+    pub fn identityVarsFromVarIgnoringConstraintsOutsideSettled(self: *TypeWriter, var_: Var) Allocator.Error![]Var {
+        self.inspector.prune_settled = true;
+        defer self.inspector.prune_settled = false;
+        return self.identityVarsFromVarIgnoringConstraints(var_);
+    }
+
+    /// The resolved vars the last walk visited, settled leaves included.
+    pub fn lastWalkVisited(self: *TypeWriter) collections.DenseMap(u32, void).KeyIterator {
+        return self.inspector.visited.keyIterator();
+    }
+
     /// Traverse ordinary structure without following identity constraints,
     /// only to surface a row that repeats a label (see `takeDuplicateRow`).
     pub fn visitIgnoringConstraints(self: *TypeWriter, var_: Var) Allocator.Error!void {
@@ -1001,6 +1015,8 @@ const Inspector = struct {
     /// the body, so whatever the group has solved it to so far is not part of
     /// either side's quantified interface.
     opaque_roots: []const Var = &.{},
+    /// Whether a class the store records as settled is an opaque leaf.
+    prune_settled: bool = false,
     detect_errors: bool = false,
     contains_error: bool = false,
     report_duplicate_rows: bool = false,
@@ -1063,6 +1079,7 @@ const Inspector = struct {
         for (self.opaque_roots) |opaque_root| {
             if (@intFromEnum(opaque_root) == node) return;
         }
+        if (self.prune_settled and self.adapter.store.isSettled(@enumFromInt(node))) return;
         const desc = try type_key_engine.describe(SourceAdapter, &self.adapter, self.allocator, &self.descriptions, node, false);
         if (self.detect_errors and desc.contains_error) self.contains_error = true;
         switch (desc.kind) {
