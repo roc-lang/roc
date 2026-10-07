@@ -869,6 +869,18 @@ pub const InspectOverrideInstance = extern struct {
     }
 };
 
+/// A node of a module-global definition whose evaluation, or a call of the
+/// value it produces, can reach code a hoisted compile-time root must not
+/// evaluate (design.md "Hoisted Root Reachability"): the definition's own
+/// node, its expression, and every node its pattern binds. Importers read
+/// these instead of walking the definition's body, which dispatches through
+/// targets only this module's checking selected.
+pub const HoistUnstableNode = extern struct {
+    node_idx: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One fact checking records about inspection's per-type override decisions
 /// (design.md "Inspect Overrides"). `vars` ranges over
 /// `inspect_demand_vars`.
@@ -1206,6 +1218,9 @@ inspect_override_instances: InspectOverrideInstance.SafeList,
 inspect_demand_records: InspectDemandRecord.SafeList,
 /// Type variables `inspect_demand_records` names.
 inspect_demand_vars: InspectDemandVar.SafeList,
+/// Sorted, distinct nodes of definitions a hoisted root must not reach
+/// (`HoistUnstableNode`).
+hoist_unstable_nodes: HoistUnstableNode.SafeList,
 
 /// A type alias mapping from a for-clause: [Model : model]
 /// Maps an alias name (Model) to a rigid variable name (model)
@@ -1567,6 +1582,7 @@ pub fn relocate(self: *Self, offset: isize) void {
     self.inspect_override_instances.relocate(offset);
     self.inspect_demand_records.relocate(offset);
     self.inspect_demand_vars.relocate(offset);
+    self.hoist_unstable_nodes.relocate(offset);
 
     // Relocate the module_name pointer if it's not empty
     if (self.module_name.len > 0) {
@@ -1675,6 +1691,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .inspect_override_instances = try InspectOverrideInstance.SafeList.initCapacity(gpa, 0),
         .inspect_demand_records = try InspectDemandRecord.SafeList.initCapacity(gpa, 0),
         .inspect_demand_vars = try InspectDemandVar.SafeList.initCapacity(gpa, 0),
+        .hoist_unstable_nodes = try HoistUnstableNode.SafeList.initCapacity(gpa, 0),
     };
 }
 
@@ -1712,6 +1729,7 @@ pub fn deinit(self: *Self) void {
     self.inspect_override_instances.deinit(self.gpa);
     self.inspect_demand_records.deinit(self.gpa);
     self.inspect_demand_vars.deinit(self.gpa);
+    self.hoist_unstable_nodes.deinit(self.gpa);
     self.top_level_demand_dependencies.deinit(self.gpa);
     // diagnostics are stored in the NodeStore, no need to free separately
     self.store.deinit();
@@ -1819,6 +1837,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.inspect_override_instances.deinit(self.gpa);
     self.inspect_demand_records.deinit(self.gpa);
     self.inspect_demand_vars.deinit(self.gpa);
+    self.hoist_unstable_nodes.deinit(self.gpa);
 
     // If enableRuntimeInserts was called on the interner, it allocated new memory
     // that needs to be freed. The interner.deinit checks supports_inserts internally
@@ -4614,6 +4633,7 @@ pub const Serialized = extern struct {
     inspect_override_instances: InspectOverrideInstance.SafeList.Serialized,
     inspect_demand_records: InspectDemandRecord.SafeList.Serialized,
     inspect_demand_vars: InspectDemandVar.SafeList.Serialized,
+    hoist_unstable_nodes: HoistUnstableNode.SafeList.Serialized,
     // Reserved space (was is_lambda_lifted and is_defunctionalized, now unused)
     _reserved_flags: [2]u8 = .{ 0, 0 },
     _padding: [6]u8 = .{ 0, 0, 0, 0, 0, 0 },
@@ -4738,6 +4758,7 @@ pub const Serialized = extern struct {
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
         try self.inspect_demand_records.serialize(&env.inspect_demand_records, allocator, writer);
         try self.inspect_demand_vars.serialize(&env.inspect_demand_vars, allocator, writer);
+        try self.hoist_unstable_nodes.serialize(&env.hoist_unstable_nodes, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
     }
@@ -4814,6 +4835,7 @@ pub const Serialized = extern struct {
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
             .inspect_demand_records = self.inspect_demand_records.deserializeInto(base_addr),
             .inspect_demand_vars = self.inspect_demand_vars.deserializeInto(base_addr),
+            .hoist_unstable_nodes = self.hoist_unstable_nodes.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4892,6 +4914,7 @@ pub const Serialized = extern struct {
             .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
             .inspect_demand_records = self.inspect_demand_records.deserializeInto(base_addr),
             .inspect_demand_vars = self.inspect_demand_vars.deserializeInto(base_addr),
+            .hoist_unstable_nodes = self.hoist_unstable_nodes.deserializeInto(base_addr),
         };
 
         env.debugAssertModuleBasename();
@@ -4973,6 +4996,7 @@ pub const Serialized = extern struct {
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
             .inspect_demand_records = try self.inspect_demand_records.deserializeWithCopy(base_addr, gpa),
             .inspect_demand_vars = try self.inspect_demand_vars.deserializeWithCopy(base_addr, gpa),
+            .hoist_unstable_nodes = try self.hoist_unstable_nodes.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5066,6 +5090,7 @@ pub const Serialized = extern struct {
             .inspect_override_instances = try self.inspect_override_instances.deserializeWithCopy(base_addr, gpa),
             .inspect_demand_records = try self.inspect_demand_records.deserializeWithCopy(base_addr, gpa),
             .inspect_demand_vars = try self.inspect_demand_vars.deserializeWithCopy(base_addr, gpa),
+            .hoist_unstable_nodes = try self.hoist_unstable_nodes.deserializeWithCopy(base_addr, gpa),
         };
 
         env.debugAssertModuleBasename();
@@ -5557,6 +5582,30 @@ pub fn inspectDemandRecord(self: *const Self, kind: InspectDemandRecord.Kind, ke
 /// The type variables an inspection fact names.
 pub fn inspectDemandVars(self: *const Self, record: InspectDemandRecord) []const InspectDemandVar {
     return self.inspect_demand_vars.items.items[record.vars_start..][0..record.vars_len];
+}
+
+/// Publish the nodes of definitions a hoisted root must not reach, sorted
+/// and distinct (`HoistUnstableNode`).
+pub fn recordHoistUnstableNodes(self: *Self, nodes: []const u32) std.mem.Allocator.Error!void {
+    self.hoist_unstable_nodes.items.clearRetainingCapacity();
+    for (nodes, 0..) |node, i| {
+        std.debug.assert(i == 0 or nodes[i - 1] < node);
+        _ = try self.hoist_unstable_nodes.append(self.gpa, .{ .node_idx = node });
+    }
+}
+
+/// Whether `node` belongs to a definition whose evaluation, or a call of the
+/// value it produces, can reach code a hoisted root must not evaluate.
+pub fn hoistUnstableNode(self: *const Self, node: Node.Idx) bool {
+    const nodes = self.hoist_unstable_nodes.items.items;
+    const target: u32 = @intFromEnum(node);
+    var low: usize = 0;
+    var high: usize = nodes.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        if (nodes[mid].node_idx < target) low = mid + 1 else high = mid;
+    }
+    return low < nodes.len and nodes[low].node_idx == target;
 }
 
 /// Whether the `to_inspect` method `def_idx` is a conditional override,

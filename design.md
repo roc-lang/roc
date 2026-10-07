@@ -738,9 +738,32 @@ feed this poison result explicitly through the same expression summary path.
 Poison is local to the expression or dependency region that owns the checking
 problem. It propagates only through explicit checked dependencies, such as a
 lookup of an erroneous local or top-level value, or a call whose callee's body
-contains code checking replaced with a runtime error: the post-solve walk that
-confirms a hoisted root's dependencies already follows each callee's body, and a
-root whose evaluation can reach such code is not kept.
+contains code checking replaced with a runtime error: a root whose evaluation
+can reach such code is not kept.
+
+**Hoisted Root Reachability.** A non-top-level hoisted root is kept only when nothing its evaluation can reach
+contains code a stored compile-time constant must not evaluate: a runtime error
+checking substituted, an instantiation whose requirement another expression
+rejected (`rejected_instantiation_exprs`), a `dbg` or `expect`, or a hash seed.
+Evaluation reaches more than the callee of a direct call, so pruning consults
+one reach graph (`HoistReachGraph`) built from explicit checking data. Its
+nodes are this module's global definitions, its promoted local procedures, and
+its static-dispatch edges. A lookup of a global definition or promoted local
+procedure references that node whatever its type, since a function can arrive
+as an argument (`apply(check_one, s)`) or inside a stored value
+(`fns = { f: check_one }`). An expression references the dispatch edges it
+introduces (`DispatchTargetInstantiation.intro_expr`) and the scheme
+requirements a lookup instantiates (`InstantiationDispatcher`); an edge
+references its selected target's definition or local procedure and the edges
+derived from it (`dispatch_derivations`), so a dispatch inside a generic body
+is followed through the instantiation that selected its target. A definition
+of another module is decided by the verdicts that module's checking recorded
+(`ModuleEnv.hoist_unstable_nodes`), since the dispatch targets inside it were
+selected there. Each node's body is walked once, when a query first reaches
+it, and instability flows back along the recorded references, so the graph
+costs one walk of the bodies it covers however many roots consult it. After
+pruning, checking evaluates every global definition against the graph and
+records the nodes of the unstable ones for importers.
 
 Top-level roots are requested and evaluated whether or not their evaluation can
 reach code checking replaced with a runtime error, and the decision is made by

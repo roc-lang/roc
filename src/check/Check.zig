@@ -5160,10 +5160,6 @@ fn hoistExprInvalidated(self: *const Self, expr: CIR.Expr.Idx) bool {
     return self.hoist_invalidated_exprs.contains(expr);
 }
 
-fn moduleHoistExprInvalidated(self: *const Self, module: *const ModuleEnv, expr: CIR.Expr.Idx) bool {
-    return module == self.cir and self.hoistExprInvalidated(expr);
-}
-
 fn selectedHoistedRootInvalidated(self: *const Self, root_index: u32) bool {
     if (root_index >= self.selected_hoisted_roots.items.len) {
         std.debug.panic("check invariant violated: hoist-known selected root index out of range", .{});
@@ -5377,7 +5373,10 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
             if (record.ext) |ext| try visitor.expr(ext);
         },
         .e_block => |block| {
-            for (self.cir.store.sliceStatements(block.stmts)) |statement| try self.visitStatementChildren(statement, visitor);
+            for (self.cir.store.sliceStatements(block.stmts)) |statement| {
+                if (@hasDecl(@TypeOf(visitor), "statement")) visitor.statement(statement);
+                try self.visitStatementChildren(statement, visitor);
+            }
             try visitor.expr(block.final_expr);
         },
         .e_tag => |tag| for (self.cir.store.sliceExpr(tag.args)) |child| try visitor.expr(child),
@@ -11486,6 +11485,9 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     var keep_oracle = try HoistedRootKeepOracle.init(self.gpa, self.selected_hoisted_roots.items, keep_roots);
     defer keep_oracle.deinit(self.gpa);
 
+    var reach = try self.initHoistReachGraph();
+    defer reach.deinit(self.gpa);
+
     var kept_count: usize = 0;
     var kept_expr_count: u32 = 0;
     var kept_pattern_count: u32 = 0;
@@ -11502,7 +11504,7 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
         const deps = intrinsic and (self.selectedHoistedRootIsTopLevel(root.*) or
             root.body == .pattern_error or
             root.body == .valueless_binding or
-            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle));
+            try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, &reach));
         if (!intrinsic) continue;
         if (!deps) continue;
 
@@ -11582,7 +11584,8 @@ fn pruneSelectedHoistedRootsAfterSolving(self: *Self) Allocator.Error!void {
     std.debug.assert(kept == kept_count);
     self.selected_hoisted_roots.shrinkRetainingCapacity(kept);
     self.debugAssertHoistSelectionConsistent();
-    try self.debugVerifyKeptHoistedRootDependencies();
+    try self.debugVerifyKeptHoistedRootDependencies(&reach);
+    try self.publishHoistUnstableDefs(&reach);
 }
 
 /// Whether evaluating a selected root's expression evaluates an expression
@@ -11670,7 +11673,7 @@ fn hoistedRootIsIntrinsicallyKept(
     return try self.varIsConcreteHoistedConstType(type_var);
 }
 
-fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
+fn debugVerifyKeptHoistedRootDependencies(self: *Self, reach: *HoistReachGraph) Allocator.Error!void {
     if (builtin.mode != .Debug) return;
 
     const root_count = self.selected_hoisted_roots.items.len;
@@ -11694,7 +11697,7 @@ fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
         // the optional-hoist dependency predicate.
         if (self.selectedHoistedRootIsTopLevel(root)) continue;
         keep_oracle.current_root_index = i;
-        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle)) {
+        if (!try self.hoistedRootDependenciesAreKept(root.expr, &keep_oracle, reach)) {
             hoistSelectionInvariant("kept selected hoisted root has unavailable dependency");
         }
     }
@@ -11886,27 +11889,11 @@ const HoistedDependencyBinding = struct {
     kind: HoistedDependencyBindingKind,
 };
 
-const HoistedCallableKey = struct {
-    module_addr: usize,
-    def: CIR.Def.Idx,
-};
-
-const HoistedCallableState = enum {
-    visiting,
-    stable,
-    unstable,
-};
-
 const HoistedDependencyContext = struct {
     bindings: std.ArrayListUnmanaged(HoistedDependencyBinding) = .empty,
-    callable_stability: std.AutoHashMapUnmanaged(HoistedCallableKey, HoistedCallableState) = .{},
-    /// Stability of promoted local procedures, keyed by their lambda.
-    local_procedure_stability: std.AutoHashMapUnmanaged(CIR.Expr.Idx, HoistedCallableState) = .{},
 
     fn deinit(self: *@This(), allocator: Allocator) void {
         self.bindings.deinit(allocator);
-        self.callable_stability.deinit(allocator);
-        self.local_procedure_stability.deinit(allocator);
     }
 
     fn mark(self: *const @This()) usize {
@@ -12003,6 +11990,7 @@ fn hoistedRootDependenciesAreKept(
     self: *Self,
     expr: CIR.Expr.Idx,
     keep_oracle: *const HoistedRootKeepOracle,
+    reach: *HoistReachGraph,
 ) Allocator.Error!bool {
     var context = HoistedDependencyContext{};
     defer context.deinit(self.gpa);
@@ -12012,7 +12000,7 @@ fn hoistedRootDependenciesAreKept(
     while (pending.pop()) |step| {
         const start = pending.items.len;
         const kept = switch (step) {
-            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, &pending),
+            .expr => |child| try self.hoistedRootExprStep(child, &context, keep_oracle, reach, &pending),
             .statement => |statement| try self.hoistedRootStatementStep(statement, &pending),
             // Binders introduced and consumed inside this root are transient
             // evaluation state. They need neither separate selected roots nor
@@ -12073,6 +12061,7 @@ fn hoistedRootExprStep(
     expr: CIR.Expr.Idx,
     context: *HoistedDependencyContext,
     keep_oracle: *const HoistedRootKeepOracle,
+    reach: *HoistReachGraph,
     pending: *std.ArrayListUnmanaged(HoistedKeptStep),
 ) Allocator.Error!bool {
     if (self.hoistExprInvalidated(expr)) return false;
@@ -12081,6 +12070,9 @@ fn hoistedRootExprStep(
     // its own method, and a lookup supplies the evidence of the scheme it
     // instantiates; either may need an unpromoted local procedure's context.
     if (self.contextual_local_dispatch_exprs.contains(expr)) return false;
+    // Everything this expression can call, read, or dispatch to must be safe
+    // to evaluate at compile time.
+    if (!try self.hoistReachReferencesStable(reach, expr)) return false;
 
     const gpa = self.gpa;
     return switch (self.cir.store.getExpr(expr)) {
@@ -12153,7 +12145,6 @@ fn hoistedRootExprStep(
             break :blk true;
         },
         .e_call => |call| blk: {
-            if (!try self.hoistedRootCalleeAllowsStoredConst(call.func, context)) break :blk false;
             try pending.append(gpa, .{ .expr = call.func });
             break :blk try self.pushHoistedKeptExprs(pending, call.args);
         },
@@ -12229,274 +12220,364 @@ const HoistedCallableDef = struct {
     def: CIR.Def.Idx,
 };
 
-fn hoistedRootCalleeAllowsStoredConst(
-    self: *Self,
-    callee: CIR.Expr.Idx,
-    context: *HoistedDependencyContext,
-) Allocator.Error!bool {
-    var scan = StoredConstScan{ .check = self, .context = context };
-    return StoredConstScan.Eval.run(self.gpa, &scan, .{ .callee = .{ .module = self.cir, .callee = callee } });
-}
-
-/// Whether evaluating an expression, and every callee it can reach, is
-/// stable enough to store as a compile-time constant. Callee bodies are
-/// marked `visiting` while their own walk runs and settled after it, so a
-/// callee reached again through recursion counts as stable.
-const StoredConstScan = struct {
-    check: *Self,
-    context: *HoistedDependencyContext,
-
-    const Leaf = union(enum) {
-        expr: struct { module: *const ModuleEnv, expr: CIR.Expr.Idx },
-        statement: struct { module: *const ModuleEnv, statement: CIR.Statement.Idx },
-        callee: struct { module: *const ModuleEnv, callee: CIR.Expr.Idx },
-        /// A promoted local procedure's body is held to the same stability
-        /// rule as a top-level callee's.
-        local_procedure: CIR.Expr.Idx,
-        callable_def: HoistedCallableDef,
+/// The definitions, local procedures, and static-dispatch edges a hoisted
+/// root's evaluation can reach, and whether each can reach code a stored
+/// compile-time constant must not evaluate (design.md "Hoisted Root
+/// Reachability"). A node is unstable when its own body contains such code,
+/// or when anything it references is unstable. Each node's body is walked
+/// once, the first time a query reaches it, and instability flows back along
+/// the recorded references, so the whole graph costs one walk of the bodies
+/// it covers however many roots consult it.
+const HoistReachGraph = struct {
+    const Key = union(enum) {
+        /// A module-global definition of this module.
+        def: CIR.Def.Idx,
+        /// The declared expression of a local procedure or local method.
+        local: CIR.Expr.Idx,
+        /// A static-dispatch edge: its selected target and the edges
+        /// derived from it.
+        dispatch: Var,
     };
-    const Eval = collections.AnyAll.Evaluation(Leaf, StoredConstScan);
+    const no_dependent = std.math.maxInt(u32);
+    const Dependent = struct { node: u32, next: u32 };
+    /// A dispatch edge an expression introduces or instantiates, or a
+    /// derivation child of a dispatch edge, sorted by `owner`.
+    const EdgeOwner = struct { owner: u32, fn_var: Var };
 
-    fn addExpr(items: Eval.Items, module: *const ModuleEnv, expr: CIR.Expr.Idx) Allocator.Error!void {
-        try items.add(.{ .expr = .{ .module = module, .expr = expr } });
+    ids: std.AutoHashMapUnmanaged(Key, u32) = .{},
+    keys: std.ArrayListUnmanaged(Key) = .empty,
+    unstable: std.ArrayListUnmanaged(bool) = .empty,
+    first_dependent: std.ArrayListUnmanaged(u32) = .empty,
+    dependents: std.ArrayListUnmanaged(Dependent) = .empty,
+    unwalked: std.ArrayListUnmanaged(u32) = .empty,
+    newly_unstable: std.ArrayListUnmanaged(u32) = .empty,
+    walk: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
+    /// References of the expression a body walk is at.
+    refs: std.ArrayListUnmanaged(Key) = .empty,
+    /// References of the root expression a query is at, which stay put while
+    /// the query walks bodies.
+    query_refs: std.ArrayListUnmanaged(Key) = .empty,
+    /// Every pattern node a module-global definition binds, to its definition.
+    def_by_pattern: std.AutoHashMapUnmanaged(CIR.Pattern.Idx, CIR.Def.Idx) = .{},
+    /// Declared expressions of promoted local procedures, which are nodes of
+    /// their own rather than part of the body that declares them.
+    promoted_locals: std.AutoHashMapUnmanaged(CIR.Expr.Idx, void) = .{},
+    expr_edges: std.ArrayListUnmanaged(EdgeOwner) = .empty,
+    derived_edges: std.ArrayListUnmanaged(EdgeOwner) = .empty,
+
+    fn deinit(self: *HoistReachGraph, allocator: Allocator) void {
+        self.ids.deinit(allocator);
+        self.keys.deinit(allocator);
+        self.unstable.deinit(allocator);
+        self.first_dependent.deinit(allocator);
+        self.dependents.deinit(allocator);
+        self.unwalked.deinit(allocator);
+        self.newly_unstable.deinit(allocator);
+        self.walk.deinit(allocator);
+        self.refs.deinit(allocator);
+        self.query_refs.deinit(allocator);
+        self.def_by_pattern.deinit(allocator);
+        self.promoted_locals.deinit(allocator);
+        self.expr_edges.deinit(allocator);
+        self.derived_edges.deinit(allocator);
     }
 
-    fn addExprSpan(items: Eval.Items, module: *const ModuleEnv, span: CIR.Expr.Span) Allocator.Error!void {
-        for (module.store.sliceExpr(span)) |expr| try addExpr(items, module, expr);
+    fn lessThan(_: void, a: EdgeOwner, b: EdgeOwner) bool {
+        return a.owner < b.owner;
     }
 
-    fn stateValue(state: HoistedCallableState) Eval.Expansion {
-        return .{ .value = switch (state) {
-            .stable, .visiting => true,
-            .unstable => false,
-        } };
-    }
-
-    pub fn enter(scan: *StoredConstScan, items: Eval.Items, leaf: Leaf) Allocator.Error!Eval.Expansion {
-        const self = scan.check;
-        switch (leaf) {
-            .callee => |callee| {
-                if (self.hoistedPromotedLocalProcedureForExpr(callee.module, callee.callee)) |lambda| {
-                    try items.add(.{ .local_procedure = lambda });
-                } else if (self.hoistedCallableDefForExpr(callee.module, callee.callee)) |callable_def| {
-                    try items.add(.{ .callable_def = callable_def });
-                } else return .{ .value = true };
-                return .{ .group = .all };
-            },
-            .local_procedure => |lambda| {
-                if (scan.context.local_procedure_stability.get(lambda)) |state| return stateValue(state);
-                try scan.context.local_procedure_stability.put(self.gpa, lambda, .visiting);
-                try addExpr(items, self.cir, lambda);
-                return .{ .group = .all };
-            },
-            .callable_def => |callable_def| {
-                const key = HoistedCallableKey{
-                    .module_addr = @intFromPtr(callable_def.module),
-                    .def = callable_def.def,
-                };
-                if (scan.context.callable_stability.get(key)) |state| return stateValue(state);
-                try scan.context.callable_stability.put(self.gpa, key, .visiting);
-                const def = callable_def.module.store.getDef(callable_def.def);
-                try addExpr(items, callable_def.module, def.expr);
-                return .{ .group = .all };
-            },
-            .statement => |statement| {
-                const module = statement.module;
-                switch (module.store.getStatement(statement.statement)) {
-                    .s_decl => |decl| try addExpr(items, module, decl.expr),
-                    .s_var => |var_stmt| try addExpr(items, module, var_stmt.expr),
-                    .s_reassign => |reassign| try addExpr(items, module, reassign.expr),
-                    .s_expr => |expr_stmt| try addExpr(items, module, expr_stmt.expr),
-                    .s_dbg,
-                    .s_expect,
-                    => return .{ .value = false },
-                    .s_for => |for_stmt| {
-                        try addExpr(items, module, for_stmt.expr);
-                        try addExpr(items, module, for_stmt.body);
-                    },
-                    .s_while => |while_stmt| {
-                        try addExpr(items, module, while_stmt.cond);
-                        try addExpr(items, module, while_stmt.body);
-                    },
-                    .s_infinite_loop => |loop_stmt| {
-                        try addExpr(items, module, loop_stmt.cond);
-                        try addExpr(items, module, loop_stmt.body);
-                    },
-                    .s_breakable_loop => |loop_stmt| {
-                        try addExpr(items, module, loop_stmt.cond);
-                        try addExpr(items, module, loop_stmt.body);
-                    },
-                    .s_return => |ret| try addExpr(items, module, ret.expr),
-                    .s_var_uninitialized,
-                    .s_import,
-                    .s_alias_decl,
-                    .s_nominal_decl,
-                    .s_where_alias_decl,
-                    .s_type_anno,
-                    .s_type_var_alias,
-                    .s_crash,
-                    .s_break,
-                    .s_runtime_error,
-                    => return .{ .value = true },
-                }
-                return .{ .group = .all };
-            },
-            .expr => |expr_leaf| return scan.enterExpr(items, expr_leaf.module, expr_leaf.expr),
+    /// The dispatch edges `owner` names in a list sorted by owner.
+    fn edgesOf(list: []const EdgeOwner, owner: u32) []const EdgeOwner {
+        var low: usize = 0;
+        var high: usize = list.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            if (list[mid].owner < owner) low = mid + 1 else high = mid;
         }
+        var end = low;
+        while (end < list.len and list[end].owner == owner) end += 1;
+        return list[low..end];
     }
 
-    fn enterExpr(scan: *StoredConstScan, items: Eval.Items, module: *const ModuleEnv, expr: CIR.Expr.Idx) Allocator.Error!Eval.Expansion {
-        const self = scan.check;
-        if (self.moduleHoistExprInvalidated(module, expr)) return .{ .value = false };
-        switch (module.store.getExpr(expr)) {
-            .e_run_low_level => |run| {
-                if (run.op == .dict_pseudo_seed) return .{ .value = false };
-                try addExprSpan(items, module, run.args);
-            },
-            .e_lookup_local,
-            .e_lookup_external,
-            .e_lookup_associated_local,
-            .e_lookup_associated,
-            .e_lookup_associated_resolved,
-            .e_lookup_required,
-            .e_str_segment,
-            .e_bytes_literal,
-            .e_num,
-            .e_num_from_numeral,
-            .e_frac_f32,
-            .e_frac_f64,
-            .e_dec,
-            .e_dec_small,
-            .e_typed_int,
-            .e_typed_frac,
-            .e_typed_num_from_numeral,
-            .e_empty_list,
-            .e_empty_record,
-            .e_zero_argument_tag,
-            .e_ellipsis,
-            .e_anno_only,
-            .e_derived_method,
-            .e_crash,
-            .e_hosted_lambda,
-            => return .{ .value = true },
-            .e_str => |str| try addExprSpan(items, module, str.span),
-            .e_list => |list| try addExprSpan(items, module, list.elems),
-            .e_tuple => |tuple| try addExprSpan(items, module, tuple.elems),
-            .e_block => |block| {
-                for (module.store.sliceStatements(block.stmts)) |statement| {
-                    try items.add(.{ .statement = .{ .module = module, .statement = statement } });
-                }
-                try addExpr(items, module, block.final_expr);
-            },
-            .e_match => |match| {
-                try addExpr(items, module, match.cond);
-                for (module.store.sliceMatchBranches(match.branches)) |branch_id| {
-                    const branch = module.store.getMatchBranch(branch_id);
-                    if (branch.guard) |guard| try addExpr(items, module, guard);
-                    try addExpr(items, module, branch.value);
-                }
-            },
-            .e_if => |if_expr| {
-                for (module.store.sliceIfBranches(if_expr.branches)) |branch_id| {
-                    const branch = module.store.getIfBranch(branch_id);
-                    try addExpr(items, module, branch.cond);
-                    try addExpr(items, module, branch.body);
-                }
-                try addExpr(items, module, if_expr.final_else);
-            },
-            .e_call => |call| {
-                try items.add(.{ .callee = .{ .module = module, .callee = call.func } });
-                try addExpr(items, module, call.func);
-                try addExprSpan(items, module, call.args);
-            },
-            .e_method_call => |call| {
-                try addExpr(items, module, call.receiver);
-                try addExprSpan(items, module, call.args);
-            },
-            .e_dispatch_call => |call| {
-                try addExpr(items, module, call.receiver);
-                try addExprSpan(items, module, call.args);
-            },
-            .e_record => |record| {
-                if (record.ext) |ext_expr| try addExpr(items, module, ext_expr);
-                for (module.store.sliceRecordFields(record.fields)) |field_id| {
-                    try addExpr(items, module, module.store.getRecordField(field_id).value);
-                }
-            },
-            .e_tag => |tag| try addExprSpan(items, module, tag.args),
-            .e_nominal => |nominal| try addExpr(items, module, nominal.backing_expr),
-            .e_nominal_external => |nominal| try addExpr(items, module, nominal.backing_expr),
-            .e_binop => |binop| {
-                try addExpr(items, module, binop.lhs);
-                try addExpr(items, module, binop.rhs);
-            },
-            .e_unary_minus => |unary| try addExpr(items, module, unary.expr),
-            .e_field_access => |field| try addExpr(items, module, field.receiver),
-            .e_interpolation => |interpolation| {
-                try addExpr(items, module, interpolation.first);
-                try addExprSpan(items, module, interpolation.parts);
-            },
-            .e_structural_eq => |eq| {
-                try addExpr(items, module, eq.lhs);
-                try addExpr(items, module, eq.rhs);
-            },
-            .e_structural_hash => |h| {
-                try addExpr(items, module, h.value);
-                try addExpr(items, module, h.hasher);
-            },
-            .e_method_eq => |eq| {
-                try addExpr(items, module, eq.lhs);
-                try addExpr(items, module, eq.rhs);
-            },
-            .e_type_method_call => |call| try addExprSpan(items, module, call.args),
-            .e_type_dispatch_call => |call| try addExprSpan(items, module, call.args),
-            .e_tuple_access => |access| try addExpr(items, module, access.tuple),
-            .e_dbg,
-            .e_expect_err,
-            .e_expect,
-            .e_break,
-            => return .{ .value = false },
-            // Checking already reported the problem this code has. Evaluating a
-            // root that reaches it would report that problem a second time, so
-            // the poison reaches every root whose evaluation can call into it.
-            .e_runtime_error => return .{ .value = false },
-            .e_for => |for_expr| {
-                try addExpr(items, module, for_expr.expr);
-                try addExpr(items, module, for_expr.body);
-            },
-            .e_return => |ret| try addExpr(items, module, ret.expr),
-            .e_closure => |closure| try addExpr(items, module, closure.lambda_idx),
-            .e_lambda => |lambda| try addExpr(items, module, lambda.body),
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+    fn node(self: *HoistReachGraph, allocator: Allocator, key: Key) Allocator.Error!u32 {
+        const entry = try self.ids.getOrPut(allocator, key);
+        if (entry.found_existing) return entry.value_ptr.*;
+        const id: u32 = @intCast(self.keys.items.len);
+        entry.value_ptr.* = id;
+        try self.keys.append(allocator, key);
+        try self.unstable.append(allocator, false);
+        try self.first_dependent.append(allocator, no_dependent);
+        try self.unwalked.append(allocator, id);
+        return id;
+    }
+
+    fn markUnstable(self: *HoistReachGraph, allocator: Allocator, id: u32) Allocator.Error!void {
+        if (self.unstable.items[id]) return;
+        self.unstable.items[id] = true;
+        try self.newly_unstable.append(allocator, id);
+    }
+
+    /// Record that `dependent` reaches `target`. Returns whether `dependent`
+    /// is now known to be unstable.
+    fn link(self: *HoistReachGraph, allocator: Allocator, dependent: u32, target: u32) Allocator.Error!bool {
+        if (self.unstable.items[target]) {
+            try self.markUnstable(allocator, dependent);
+            return true;
         }
-        return .{ .group = .all };
+        try self.dependents.append(allocator, .{ .node = dependent, .next = self.first_dependent.items[target] });
+        self.first_dependent.items[target] = @intCast(self.dependents.items.len - 1);
+        return false;
     }
 
-    pub fn exit(scan: *StoredConstScan, leaf: Leaf, result: ?bool) Allocator.Error!void {
-        const stable = result orelse return;
-        const state: HoistedCallableState = if (stable) .stable else .unstable;
-        switch (leaf) {
-            .local_procedure => |lambda| scan.context.local_procedure_stability.getPtr(lambda).?.* = state,
-            .callable_def => |callable_def| scan.context.callable_stability.getPtr(.{
-                .module_addr = @intFromPtr(callable_def.module),
-                .def = callable_def.def,
-            }).?.* = state,
-            .expr, .statement, .callee => {},
+    /// Spread instability to everything that reaches a newly unstable node.
+    fn propagate(self: *HoistReachGraph, allocator: Allocator) Allocator.Error!void {
+        while (self.newly_unstable.pop()) |id| {
+            var edge = self.first_dependent.items[id];
+            while (edge != no_dependent) : (edge = self.dependents.items[edge].next) {
+                try self.markUnstable(allocator, self.dependents.items[edge].node);
+            }
         }
     }
 };
 
-/// The lambda of the promoted local procedure a callee expression of this
-/// module names, if it names one.
-fn hoistedPromotedLocalProcedureForExpr(self: *Self, module: *const ModuleEnv, callee: CIR.Expr.Idx) ?CIR.Expr.Idx {
-    if (module != self.cir) return null;
-    const expr = module.store.getExpr(callee);
-    if (expr != .e_lookup_local) return null;
-    const pattern = expr.e_lookup_local.pattern_idx;
-    if (!self.promoted_local_procedure_patterns.contains(pattern)) return null;
-    const candidate = self.local_procedure_candidates.get(pattern) orelse
-        hoistSelectionInvariant("promoted local procedure had no candidate record");
-    return candidate.expr;
+/// Index what the reach graph consults about this module's definitions,
+/// promoted local procedures, and dispatch edges.
+fn initHoistReachGraph(self: *Self) Allocator.Error!HoistReachGraph {
+    var graph = HoistReachGraph{};
+    errdefer graph.deinit(self.gpa);
+    var patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
+    defer patterns.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        try appendPatternNodes(self.cir, self.gpa, self.cir.store.getDef(def_idx).pattern, &patterns);
+        for (patterns.items) |pattern| try graph.def_by_pattern.put(self.gpa, pattern, def_idx);
+        patterns.clearRetainingCapacity();
+    }
+    for (self.promoted_local_procedures.items) |procedure| {
+        try graph.promoted_locals.put(self.gpa, procedure.expr, {});
+    }
+    for (self.dispatch_target_instantiations.items) |instantiation| {
+        const expr = instantiation.intro_expr orelse continue;
+        try graph.expr_edges.append(self.gpa, .{ .owner = @intFromEnum(expr), .fn_var = instantiation.constraint_fn_var });
+    }
+    // A lookup that instantiated a scheme requirement supplies its evidence,
+    // so evaluating the lookup evaluates the dispatch.
+    for (self.instantiation_dispatchers.items) |dispatcher| {
+        const expr = dispatcher.instantiation_expr orelse continue;
+        for (self.types.sliceStaticDispatchConstraints(dispatcher.constraints)) |constraint| {
+            try graph.expr_edges.append(self.gpa, .{ .owner = @intFromEnum(expr), .fn_var = constraint.fn_var });
+        }
+    }
+    for (self.instantiated_literal_conversion_uses.items) |copied| {
+        try graph.expr_edges.append(self.gpa, .{ .owner = @intFromEnum(copied.use_expr), .fn_var = copied.fn_var });
+    }
+    for (self.dispatch_derivations.items) |derivation| {
+        try graph.derived_edges.append(self.gpa, .{ .owner = @intFromEnum(derivation.parent_fn_var), .fn_var = derivation.child_fn_var });
+    }
+    std.mem.sortUnstable(HoistReachGraph.EdgeOwner, graph.expr_edges.items, {}, HoistReachGraph.lessThan);
+    std.mem.sortUnstable(HoistReachGraph.EdgeOwner, graph.derived_edges.items, {}, HoistReachGraph.lessThan);
+    return graph;
+}
+
+/// Whether evaluating `key`, or calling the value it produces, can reach
+/// code a stored compile-time constant must not evaluate.
+fn hoistReachUnstable(self: *Self, graph: *HoistReachGraph, key: HoistReachGraph.Key) Allocator.Error!bool {
+    const id = try graph.node(self.gpa, key);
+    try self.settleHoistReachGraph(graph);
+    return graph.unstable.items[id];
+}
+
+/// Whether everything one expression of a hoisted root references (the
+/// definitions and procedures it reads or calls, and the dispatch edges it
+/// introduces) is stable. Its subexpressions are the root walk's own.
+fn hoistReachReferencesStable(self: *Self, graph: *HoistReachGraph, expr: CIR.Expr.Idx) Allocator.Error!bool {
+    graph.query_refs.clearRetainingCapacity();
+    if (!try self.collectHoistReachReferences(graph, expr, &graph.query_refs)) return false;
+    for (graph.query_refs.items) |key| {
+        if (try self.hoistReachUnstable(graph, key)) return false;
+    }
+    return true;
+}
+
+/// Walk every node discovered but not yet walked, then spread instability.
+fn settleHoistReachGraph(self: *Self, graph: *HoistReachGraph) Allocator.Error!void {
+    while (graph.unwalked.items.len != 0) {
+        while (graph.unwalked.pop()) |id| try self.walkHoistReachNode(graph, id);
+        try graph.propagate(self.gpa);
+    }
+}
+
+fn walkHoistReachNode(self: *Self, graph: *HoistReachGraph, id: u32) Allocator.Error!void {
+    switch (graph.keys.items[id]) {
+        .def => |def_idx| try self.walkHoistReachBody(graph, id, self.cir.store.getDef(def_idx).expr),
+        .local => |expr| try self.walkHoistReachBody(graph, id, expr),
+        .dispatch => |fn_var| {
+            graph.refs.clearRetainingCapacity();
+            if (self.dispatch_target_instantiation_by_fn_var.get(fn_var)) |raw_index| {
+                const instantiation = self.dispatch_target_instantiations.items[raw_index];
+                const binding = instantiation.target_binding;
+                if (instantiation.target_env != self.cir) {
+                    if (instantiation.target_env.hoistUnstableNode(ModuleEnv.nodeIdxFrom(binding.def_idx))) {
+                        return graph.markUnstable(self.gpa, id);
+                    }
+                } else if (self.cir.store.nodes.get(binding.type_node_idx).tag == .statement_decl) {
+                    // A local method: the local procedure its binding reaches.
+                    if (try self.localProcedureTargetPattern(self.cir, binding)) |pattern| {
+                        if (try self.localDeclExprForPattern(pattern)) |target| {
+                            try graph.refs.append(self.gpa, .{ .local = target });
+                        }
+                    }
+                } else {
+                    try graph.refs.append(self.gpa, .{ .def = binding.def_idx });
+                }
+            }
+            for (HoistReachGraph.edgesOf(graph.derived_edges.items, @intFromEnum(fn_var))) |child| {
+                try graph.refs.append(self.gpa, .{ .dispatch = child.fn_var });
+            }
+            for (graph.refs.items) |key| {
+                const target = try graph.node(self.gpa, key);
+                if (try graph.link(self.gpa, id, target)) return;
+            }
+        },
+    }
+}
+
+/// Walk one node's body. A promoted local procedure declared inside it is a
+/// node of its own, reached by reference.
+fn walkHoistReachBody(self: *Self, graph: *HoistReachGraph, id: u32, body: CIR.Expr.Idx) Allocator.Error!void {
+    const Visitor = struct {
+        graph: *HoistReachGraph,
+        gpa: Allocator,
+        check: *const Self,
+        stable: *bool,
+
+        pub fn expr(visitor: @This(), child: CIR.Expr.Idx) Allocator.Error!void {
+            try visitor.graph.walk.append(visitor.gpa, child);
+        }
+
+        pub fn statement(visitor: @This(), statement_idx: CIR.Statement.Idx) void {
+            switch (visitor.check.cir.store.getStatement(statement_idx)) {
+                .s_dbg, .s_expect => visitor.stable.* = false,
+                .s_decl, .s_var, .s_reassign, .s_var_uninitialized, .s_expr, .s_for, .s_while, .s_infinite_loop, .s_breakable_loop, .s_return, .s_crash, .s_break, .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_runtime_error => {},
+            }
+        }
+
+        pub fn boundPattern(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        pub fn reassignTarget(_: @This(), _: CIR.Pattern.Idx) Allocator.Error!void {}
+
+        pub fn returnTarget(_: @This(), _: CIR.Expr.Idx) Allocator.Error!void {}
+    };
+    graph.walk.clearRetainingCapacity();
+    try graph.walk.append(self.gpa, body);
+    while (graph.walk.pop()) |expr| {
+        graph.refs.clearRetainingCapacity();
+        if (expr != body and graph.promoted_locals.contains(expr)) {
+            try graph.refs.append(self.gpa, .{ .local = expr });
+        } else {
+            if (!self.hoistReachExprBaseStable(expr) or !try self.collectHoistReachReferences(graph, expr, &graph.refs)) {
+                return graph.markUnstable(self.gpa, id);
+            }
+            var stable = true;
+            try self.visitExprChildren(expr, Visitor{ .graph = graph, .gpa = self.gpa, .check = self, .stable = &stable });
+            if (!stable) return graph.markUnstable(self.gpa, id);
+        }
+        // Linking may append nodes but never walks, so `walk` stays this body's.
+        for (graph.refs.items) |key| {
+            const target = try graph.node(self.gpa, key);
+            if (try graph.link(self.gpa, id, target)) return;
+        }
+    }
+}
+
+/// Whether one expression of a reachable body is itself safe to evaluate at
+/// compile time, apart from what it references. Checking already reported
+/// the problem of code it replaced with a runtime error, or of a scheme
+/// instantiation whose requirement another expression rejected; evaluating a
+/// root that reaches it would report that problem a second time.
+fn hoistReachExprBaseStable(self: *Self, expr: CIR.Expr.Idx) bool {
+    if (self.hoistExprInvalidated(expr)) return false;
+    if (self.rejected_instantiation_exprs.contains(expr)) return false;
+    return switch (self.cir.store.getExpr(expr)) {
+        .e_dbg, .e_expect, .e_expect_err, .e_break, .e_runtime_error => false,
+        .e_run_low_level => |run| run.op != .dict_pseudo_seed,
+        .e_lookup_local, .e_lookup_external, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_str_segment, .e_bytes_literal, .e_num, .e_num_from_numeral, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_derived_method, .e_crash, .e_hosted_lambda, .e_str, .e_list, .e_tuple, .e_block, .e_match, .e_if, .e_call, .e_method_call, .e_dispatch_call, .e_record, .e_tag, .e_nominal, .e_nominal_external, .e_binop, .e_unary_minus, .e_field_access, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_for, .e_return, .e_closure, .e_lambda => true,
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+    };
+}
+
+/// Append to `out` what evaluating one expression reaches beyond its
+/// subexpressions: the module-global definition or promoted local procedure
+/// a lookup reads, and the dispatch edges the expression introduces or
+/// instantiates. A definition of another module is decided by the verdicts
+/// that module published (`ModuleEnv.hoistUnstableNode`); returns false when
+/// such a definition is unstable.
+fn collectHoistReachReferences(
+    self: *Self,
+    graph: *const HoistReachGraph,
+    expr: CIR.Expr.Idx,
+    out: *std.ArrayListUnmanaged(HoistReachGraph.Key),
+) Allocator.Error!bool {
+    for (HoistReachGraph.edgesOf(graph.expr_edges.items, @intFromEnum(expr))) |edge| {
+        try out.append(self.gpa, .{ .dispatch = edge.fn_var });
+    }
+    switch (self.cir.store.getExpr(expr)) {
+        .e_lookup_local => |lookup| {
+            if (self.promoted_local_procedure_patterns.contains(lookup.pattern_idx)) {
+                const candidate = self.local_procedure_candidates.get(lookup.pattern_idx) orelse
+                    hoistSelectionInvariant("promoted local procedure had no candidate record");
+                try out.append(self.gpa, .{ .local = candidate.expr });
+            } else if (graph.def_by_pattern.get(lookup.pattern_idx)) |def_idx| {
+                try out.append(self.gpa, .{ .def = def_idx });
+            }
+        },
+        .e_lookup_external => |external| {
+            const imported = self.hoistedImportedModule(self.cir, external.module_idx) orelse return true;
+            if (imported.hoistUnstableNode(@enumFromInt(external.target_node_idx))) return false;
+        },
+        .e_lookup_associated_resolved => |resolved| {
+            const target = self.moduleEnvForIdentity(self.cir, resolved.module_identity).env;
+            if (target == self.cir) {
+                try out.append(self.gpa, .{ .def = resolved.target_def_idx });
+            } else if (target.hoistUnstableNode(ModuleEnv.nodeIdxFrom(resolved.target_def_idx))) return false;
+        },
+        .e_dispatch_call => |call| try out.append(self.gpa, .{ .dispatch = call.constraint_fn_var }),
+        .e_method_eq => |eq| try out.append(self.gpa, .{ .dispatch = eq.constraint_fn_var }),
+        .e_type_dispatch_call => |call| try out.append(self.gpa, .{ .dispatch = call.constraint_fn_var }),
+        .e_interpolation => |interpolation| if (interpolation.constraint_fn_var) |fn_var| {
+            try out.append(self.gpa, .{ .dispatch = fn_var });
+        },
+        .e_lookup_associated_local, .e_lookup_associated, .e_lookup_required, .e_str_segment, .e_bytes_literal, .e_num, .e_num_from_numeral, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_empty_list, .e_empty_record, .e_zero_argument_tag, .e_ellipsis, .e_anno_only, .e_derived_method, .e_crash, .e_hosted_lambda, .e_str, .e_list, .e_tuple, .e_block, .e_match, .e_if, .e_call, .e_method_call, .e_record, .e_tag, .e_nominal, .e_nominal_external, .e_binop, .e_unary_minus, .e_field_access, .e_structural_eq, .e_structural_hash, .e_type_method_call, .e_tuple_access, .e_for, .e_return, .e_closure, .e_lambda, .e_dbg, .e_expect, .e_expect_err, .e_break, .e_runtime_error, .e_run_low_level => {},
+        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+    }
+    return true;
+}
+
+/// Publish, for importers, the nodes of every module-global definition whose
+/// evaluation can reach code a stored compile-time constant must not
+/// evaluate. Importers cannot walk these bodies themselves: the dispatch
+/// targets inside them were selected by this module's checking.
+fn publishHoistUnstableDefs(self: *Self, graph: *HoistReachGraph) Allocator.Error!void {
+    var nodes: std.ArrayListUnmanaged(u32) = .empty;
+    defer nodes.deinit(self.gpa);
+    var patterns: std.ArrayListUnmanaged(CIR.Pattern.Idx) = .empty;
+    defer patterns.deinit(self.gpa);
+    for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
+        if (!try self.hoistReachUnstable(graph, .{ .def = def_idx })) continue;
+        const def = self.cir.store.getDef(def_idx);
+        try nodes.append(self.gpa, @intFromEnum(ModuleEnv.nodeIdxFrom(def_idx)));
+        try nodes.append(self.gpa, @intFromEnum(ModuleEnv.nodeIdxFrom(def.expr)));
+        patterns.clearRetainingCapacity();
+        try appendPatternNodes(self.cir, self.gpa, def.pattern, &patterns);
+        for (patterns.items) |pattern| try nodes.append(self.gpa, @intFromEnum(ModuleEnv.nodeIdxFrom(pattern)));
+    }
+    std.mem.sortUnstable(u32, nodes.items, {}, std.sort.asc(u32));
+    var distinct: usize = 0;
+    for (nodes.items) |node| {
+        if (distinct != 0 and nodes.items[distinct - 1] == node) continue;
+        nodes.items[distinct] = node;
+        distinct += 1;
+    }
+    try self.cir.recordHoistUnstableNodes(nodes.items[0..distinct]);
 }
 
 fn hoistedCallableDefForExpr(
@@ -12620,59 +12701,69 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
     pending.append(stack_allocator, root) catch return false;
     while (pending.pop()) |current| {
         if (ModuleEnv.nodeIdxFrom(current) == node) return true;
-        switch (module.store.getPattern(current)) {
-            .assign, .var_assign => {},
-            .as => |as_pattern| pending.append(stack_allocator, as_pattern.pattern) catch return false,
-            .applied_tag => |tag| {
-                for (module.store.slicePatterns(tag.args)) |arg| {
-                    pending.append(stack_allocator, arg) catch return false;
-                }
-            },
-            .nominal => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-            .nominal_external => |nominal| pending.append(stack_allocator, nominal.backing_pattern) catch return false,
-            .record_destructure => |record| {
-                for (module.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
-                    const destruct = module.store.getRecordDestruct(destruct_idx);
-                    pending.append(stack_allocator, destruct.kind.toPatternIdx()) catch return false;
-                }
-            },
-            .list => |list| {
-                for (module.store.slicePatterns(list.patterns)) |item| {
-                    pending.append(stack_allocator, item) catch return false;
-                }
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pattern| {
-                        pending.append(stack_allocator, rest_pattern) catch return false;
-                    }
-                }
-            },
-            .tuple => |tuple| {
-                for (module.store.slicePatterns(tuple.patterns)) |item| {
-                    pending.append(stack_allocator, item) catch return false;
-                }
-            },
-            .str_interpolation => |str| {
-                for (0..str.steps.span.len) |offset| {
-                    const step = module.store.getStrPatternStep(str.steps, @intCast(offset));
-                    if (step.capture) |capture| {
-                        pending.append(stack_allocator, capture) catch return false;
-                    }
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-        }
+        appendSubpatterns(module, stack_allocator, current, &pending) catch return false;
     }
     return false;
+}
+
+/// Append `root` and every pattern nested inside it.
+fn appendPatternNodes(
+    module: *const ModuleEnv,
+    allocator: Allocator,
+    root: CIR.Pattern.Idx,
+    out: *std.ArrayListUnmanaged(CIR.Pattern.Idx),
+) Allocator.Error!void {
+    const start = out.items.len;
+    try out.append(allocator, root);
+    var next = start;
+    while (next < out.items.len) : (next += 1) {
+        try appendSubpatterns(module, allocator, out.items[next], out);
+    }
+}
+
+/// Append the patterns directly nested inside `pattern`.
+fn appendSubpatterns(
+    module: *const ModuleEnv,
+    allocator: Allocator,
+    pattern: CIR.Pattern.Idx,
+    out: *std.ArrayList(CIR.Pattern.Idx),
+) Allocator.Error!void {
+    switch (module.store.getPattern(pattern)) {
+        .assign, .var_assign => {},
+        .as => |as_pattern| try out.append(allocator, as_pattern.pattern),
+        .applied_tag => |tag| try out.appendSlice(allocator, module.store.slicePatterns(tag.args)),
+        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
+        .record_destructure => |record| {
+            for (module.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
+                try out.append(allocator, module.store.getRecordDestruct(destruct_idx).kind.toPatternIdx());
+            }
+        },
+        .list => |list| {
+            try out.appendSlice(allocator, module.store.slicePatterns(list.patterns));
+            if (list.rest_info) |rest| {
+                if (rest.pattern) |rest_pattern| try out.append(allocator, rest_pattern);
+            }
+        },
+        .tuple => |tuple| try out.appendSlice(allocator, module.store.slicePatterns(tuple.patterns)),
+        .str_interpolation => |str| {
+            for (0..str.steps.span.len) |offset| {
+                const step = module.store.getStrPatternStep(str.steps, @intCast(offset));
+                if (step.capture) |capture| try out.append(allocator, capture);
+            }
+        },
+        .num_literal,
+        .num_from_numeral_literal,
+        .small_dec_literal,
+        .dec_literal,
+        .frac_f32_literal,
+        .frac_f64_literal,
+        .str_literal,
+        .underscore,
+        .runtime_error,
+        => {},
+        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+    }
 }
 
 fn exprHasDedicatedLiteralConversionRoot(self: *Self, expr: CIR.Expr.Idx) bool {

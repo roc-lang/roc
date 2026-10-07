@@ -2309,3 +2309,199 @@ test "issue 11993 - generic is_eq whose evidence is a rejected capturing local i
 
     try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
+
+const reach_helpers =
+    \\apply : (a -> b), a -> b
+    \\apply = |f, x| f(x)
+    \\
+    \\noisy : I64 -> I64
+    \\noisy = |n| {
+    \\    dbg n
+    \\    n + 1.I64
+    \\}
+    \\
+    \\quiet : I64 -> I64
+    \\quiet = |n| n + 1.I64
+    \\
+    \\Wrap := [Wrap(I64)].{
+    \\    loud = |Wrap(n)| noisy(n)
+    \\    calm = |Wrap(n)| quiet(n)
+    \\}
+    \\
+    \\Outer := [Outer(I64)].{
+    \\    loud = |Outer(n)| Wrap.Wrap(n).loud()
+    \\    calm = |Outer(n)| Wrap.Wrap(n).calm()
+    \\}
+    \\
+    \\
+;
+
+fn expectReachRootCount(comptime body: []const u8, tag: std.meta.Tag(CIR.Expr), expected: usize) TestEnv.TestEnvError!void {
+    var test_env = try TestEnv.init("Test", reach_helpers ++
+        "main = |arg| {\n    x = " ++ body ++ "\n    x + arg\n}\n");
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(expected, countExprRootsByTag(&test_env, tag));
+}
+
+test "hoist roots are not selected for a call whose function argument reaches dbg" {
+    try expectReachRootCount("apply(noisy, 2.I64)", .e_call, 0);
+}
+
+test "hoist roots are selected for a call whose function argument is stable" {
+    try expectReachRootCount("apply(quiet, 2.I64)", .e_call, 1);
+}
+
+test "hoist roots are not selected for a dispatch whose method reaches dbg" {
+    try expectReachRootCount("Wrap.Wrap(2.I64).loud()", .e_dispatch_call, 0);
+}
+
+test "hoist roots are selected for a dispatch whose method is stable" {
+    try expectReachRootCount("Wrap.Wrap(2.I64).calm()", .e_dispatch_call, 1);
+}
+
+test "hoist roots are not selected for a dispatch reaching dbg through a second dispatch" {
+    try expectReachRootCount("Outer.Outer(2.I64).loud()", .e_dispatch_call, 0);
+}
+
+test "hoist roots are selected for a dispatch reaching a stable second dispatch" {
+    try expectReachRootCount("Outer.Outer(2.I64).calm()", .e_dispatch_call, 1);
+}
+
+test "hoist roots are not selected for a call through a stored closure that reaches dbg" {
+    var test_env = try TestEnv.init("Test", reach_helpers ++
+        \\fns = { f: noisy, n: 1.I64 }
+        \\
+        \\main = |arg| {
+        \\    x = (fns.f)(2.I64)
+        \\    x + arg
+        \\}
+    );
+    defer test_env.deinit();
+
+    try test_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "hoist roots are not selected for a call whose callee evaluates a rejected instantiation" {
+    var test_env = try TestEnv.init("Test",
+        \\check_one = |s| {
+        \\    r = Blub.parse(s)
+        \\    Ok(Friendly) == r
+        \\}
+        \\
+        \\outer = |s| apply(check_one, s)
+        \\
+        \\apply : (a -> b), a -> b
+        \\apply = |f, x| f(x)
+        \\
+        \\Blub :: {}.{
+        \\    parse : Str -> Try(a, [])
+        \\        where [
+        \\            a.parser_for : Parser -> (Str -> Try({ value : a, rest : Str }, [])),
+        \\        ]
+        \\    parse = |str| {
+        \\        T : a
+        \\        parse = T.parser_for({})
+        \\        { value, .. } = parse(str)?
+        \\        Ok(value)
+        \\    }
+        \\}
+        \\
+        \\Parser := {}.{
+        \\    parse_str : Parser, Str -> Try({ value : Str, rest : Str }, [])
+        \\    parse_str = |_parser, str| Ok({ value: str, rest: "" })
+        \\}
+        \\
+        \\main = |arg| {
+        \\    direct = check_one("Friendly")
+        \\    nested = outer("Friendly")
+        \\    [direct, nested, arg]
+        \\}
+    );
+    defer test_env.deinit();
+
+    try std.testing.expect(test_env.checker.problems.problems.items.len > 0);
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&test_env, .e_call));
+}
+
+test "hoist roots consult an imported module's verdict on a definition reaching dbg through its dispatch" {
+    var helper_env = try TestEnv.init("Helper",
+        \\Helper := {}.{
+        \\    noisy : I64 -> I64
+        \\    noisy = |n| {
+        \\        dbg n
+        \\        n + 1.I64
+        \\    }
+        \\
+        \\    run_loud : I64 -> I64
+        \\    run_loud = |n| Loud.Loud(n).loud()
+        \\
+        \\    run_calm : I64 -> I64
+        \\    run_calm = |n| n + 1.I64
+        \\}
+        \\
+        \\Loud := [Loud(I64)].{
+        \\    loud = |Loud(n)| Helper.noisy(n)
+        \\}
+    );
+    defer helper_env.deinit();
+    try helper_env.assertNoErrors();
+
+    var loud_env = try TestEnv.initWithImport("Main",
+        \\import Helper
+        \\
+        \\main = |arg| {
+        \\    x = Helper.run_loud(2.I64)
+        \\    x + arg
+        \\}
+    , "Helper", &helper_env);
+    defer loud_env.deinit();
+    try loud_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&loud_env, .e_call));
+
+    var calm_env = try TestEnv.initWithImport("Main",
+        \\import Helper
+        \\
+        \\main = |arg| {
+        \\    x = Helper.run_calm(2.I64)
+        \\    x + arg
+        \\}
+    , "Helper", &helper_env);
+    defer calm_env.deinit();
+    try calm_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 1), countExprRootsByTag(&calm_env, .e_call));
+}
+
+test "hoist roots follow an imported generic helper's dispatch to the importer's method" {
+    var helper_env = try TestEnv.init("Helper",
+        \\Helper := {}.{
+        \\    run = |w| w.loud()
+        \\}
+    );
+    defer helper_env.deinit();
+    try helper_env.assertNoErrors();
+
+    var main_env = try TestEnv.initWithImport("Main",
+        \\import Helper
+        \\
+        \\noisy : I64 -> I64
+        \\noisy = |n| {
+        \\    dbg n
+        \\    n + 1.I64
+        \\}
+        \\
+        \\Wrap := [Wrap(I64)].{
+        \\    loud = |Wrap(n)| noisy(n)
+        \\}
+        \\
+        \\main = |arg| {
+        \\    x = Helper.run(Wrap.Wrap(2.I64))
+        \\    x + arg
+        \\}
+    , "Helper", &helper_env);
+    defer main_env.deinit();
+    try main_env.assertNoErrors();
+    try std.testing.expectEqual(@as(usize, 0), countExprRootsByTag(&main_env, .e_call));
+}
