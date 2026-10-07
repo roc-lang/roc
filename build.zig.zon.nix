@@ -95,7 +95,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
   }
 ] ++ [
   {
-    name = "N-V-__8AAI7KVRG6J1Tp9i70olobTIwsFtoF_O54b2H3PnHZ.tar.gz";
+    name = "N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_macos_none";
       packageHash = "N-V-__8AAPOuPRLK1oNUw3WwQQzBRNkTOff2oOlXtnscSdOO";
@@ -104,7 +104,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AAHzIKhc4RFMeZgW2iBmdo3tsRO5ZpNElA4Fm7THu.tar.gz";
+    name = "N-V-__8AAI28HhhG0Nx8NG4UWcEadzHaIBt4m-lIs_M-xRNP.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_linux_musl";
       packageHash = "N-V-__8AAI28HhhG0Nx8NG4UWcEadzHaIBt4m-lIs_M-xRNP";
@@ -113,7 +113,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AAHIzNhjDkOXYZnta3YtR_7LrghBqs1jXUvmCpjCu.tar.gz";
+    name = "N-V-__8AAILeexlcrD3R0nKDv_nFeowG7dLWpZuQCMjeMgN_.tar.gz";
     path = fetchZig {
       name = "roc_deps_aarch64_windows_gnu";
       packageHash = "N-V-__8AAILeexlcrD3R0nKDv_nFeowG7dLWpZuQCMjeMgN_";
@@ -122,7 +122,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AAGa9PxcZ8NvCQI5IquwW3ml3U9eoLBVIsRf28aBF.tar.gz";
+    name = "N-V-__8AAMGvTxiyNmCHtvc7ThHsFU25_TnBjl1zIDWh_0g_.tar.gz";
     path = fetchZig {
       name = "roc_deps_arm_linux_musleabihf";
       packageHash = "N-V-__8AAMGvTxiyNmCHtvc7ThHsFU25_TnBjl1zIDWh_0g_";
@@ -131,7 +131,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AAHRLihScN14ACLeAAXmQB7hKYq8Ii5wPWSXn18cl.tar.gz";
+    name = "N-V-__8AAFEjaRWoQd3IMN0XCm8oziHcSolDSrLVXTQgcIWd.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_linux_musl";
       packageHash = "N-V-__8AAFEjaRWoQd3IMN0XCm8oziHcSolDSrLVXTQgcIWd";
@@ -140,7 +140,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AAGRcMhjhLwO3ey8ICFyBlvCT3_7XhM1xrEzWIBRD.tar.gz";
+    name = "N-V-__8AAFRVFhloG5rlb8GkGn4-7ays_ZfWOq4W_pi1ETcU.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_linux_musl";
       packageHash = "N-V-__8AAFRVFhloG5rlb8GkGn4-7ays_ZfWOq4W_pi1ETcU";
@@ -149,7 +149,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AANLT0hHDnp788OOENaNTO0osBQU25xaf6WT4g75U.tar.gz";
+    name = "N-V-__8AADTKtxK-zH-_M4lsXzYzvaCcHdcoPvm_kQvmKaoG.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_macos_none";
       packageHash = "N-V-__8AADTKtxK-zH-_M4lsXzYzvaCcHdcoPvm_kQvmKaoG";
@@ -158,7 +158,7 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "N-V-__8AALjVZhvbkIwdq0GDQB5m6lsopY3B2XZ2awlF4i2c.tar.gz";
+    name = "N-V-__8AAG24mBxL085Yl7ox-jj-YgHWzMXsf6uj7SH6LnxQ.tar.gz";
     path = fetchZig {
       name = "roc_deps_x86_64_windows_gnu";
       packageHash = "N-V-__8AAG24mBxL085Yl7ox-jj-YgHWzMXsf6uj7SH6LnxQ";
