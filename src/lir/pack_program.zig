@@ -334,7 +334,7 @@ pub fn literalConvertingProcs(allocator: Allocator, store: *const LirStore) Allo
                 result.* = true;
                 break;
             }
-            try BodyClone.appendSuccessorsWithAllocator(store, &work, stmt_id, allocator);
+            try BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
         }
     }
     return converts;

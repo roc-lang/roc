@@ -184,9 +184,11 @@ const ResolvedWorkerBody = union(enum) {
     /// The declaration behind this worker has a type annotation and no
     /// implementation, so reaching the worker crashes.
     unimplemented: checked.UnimplementedDeclaration,
+    /// A callable binding whose compile-time value is this crash or checked
+    /// error constant, so reaching the worker crashes with its message.
+    const_crash: checked.ConstNodeId,
     generated_codec: Plan.GeneratedCodecSource,
     generated_field_iterator: Plan.GeneratedFieldIteratorSource,
-    generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
 };
 
 fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
@@ -195,9 +197,9 @@ fn resolvedWorkerIsListMapCanReuseWrapper(resolved: ResolvedWorker) bool {
         .intrinsic,
         .hosted,
         .unimplemented,
+        .const_crash,
         .generated_codec,
         .generated_field_iterator,
-        .generated_interpolation_step,
         => return false,
     };
     return checkedExprIsListMapCanReuseWrapper(resolved.module, body);
@@ -307,24 +309,9 @@ fn resolveWorkerProcedure(modules: Common.CheckedModules, worker: Plan.WorkerPla
         .nested_expr => |expr_ref| resolveNestedExprWorker(modules, worker.id, expr_ref),
         .generated_codec => |source| resolveGeneratedCodecWorker(modules, worker.id, source),
         .generated_field_iterator => |source| resolveGeneratedFieldIteratorWorker(modules, worker.id, source),
-        .generated_interpolation_step => |source| resolveGeneratedInterpolationStepWorker(modules, worker.id, source),
     };
     resolved.stored_fn = worker.stored_fn;
     return resolved;
-}
-
-fn resolveGeneratedInterpolationStepWorker(
-    modules: Common.CheckedModules,
-    worker: Plan.WorkerPlanId,
-    source: Plan.GeneratedInterpolationStepSource,
-) ResolvedWorker {
-    const module = procedureModuleById(modules, source.step_type.module);
-    return .{
-        .worker = worker,
-        .module_key = module.key,
-        .module = module,
-        .body = .{ .generated_interpolation_step = source },
-    };
 }
 
 fn resolveGeneratedFieldIteratorWorker(
@@ -552,7 +539,16 @@ fn resolveCallableEvalTemplate(
     return switch (root.payload) {
         .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
         .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
-        .const_node,
+        .const_node => |node| switch (module.const_store.get(node)) {
+            .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
+            .crash, .checked_error => .{
+                .worker = worker,
+                .module_key = module.key,
+                .module = module,
+                .body = .{ .const_crash = node },
+            },
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal => boxyLowerInvariant("callable eval binding constant was not a callable value"),
+        },
         .discarded,
         .expect,
         .runtime,
@@ -676,6 +672,16 @@ fn resolveNestedExprWorker(
             .root_expr = root_expr,
         } },
     };
+}
+
+/// The runtime captures of the nested procedure a lambda or closure
+/// expression constructs.
+fn nestedCallableExprRuntimeCaptures(module: ProcedureModuleView, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
+    switch (module.checked_bodies.expr(expr_id).data) {
+        .lambda, .closure => {},
+        .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable capture lookup did not reference a lambda or closure"),
+    }
+    return Plan.nestedCallableRuntimeCaptures(module, expr_id);
 }
 
 fn nestedProcSiteForExpr(module: ProcedureModuleView, expr_id: checked.CheckedExprId) ?checked.NestedProcSite {
@@ -865,37 +871,9 @@ fn methodOwnerForProcedureType(module: ProcedureModuleView, ty: checked.CheckedT
         if (remaining == 0) boxyLowerInvariant("checked type alias chain was cyclic during boxy method owner lookup");
         remaining -= 1;
         const payload = module.checked_types.payload(current);
-        if (payload != .alias) return methodOwnerForProcedurePayload(payload);
+        if (payload != .alias) return Plan.methodOwnerForCheckedPayload(payload);
         current = payload.alias.backing;
     }
-}
-
-fn methodOwnerForProcedurePayload(payload: checked.CheckedTypePayload) ?static_dispatch.MethodOwner {
-    if (payload != .nominal) return null;
-    const nominal = payload.nominal;
-    const nominal_owner: static_dispatch.MethodOwner = .{ .nominal = .{
-        .module = nominal.origin_module,
-        .type_name = nominal.name,
-        .source_decl = nominal.source_decl,
-    } };
-    const builtin = nominal.builtin orelse return nominal_owner;
-    if (builtin == .try_) return nominal_owner;
-    return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin) };
-}
-
-fn methodOwnerInProcedureNames(
-    source_names: *const names.CanonicalNameStore,
-    target_names: *const names.CanonicalNameStore,
-    owner: static_dispatch.MethodOwner,
-) ?static_dispatch.MethodOwner {
-    return switch (owner) {
-        .builtin => |builtin| .{ .builtin = builtin },
-        .nominal => |nominal| .{ .nominal = .{
-            .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
-            .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
-            .source_decl = nominal.source_decl,
-        } },
-    };
 }
 
 const HostedCatalogEntry = struct {
@@ -955,7 +933,12 @@ const DerivedHelper = struct {
     shape: DerivedFrameShape,
 };
 
-const InspectMethodSlotCacheEntry = struct {
+const DescriptorDictCacheEntry = struct {
+    dictionaries: Plan.Span,
+    dict: LIR.BoxyDictId,
+};
+
+const DescriptorMethodSlotCacheEntry = struct {
     worker: Plan.WorkerPlanId,
     slot: LirProgram.BoxyMethodSlotId,
 };
@@ -1159,8 +1142,7 @@ const StaticMethodCallDescSourceMap = struct {
                             boxyLowerInvariant("static dictionary method descriptor source map assigned one worker descriptor to two slot sources");
                         }
                     },
-                    .call => entry.source = source,
-                    .argument => entry.source = source,
+                    .call, .argument => entry.source = source,
                 },
                 .call => switch (source) {
                     .slot => {},
@@ -1384,8 +1366,13 @@ const ProcedureBuilder = struct {
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     internal_leaf_desc_ids: std.AutoHashMapUnmanaged(layout.Idx, LIR.BoxyTypeDescId),
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
+    /// The procedures every descriptor dictionary's `is_eq` and `to_hash`
+    /// slots call; see `descriptorDict`.
+    descriptor_equality_proc: ?LIR.LirProcSpecId = null,
+    descriptor_hash_proc: ?LIR.LirProcSpecId = null,
+    descriptor_dicts: std.ArrayList(DescriptorDictCacheEntry) = .empty,
     derived_helpers: std.ArrayList(DerivedHelper) = .empty,
-    inspect_method_slot_cache: std.ArrayList(InspectMethodSlotCacheEntry),
+    descriptor_method_slot_cache: std.ArrayList(DescriptorMethodSlotCacheEntry),
     callable_adapter_cache: std.ArrayList(CallableAdapterCacheEntry),
     pending_direct_call_descriptor_abis: std.ArrayList(PendingDirectCallDescriptorAbi),
     descriptor_read_steps: std.ArrayList(DescriptorReadStep),
@@ -1419,10 +1406,24 @@ const ProcedureBuilder = struct {
         fields: []const FrozenCaptureRecipe,
         result_rep: Plan.TypeRepId,
         rep: Plan.TypeRepId,
+        /// The literal initializer whose frame built this callable, which
+        /// then describes it under that initializer's own bindings.
+        literal_initializer: ?u32 = null,
     };
+    /// A frozen callable's captured descriptor: the creating frame built it
+    /// for `source_rep`, the representation it described there, and the
+    /// callable reads it for its own `worker_rep`. `exact` is the static
+    /// descriptor the creating frame stored when it read none of its own
+    /// descriptor bindings.
+    const FrozenDescriptorCapture = struct {
+        worker_rep: Plan.TypeRepId,
+        source_rep: Plan.TypeRepId,
+        exact: ?LIR.BoxyTypeDescId = null,
+    };
+
     const FrozenCaptureRecipe = union(enum) {
         value: Plan.TypeRepId,
-        descriptor: Plan.TypeRepId,
+        descriptor: FrozenDescriptorCapture,
         dictionary: Plan.Span,
         literal: u32,
     };
@@ -1471,11 +1472,10 @@ const ProcedureBuilder = struct {
                     .kind = .scaffold,
                 };
             },
-            .hosted, .unimplemented => constructlessOrigin(.scaffold),
+            .hosted, .unimplemented, .const_crash => constructlessOrigin(.scaffold),
             .intrinsic,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => constructlessOrigin(.derived),
         };
     }
@@ -1526,7 +1526,7 @@ const ProcedureBuilder = struct {
             .generated_evidence_desc_ids = .{ null, null, null, null },
             .internal_leaf_desc_ids = .empty,
             .static_dict_cache = .empty,
-            .inspect_method_slot_cache = .empty,
+            .descriptor_method_slot_cache = .empty,
             .callable_adapter_cache = .empty,
             .pending_direct_call_descriptor_abis = .empty,
             .descriptor_read_steps = .empty,
@@ -1550,9 +1550,10 @@ const ProcedureBuilder = struct {
         self.pending_direct_call_descriptor_abis.deinit(self.allocator);
         for (self.callable_adapter_cache.items) |entry| self.allocator.free(entry.materialize_reps);
         self.callable_adapter_cache.deinit(self.allocator);
-        self.inspect_method_slot_cache.deinit(self.allocator);
+        self.descriptor_method_slot_cache.deinit(self.allocator);
         self.internal_leaf_desc_ids.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
+        self.descriptor_dicts.deinit(self.allocator);
         for (self.derived_helpers.items) |helper| helper.shape.deinit(self.allocator);
         self.derived_helpers.deinit(self.allocator);
         self.allocator.free(self.hosted_catalog);
@@ -1699,11 +1700,12 @@ const ProcedureBuilder = struct {
     /// holds only what every instantiation of the owning nominal shares; each
     /// descriptor supplies its own instantiation's receiver and hidden
     /// descriptors, which the slot's `.slot` sources index.
-    fn inspectMethodSlotForRep(
+    fn descriptorMethodSlotForRep(
         self: *ProcedureBuilder,
         rep_id: Plan.TypeRepId,
+        kind: Plan.DescriptorMethod,
     ) Allocator.Error!?LirProgram.BoxyMethodSlotId {
-        return switch (try self.runStatic(.{ .inspect_slot = rep_id })) {
+        return switch (try self.runStatic(.{ .inspect_slot = .{ .rep = rep_id, .kind = kind } })) {
             .slot_id => |slot| slot,
             .desc, .ref, .dict, .span, .method_slot, .adapter => boxyLowerInvariant("inspect slot request delivered a non-slot value"),
         };
@@ -1757,7 +1759,8 @@ const ProcedureBuilder = struct {
     /// An inspect call's descriptors for the descriptor `self_desc` under
     /// construction; see `BoxyTypeDesc.inspect_hidden_descs` and
     /// `BoxyTypeDesc.inspect_arg_descs`.
-    const StaticInspectRequest = struct {
+    const StaticDescriptorMethodRequest = struct {
+        kind: Plan.DescriptorMethod,
         rep: Plan.TypeRepId,
         self_desc: LIR.BoxyTypeDescId,
         building_worker_rep: ?Plan.TypeRepId = null,
@@ -1804,13 +1807,14 @@ const ProcedureBuilder = struct {
         dict: StaticDictRequest,
         /// A dictionary built in the request's template frame.
         dict_in_frame: StaticDictRequest,
-        inspect_slot: Plan.TypeRepId,
+        inspect_slot: struct { rep: Plan.TypeRepId, kind: Plan.DescriptorMethod },
+        method_dicts: struct { rep: Plan.TypeRepId, kind: Plan.DescriptorMethod },
         nested_descs: StaticDescPosition,
         tag_variants: StaticTagVariantsRequest,
         tag_ext: StaticDescPosition,
         payload_descs: StaticPayloadDescsRequest,
-        inspect_hidden: StaticInspectRequest,
-        inspect_arg: StaticInspectRequest,
+        inspect_hidden: StaticDescriptorMethodRequest,
+        inspect_arg: StaticDescriptorMethodRequest,
         structural_slot: StaticStructuralSlotRequest,
         method_adapter: StaticMethodAdapterRequest,
     };
@@ -1856,15 +1860,24 @@ const ProcedureBuilder = struct {
         desc: *StaticDescFrame,
         source_desc: *StaticSourceDescFrame,
         dict: *StaticDictFrame,
-        inspect_slot: *StaticInspectSlotFrame,
+        inspect_slot: *StaticDescriptorMethodSlotFrame,
+        method_dicts: *StaticDescriptorMethodDictFrame,
         nested_descs: *StaticNestedDescsFrame,
         tag_variants: *StaticTagVariantsFrame,
         payload_descs: *StaticPayloadDescsFrame,
-        inspect_hidden: *StaticInspectHiddenFrame,
-        inspect_arg: *StaticInspectArgFrame,
+        inspect_hidden: *StaticDescriptorMethodHiddenFrame,
+        inspect_arg: *StaticDescriptorMethodArgFrame,
         structural_slot: *StaticStructuralSlotFrame,
         method_adapter: *StaticMethodAdapterFrame,
     };
+
+    const DescriptorMethodParts = struct {
+        method: ?LirProgram.BoxyMethodSlotId = null,
+        hidden: LIR.BoxySpan = .{},
+        args: LIR.BoxySpan = .{},
+        dictionaries: LIR.BoxySpan = .{},
+    };
+    const descriptor_method_kinds = [_]Plan.DescriptorMethod{ .inspect, .equality, .hash };
 
     /// A representation's static descriptor.
     const StaticDescFrame = struct {
@@ -1876,13 +1889,13 @@ const ProcedureBuilder = struct {
         tag_variants: LIR.BoxySpan = .{},
         tag_ext_desc: ?LIR.BoxyDescRef = null,
         field_names: LIR.BoxySpan = .{},
-        inspect_method: ?LirProgram.BoxyMethodSlotId = null,
-        inspect_hidden_descs: LIR.BoxySpan = .{},
+        method_index: usize = 0,
+        methods: [3]DescriptorMethodParts = @splat(.{}),
         /// A nominal backing's descriptor sources and instantiation context.
         sources: StaticDescriptorSourceMap = .{},
         context: StaticDescInstantiationContext = .{},
 
-        const Phase = enum { start, forward, nested, variants, ext, inspect_method, inspect_hidden, inspect_arg };
+        const Phase = enum { start, forward, nested, variants, ext, inspect_method, inspect_hidden, inspect_arg, inspect_dict };
 
         fn deinit(frame: *StaticDescFrame, allocator: Allocator) void {
             frame.sources.deinit(allocator);
@@ -1906,10 +1919,10 @@ const ProcedureBuilder = struct {
         tag_variants: LIR.BoxySpan = .{},
         tag_ext_desc: ?LIR.BoxyDescRef = null,
         field_names: LIR.BoxySpan = .{},
-        inspect_method: ?LirProgram.BoxyMethodSlotId = null,
-        inspect_hidden_descs: LIR.BoxySpan = .{},
+        method_index: usize = 0,
+        methods: [3]DescriptorMethodParts = @splat(.{}),
 
-        const Phase = enum { start, redirect, forward, nested, variants, ext, inspect_method, inspect_hidden, inspect_arg };
+        const Phase = enum { start, redirect, forward, nested, variants, ext, inspect_method, inspect_hidden, inspect_arg, inspect_dict };
 
         fn deinit(_: *StaticSourceDescFrame, _: Allocator) void {}
     };
@@ -1957,35 +1970,47 @@ const ProcedureBuilder = struct {
         }
     };
 
-    const StaticInspectHiddenFrame = struct {
-        request: StaticInspectRequest,
+    const StaticDescriptorMethodHiddenFrame = struct {
+        request: StaticDescriptorMethodRequest,
         started: bool = false,
         hidden_desc_args: Plan.Span = .{},
         refs: std.ArrayList(LIR.BoxyDescRef) = .empty,
 
-        fn deinit(frame: *StaticInspectHiddenFrame, allocator: Allocator) void {
+        fn deinit(frame: *StaticDescriptorMethodHiddenFrame, allocator: Allocator) void {
             frame.refs.deinit(allocator);
         }
     };
 
-    const StaticInspectArgFrame = struct {
-        request: StaticInspectRequest,
+    const StaticDescriptorMethodArgFrame = struct {
+        request: StaticDescriptorMethodRequest,
         arg_sources: StaticDescriptorSourceMap = .{},
         local_context: StaticDescInstantiationContext = .{},
 
-        fn deinit(frame: *StaticInspectArgFrame, allocator: Allocator) void {
+        fn deinit(frame: *StaticDescriptorMethodArgFrame, allocator: Allocator) void {
             frame.arg_sources.deinit(allocator);
             frame.local_context.deinit(allocator);
         }
     };
 
-    const StaticInspectSlotFrame = struct {
+    const StaticDescriptorMethodDictFrame = struct {
         rep: Plan.TypeRepId,
-        inspect: ?Plan.InspectMethodPlan = null,
+        kind: Plan.DescriptorMethod,
+        args: Plan.Span = .{},
+        started: bool = false,
+        refs: std.ArrayList(LIR.BoxyDictRef) = .empty,
+        fn deinit(frame: *StaticDescriptorMethodDictFrame, allocator: Allocator) void {
+            frame.refs.deinit(allocator);
+        }
+    };
+
+    const StaticDescriptorMethodSlotFrame = struct {
+        kind: Plan.DescriptorMethod,
+        rep: Plan.TypeRepId,
+        inspect: ?Plan.DescriptorMethodPlan = null,
         slot_id: LirProgram.BoxyMethodSlotId = undefined,
         nested_dict_refs: std.ArrayList(LIR.BoxyDictRef) = .empty,
 
-        fn deinit(frame: *StaticInspectSlotFrame, allocator: Allocator) void {
+        fn deinit(frame: *StaticDescriptorMethodSlotFrame, allocator: Allocator) void {
             frame.nested_dict_refs.deinit(allocator);
         }
     };
@@ -2161,7 +2186,7 @@ const ProcedureBuilder = struct {
 
     fn destroyStaticFrame(self: *ProcedureBuilder, frame: StaticFrame) void {
         switch (frame) {
-            inline .desc, .source_desc, .dict, .inspect_slot, .nested_descs, .tag_variants, .payload_descs, .inspect_hidden, .inspect_arg, .structural_slot, .method_adapter => |payload| {
+            inline .desc, .source_desc, .dict, .inspect_slot, .method_dicts, .nested_descs, .tag_variants, .payload_descs, .inspect_hidden, .inspect_arg, .structural_slot, .method_adapter => |payload| {
                 payload.deinit(self.allocator);
                 self.allocator.destroy(payload);
             },
@@ -2237,7 +2262,8 @@ const ProcedureBuilder = struct {
                 }
                 return try self.pushStaticFrame(stack, .dict, .{ .request = dict });
             },
-            .inspect_slot => |rep_id| return try self.pushStaticFrame(stack, .inspect_slot, .{ .rep = rep_id }),
+            .inspect_slot => |request_slot| return try self.pushStaticFrame(stack, .inspect_slot, .{ .rep = request_slot.rep, .kind = request_slot.kind }),
+            .method_dicts => |request_method| return try self.pushStaticFrame(stack, .method_dicts, .{ .rep = request_method.rep, .kind = request_method.kind }),
             .nested_descs => |position| return try self.pushStaticFrame(stack, .nested_descs, .{ .position = position }),
             .tag_variants => |tag_variants| return try self.pushStaticFrame(stack, .tag_variants, .{ .request = tag_variants }),
             .tag_ext => |position| {
@@ -2256,12 +2282,13 @@ const ProcedureBuilder = struct {
             .desc => |desc| try self.stepStaticDesc(desc, delivered),
             .source_desc => |source_desc| try self.stepStaticSourceDesc(source_desc, delivered),
             .dict => |dict| try self.stepStaticDict(dict, delivered),
-            .inspect_slot => |inspect_slot| try self.stepStaticInspectSlot(inspect_slot, delivered),
+            .inspect_slot => |inspect_slot| try self.stepStaticDescriptorMethodSlot(inspect_slot, delivered),
+            .method_dicts => |method| try self.stepStaticDescriptorMethodDict(method, delivered),
             .nested_descs => |nested| try self.stepStaticNestedDescs(nested, delivered),
             .tag_variants => |tag_variants| try self.stepStaticTagVariants(tag_variants, delivered),
             .payload_descs => |payload_descs| try self.stepStaticPayloadDescs(payload_descs, delivered),
-            .inspect_hidden => |inspect_hidden| try self.stepStaticInspectHidden(inspect_hidden, delivered),
-            .inspect_arg => |inspect_arg| try self.stepStaticInspectArg(inspect_arg, delivered),
+            .inspect_hidden => |inspect_hidden| try self.stepStaticDescriptorMethodHidden(inspect_hidden, delivered),
+            .inspect_arg => |inspect_arg| try self.stepStaticDescriptorMethodArg(inspect_arg, delivered),
             .structural_slot => |slot| try self.stepStaticStructuralSlot(slot, delivered),
             .method_adapter => |adapter| try self.stepStaticMethodAdapter(adapter, delivered),
         };
@@ -2346,22 +2373,33 @@ const ProcedureBuilder = struct {
                 frame.tag_ext_desc = staticValueRef(delivered.?);
                 frame.field_names = try self.staticFieldNamesForRep(frame.rep);
                 frame.phase = .inspect_method;
-                return .{ .request = .{ .inspect_slot = frame.rep } };
+                return .{ .request = .{ .inspect_slot = .{ .rep = frame.rep, .kind = descriptor_method_kinds[frame.method_index] } } };
             },
             .inspect_method => {
-                frame.inspect_method = switch (delivered.?) {
+                frame.methods[frame.method_index].method = switch (delivered.?) {
                     .slot_id => |slot| slot,
                     .desc, .ref, .dict, .span, .method_slot, .adapter => boxyLowerInvariant("descriptor inspect slot request delivered a non-slot value"),
                 };
                 frame.phase = .inspect_hidden;
-                return .{ .request = .{ .inspect_hidden = .{ .rep = frame.rep, .self_desc = frame.desc_id } } };
+                return .{ .request = .{ .inspect_hidden = .{ .kind = descriptor_method_kinds[frame.method_index], .rep = frame.rep, .self_desc = frame.desc_id } } };
             },
             .inspect_hidden => {
-                frame.inspect_hidden_descs = staticValueSpan(delivered.?);
+                frame.methods[frame.method_index].hidden = staticValueSpan(delivered.?);
                 frame.phase = .inspect_arg;
-                return .{ .request = .{ .inspect_arg = .{ .rep = frame.rep, .self_desc = frame.desc_id } } };
+                return .{ .request = .{ .inspect_arg = .{ .kind = descriptor_method_kinds[frame.method_index], .rep = frame.rep, .self_desc = frame.desc_id } } };
             },
             .inspect_arg => {
+                frame.methods[frame.method_index].args = staticValueSpan(delivered.?);
+                frame.phase = .inspect_dict;
+                return .{ .request = .{ .method_dicts = .{ .rep = frame.rep, .kind = descriptor_method_kinds[frame.method_index] } } };
+            },
+            .inspect_dict => {
+                frame.methods[frame.method_index].dictionaries = staticValueSpan(delivered.?);
+                frame.method_index += 1;
+                if (frame.method_index < descriptor_method_kinds.len) {
+                    frame.phase = .inspect_method;
+                    return .{ .request = .{ .inspect_slot = .{ .rep = frame.rep, .kind = descriptor_method_kinds[frame.method_index] } } };
+                }
                 const rep = self.plan.representations.items[rep_index];
                 const layout_value = self.result.layouts.getLayout(frame.payload_layout);
                 self.result.boxy_type_descs.items[@backingInt(frame.desc_id)] = .{
@@ -2373,10 +2411,21 @@ const ProcedureBuilder = struct {
                     .tag_ext_desc = frame.tag_ext_desc,
                     .field_names = frame.field_names,
                     .inspect_opaque = self.repInspectsOpaque(frame.rep),
-                    .inspect_method = frame.inspect_method,
-                    .inspect_hidden_descs = frame.inspect_hidden_descs,
-                    .inspect_arg_descs = staticValueSpan(delivered.?),
+                    .inspect_method = frame.methods[0].method,
+                    .inspect_hidden_descs = frame.methods[0].hidden,
+                    .inspect_arg_descs = frame.methods[0].args,
+                    .eq_method = frame.methods[1].method,
+                    .eq_hidden_descs = frame.methods[1].hidden,
+                    .eq_arg_descs = frame.methods[1].args,
+                    .eq_nested_dicts = frame.methods[1].dictionaries,
+                    .hash_method = frame.methods[2].method,
+                    .hash_hidden_descs = frame.methods[2].hidden,
+                    .hash_arg_descs = frame.methods[2].args,
+                    .hash_nested_dicts = frame.methods[2].dictionaries,
                     .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
+                    .eq_rejected = self.plan.descriptorMethodRejected(frame.rep, .equality),
+                    .hash_rejected = self.plan.descriptorMethodRejected(frame.rep, .hash),
+                    .is_bool = self.repDescribesBool(frame.rep),
                     .debug_checked_type = rep.source_type.ty,
                 };
                 return .{ .done = .{ .desc = frame.desc_id } };
@@ -2519,28 +2568,39 @@ const ProcedureBuilder = struct {
                 context.env = frame.outer_env;
                 frame.field_names = try self.staticFieldNamesForRep(frame.worker);
                 frame.phase = .inspect_method;
-                return .{ .request = .{ .inspect_slot = frame.source orelse frame.worker } };
+                return .{ .request = .{ .inspect_slot = .{ .rep = frame.source orelse frame.worker, .kind = descriptor_method_kinds[frame.method_index] } } };
             },
             .inspect_method => {
-                frame.inspect_method = switch (delivered.?) {
+                frame.methods[frame.method_index].method = switch (delivered.?) {
                     .slot_id => |slot| slot,
                     .desc, .ref, .dict, .span, .method_slot, .adapter => boxyLowerInvariant("descriptor inspect slot request delivered a non-slot value"),
                 };
                 frame.phase = .inspect_hidden;
                 return .{ .request = .{ .inspect_hidden = if (frame.source) |source_rep|
-                    .{ .rep = source_rep, .self_desc = frame.desc_id }
+                    .{ .kind = descriptor_method_kinds[frame.method_index], .rep = source_rep, .self_desc = frame.desc_id }
                 else
-                    .{ .rep = frame.worker, .self_desc = frame.desc_id, .mapping = mapping } } };
+                    .{ .kind = descriptor_method_kinds[frame.method_index], .rep = frame.worker, .self_desc = frame.desc_id, .mapping = mapping } } };
             },
             .inspect_hidden => {
-                frame.inspect_hidden_descs = staticValueSpan(delivered.?);
+                frame.methods[frame.method_index].hidden = staticValueSpan(delivered.?);
                 frame.phase = .inspect_arg;
                 return .{ .request = .{ .inspect_arg = if (frame.source) |source_rep|
-                    .{ .rep = source_rep, .self_desc = frame.desc_id, .building_worker_rep = frame.worker }
+                    .{ .kind = descriptor_method_kinds[frame.method_index], .rep = source_rep, .self_desc = frame.desc_id, .building_worker_rep = frame.worker }
                 else
-                    .{ .rep = frame.worker, .self_desc = frame.desc_id, .building_worker_rep = frame.worker, .mapping = mapping } } };
+                    .{ .kind = descriptor_method_kinds[frame.method_index], .rep = frame.worker, .self_desc = frame.desc_id, .building_worker_rep = frame.worker, .mapping = mapping } } };
             },
             .inspect_arg => {
+                frame.methods[frame.method_index].args = staticValueSpan(delivered.?);
+                frame.phase = .inspect_dict;
+                return .{ .request = .{ .method_dicts = .{ .rep = frame.source orelse frame.worker, .kind = descriptor_method_kinds[frame.method_index] } } };
+            },
+            .inspect_dict => {
+                frame.methods[frame.method_index].dictionaries = staticValueSpan(delivered.?);
+                frame.method_index += 1;
+                if (frame.method_index < descriptor_method_kinds.len) {
+                    frame.phase = .inspect_method;
+                    return .{ .request = .{ .inspect_slot = .{ .rep = frame.source orelse frame.worker, .kind = descriptor_method_kinds[frame.method_index] } } };
+                }
                 const worker_rep = self.plan.representations.items[@backingInt(frame.worker)];
                 const layout_value = self.result.layouts.getLayout(frame.payload_layout);
                 self.result.boxy_type_descs.items[@backingInt(frame.desc_id)] = .{
@@ -2552,10 +2612,21 @@ const ProcedureBuilder = struct {
                     .tag_ext_desc = frame.tag_ext_desc,
                     .field_names = frame.field_names,
                     .inspect_opaque = self.repInspectsOpaque(frame.worker),
-                    .inspect_method = frame.inspect_method,
-                    .inspect_hidden_descs = frame.inspect_hidden_descs,
-                    .inspect_arg_descs = staticValueSpan(delivered.?),
+                    .inspect_method = frame.methods[0].method,
+                    .inspect_hidden_descs = frame.methods[0].hidden,
+                    .inspect_arg_descs = frame.methods[0].args,
+                    .eq_method = frame.methods[1].method,
+                    .eq_hidden_descs = frame.methods[1].hidden,
+                    .eq_arg_descs = frame.methods[1].args,
+                    .eq_nested_dicts = frame.methods[1].dictionaries,
+                    .hash_method = frame.methods[2].method,
+                    .hash_hidden_descs = frame.methods[2].hidden,
+                    .hash_arg_descs = frame.methods[2].args,
+                    .hash_nested_dicts = frame.methods[2].dictionaries,
                     .presence_slot_present_discriminant = worker_rep.presence_slot_present_discriminant,
+                    .eq_rejected = self.plan.descriptorMethodRejected(frame.source orelse frame.worker, .equality),
+                    .hash_rejected = self.plan.descriptorMethodRejected(frame.source orelse frame.worker, .hash),
+                    .is_bool = self.repDescribesBool(frame.worker),
                     .debug_checked_type = worker_rep.source_type.ty,
                 };
                 return .{ .done = .{ .desc = frame.desc_id } };
@@ -2828,13 +2899,13 @@ const ProcedureBuilder = struct {
     /// representation, built statically; a mapping instantiates a worker
     /// representation whose descriptor sources an enclosing dictionary
     /// method planned.
-    fn stepStaticInspectHidden(self: *ProcedureBuilder, frame: *StaticInspectHiddenFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
+    fn stepStaticDescriptorMethodHidden(self: *ProcedureBuilder, frame: *StaticDescriptorMethodHiddenFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
         if (delivered) |value| {
             try frame.refs.append(self.allocator, staticValueRef(value) orelse
                 boxyLowerInvariant("inspect hidden descriptor request delivered no descriptor"));
         } else {
             frame.started = true;
-            const inspect = self.plan.inspectMethodForRep(frame.request.rep) orelse return .{ .done = .{ .span = .{} } };
+            const inspect = self.plan.descriptorMethodForRep(frame.request.rep, frame.request.kind) orelse return .{ .done = .{ .span = .{} } };
             if (inspect.hidden_desc_args.len == 0) return .{ .done = .{ .span = .{} } };
             frame.hidden_desc_args = inspect.hidden_desc_args;
         }
@@ -2856,23 +2927,23 @@ const ProcedureBuilder = struct {
     /// The inspected value's descriptor in the inspect worker's parameter
     /// storage: the worker parameter instantiated by the planned hidden
     /// descriptor arguments.
-    fn stepStaticInspectArg(self: *ProcedureBuilder, frame: *StaticInspectArgFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
+    fn stepStaticDescriptorMethodArg(self: *ProcedureBuilder, frame: *StaticDescriptorMethodArgFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
         if (delivered) |value| {
             const ref = staticValueRef(value) orelse boxyLowerInvariant("inspect argument descriptor request delivered no descriptor");
-            return .{ .done = .{ .span = try self.appendStaticHiddenDescRefs(&.{ref}) } };
+            return .{ .done = .{ .span = try self.appendDescriptorMethodArgRefs(self.plan.descriptorMethodForRep(frame.request.rep, frame.request.kind).?, ref) } };
         }
         const rep_id = frame.request.rep;
-        const inspect = self.plan.inspectMethodForRep(rep_id) orelse return .{ .done = .{ .span = .{} } };
+        const inspect = self.plan.descriptorMethodForRep(rep_id, frame.request.kind) orelse return .{ .done = .{ .span = .{} } };
         // A descriptor already built as the worker parameter's instantiation
         // describes the value in that parameter's storage.
         const is_worker_instantiation = if (frame.request.building_worker_rep) |building|
-            self.descriptorIdentityRep(building) == self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))
+            self.descriptorIdentityRep(building) == self.descriptorIdentityRep(self.descriptorMethodWorkerArgRep(inspect))
         else
             false;
-        if (is_worker_instantiation or self.inspectArgumentIsIdentity(inspect)) {
-            return .{ .done = .{ .span = try self.appendStaticHiddenDescRefs(&.{.{ .static = frame.request.self_desc }}) } };
+        if (is_worker_instantiation or self.descriptorMethodArgumentIsIdentity(inspect)) {
+            return .{ .done = .{ .span = try self.appendDescriptorMethodArgRefs(inspect, .{ .static = frame.request.self_desc }) } };
         }
-        const worker_arg = self.inspectWorkerArgRep(inspect);
+        const worker_arg = self.descriptorMethodWorkerArgRep(inspect);
         // The worker parameter's own structure is instantiated at the
         // descriptors of its type parameters.
         for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
@@ -2894,22 +2965,26 @@ const ProcedureBuilder = struct {
         } } };
     }
 
-    fn stepStaticInspectSlot(self: *ProcedureBuilder, frame: *StaticInspectSlotFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
+    fn stepStaticDescriptorMethodSlot(self: *ProcedureBuilder, frame: *StaticDescriptorMethodSlotFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
         if (delivered) |value| {
             try frame.nested_dict_refs.append(self.allocator, .{ .static = staticValueDict(value) });
         } else {
-            const inspect = self.plan.inspectMethodForRep(frame.rep) orelse return .{ .done = .{ .slot_id = null } };
-            for (self.inspect_method_slot_cache.items) |entry| {
+            const inspect = self.plan.descriptorMethodForRep(frame.rep, frame.kind) orelse return .{ .done = .{ .slot_id = null } };
+            for (self.descriptor_method_slot_cache.items) |entry| {
                 if (entry.worker == inspect.worker) return .{ .done = .{ .slot_id = entry.slot } };
             }
             const method_view = procedureModuleById(self.modules, inspect.method_module);
-            if (!std.mem.eql(u8, method_view.canonical_names.methodNameText(inspect.method), "to_inspect")) {
+            if (!std.mem.eql(u8, method_view.canonical_names.methodNameText(inspect.method), switch (frame.kind) {
+                .inspect => "to_inspect",
+                .equality => "is_eq",
+                .hash => "to_hash",
+            })) {
                 boxyLowerInvariant("planned boxy inspect method had an unexpected checked method identity");
             }
 
             frame.inspect = inspect;
-            frame.slot_id = @fromBackingInt(@intCast(@as(u32, @intCast(self.result.boxy_method_slots.items.len))));
-            try self.inspect_method_slot_cache.append(self.allocator, .{
+            frame.slot_id = @fromBackingInt(@as(u32, @intCast(self.result.boxy_method_slots.items.len)));
+            try self.descriptor_method_slot_cache.append(self.allocator, .{
                 .worker = inspect.worker,
                 .slot = frame.slot_id,
             });
@@ -2920,13 +2995,21 @@ const ProcedureBuilder = struct {
         }
         const inspect = frame.inspect.?;
         const worker = self.plan.workers.items[@backingInt(inspect.worker)];
-        const hidden_dict_args = self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args);
-        if (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
+        const hidden_dict_args: []const Plan.DirectCallHiddenDictionaryArg = if (frame.kind == .inspect) self.plan.directCallHiddenDictionaryArgSlice(inspect.hidden_dict_args) else &.{};
+        while (frame.nested_dict_refs.items.len < hidden_dict_args.len) {
             const arg = hidden_dict_args[frame.nested_dict_refs.items.len];
             const source_rep = switch (arg.source) {
                 .static_rep => |source_rep| source_rep,
                 .bound_dictionaries => boxyLowerInvariant("boxy inspect slot received a caller-bound dictionary source"),
-                .literal => boxyLowerInvariant("boxy inspect slot received a literal dictionary source"),
+                // A slot is called from no frame, so each literal the worker
+                // converts is closed at the described representation.
+                .literal => |literal| switch (literal) {
+                    .result => |index| {
+                        try frame.nested_dict_refs.append(self.allocator, .{ .static = try self.emitLiteralAccessor(index) });
+                        continue;
+                    },
+                    .parameter => boxyLowerInvariant("boxy inspect slot received an open literal argument"),
+                },
             };
             return .{ .request = .{ .dict = .{
                 .rep = source_rep,
@@ -2942,22 +3025,29 @@ const ProcedureBuilder = struct {
         // `inspect_hidden_descs`), so the shared slot names only their order.
         const worker_layout = self.layout_plan.workerLayoutFor(inspect.worker);
         const worker_args = self.layout_plan.workerLayoutSlice(worker_layout.args);
-        if (worker_args.len != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+        if (worker_args.len != frame.kind.argCount()) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
         const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
-        try self.result.boxy_method_arg_layouts.append(self.allocator, worker_args[0].layoutIdx());
+        for (worker_args) |arg| try self.result.boxy_method_arg_layouts.append(self.allocator, arg.layoutIdx());
         const params = self.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
         const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
         for (0..params.len) |slot_index| {
             try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .slot = @intCast(slot_index) });
         }
 
+        const ret_rep: ?Plan.TypeRepId = if (inspect.ret_type) |ty|
+            self.plan.repForSourceType(ty) orelse boxyLowerInvariant("descriptor method result type was not analyzed")
+        else
+            null;
+        const ret_desc = if (ret_rep) |rep| try self.staticDescRefForRep(rep) else null;
         const slot = LirProgram.BoxyMethodSlot{
             .method = inspect.method,
             .proc = try self.reserveWorkerProc(inspect.worker),
             .nested_dicts = try self.appendStaticHiddenDictRefs(frame.nested_dict_refs.items),
             .adapter = .{
-                .arg_layouts = .{ .start = arg_layouts_start, .len = 1 },
+                .arg_layouts = .{ .start = arg_layouts_start, .len = frame.kind.argCount() },
                 .hidden_desc_sources = .{ .start = hidden_sources_start, .len = @intCast(params.len) },
+                .ret_layout = if (ret_rep) |rep| self.layout_plan.rep_layouts[@backingInt(rep)].worker.layoutIdx() else null,
+                .ret_desc = ret_desc,
             },
         };
         self.result.boxy_method_slots.items[@backingInt(frame.slot_id)] = slot;
@@ -3048,10 +3138,10 @@ const ProcedureBuilder = struct {
                 null;
             const fn_type = if (exact_method) |method| method.callable_type else requirement.fn_ty;
             const structural_method: ?Plan.DerivedMethod = if (structural_kind == .equality or
-                (exact_method == null and self.staticDictionarySlotIsStructuralEq(rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural(base.Ident.IS_EQ_METHOD_NAME, rep_id, requirement)))
                 .equality
             else if (structural_kind == .hash or
-                (exact_method == null and self.staticDictionarySlotIsStructuralHash(rep_id, requirement)))
+                (exact_method == null and self.staticDictionarySlotIsStructural(base.Ident.TO_HASH_METHOD_NAME, rep_id, requirement)))
                 .hash
             else
                 null;
@@ -3068,8 +3158,13 @@ const ProcedureBuilder = struct {
                 } } };
             }
             if (exact_method) |method| {
-                if (method.resolution == .unreachable_value) {
-                    frame.slots.items[slot_index] = try self.unreachableDictionaryMethodSlot(requirement, method.requirement_type);
+                const crash: ?CrashingDictionaryMethod = switch (method.resolution) {
+                    .checked_error => .checked_error,
+                    .unreachable_value => .unreachable_value,
+                    .worker, .structural, .constraint, .builtin_numeral => null,
+                };
+                if (crash) |kind| {
+                    frame.slots.items[slot_index] = try self.crashingDictionaryMethodSlot(requirement, method.requirement_type, kind);
                     continue;
                 }
             }
@@ -3077,9 +3172,8 @@ const ProcedureBuilder = struct {
                 .worker => |worker| worker,
                 .structural => boxyLowerInvariant("unsupported structural dictionary method reached boxy lowering"),
                 .constraint => boxyLowerInvariant("forwarded dictionary evidence reached static dictionary lowering"),
-                .checked_error => boxyLowerInvariant("checked-error dictionary evidence reached boxy lowering"),
                 .builtin_numeral => boxyLowerInvariant("compile-time numeral proof reached a runtime dictionary"),
-                .unreachable_value => boxyLowerInvariant("unreachable dictionary evidence reached boxy lowering"),
+                .checked_error, .unreachable_value => unreachable,
             } else self.methodWorkerForStaticDictionary(rep_id, requirement) orelse
                 boxyLowerInvariant("static boxy dictionary method target was not planned");
 
@@ -3848,22 +3942,253 @@ const ProcedureBuilder = struct {
         }
     }
 
+    /// The dictionaries `rep_id`'s `kind` method worker receives at that
+    /// representation.
+    fn descriptorMethodDictRefs(self: *ProcedureBuilder, rep_id: Plan.TypeRepId, kind: Plan.DescriptorMethod) Allocator.Error!LIR.BoxySpan {
+        return staticValueSpan(try self.runStatic(.{ .method_dicts = .{ .rep = rep_id, .kind = kind } }));
+    }
+
+    fn stepStaticDescriptorMethodDict(self: *ProcedureBuilder, frame: *StaticDescriptorMethodDictFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
+        if (frame.kind == .inspect) return .{ .done = .{ .span = .{} } };
+        if (delivered) |value| {
+            try frame.refs.append(self.allocator, .{ .static = staticValueDict(value) });
+        } else if (!frame.started) {
+            frame.started = true;
+            const method = self.plan.descriptorMethodForRep(frame.rep, frame.kind) orelse return .{ .done = .{ .span = .{} } };
+            const worker = self.plan.workers.items[@backingInt(method.worker)];
+            const params = self.plan.hiddenDictionaryParamSlice(worker.hidden_dicts);
+            if (params.len == 0) return .{ .done = .{ .span = .{} } };
+            if (!method.static_hidden_dicts) {
+                for (params) |param| {
+                    try frame.refs.append(self.allocator, .{ .static = try self.descriptorDict(param.dictionaries, method.method_module) });
+                }
+                return .{ .done = .{ .span = try self.appendStaticHiddenDictRefs(frame.refs.items) } };
+            }
+            frame.args = method.hidden_dict_args;
+            if (frame.args.len != params.len) boxyLowerInvariant("descriptor method dictionaries disagreed with its worker parameters");
+        }
+        const args = self.plan.directCallHiddenDictionaryArgSlice(frame.args);
+        while (frame.refs.items.len < args.len) {
+            const arg = args[frame.refs.items.len];
+            const source_rep = switch (arg.source) {
+                .static_rep => |rep| rep,
+                // A slot is called from no frame, so each literal the worker
+                // converts is closed at the described representation.
+                .literal => |literal| switch (literal) {
+                    .result => |index| {
+                        try frame.refs.append(self.allocator, .{ .static = try self.emitLiteralAccessor(index) });
+                        continue;
+                    },
+                    .parameter => boxyLowerInvariant("descriptor method at a concrete representation took an open literal"),
+                },
+                .bound_dictionaries => boxyLowerInvariant("descriptor method at a concrete representation took a non-static dictionary"),
+            };
+            return .{ .request = .{ .dict = .{ .rep = source_rep, .worker_dictionaries = arg.worker_dictionaries, .method_evidence = arg.method_evidence, .template = null, .env = arg.env } } };
+        }
+        return .{ .done = .{ .span = try self.appendStaticHiddenDictRefs(frame.refs.items) } };
+    }
+
+    /// A dictionary for `dictionaries`, each an `is_eq` or a `to_hash`, that
+    /// compares or hashes its first argument by that argument's own
+    /// descriptor: the derived method at whatever type the argument has,
+    /// including each component type's own method. Each slot reads the
+    /// descriptor of its first argument.
+    fn descriptorDict(self: *ProcedureBuilder, dictionaries: Plan.Span, module_id: checked.ModuleId) Allocator.Error!LIR.BoxyDictId {
+        for (self.descriptor_dicts.items) |entry| {
+            if (std.meta.eql(entry.dictionaries, dictionaries)) return entry.dict;
+        }
+        const dynamic_layout = try self.result.layouts.insertErasedBox();
+        var slots = std.ArrayList(LirProgram.BoxyMethodSlot).empty;
+        defer slots.deinit(self.allocator);
+        try slots.appendNTimes(self.allocator, .{
+            .present = false,
+            .method = undefined,
+            .proc = undefined,
+        }, self.plan.dictionary_method_slots.items.len);
+        for (self.plan.dictionarySlice(dictionaries)) |requirement| {
+            const view = procedureModuleById(self.modules, requirement.source_type.module);
+            const name = view.canonical_names.methodNameText(requirement.fn_name);
+            const second_layout = if (std.mem.eql(u8, name, "is_eq"))
+                dynamic_layout
+            else if (std.mem.eql(u8, name, "to_hash"))
+                try self.descriptorDictHasherLayout(requirement)
+            else
+                boxyLowerInvariant("descriptor dictionary was required to supply a method other than is_eq or to_hash");
+            const proc = if (second_layout == dynamic_layout)
+                try self.descriptorEqualityProc(module_id)
+            else
+                try self.descriptorHashProc(module_id, second_layout);
+            const arg_layouts_start: u32 = @intCast(self.result.boxy_method_arg_layouts.items.len);
+            try self.result.boxy_method_arg_layouts.appendSlice(self.allocator, &.{ dynamic_layout, second_layout });
+            const hidden_sources_start: u32 = @intCast(self.result.boxy_method_hidden_desc_sources.items.len);
+            try self.result.boxy_method_hidden_desc_sources.append(self.allocator, .{ .argument = 0 });
+            slots.items[requirement.slot] = .{
+                .method = requirement.fn_name,
+                .proc = proc,
+                .adapter = .{
+                    .arg_layouts = .{ .start = arg_layouts_start, .len = 2 },
+                    .hidden_desc_sources = .{ .start = hidden_sources_start, .len = 1 },
+                },
+            };
+        }
+        const dict_id: LIR.BoxyDictId = @fromBackingInt(@as(u32, @intCast(self.result.boxy_dicts.items.len)));
+        const method_start: u32 = @intCast(self.result.boxy_method_slots.items.len);
+        try self.result.boxy_method_slots.appendSlice(self.allocator, slots.items);
+        try self.result.boxy_dicts.append(self.allocator, .{
+            .method_slots = .{ .start = method_start, .len = @intCast(slots.items.len) },
+        });
+        try self.descriptor_dicts.append(self.allocator, .{ .dictionaries = dictionaries, .dict = dict_id });
+        return dict_id;
+    }
+
+    /// The Hasher layout of a `to_hash` requirement: its second argument's.
+    fn descriptorDictHasherLayout(self: *ProcedureBuilder, requirement: Plan.DictionaryRequirement) Allocator.Error!layout.Idx {
+        const fn_rep = self.plan.repForSourceType(requirement.fn_ty) orelse
+            boxyLowerInvariant("descriptor dictionary to_hash requirement type was not analyzed");
+        const function = self.staticMethodFunctionForRep(fn_rep) orelse
+            boxyLowerInvariant("descriptor dictionary to_hash requirement was not a function");
+        if (function.arg_count != 2) boxyLowerInvariant("descriptor dictionary to_hash requirement did not take two arguments");
+        const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
+        return self.layout_plan.rep_layouts[@backingInt(children[function.args_start + 1].rep)].worker.layoutIdx();
+    }
+
+    /// `to_hash(value, hasher)` over a dynamic value described by one hidden
+    /// descriptor: the descriptor-guided hashing of `assign_boxy_hash`.
+    fn descriptorHashProc(self: *ProcedureBuilder, module_id: checked.ModuleId, hasher_layout: layout.Idx) Allocator.Error!LIR.LirProcSpecId {
+        if (self.descriptor_hash_proc) |proc_id| return proc_id;
+        if (self.layout_plan.worker_layouts.len == 0) {
+            boxyLowerInvariant("descriptor hash procedure was emitted without a worker layout context");
+        }
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        var proc = ProcBodyBuilder.initSyntheticAdapter(
+            self,
+            procedureModuleById(self.modules, module_id),
+            self.layout_plan.worker_layouts[0],
+            constructlessOrigin(.derived),
+        );
+        defer proc.deinit();
+
+        const dynamic_layout = try self.result.layouts.insertErasedBox();
+        const value = try proc.addArgLocal(dynamic_layout);
+        const hasher = try proc.addArgLocal(hasher_layout);
+        const desc = try proc.addFrameLocal(.opaque_ptr);
+        try proc.markReadOnlyDescriptorInput(desc);
+        try proc.arg_locals.append(self.allocator, desc);
+        self.result.store.setLocalBoxyDesc(value, .{ .local = desc });
+        const result = try proc.addFrameLocal(hasher_layout);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
+        const body = try self.result.store.addCFStmt(.{ .assign_boxy_hash = .{
+            .target = result,
+            .value = value,
+            .hasher = hasher,
+            .desc = .{ .local = desc },
+            .next = ret_stmt,
+        } }, proc.derivedOrigin());
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const proc_symbol = self.symbols.fresh();
+        const proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(proc_symbol),
+            .identity = LIR.ProcIdentity.programLocal("boxy", @backingInt(proc_symbol)),
+            .args = args_span,
+            .frame_locals = frame_span,
+            .body = body,
+            .ret_layout = hasher_layout,
+            .boxy_runtime_entry = true,
+            .stack_probe = self.stackProbeForProc(args_span, frame_span, hasher_layout),
+        }, proc.origin.loc);
+        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
+        self.descriptor_hash_proc = proc_id;
+        return proc_id;
+    }
+
+    /// `is_eq(lhs, rhs)` over two dynamic values described by one hidden
+    /// descriptor: the descriptor-guided equality of `assign_boxy_eq`.
+    fn descriptorEqualityProc(self: *ProcedureBuilder, module_id: checked.ModuleId) Allocator.Error!LIR.LirProcSpecId {
+        if (self.descriptor_equality_proc) |proc_id| return proc_id;
+        if (self.layout_plan.worker_layouts.len == 0) {
+            boxyLowerInvariant("descriptor equality procedure was emitted without a worker layout context");
+        }
+        const saved_tail_builder = self.result.store.tail_call_builder;
+        self.result.store.tail_call_builder = null;
+        defer self.result.store.tail_call_builder = saved_tail_builder;
+        var proc = ProcBodyBuilder.initSyntheticAdapter(
+            self,
+            procedureModuleById(self.modules, module_id),
+            self.layout_plan.worker_layouts[0],
+            constructlessOrigin(.derived),
+        );
+        defer proc.deinit();
+
+        const dynamic_layout = try self.result.layouts.insertErasedBox();
+        const lhs = try proc.addArgLocal(dynamic_layout);
+        const rhs = try proc.addArgLocal(dynamic_layout);
+        const desc = try proc.addFrameLocal(.opaque_ptr);
+        try proc.markReadOnlyDescriptorInput(desc);
+        try proc.arg_locals.append(self.allocator, desc);
+        self.result.store.setLocalBoxyDesc(lhs, .{ .local = desc });
+        self.result.store.setLocalBoxyDesc(rhs, .{ .local = desc });
+        const result = try proc.addFrameLocal(.bool);
+        const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = result } }, proc.derivedOrigin());
+        const body = try self.result.store.addCFStmt(.{ .assign_boxy_eq = .{
+            .target = result,
+            .lhs = lhs,
+            .rhs = rhs,
+            .desc = .{ .local = desc },
+            .next = ret_stmt,
+        } }, proc.derivedOrigin());
+        const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
+        const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const proc_symbol = self.symbols.fresh();
+        const proc_id = try self.result.store.addProcSpec(.{
+            .name = lirSymbol(proc_symbol),
+            .identity = LIR.ProcIdentity.programLocal("boxy", @backingInt(proc_symbol)),
+            .args = args_span,
+            .frame_locals = frame_span,
+            .body = body,
+            .ret_layout = .bool,
+            .boxy_runtime_entry = true,
+            .stack_probe = self.stackProbeForProc(args_span, frame_span, .bool),
+        }, proc.origin.loc);
+        const proc_spec = self.result.store.getProcSpecPtr(proc_id);
+        proc_spec.shapes = proc_spec.shapes.merged(self.result.store.shapes);
+        self.descriptor_equality_proc = proc_id;
+        return proc_id;
+    }
+
+    /// The argument descriptors of a `method` call over the value `ref`
+    /// describes: `ref` for each value argument, and a hash call's Hasher.
+    fn appendDescriptorMethodArgRefs(self: *ProcedureBuilder, method: Plan.DescriptorMethodPlan, ref: LIR.BoxyDescRef) Allocator.Error!LIR.BoxySpan {
+        const second = if (method.second_type) |ty|
+            try self.staticDescRefForRep(self.plan.repForSourceType(ty) orelse
+                boxyLowerInvariant("descriptor method second argument type was not analyzed"))
+        else
+            ref;
+        const refs = [_]LIR.BoxyDescRef{ ref, second };
+        return try self.appendStaticHiddenDescRefs(refs[0..method.kind.argCount()]);
+    }
+
     /// Whether the inspect call instantiates its worker at the worker's own
     /// type parameters; the inspected descriptor then already describes the
     /// value in the worker parameter's storage.
-    fn inspectArgumentIsIdentity(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) bool {
-        if (self.descriptorIdentityRep(inspect.source_rep) != self.descriptorIdentityRep(self.inspectWorkerArgRep(inspect))) return false;
-        for (self.plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)) |arg| {
+    fn descriptorMethodArgumentIsIdentity(self: *const ProcedureBuilder, method: Plan.DescriptorMethodPlan) bool {
+        if (self.descriptorIdentityRep(method.source_rep) != self.descriptorIdentityRep(self.descriptorMethodWorkerArgRep(method))) return false;
+        for (self.plan.directCallHiddenDescriptorArgSlice(method.hidden_desc_args)) |arg| {
             if (self.descriptorIdentityRep(arg.rep) != self.descriptorIdentityRep(arg.worker_rep)) return false;
         }
         return true;
     }
 
-    fn inspectWorkerArgRep(self: *const ProcedureBuilder, inspect: Plan.InspectMethodPlan) Plan.TypeRepId {
-        const worker = self.plan.workers.items[@backingInt(inspect.worker)];
+    /// The worker's first receiver-typed parameter; an `is_eq` worker's two
+    /// parameters share its type.
+    fn descriptorMethodWorkerArgRep(self: *const ProcedureBuilder, method: Plan.DescriptorMethodPlan) Plan.TypeRepId {
+        const worker = self.plan.workers.items[@backingInt(method.worker)];
         const function = self.repQuery().functionChildren(worker.rep) orelse
-            boxyLowerInvariant("boxy inspect worker was not callable");
-        if (function.arg_count != 1) boxyLowerInvariant("boxy inspect worker did not take exactly one argument");
+            boxyLowerInvariant("boxy descriptor method worker was not callable");
+        if (function.arg_count != method.kind.argCount()) boxyLowerInvariant("boxy descriptor method worker had unexpected arity");
         const children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
         return children[function.args_start].rep;
     }
@@ -4304,10 +4629,10 @@ const ProcedureBuilder = struct {
             const concrete_result = try proc.addFrameLocalForRep(concrete.ret);
             const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
             try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, true);
-            const to_requirement = try proc.assignStaticMethodBoundary(result, concrete_result, requirement_function.ret, concrete.ret, ret_stmt);
+            const to_requirement = try proc.assignPlannedCallBoundary(result, concrete_result, requirement_function.ret, concrete.ret, ret_stmt);
             const requirement_step = try proc.leaveDetachedDescriptorScope(detached, to_requirement);
-            break :split try proc.assignStaticMethodBoundary(concrete_result, raw_result, concrete.ret, worker_function.ret, requirement_step);
-        } else try proc.assignStaticMethodBoundary(
+            break :split try proc.assignPlannedCallBoundary(concrete_result, raw_result, concrete.ret, worker_function.ret, requirement_step);
+        } else try proc.assignPlannedCallBoundary(
             result,
             raw_result,
             requirement_function.ret,
@@ -4328,7 +4653,7 @@ const ProcedureBuilder = struct {
             if (concrete_function != null) {
                 const concrete_arg = concrete_arg_reps[arg_index];
                 const concrete_local = try proc.addFrameLocalForRep(concrete_arg);
-                continuation = try proc.assignStaticMethodBoundary(
+                continuation = try proc.assignPlannedCallBoundary(
                     worker_call_args[arg_index],
                     concrete_local,
                     worker_args[arg_index].rep,
@@ -4337,7 +4662,7 @@ const ProcedureBuilder = struct {
                 );
                 const detached = try proc.enterDetachedDescriptorScope(requirement_scope);
                 try proc.bindFrameRequirementDescriptors(frame_requirement_descs, frame_requirement_locals, true);
-                const to_concrete = try proc.assignStaticMethodBoundary(
+                const to_concrete = try proc.assignPlannedCallBoundary(
                     concrete_local,
                     proc.arg_locals.items[arg_index],
                     concrete_arg,
@@ -4347,7 +4672,7 @@ const ProcedureBuilder = struct {
                 continuation = try proc.leaveDetachedDescriptorScope(detached, to_concrete);
                 continue;
             }
-            continuation = try proc.assignStaticMethodBoundary(
+            continuation = try proc.assignPlannedCallBoundary(
                 worker_call_args[arg_index],
                 proc.arg_locals.items[arg_index],
                 worker_args[arg_index].rep,
@@ -4829,7 +5154,7 @@ const ProcedureBuilder = struct {
                         }
                     }
                     if (!has_call_supplied_desc) continue;
-                    if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
+                    if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                         return .{ worker_child.rep, requirement_rep_id };
                     }
                     if (worker_child.role == .tag_ext and requirement_structure_children.len == 0 and requirement_rep.descriptor != null) {
@@ -4855,7 +5180,7 @@ const ProcedureBuilder = struct {
                             return .{ worker_child.rep, requirement_child.rep };
                         }
                     }
-                    if (try self.workerChildCanMatchUnwrappedSourceRep(requirement_rep_id, requirement_child)) {
+                    if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(requirement_rep_id, requirement_child)) {
                         return .{ worker_rep_id, requirement_child.rep };
                     }
                     if (requirement_child.role == .tag_ext and worker_children.len == 0 and worker_rep.descriptor != null) {
@@ -5067,7 +5392,7 @@ const ProcedureBuilder = struct {
                     continue;
                 }
             }
-            if (try self.workerChildCanMatchUnwrappedSourceRep(worker_rep_id, worker_child)) {
+            if (try self.repQuery().workerChildCanMatchUnwrappedCallRep(worker_rep_id, worker_child)) {
                 try pending.append(self.allocator, .{ worker_child.rep, source_rep_id });
                 continue;
             }
@@ -5268,28 +5593,15 @@ const ProcedureBuilder = struct {
     /// comparison: the requirement is the equality method and the source type
     /// resolves no `is_eq` method of its own (an anonymous structural type, or a
     /// nominal that neither declares nor derives equality).
-    fn staticDictionarySlotIsStructuralEq(
+    fn staticDictionarySlotIsStructural(
         self: *ProcedureBuilder,
+        comptime structural_method: []const u8,
         rep_id: Plan.TypeRepId,
         requirement: Plan.DictionaryRequirement,
     ) bool {
         const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
         const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
-        if (!std.mem.eql(u8, method_text, "is_eq")) return false;
-        const source_rep = self.plan.representations.items[@backingInt(rep_id)];
-        const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
-        const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
-        return self.lookupMethodTarget(source_module, owner, requirement_module, requirement.fn_name) == null;
-    }
-
-    fn staticDictionarySlotIsStructuralHash(
-        self: *ProcedureBuilder,
-        rep_id: Plan.TypeRepId,
-        requirement: Plan.DictionaryRequirement,
-    ) bool {
-        const requirement_module = procedureModuleById(self.modules, requirement.source_type.module);
-        const method_text = requirement_module.canonical_names.methodNameText(requirement.fn_name);
-        if (!std.mem.eql(u8, method_text, "to_hash")) return false;
+        if (!std.mem.eql(u8, method_text, structural_method)) return false;
         const source_rep = self.plan.representations.items[@backingInt(rep_id)];
         const source_module = procedureModuleById(self.modules, source_rep.source_type.module);
         const owner = methodOwnerForProcedureType(source_module, source_rep.source_type.ty) orelse return true;
@@ -5655,15 +5967,29 @@ const ProcedureBuilder = struct {
         const ret_stmt = try self.result.store.addCFStmt(.{ .ret = .{ .value = ret_local } }, adapter_proc.origin);
         var continuation = ret_stmt;
 
-        const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
-        continuation = try adapter_proc.assignPlannedCallBoundary(
-            ret_local,
-            raw_ret,
-            target_function.ret,
-            source_function.ret,
-            continuation,
-        );
-        const call_target = raw_ret;
+        // A result that crosses unchanged is written straight to the return
+        // local, which leaves the wrapped callable's call in tail position.
+        const ret_desc_is_shared = if (self.result.store.getLocal(ret_local).boxy_desc) |desc|
+            if (desc.localOrNull()) |local| adapter_proc.localIsDescriptorSlot(local) else false
+        else
+            false;
+        const source_ret_layout = adapter_proc.workerRuntimeLayoutForRep(source_function.ret).layoutIdx();
+        const call_target = if (!ret_desc_is_shared and
+            self.result.store.getLocal(ret_local).layout_idx == source_ret_layout and
+            (adapter_proc.erasedCallResultCanUseTarget(target_function.ret, source_function.ret) or
+                adapter_proc.callResultAdoptsCalleeDescriptor(ret_local, target_function.ret)))
+            ret_local
+        else blk: {
+            const raw_ret = try adapter_proc.addFrameLocalForRepWithFreshDescriptor(source_function.ret);
+            continuation = try adapter_proc.assignPlannedCallBoundary(
+                ret_local,
+                raw_ret,
+                target_function.ret,
+                source_function.ret,
+                continuation,
+            );
+            break :blk raw_ret;
+        };
 
         const out_desc = adapter_proc.callResultOutputDescriptorLocal(call_target);
         if (out_desc) |local| {
@@ -5822,17 +6148,27 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn unreachableDictionaryMethodSlot(
+    /// Why a static dictionary method slot crashes instead of calling a
+    /// method: the checked evidence for that slot is a rejected dispatch.
+    const CrashingDictionaryMethod = enum {
+        /// Checking rejected the dispatch and already reported it.
+        checked_error,
+        /// The dispatcher is a value that can never exist.
+        unreachable_value,
+    };
+
+    fn crashingDictionaryMethodSlot(
         self: *ProcedureBuilder,
         requirement: Plan.DictionaryRequirement,
         fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
     ) Allocator.Error!LirProgram.BoxyMethodSlot {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         if (self.layout_plan.worker_layouts.len == 0) {
-            boxyLowerInvariant("unreachable dictionary method was emitted without a worker layout context");
+            boxyLowerInvariant("crashing dictionary method was emitted without a worker layout context");
         }
 
         const ret_layout = self.layout_plan.rep_layouts[@backingInt(function.ret)].worker.layoutIdx();
@@ -5845,20 +6181,25 @@ const ProcedureBuilder = struct {
             .ret_layout = ret_layout,
             .boxy_runtime_entry = true,
         }, constructlessOrigin(.scaffold).loc);
-        try self.appendProcJob(.{ .unreachable_method = .{ .proc_id = proc_id, .fn_type = fn_type } });
+        try self.appendProcJob(.{ .crashing_method = .{ .proc_id = proc_id, .fn_type = fn_type, .crash = crash } });
         return .{
             .method = requirement.fn_name,
             .proc = proc_id,
         };
     }
 
-    /// Build a dictionary method that crashes: it can only be reached by
-    /// dispatching on a value that can never exist.
-    fn buildUnreachableDictionaryMethod(self: *ProcedureBuilder, proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity) Allocator.Error!void {
+    /// Build a dictionary method that crashes when called: the crash a
+    /// direct dispatch with the same rejected resolution lowers to.
+    fn buildCrashingDictionaryMethod(
+        self: *ProcedureBuilder,
+        proc_id: LIR.LirProcSpecId,
+        fn_type: Plan.CheckedTypeIdentity,
+        crash: CrashingDictionaryMethod,
+    ) Allocator.Error!void {
         const requirement_rep = self.plan.repForSourceType(fn_type) orelse
-            boxyLowerInvariant("unreachable dictionary function type was not analyzed");
+            boxyLowerInvariant("crashing dictionary function type was not analyzed");
         const function = self.staticMethodFunctionForRep(requirement_rep) orelse
-            boxyLowerInvariant("unreachable dictionary requirement was not a function");
+            boxyLowerInvariant("crashing dictionary requirement was not a function");
         const function_children = self.plan.childSlice(self.plan.representations.items[@backingInt(function.rep)].children);
         const function_args = function_children[function.args_start..][0..function.arg_count];
         const saved_tail_builder = self.result.store.tail_call_builder;
@@ -5876,8 +6217,13 @@ const ProcedureBuilder = struct {
         }
         const args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         const frame_span = try self.result.store.addLocalSpan(proc.frame_locals.items);
+        const message = switch (crash) {
+            .checked_error => "method dispatch failed to check",
+            .unreachable_value => "dispatch on a value that can never exist",
+        };
         const body = try self.result.store.addCFStmt(.{ .crash = .{
-            .msg = .{ .literal = try self.result.store.insertString("dispatch on a value that can never exist") },
+            .msg = .{ .literal = try self.result.store.insertString(message) },
+            .checked_error = crash == .checked_error,
         } }, proc.origin);
         const proc_spec = self.result.store.getProcSpecPtr(proc_id);
         proc_spec.args = args_span;
@@ -6015,10 +6361,13 @@ const ProcedureBuilder = struct {
         owner_module: ProcedureModuleView,
         owner: static_dispatch.MethodOwner,
     ) ?InspectOverrideDecision {
-        const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
+        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName("to_inspect") orelse return null;
         const key: static_dispatch.MethodKey = .{ .owner = candidate_owner, .method = candidate_method };
-        _ = (candidate.method_registry.lookup(key) orelse return null).requireTarget("boxy inspect lowering");
+        // A declared `to_inspect` decides inspection in this module; the
+        // registry records an override only for an eligible, unrejected
+        // declaration.
+        _ = candidate.method_registry.lookup(key) orelse return null;
         const override = candidate.method_registry.lookupInspectOverride(key) orelse return .{ .target = null };
         // Inspection calls the method at its checked `T -> Str` instance.
         var target = override.target;
@@ -6033,7 +6382,7 @@ const ProcedureBuilder = struct {
         owner: static_dispatch.MethodOwner,
         method_text: []const u8,
     ) ?MethodTargetLookup {
-        const candidate_owner = methodOwnerInProcedureNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
+        const candidate_owner = Plan.methodOwnerInNames(owner_module.canonical_names, candidate.canonical_names, owner) orelse return null;
         const candidate_method = candidate.canonical_names.lookupMethodName(method_text) orelse return null;
         const found = candidate.method_registry.lookup(.{ .owner = candidate_owner, .method = candidate_method }) orelse return null;
         return .{ .module = candidate, .target = found.requireTarget("boxy procedure lowering") };
@@ -6159,6 +6508,40 @@ const ProcedureBuilder = struct {
     }
 
     /// Source-language shape of the value `rep_id`'s descriptor describes.
+    /// Whether `rep_id` is builtin Bool, through aliases, nominals, and sealed
+    /// defaults, which derived hashing writes as a Bool.
+    fn repDescribesBool(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) bool {
+        var current = rep_id;
+        for (0..self.plan.representations.items.len + 1) |_| {
+            const rep = self.plan.representations.items[@backingInt(current)];
+            if (rep.sealed_default) |sealed_default| {
+                current = sealed_default;
+                continue;
+            }
+            switch (rep.kind) {
+                .bool_tag_union => return true,
+                .alias => current = self.singleChildRepForDesc(current, .alias_backing) orelse return false,
+                .nominal => current = self.singleChildRepForDesc(current, .nominal_backing) orelse return false,
+                .in_progress,
+                .dynamic,
+                .primitive,
+                .tag_union,
+                .empty_tag_union,
+                .erased_callable,
+                .record,
+                .empty_record,
+                .tuple,
+                .list,
+                .box,
+                .generated_field,
+                .generated_field_names,
+                .generated_tag_union_spec,
+                => return false,
+            }
+        }
+        boxyLowerInvariant("cyclic boxy descriptor Bool wrapper chain");
+    }
+
     fn descriptorShapeForRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) LirProgram.BoxyDescShape {
         var current = rep_id;
         for (0..self.plan.representations.items.len + 1) |_| {
@@ -6520,7 +6903,7 @@ const ProcedureBuilder = struct {
     fn descriptorIdentityRep(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
         var current = rep_id;
         while (true) {
-            if (self.plan.inspectMethodForRep(current) != null) return current;
+            if (self.plan.repOwnsDescriptorMethod(current)) return current;
 
             const rep = self.plan.representations.items[@backingInt(current)];
             // An opaque type's descriptor must keep its opacity.
@@ -6609,15 +6992,6 @@ const ProcedureBuilder = struct {
             found = child.rep;
         }
         return found;
-    }
-
-    fn workerChildCanMatchUnwrappedSourceRep(
-        self: *ProcedureBuilder,
-        worker_rep_id: Plan.TypeRepId,
-        worker_child: Plan.RepChild,
-    ) Allocator.Error!bool {
-        const worker_backing = self.repQuery().structuralWrapperBackingRep(worker_rep_id) orelse return false;
-        return worker_child.rep == worker_backing and !try self.repQuery().repSubtreeHasDescriptorInOtherChildren(worker_rep_id, worker_child);
     }
 
     fn findMatchingTagVariant(
@@ -6959,6 +7333,8 @@ const ProcedureBuilder = struct {
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .assign_call_dict,
@@ -7043,6 +7419,10 @@ const ProcedureBuilder = struct {
             try self.collectDescriptorGraphRefs(desc.nested_descs, parent, captures, parents);
             try self.collectDescriptorGraphRefs(desc.inspect_hidden_descs, parent, captures, parents);
             try self.collectDescriptorGraphRefs(desc.inspect_arg_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.eq_hidden_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.eq_arg_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.hash_hidden_descs, parent, captures, parents);
+            try self.collectDescriptorGraphRefs(desc.hash_arg_descs, parent, captures, parents);
             if (desc.tag_ext_desc) |desc_ref| {
                 try self.collectDescriptorGraphRef(desc_ref, parent, captures, parents);
             }
@@ -7193,7 +7573,7 @@ const ProcedureBuilder = struct {
             /// A literal conversion's procedures, filling its reserved
             /// dictionary's method slot.
             literal: struct { index: u32, method_slot: u32 },
-            unreachable_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity },
+            crashing_method: struct { proc_id: LIR.LirProcSpecId, fn_type: Plan.CheckedTypeIdentity, crash: CrashingDictionaryMethod },
         },
     };
 
@@ -7239,7 +7619,7 @@ const ProcedureBuilder = struct {
                 adapter_job.deinit(self.allocator);
                 self.allocator.destroy(adapter_job);
             },
-            .literal, .unreachable_method => {},
+            .literal, .crashing_method => {},
         }
     }
 
@@ -7331,7 +7711,7 @@ const ProcedureBuilder = struct {
                 try self.pushWorkerJob(adapter_job.worker_id);
             },
             .derived => |derived_job| try self.buildDerivedHeader(derived_job),
-            .callable_adapter, .literal, .unreachable_method => {},
+            .callable_adapter, .literal, .crashing_method => {},
         }
     }
 
@@ -7356,7 +7736,7 @@ const ProcedureBuilder = struct {
             .callable_adapter => |adapter_job| try self.buildCallableAdapterBody(adapter_job),
             .static_method_adapter => |adapter_job| try self.buildStaticMethodAdapterBody(adapter_job),
             .literal => |literal| try self.buildLiteralAccessor(literal.index, literal.method_slot),
-            .unreachable_method => |method| try self.buildUnreachableDictionaryMethod(method.proc_id, method.fn_type),
+            .crashing_method => |method| try self.buildCrashingDictionaryMethod(method.proc_id, method.fn_type, method.crash),
         }
         const job = &self.proc_jobs.items[job_index];
         job.status = .finished;
@@ -7452,6 +7832,7 @@ const ProcedureBuilder = struct {
             try proc.bindWorkerDictionaryDescriptors();
             try proc.bindLambdaArgDescriptors();
             header.ret_local = try proc.addWorkerReturnLocal(true);
+            proc.worker_return_local = header.ret_local;
             header.args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
             self.worker_return_locals[index] = header.ret_local;
             const proc_spec = self.result.store.getProcSpecPtr(job.proc_id);
@@ -7468,6 +7849,7 @@ const ProcedureBuilder = struct {
         const erased_reuse_arg = try proc.addArgLocal(try self.result.layouts.insertErasedCallable());
         try proc.bindLambdaArgDescriptors();
         header.ret_local = try proc.addWorkerReturnLocal(true);
+        proc.worker_return_local = header.ret_local;
         header.args_span = try self.result.store.addLocalSpan(proc.arg_locals.items);
         header.erased = .{ .worker_function = worker_function, .erased_arg_desc_params = erased_arg_desc_params };
         const erased_call_args = try proc.erasedCallArgsPlan(proc.arg_locals.items[0..worker_function.arg_count]);
@@ -7670,7 +8052,7 @@ const ProcedureBuilder = struct {
             try getter.bindDescriptorIdentityLocalForRep(binding.scheme_rep, local, true);
             try getter_descriptors.append(self.allocator, .{ .local = local, .materialize = try self.staticDescRefForRep(binding.site_rep) });
         }
-        const site_rep = getter.repForType(expr.ty);
+        const site_rep = getter.repForType(Plan.literalSiteValueType(module.checked_bodies, site.source.expr));
         const frozen_value = try getter.addFrameLocalForRep(initializer.rep);
         const returned_value = try getter.addFrameLocalForRep(site_rep);
         const getter_ret = try self.result.store.addCFStmt(.{ .ret = .{ .value = returned_value } }, origin);
@@ -7722,17 +8104,18 @@ const ProcedureBuilder = struct {
             dictionary_initializer = .{ .local = local, .materialize = try self.staticDictRefForRepWithEvidence(initializer.rep, dictionaries, initializer.method_evidence, 0) };
         };
         const result_value = try proc.addFrameLocalForRep(initializer.rep);
-        const generic_rep = proc.repForType(expr.ty);
+        const generic_rep = proc.repForType(Plan.literalSiteValueType(module.checked_bodies, site.source.expr));
         const generic_value = try proc.addFrameLocalForRepWithFreshDescriptor(generic_rep);
         const done = try self.result.store.addCFStmt(.{ .ret = .{ .value = result_value } }, origin);
         const adapted = try proc.assignRepresentationBoundary(result_value, generic_value, initializer.rep, generic_rep, done);
         var body = switch (expr.data) {
-            .str_from_quote => |quote| try proc.lowerRuntimeQuoteConversionInto(generic_value, site.source.expr, expr.ty, quote.plan, adapted),
+            .str_from_quote => |quote| try proc.lowerRuntimeStringConversionInto(generic_value, site.source.expr, expr.ty, quote.plan, "invalid string literal", adapted),
+            .interpolation => |interpolation| try proc.lowerRuntimeStringConversionInto(generic_value, site.source.expr, interpolation.assembler_ty, interpolation.plan, "invalid string interpolation", adapted),
             .numeral => |numeral| if (initializer.builtin_numeral)
                 try proc.lowerNumFromNumeralInto(result_value, numeral.plan, done)
             else
                 try proc.lowerPendingNumeralConversionInto(generic_value, site.source.expr, expr.ty, numeral.plan, adapted),
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => boxyLowerInvariant("literal initializer did not name a checked conversion"),
         };
         if (dictionary_initializer) |dictionary| body = try proc.prependHiddenDictionaryArgMaterialization(&.{dictionary}, body);
         body = try proc.prependStaticDescriptorMaterializationsForSlots(body);
@@ -7754,8 +8137,13 @@ const ProcedureBuilder = struct {
         };
         self.result.literal_roots.items[index] = .{
             .module = module.key,
-            .id = @fromBackingInt(@intCast(index)),
-            .site = .{ .owner = owner, .checked_expr = @backingInt(site.source.expr), .kind = if (expr.data == .numeral) .numeral else .quote },
+            .id = @fromBackingInt(index),
+            .site = .{ .owner = owner, .checked_expr = @backingInt(site.source.expr), .kind = switch (expr.data) {
+                .numeral => .numeral,
+                .str_from_quote => .quote,
+                .interpolation => .interpolation,
+                .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("literal root did not name a checked literal conversion"),
+            } },
             .proc = proc_id,
             .ret_layout = ret_layout,
             .plan = constant_plan,
@@ -7767,16 +8155,23 @@ const ProcedureBuilder = struct {
         return self.literal_const_plans != null and self.plan.literal_evidence.?.freeze_contexts.items.len != 0;
     }
 
-    fn recordFrozenCallable(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, source_rep: Plan.TypeRepId, target_rep: Plan.TypeRepId, entry: LIR.LirProcSpecId, capture_layout: layout.Idx, on_drop: LIR.ErasedCallableOnDrop, result_rep: Plan.TypeRepId, fields: []const FrozenCaptureRecipe) Allocator.Error!void {
+    fn recordFrozenCallable(self: *ProcedureBuilder, worker: Plan.WorkerPlanId, literal_initializer: ?u32, source_rep: Plan.TypeRepId, target_rep: Plan.TypeRepId, entry: LIR.LirProcSpecId, capture_layout: layout.Idx, on_drop: LIR.ErasedCallableOnDrop, result_rep: Plan.TypeRepId, fields: []const FrozenCaptureRecipe) Allocator.Error!void {
         if (!self.needsFrozenCallableRecipes()) return;
         var hash = base.Sha256.init(.{});
-        const identities = [_]u32{ @backingInt(worker), @backingInt(source_rep), @backingInt(target_rep) };
+        const identities = [_]u32{ @backingInt(worker), @backingInt(source_rep), @backingInt(target_rep), if (literal_initializer) |index| index + 1 else 0 };
         hash.update(std.mem.asBytes(&identities));
         for (fields) |field| {
             const identity = [_]u32{ @backingInt(std.meta.activeTag(field)), switch (field) {
-                .value, .descriptor => |rep| @backingInt(rep),
+                .value => |rep| @backingInt(rep),
+                .descriptor => |descriptor| @backingInt(descriptor.worker_rep),
                 .dictionary => |span| span.start,
                 .literal => |index| index,
+            }, switch (field) {
+                .descriptor => |descriptor| @backingInt(descriptor.source_rep),
+                .value, .dictionary, .literal => 0,
+            }, switch (field) {
+                .descriptor => |descriptor| if (descriptor.exact) |id| @backingInt(id) + 1 else 0,
+                .value, .dictionary, .literal => 0,
             } };
             hash.update(std.mem.asBytes(&identity));
         }
@@ -7785,7 +8180,7 @@ const ProcedureBuilder = struct {
         for (self.frozen_callable_recipes.items) |existing| {
             if (std.mem.eql(u8, &existing.key, &key)) return;
         }
-        try self.frozen_callable_recipes.append(self.allocator, .{ .worker = worker, .source_rep = source_rep, .entry = entry, .key = key, .capture_layout = capture_layout, .on_drop = on_drop, .result_rep = result_rep, .rep = target_rep, .fields = try self.allocator.dupe(FrozenCaptureRecipe, fields) });
+        try self.frozen_callable_recipes.append(self.allocator, .{ .worker = worker, .source_rep = source_rep, .entry = entry, .key = key, .capture_layout = capture_layout, .on_drop = on_drop, .result_rep = result_rep, .rep = target_rep, .fields = try self.allocator.dupe(FrozenCaptureRecipe, fields), .literal_initializer = literal_initializer });
     }
 
     fn emitHostedExternalProc(
@@ -7865,9 +8260,9 @@ const ProcedureBuilder = struct {
         checked_expr: checked.CheckedExprId,
         hosted,
         unimplemented,
+        const_crash: checked.ConstNodeId,
         generated_codec: Plan.GeneratedCodecSource,
         generated_field_iterator: Plan.GeneratedFieldIteratorSource,
-        generated_interpolation_step: Plan.GeneratedInterpolationStepSource,
         generated_evidence_intrinsic: checked.IntrinsicId,
         str_inspect: struct {
             arg: LIR.LocalId,
@@ -7897,24 +8292,13 @@ const ProcedureBuilder = struct {
             .intrinsic => |intrinsic| try self.bodySourceForIntrinsic(resolved, proc, intrinsic),
             .hosted => try self.bodySourceForHosted(proc),
             .unimplemented => try self.bodySourceForUnimplemented(proc),
+            .const_crash => |node| blk: {
+                _ = try self.bodySourceForUnimplemented(proc);
+                break :blk .{ .const_crash = node };
+            },
             .generated_codec => |source| try self.bodySourceForGeneratedCodec(proc, source),
             .generated_field_iterator => |source| try self.bodySourceForGeneratedFieldIterator(proc, source),
-            .generated_interpolation_step => |source| try self.bodySourceForGeneratedInterpolationStep(proc, source),
         };
-    }
-
-    fn bodySourceForGeneratedInterpolationStep(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedInterpolationStepSource,
-    ) Allocator.Error!WorkerBodySource {
-        const worker = proc.parent.plan.workers.items[@backingInt(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        if (function.arg_count != 0 or proc.worker_layout.args.len != 0) {
-            boxyLowerInvariant("generated interpolation step worker was not zero-argument");
-        }
-        return .{ .generated_interpolation_step = source };
     }
 
     fn bodySourceForGeneratedFieldIterator(
@@ -8067,9 +8451,18 @@ const ProcedureBuilder = struct {
             .unimplemented => try self.result.store.addCFStmt(.{ .crash = .{
                 .msg = .{ .literal = try self.result.store.insertString(Common.unimplemented_declaration_crash) },
             } }, proc.origin),
+            .const_crash => |node| switch (resolved.module.const_store.get(node)) {
+                .crash => |str| try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                } }, proc.origin),
+                .checked_error => |str| try self.result.store.addCFStmt(.{ .crash = .{
+                    .msg = .{ .literal = try self.result.store.insertString(resolved.module.const_store.strBytes(str)) },
+                    .checked_error = true,
+                } }, proc.origin),
+                .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => boxyLowerInvariant("boxy constant crash worker's constant was not a crash"),
+            },
             .generated_codec => |source| try self.lowerGeneratedCodecWorkerInto(proc, source, ret_local, ret_stmt),
             .generated_field_iterator => |source| try self.lowerGeneratedFieldIteratorStepInto(proc, source, ret_local, ret_stmt),
-            .generated_interpolation_step => |source| try self.lowerGeneratedInterpolationStepInto(proc, source, ret_local, ret_stmt),
             .generated_evidence_intrinsic => |intrinsic| try self.lowerGeneratedEvidenceIntrinsicInto(proc, intrinsic, ret_local, ret_stmt),
             .str_inspect => |inspect| blk: {
                 try proc.markLocalDescriptorForType(inspect.arg, inspect.arg_ty);
@@ -8799,259 +9192,6 @@ const ProcedureBuilder = struct {
         } }, proc.derivedOrigin());
     }
 
-    /// A generated interpolation iterator's nodes, built one node at a time
-    /// from the last execution-order node; a node's item expressions are
-    /// lowered as a piece of the expression machine.
-    const InterpolationIterState = struct {
-        planned: Plan.GeneratedInterpolationPlan,
-        interpolation: checked.CheckedInterpolation,
-        iter_values: []LIR.LocalId,
-        /// The node being built.
-        index: usize = 0,
-        continuation: LIR.CFStmtId,
-        /// The current node's locals, built before its items are lowered.
-        len: LIR.LocalId = undefined,
-        step: LIR.LocalId = undefined,
-        remaining: LIR.LocalId = undefined,
-        len_rep: Plan.TypeRepId = undefined,
-        item_exprs: [2]checked.CheckedExprId = undefined,
-        /// The current node's nominal wrapper formal scope: the iterator's
-        /// fields live in `Iter`'s shared backing, whose item formal names
-        /// this interpolation's item type only inside the wrapper's scope.
-        scope: ?ProcBodyBuilder.NominalBackingFormalScope = null,
-    };
-
-    fn beginGeneratedInterpolationIter(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        requested_target: LIR.LocalId,
-        requested_target_rep: Plan.TypeRepId,
-        expr_id: checked.CheckedExprId,
-        requested_next: LIR.CFStmtId,
-    ) Allocator.Error!*InterpolationIterState {
-        const interpolation_id = Plan.CheckedExprIdentity{ .module = proc.module.key, .expr = expr_id };
-        const planned = self.plan.generatedInterpolationPlan(interpolation_id, proc.worker_layout.worker) orelse
-            boxyLowerInvariant("generated interpolation operand had no worker plan");
-        // The iterator is built at its planned representation and converted
-        // into the requested one.
-        var target = requested_target;
-        var next = requested_next;
-        if (planned.iter_rep != requested_target_rep) {
-            const exact_target = try proc.addFrameBoundaryTargetLocalForRep(planned.iter_rep);
-            next = try proc.assignRepresentationBoundary(requested_target, exact_target, requested_target_rep, planned.iter_rep, requested_next);
-            target = exact_target;
-        }
-
-        const expr = proc.module.checked_bodies.expr(expr_id);
-        if (expr.data != .interpolation) {
-            boxyLowerInvariant("generated interpolation operand pointed at a non-interpolation expression");
-        }
-        const interpolation = expr.data.interpolation;
-        const iter_values = try self.allocator.alloc(LIR.LocalId, interpolation.parts.len + 1);
-        errdefer self.allocator.free(iter_values);
-        iter_values[0] = target;
-        for (iter_values[1..]) |*iter_value| {
-            iter_value.* = try proc.addFrameBoundaryTargetLocalForRep(planned.iter_rep);
-        }
-        const state = try self.allocator.create(InterpolationIterState);
-        state.* = .{ .planned = planned, .interpolation = interpolation, .iter_values = iter_values, .continuation = next };
-        return state;
-    }
-
-    fn freeInterpolationIterState(self: *ProcedureBuilder, state: *InterpolationIterState) void {
-        self.allocator.free(state.iter_values);
-        self.allocator.destroy(state);
-    }
-
-    /// Build the current node up to its item, returning the item's
-    /// expressions to lower, or finish a node without an item.
-    fn beginGeneratedInterpolationNode(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *InterpolationIterState,
-    ) Allocator.Error!?ProcBodyBuilder.ExprTask {
-        const iter_rep = state.planned.iter_rep;
-        const interpolation = state.interpolation;
-        const index = state.index;
-        const target = state.iter_values[index];
-        const rest: ?LIR.LocalId = if (index < interpolation.parts.len) state.iter_values[index + 1] else null;
-        const planned = state.planned;
-        state.scope = try proc.enterNominalWrapperFormalScopes(iter_rep);
-        const len_child = proc.generatedRecordFieldChild(iter_rep, "len_if_known");
-        const step_child = proc.generatedRecordFieldChild(iter_rep, "step");
-        state.len = try proc.addFrameLocalForRep(len_child.rep);
-        state.step = try proc.addFrameLocalForRep(step_child.rep);
-        state.remaining = try proc.addFrameLocal(.u64);
-        state.len_rep = len_child.rep;
-
-        var continuation = try proc.assignGeneratedParserTwoFieldRecord(
-            target,
-            iter_rep,
-            "len_if_known",
-            state.len,
-            len_child.rep,
-            "step",
-            state.step,
-            step_child.rep,
-            state.continuation,
-        );
-        if (index == interpolation.parts.len) {
-            state.continuation = try self.packGeneratedInterpolationStep(
-                proc,
-                state.step,
-                step_child.rep,
-                planned.done_step,
-                &.{},
-                continuation,
-            );
-            return null;
-        }
-        const step_worker = self.plan.workers.items[@backingInt(planned.one_step)];
-        if (step_worker.source != .generated_interpolation_step) {
-            boxyLowerInvariant("generated interpolation One worker had the wrong source kind");
-        }
-        const step_source = step_worker.source.generated_interpolation_step;
-        const payload_type = step_source.one_payload_type orelse
-            boxyLowerInvariant("generated interpolation One worker had no payload type");
-        const payload_rep = proc.repForTypeRef(payload_type);
-        const item_child = proc.generatedRecordFieldChild(payload_rep, "item");
-        const item = try proc.addFrameBoundaryTargetLocalForRep(item_child.rep);
-        const payload = try proc.addFrameBoundaryTargetLocalForRep(payload_rep);
-        const rest_value = rest orelse
-            boxyLowerInvariant("generated interpolation One step had no rest iterator");
-
-        continuation = try self.packGeneratedInterpolationStep(
-            proc,
-            state.step,
-            step_child.rep,
-            planned.one_step,
-            &.{payload},
-            continuation,
-        );
-        continuation = try proc.assignGeneratedParserTwoFieldRecord(
-            payload,
-            payload_rep,
-            "item",
-            item,
-            item_child.rep,
-            "rest",
-            rest_value,
-            planned.iter_rep,
-            continuation,
-        );
-        const item_rep = proc.tupleRepForBoundary(item_child.rep) orelse
-            boxyLowerInvariant("generated interpolation item was not a tuple representation");
-        const item_shape = self.plan.representations.items[@backingInt(item_rep)];
-        const part = interpolation.parts[index];
-        state.item_exprs = .{ part.value, part.following_segment };
-        return .{ .exprs_struct = .{
-            .target = item,
-            .target_rep = item_child.rep,
-            .items = &state.item_exprs,
-            .item_reps = self.plan.childSlice(item_shape.children),
-            .next = continuation,
-        } };
-    }
-
-    /// Finish the current node once its item is built.
-    fn finishGeneratedInterpolationNode(
-        _: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        state: *InterpolationIterState,
-    ) Allocator.Error!void {
-        const index = state.index;
-        try proc.recordAggregateLocalDescriptorEnvironment(state.iter_values[index], state.planned.iter_rep, &.{ state.len, state.step });
-        var continuation = try proc.assignGeneratedIteratorLength(state.len, state.len_rep, .all, state.remaining, state.continuation);
-        continuation = try proc.assignIntLiteral(state.remaining, @intCast(state.interpolation.parts.len - index), continuation);
-        const scope = state.scope.?;
-        state.scope = null;
-        state.continuation = try proc.leaveNominalBackingFormalScope(scope, continuation);
-        state.index += 1;
-    }
-
-    fn packGeneratedInterpolationStep(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        worker_id: Plan.WorkerPlanId,
-        capture_values: []const LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@backingInt(worker_id)];
-        const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var descriptor_initializers = std.ArrayList(ProcBodyBuilder.DescriptorArgLocal).empty;
-        defer descriptor_initializers.deinit(self.allocator);
-        var dictionary_initializers = std.ArrayList(ProcBodyBuilder.DictionaryArgLocal).empty;
-        defer dictionary_initializers.deinit(self.allocator);
-        const all_capture_values = try self.generatedCodecCaptureValues(proc, worker_id, captures, capture_values, &descriptor_initializers, &dictionary_initializers);
-        defer self.allocator.free(all_capture_values);
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        const worker_layout = self.layout_plan.workerLayoutFor(worker_id);
-        const erased_proc = try self.reserveErasedWorkerProc(worker_id);
-        const result_desc = try proc.exactCallResultDescriptorRef(function.ret);
-        const boundary = try self.generatedCallablePackBoundary(proc, target, target_rep, function, next);
-        const entry = try proc.packGeneratedErasedCallable(
-            boundary.target,
-            erased_proc,
-            worker_id,
-            function.rep,
-            function.ret,
-            result_desc,
-            captures,
-            all_capture_values,
-            worker_layout.erased_capture_layout,
-            boundary.next,
-        );
-        try self.finishGeneratedCallablePackBoundary(proc, boundary);
-        return try proc.prependDescriptorArgMaterializations(descriptor_initializers.items, try proc.prependHiddenDictionaryArgMaterialization(dictionary_initializers.items, entry));
-    }
-
-    fn lowerGeneratedInterpolationStepInto(
-        self: *ProcedureBuilder,
-        proc: *ProcBodyBuilder,
-        source: Plan.GeneratedInterpolationStepSource,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
-        const function = proc.functionChildrenForRep(worker.rep) orelse
-            boxyLowerInvariant("generated interpolation step worker was not callable");
-        if (!planTypeRefEql(worker.checked_type, source.step_type)) {
-            boxyLowerInvariant("generated interpolation worker type disagreed with its source");
-        }
-        const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
-        var payload_capture: ?LIR.LocalId = null;
-        for (captures, proc.erased_capture_locals.items) |capture, capture_local| {
-            if (capture.kind != .captured_value) continue;
-            if (payload_capture != null) {
-                boxyLowerInvariant("generated interpolation worker had multiple value captures");
-            }
-            payload_capture = capture_local;
-        }
-        if (source.one_payload_type) |payload_type| {
-            const payload = payload_capture orelse {
-                boxyLowerInvariant("generated interpolation One worker did not have one payload capture");
-            };
-            const payload_rep = proc.repForTypeRef(payload_type);
-            const one = proc.generatedParserTagVariant(function.ret, "One");
-            return try proc.assignGeneratedParserTag(
-                target,
-                function.ret,
-                one,
-                payload,
-                payload_rep,
-                next,
-            );
-        }
-        if (payload_capture != null) {
-            boxyLowerInvariant("generated interpolation Done worker unexpectedly had a value capture");
-        }
-        const done = proc.generatedParserTagVariant(function.ret, "Done");
-        return try proc.assignGeneratedParserZeroTag(target, function.ret, done, next);
-    }
-
     fn lowerGeneratedFieldIteratorValueInto(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
@@ -9484,7 +9624,7 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated encoder body had no encoding type");
         const encoding = proc.erased_capture_locals.items[0];
 
-        if (proc.generatedCodecCallPlanOrNull(caller, schema_type, "encoder_for", schema_type)) |constructor_call| {
+        if (proc.generatedCodecCallPlanOrNull(caller, schema_type, base.Ident.ENCODER_FOR_METHOD_NAME, schema_type)) |constructor_call| {
             const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
             const function = proc.functionChildrenForRep(worker.rep) orelse
                 boxyLowerInvariant("generated encoder worker was not callable");
@@ -9577,9 +9717,10 @@ const ProcedureBuilder = struct {
             const backing = proc.repQuery().requiredSingleChild(shape_rep, role);
             var backing_request = request;
             backing_request.schema_type = backing.source_type;
+            if (shape_plan.kind == .alias and planTypeRefEql(subject_type, schema_type)) backing_request.subject_type = backing.source_type;
             return .{ .request = backing_request };
         }
-        if (generatedEncoderScalarMethodForRep(self.plan, shape_rep)) |method_text| {
+        if (generatedCodecScalarMethodForRep(self.plan, shape_rep, "encode_")) |method_text| {
             const call = proc.generatedCodecCallPlan(caller, encoding_type, method_text, subject_type);
             return .{ .done = try self.lowerGeneratedCodecCallLocalsInto(
                 proc,
@@ -10437,11 +10578,7 @@ const ProcedureBuilder = struct {
                     value.* = proc.descriptorLocalForRequirementAndRepOrNull(desc, capture.rep) orelse materialized: {
                         const materialization = try proc.descriptorMaterializationForSourceRep(capture.rep);
                         const local = try proc.addFrameLocal(.opaque_ptr);
-                        try descriptor_initializers.append(self.allocator, .{
-                            .local = local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        });
+                        try descriptor_initializers.append(self.allocator, materialization.initializer(local));
                         break :materialized local;
                     };
                 },
@@ -11475,7 +11612,7 @@ const ProcedureBuilder = struct {
         schema_source.shape = schema_type;
         const encoding_type = source.capture_type orelse
             boxyLowerInvariant("generated parser runtime had no encoding capture type");
-        if (generatedParserScalarMethodForRep(self.plan, shape_rep)) |method_text| {
+        if (generatedCodecScalarMethodForRep(self.plan, shape_rep, "parse_")) |method_text| {
             return try self.lowerGeneratedScalarParserRuntimeInto(
                 proc,
                 worker_id,
@@ -11955,11 +12092,11 @@ const ProcedureBuilder = struct {
             const constructor_call = proc.generatedCodecCallPlanOrNull(
                 context.worker,
                 shape_type,
-                "parser_for",
+                base.Ident.PARSER_FOR_METHOD_NAME,
                 shape_type,
             );
             const scalar_call = if (constructor_call == null) blk: {
-                const method = generatedParserScalarMethodForRep(self.plan, shape_rep) orelse break :blk null;
+                const method = generatedCodecScalarMethodForRep(self.plan, shape_rep, "parse_") orelse break :blk null;
                 break :blk proc.generatedCodecCallPlan(context.worker, context.encoding_type, method, shape_type);
             } else null;
             if (constructor_call != null or scalar_call != null) {
@@ -15100,6 +15237,8 @@ const ProcedureBuilder = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -15261,11 +15400,8 @@ const ProcedureBuilder = struct {
                         const source = switch (assign.op) {
                             .local => |local| local,
                             .field => |field| field.source,
-                            .discriminant => |op| op.source,
-                            .tag_payload => |op| op.source,
-                            .tag_payload_struct => |op| op.source,
-                            .list_reinterpret => |op| op.backing_ref,
-                            .nominal => |op| op.backing_ref,
+                            inline .discriminant, .tag_payload, .tag_payload_struct => |op| op.source,
+                            inline .list_reinterpret, .nominal => |op| op.backing_ref,
                         };
                         if (!dynamic.contains(source)) continue;
                         const entry = try dynamic.getOrPut(assign.target);
@@ -15284,6 +15420,8 @@ const ProcedureBuilder = struct {
                     .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_inspect,
+                    .assign_boxy_eq,
+                    .assign_boxy_hash,
                     .assign_boxy_tag,
                     .assign_boxy_tag_payload,
                     .boxy_tag_match,
@@ -15340,14 +15478,14 @@ const ProcedureBuilder = struct {
                     const call_args = self.result.store.getLocalSpan(assign.args);
                     const callee_args = self.result.store.getLocalSpan(callee.args);
                     if (call_args.len != callee_args.len) {
-                        std.debug.panic(
+                        base.invariant(
                             "boxy lower invariant violated: direct-call argument count disagreed with finalized callee ABI: stmt={d} callee={d} call_args={d} callee_args={d}",
                             .{ stmt_index, @backingInt(assign.proc), call_args.len, callee_args.len },
                         );
                     }
                     if (!unused_static_calls.contains(stmt_id)) {
                         if ((assign.out_desc != null) != (callee.runtime_ret_desc != null)) {
-                            std.debug.panic(
+                            base.invariant(
                                 "boxy lower invariant violated: direct-call descriptor output disagreed with finalized callee ABI: stmt={d} callee={d} call_out={any} callee_out={any}",
                                 .{ stmt_index, @backingInt(assign.proc), assign.out_desc != null, callee.runtime_ret_desc != null },
                             );
@@ -15367,6 +15505,8 @@ const ProcedureBuilder = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -15503,6 +15643,9 @@ const ProcBodyBuilder = struct {
     erased_capture_arg: ?LIR.LocalId,
     erased_capture_contents_desc: ?LIR.LocalId,
     erased_capture_locals: std.ArrayList(LIR.LocalId),
+    /// Boxed slot of each recursive value binder in scope: reserved with the
+    /// declaring block, or received as an erased capture.
+    recursive_value_slots: std.AutoHashMapUnmanaged(checked.PatternBinderId, LIR.LocalId),
     worker_argument_desc_initializers: std.ArrayList(DescriptorArgLocal),
     erased_capture_value_desc_initializers: std.ArrayList(DescriptorArgLocal),
     stored_capture_initializers: std.ArrayList(StoredCaptureInitializer),
@@ -15516,6 +15659,7 @@ const ProcBodyBuilder = struct {
     derived_expanding: ?Plan.TypeRepId = null,
     next_join_point: u32,
     current_lambda: ?checked.CheckedExprId,
+    worker_return_local: ?LIR.LocalId = null,
     /// Provenance of the construct this builder is currently lowering. The
     /// body's creator states it explicitly (scaffold or derived, naming the
     /// construct that demanded the body), and the expression machine
@@ -15671,6 +15815,11 @@ const ProcBodyBuilder = struct {
     const DescriptorMaterialization = struct {
         desc: LIR.BoxyDescRef,
         captures: LIR.LocalSpan = .{ .start = 0, .len = 0 },
+
+        /// The initializer that materializes this descriptor into `local`.
+        fn initializer(self: DescriptorMaterialization, local: LIR.LocalId) DescriptorArgLocal {
+            return .{ .local = local, .materialize = self.desc, .captures = self.captures };
+        }
     };
 
     const StoredCaptureInitializer = struct {
@@ -15937,6 +16086,7 @@ const ProcBodyBuilder = struct {
             .erased_capture_arg = null,
             .erased_capture_contents_desc = null,
             .erased_capture_locals = .empty,
+            .recursive_value_slots = .empty,
             .worker_argument_desc_initializers = .empty,
             .erased_capture_value_desc_initializers = .empty,
             .stored_capture_initializers = .empty,
@@ -15997,6 +16147,7 @@ const ProcBodyBuilder = struct {
         self.erased_capture_value_desc_initializers.deinit(self.parent.allocator);
         self.worker_argument_desc_initializers.deinit(self.parent.allocator);
         self.erased_capture_locals.deinit(self.parent.allocator);
+        self.recursive_value_slots.deinit(self.parent.allocator);
         self.parent.allocator.free(self.dictionary_slots);
         self.parent.allocator.free(self.dictionary_bound);
         self.parent.allocator.free(self.dictionary_locals);
@@ -16192,28 +16343,10 @@ const ProcBodyBuilder = struct {
     }
 
     fn bindHiddenDescriptorArgs(self: *ProcBodyBuilder) Allocator.Error!void {
+        try self.bindPassthroughHiddenDescriptorArgs();
         const worker = self.parent.plan.workers.items[@backingInt(self.worker_layout.worker)];
         const params = self.parent.plan.hiddenDescriptorParamSlice(worker.hidden_descs);
-        const layouts = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.hidden_descs);
-        if (params.len != layouts.len) {
-            boxyLowerInvariant("boxy worker hidden descriptor param count disagreed with layout plan");
-        }
-        if (params.len == 0) return;
-
-        try self.ensureDescriptorLocals();
-        for (params, layouts) |param, runtime_layout| {
-            const layout_idx = runtime_layout.layoutIdx();
-            if (layout_idx != .opaque_ptr) {
-                boxyLowerInvariant("boxy hidden descriptor arg layout was not opaque_ptr");
-            }
-            const local = try self.addArgLocal(layout_idx);
-            try self.markReadOnlyDescriptorInput(local);
-            try self.bindDescriptorRequirementLocalForRep(param.desc, param.rep, local, true);
-            if (self.repOwnsDescriptor(param.rep, param.desc)) {
-                try self.bindDescriptorIdentityLocalForRep(param.rep, local, true);
-            }
-        }
-        try self.prepareHiddenDescriptorArgumentRoots(params);
+        if (params.len != 0) try self.prepareHiddenDescriptorArgumentRoots(params);
     }
 
     /// A static dictionary method adapter accepts the requirement's explicit
@@ -16265,7 +16398,7 @@ const ProcBodyBuilder = struct {
         for (args, self.arg_locals.items[0..args.len]) |arg, arg_local| {
             var abi_params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer abi_params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &abi_params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &abi_params, &seen_reps, &seen_descs);
             for (abi_params.items) |param| {
                 if (next_param >= worker_params.len or
                     worker_params[next_param].desc != param.desc or
@@ -16362,11 +16495,7 @@ const ProcBodyBuilder = struct {
                 const root_param = params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
-                try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
-                    .local = rebuilt,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                });
+                try self.worker_argument_desc_initializers.append(self.parent.allocator, materialization.initializer(rebuilt));
                 try appendUniqueLocal(self.parent.allocator, &self.runtime_initialized_descriptor_locals, rebuilt);
                 try self.recordDescriptorLocalTemplate(rebuilt, materialization);
                 try self.bindDescriptorRequirementLocalForRep(root_param.desc, root_param.rep, rebuilt, true);
@@ -16459,7 +16588,6 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -16651,7 +16779,7 @@ const ProcBodyBuilder = struct {
         defer self.parent.allocator.free(param_starts);
         param_starts[0] = 0;
         for (args, 0..) |arg, arg_index| {
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             param_starts[arg_index + 1] = params.items.len;
         }
         if (params.items.len == 0) return .{};
@@ -16735,7 +16863,7 @@ const ProcBodyBuilder = struct {
             defer param_locals.deinit(self.parent.allocator);
             var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
             defer bindings.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, param_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy erased argument descriptor parameter key exceeded its index range");
@@ -16834,11 +16962,7 @@ const ProcBodyBuilder = struct {
                 const root_param = all_params.items[root_param_index.?];
                 const rebuilt = try self.addFrameLocal(.opaque_ptr);
                 const materialization = try self.descriptorMaterializationForKnownRepWithOverrides(arg.rep, overrides.items);
-                try self.worker_argument_desc_initializers.append(self.parent.allocator, .{
-                    .local = rebuilt,
-                    .materialize = materialization.desc,
-                    .captures = materialization.captures,
-                });
+                try self.worker_argument_desc_initializers.append(self.parent.allocator, materialization.initializer(rebuilt));
                 try appendUniqueLocal(self.parent.allocator, &self.runtime_initialized_descriptor_locals, rebuilt);
                 try self.recordDescriptorLocalTemplate(rebuilt, materialization);
                 try self.bindDescriptorRequirementLocalForRep(root_param.desc, root_param.rep, rebuilt, true);
@@ -16984,7 +17108,6 @@ const ProcBodyBuilder = struct {
                 .parser_constructor, .encoder_constructor => false,
             },
             .generated_field_iterator => true,
-            .generated_interpolation_step => true,
             .procedure_template, .procedure_binding, .procedure_use, .nested_expr => false,
         };
 
@@ -17006,19 +17129,54 @@ const ProcBodyBuilder = struct {
             source_capture_index -= 1;
             const pattern_id = source_captures[source_capture_index].pattern;
             const pattern_rep = self.repForType(self.module.checked_bodies.pattern(pattern_id).ty);
-            const binding_local = if (self.representationBoundaryIsDirect(pattern_rep, capture.rep))
-                slot_local
+            // A recursive value's slot is filled before any call can run this
+            // worker, so its value is read once on entry. The slot stays in
+            // scope for callables this worker builds that capture it too.
+            const slot_wrapper_rep = if (capture.recursive_slot)
+                self.repQuery().requiredSingleChild(capture.rep, .box_payload).rep
+            else
+                null;
+            const value_rep = if (slot_wrapper_rep) |wrapper_rep|
+                self.repQuery().requiredSingleChild(wrapper_rep, .{ .tuple_elem = 0 }).rep
+            else
+                capture.rep;
+            const slot_wrapper_local = if (slot_wrapper_rep) |wrapper_rep| wrapper: {
+                const local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(wrapper_rep).layoutIdx());
+                try self.prepareRecursiveValueSlotRead(local, wrapper_rep);
+                break :wrapper local;
+            } else null;
+            const value_local = if (capture.recursive_slot) recursive: {
+                const local = try self.addFrameLocal(self.workerRuntimeLayoutForRep(value_rep).layoutIdx());
+                try self.prepareRecursiveValueSlotRead(local, value_rep);
+                break :recursive local;
+            } else slot_local;
+            const binding_local = if (self.representationBoundaryIsDirect(pattern_rep, value_rep))
+                value_local
             else
                 try self.addFrameBoundaryTargetLocalForRep(pattern_rep);
             continuation = try self.bindPatternFromLocal(pattern_id, binding_local, continuation);
-            if (binding_local != slot_local) {
+            if (binding_local != value_local) {
                 continuation = try self.assignPlannedCallBoundary(
                     binding_local,
-                    slot_local,
+                    value_local,
                     pattern_rep,
-                    capture.rep,
+                    value_rep,
                     continuation,
                 );
+            }
+            if (capture.recursive_slot) {
+                try self.recursive_value_slots.put(
+                    self.parent.allocator,
+                    source_captures[source_capture_index].capture_id.binder(),
+                    slot_local,
+                );
+                const wrapper_local = slot_wrapper_local.?;
+                continuation = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
+                    .target = value_local,
+                    .op = .{ .field = .{ .source = wrapper_local, .field_idx = 0 } },
+                    .next = continuation,
+                } }, self.glueOrigin());
+                continuation = try self.assignUnaryLowLevel(wrapper_local, .box_unbox, slot_local, continuation);
             }
             continuation = try self.prependErasedCaptureSlotRead(slot_local, capture_value, @intCast(index), continuation);
         }
@@ -17115,29 +17273,19 @@ const ProcBodyBuilder = struct {
     fn erasedCaptureSlotLayout(self: *ProcBodyBuilder, capture: Plan.ErasedCapture) layout.Idx {
         return switch (capture.kind) {
             .captured_value => self.workerRuntimeLayoutForRep(capture.rep).layoutIdx(),
-            .hidden_desc => .opaque_ptr,
-            .hidden_dict, .hidden_literal => .opaque_ptr,
+            .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
         };
     }
 
     fn workerSourceCaptures(self: *ProcBodyBuilder) []const checked.CheckedCapture {
         const worker = self.parent.plan.workers.items[@backingInt(self.worker_layout.worker)];
         return switch (worker.source) {
-            .nested_expr => |expr_ref| blk: {
-                const module = procedureModuleById(self.parent.modules, expr_ref.module);
-                const expr = module.checked_bodies.expr(expr_ref.expr);
-                break :blk switch (expr.data) {
-                    .closure => |closure| closure.captures,
-                    .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable worker source did not point at a lambda or closure"),
-                };
-            },
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => &.{},
         };
     }
@@ -17178,6 +17326,7 @@ const ProcBodyBuilder = struct {
             saved: ?ModuleExprSaved = null,
         },
         statement: struct { statement_id: checked.CheckedStatementId, next: LIR.CFStmtId },
+        decl_pattern: struct { pattern: checked.CheckedPatternId, expr: checked.CheckedExprId, next: LIR.CFStmtId },
         if_: struct {
             target: LIR.LocalId,
             if_ty: checked.CheckedTypeId,
@@ -17302,14 +17451,6 @@ const ProcBodyBuilder = struct {
             state: ?*PlannedCallState = null,
         },
         pattern: PatternTask,
-        /// A compiler-generated iterator over an interpolation's parts.
-        interpolation_iter: struct {
-            target: LIR.LocalId,
-            target_rep: Plan.TypeRepId,
-            expr_id: checked.CheckedExprId,
-            next: LIR.CFStmtId,
-            state: ?*ProcedureBuilder.InterpolationIterState = null,
-        },
         /// Expressions lowered into a struct's fields.
         exprs_struct: struct {
             target: LIR.LocalId,
@@ -17397,6 +17538,7 @@ const ProcBodyBuilder = struct {
         /// Materialize descriptor initializers, owning the slice.
         prepend_descriptor_initializers: []DescriptorArgLocal,
         capture_snapshots: checked.CheckedExprId,
+        recursive_value_slots: checked.CheckedPatternId,
         runtime_error,
         /// Crash when a declaration's pattern misses.
         pattern_miss_crash: LIR.JoinPointId,
@@ -17434,7 +17576,7 @@ const ProcBodyBuilder = struct {
         var copy = task;
         switch (copy) {
             .chain => |*chain| chain.current = next,
-            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .interpolation_iter, .exprs_struct => |*payload| payload.next = next,
+            inline .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .module_expr, .statement, .decl_pattern, .if_, .bool_binop, .match_, .match_branch, .shared_rep, .while_, .iter_dispatch, .iterator_for, .iterator_loop_body, .iterator_one_branch, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .planned_call, .pattern, .stored_across, .exprs_struct => |*payload| payload.next = next,
         }
         return copy;
     }
@@ -17487,7 +17629,7 @@ const ProcBodyBuilder = struct {
                 for (chain.items[chain.index..]) |item| switch (item) {
                     .record_local_env => |env| self.parent.allocator.free(env.bindings),
                     .prepend_descriptor_initializers => |initializers| self.parent.allocator.free(initializers),
-                    .capture_snapshots, .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
+                    .capture_snapshots, .recursive_value_slots, .lower, .propagate_desc, .prepend_field_initializers, .record_aggregate_env, .leave_scope, .str_concat, .missing_optional_slot, .record_ext_field, .call_operand, .boundary_assign, .const_list_element_box, .bind_shared_descriptor, .restore_descriptors, .runtime_error, .pattern_miss_crash, .callable_adapter => {},
                 };
                 if (chain.scope) |scope| self.dropNominalBackingFormalScope(scope);
                 chain.scope = null;
@@ -17525,13 +17667,6 @@ const ProcBodyBuilder = struct {
                 if (pattern.state) |state| self.releasePatternState(state);
                 pattern.state = null;
             },
-            .interpolation_iter => |*iter| {
-                if (iter.state) |state| {
-                    if (state.scope) |scope| self.dropNominalBackingFormalScope(scope);
-                    self.parent.freeInterpolationIterState(state);
-                }
-                iter.state = null;
-            },
             .iter_dispatch => |*dispatch| {
                 if (dispatch.snapshot) |snapshot| {
                     self.restoreDescriptorBindings(snapshot);
@@ -17548,7 +17683,7 @@ const ProcBodyBuilder = struct {
                 if (while_.loop_pushed) _ = self.loop_stack.pop();
                 while_.loop_pushed = false;
             },
-            .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .statement, .if_, .bool_binop, .shared_rep, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .stored_across, .exprs_struct => {},
+            .expr, .expected, .expected_ref, .into_rep, .payload_storage, .list, .tuple_rep, .tag_rep, .tag_variant, .record_rep, .defaulted_field, .statement, .decl_pattern, .if_, .bool_binop, .shared_rep, .const_node, .stored_node, .const_storage, .stored_storage, .const_optional_slot, .stored_across, .exprs_struct => {},
         }
     }
 
@@ -17590,6 +17725,7 @@ const ProcBodyBuilder = struct {
             .defaulted_field => |t| try self.beginDefaultedRecordField(t.field_module, t.target, t.default, t.field_type, t.next),
             .module_expr => |*t| try self.stepModuleExpr(t, stage, input),
             .statement => |t| try self.beginStatement(t.statement_id, t.next),
+            .decl_pattern => |t| try self.beginDeclPattern(t.pattern, t.expr, t.next),
             .if_ => |*t| try self.stepIf(t, stage, input),
             .bool_binop => |*t| try self.stepBoolBinop(t, stage, input),
             .shared_rep => |t| try self.beginSharedRep(t.target, t.target_rep, t.expr_id, t.next),
@@ -17607,7 +17743,6 @@ const ProcBodyBuilder = struct {
             .match_branch => |*t| try self.stepMatchBranch(t, stage, input),
             .planned_call => |*t| try self.stepPlannedWorkerCall(t, stage, input),
             .pattern => |*t| try self.stepPattern(t, input),
-            .interpolation_iter => |*t| try self.stepInterpolationIter(t, input),
             .exprs_struct => |t| try self.beginExprsAsStructWithReps(t.target, t.target_rep, t.items, t.item_reps, t.next),
             .stored_across => |t| try self.beginRestoreStoredConstNodeAcrossBoundary(t.target, t.store_module, t.node, t.stored_type, t.target_rep, t.stored_rep, t.next),
             .chain => |*chain| try self.stepExprChain(chain, input),
@@ -17665,12 +17800,7 @@ const ProcBodyBuilder = struct {
                         literal,
                         chain.current,
                     ),
-                    .generated_interpolation_iter => |expr| return .{ .child = .{ .interpolation_iter = .{
-                        .target = operand.lowered,
-                        .target_rep = operand.storage_arg_rep,
-                        .expr_id = expr,
-                        .next = chain.current,
-                    } } },
+                    .generated_interpolation_segments => |expr| try self.assignInterpolationSegmentsInto(operand.lowered, operand.storage_arg_rep, expr, chain.current),
                 },
                 .boundary_assign => |assign| try self.assignRepresentationBoundary(
                     assign.target,
@@ -17693,6 +17823,7 @@ const ProcBodyBuilder = struct {
                     break :blk chain.current;
                 },
                 .capture_snapshots => |expr| try self.prependClosureCaptureSnapshots(expr, chain.current),
+                .recursive_value_slots => |pattern| try self.prependRecursiveValueSlotAllocations(pattern, chain.current),
                 .runtime_error => try self.parent.result.store.addCFStmt(.{ .crash = .{
                     .msg = .{ .literal = try self.parent.result.store.insertString("runtime error") },
                     .checked_error = true,
@@ -17748,20 +17879,23 @@ const ProcBodyBuilder = struct {
         const expr = self.module.checked_bodies.expr(expr_id);
         self.origin = try self.sourceOrigin(expr.source_region);
 
+        switch (Plan.divergentStep(self.module, expr_id)) {
+            .normal => {},
+            .operand => |operand| return try self.beginDivergentOperand(target, expr_id, operand),
+        }
+
         return switch (expr.data) {
             .numeral => |numeral| if (numeral.plan) |plan|
                 try self.beginNumeralConversion(target, expr_id, expr.ty, plan, next)
             else
                 exprDone(try self.assignCheckedNumeralLiteral(target, expr.ty, numeral.literal, next)),
-            .str_segment => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
-            .bytes_literal => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
+            .str_segment, .bytes_literal => |literal| exprDone(try self.assignStringLiteral(target, literal, next)),
             .str => |segments| try self.beginStr(target, expr.ty, segments, next),
             .str_from_quote => |quote| try self.beginQuoteConversion(target, expr_id, expr.ty, quote, next),
             .empty_record => try self.beginEmptyRecord(target, expr_id, expr.ty, next),
             .empty_list => try self.beginList(target, expr.ty, &.{}, next),
             .lookup_local => |lookup| try self.beginLookupLocal(target, expr_id, expr.ty, lookup, next),
-            .lookup_external => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
-            .lookup_required => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
+            .lookup_external, .lookup_required => |ref_id| try self.beginResolvedLookup(target, expr_id, expr.ty, ref_id, next),
             .field_access => |access| try self.beginFieldAccess(target, expr.ty, access.receiver, access.segments, next),
             .tuple_access => |access| try self.beginTupleAccess(target, access.tuple, access.elem_index, next),
             .list => |items| try self.beginList(target, expr.ty, items, next),
@@ -17800,9 +17934,8 @@ const ProcBodyBuilder = struct {
             .record => |record| try self.beginRecordExpr(target, expr_id, expr.ty, record, next),
             .nominal => |nominal| try self.beginNominal(target, expr.ty, nominal.backing_expr, next),
             .call => |call| try self.beginDirectCall(target, expr_id, call, expr.ty, next),
-            .dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
-            .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
-            .interpolation => |interpolation| try self.beginDispatchCall(target, expr_id, interpolation.plan, expr.ty, next),
+            .dispatch_call, .type_dispatch_call => |maybe_plan| try self.beginDispatchCall(target, expr_id, maybe_plan, expr.ty, next),
+            .interpolation => |interpolation| try self.beginInterpolation(target, expr_id, expr.ty, interpolation, next),
             .for_ => |for_| blk: {
                 if (self.isZstLocal(target)) {
                     break :blk .{ .tail = .{ .iterator_for = .{ .target = target, .for_ = forLoop(for_), .next = next } } };
@@ -17847,7 +17980,7 @@ const ProcBodyBuilder = struct {
             } }, self.origin)),
             .break_ => exprDone(try self.lowerBreak()),
             .return_ => |ret| try self.beginReturn(ret.expr, ret.lambda),
-            .runtime_error => exprDone(try self.lowerCheckedRuntimeError()),
+            .runtime_error => |runtime_error| try self.beginRuntimeError(runtime_error.evaluated),
             .lambda,
             .closure,
             => if (try self.nestedCallableUseTypeForCurrentWorker(expr_id)) |use_type|
@@ -17861,6 +17994,50 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("checked expression form reached boxy body lowering before its LIR lowering was implemented");
             },
         };
+    }
+
+    /// Lower the operands of a divergent expression up to the one that makes
+    /// it diverge: each earlier operand runs for its effects into a discarded
+    /// local, then the divergent one. Nothing after it runs, so its value has
+    /// no continuation.
+    fn beginDivergentOperand(
+        self: *ProcBodyBuilder,
+        enclosing_target: LIR.LocalId,
+        enclosing: checked.CheckedExprId,
+        operand: checked.CheckedExprId,
+    ) Allocator.Error!ExprStep {
+        const unreachable_continuation = try self.parent.result.store.addCFStmt(.runtime_error, self.origin);
+        const operand_target = switch (Plan.divergentStep(self.module, operand)) {
+            .operand => enclosing_target,
+            .normal => switch (self.module.checked_bodies.expr(operand).data) {
+                // Terminating forms produce no value.
+                .crash, .runtime_error, .ellipsis, .break_, .return_, .expect_err => enclosing_target,
+                // A divergent operand with an erroneous result type is
+                // lowered at unit.
+                .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .dbg, .expect, .anno_only, .for_, .hosted_lambda, .run_low_level => if (self.module.checked_types.payload(self.module.checked_bodies.expr(operand).ty) == .err)
+                    try self.addFrameLocal(.zst)
+                else
+                    try self.addFrameLocalForRep(self.repForTypeRef(.{
+                        .module = self.module.key,
+                        .ty = self.module.checked_bodies.expr(operand).ty,
+                    })),
+            },
+        };
+        const earlier = try Plan.divergentEarlierOperands(self.module, self.parent.allocator, enclosing, operand);
+        defer self.parent.allocator.free(earlier);
+        if (earlier.len == 0) return .{ .tail = .{ .expr = .{ .target = operand_target, .expr_id = operand, .next = unreachable_continuation } } };
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, earlier.len + 1);
+        chain_items[0] = .{ .lower = .{ .expr = .{ .target = operand_target, .expr_id = operand, .next = undefined } } };
+        for (earlier, 0..) |earlier_operand, index| {
+            const expr = self.module.checked_bodies.expr(earlier_operand);
+            const discarded = if (expr.data == .runtime_error or self.module.checked_types.payload(expr.ty) == .err)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[earlier.len - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = earlier_operand, .next = undefined } } };
+        }
+        return exprChain(chain_items, unreachable_continuation);
     }
 
     /// Lower `expr_id` into `source`, then `boundary`, which converts
@@ -17909,6 +18086,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const target_rep = self.repForType(expected_ty);
         const source_rep = self.exprStorageRep(expr, self.repForType(expr.ty));
         const target_layout = self.parent.result.store.getLocal(target).layout_idx;
@@ -17935,8 +18116,7 @@ const ProcBodyBuilder = struct {
             }
             switch (expr.data) {
                 .call => |call| if (target_uses_expected_layout) return try self.beginDirectCall(target, expr_id, call, expected_ty, next),
-                .dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
-                .type_dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
+                .dispatch_call, .type_dispatch_call => |maybe_plan| if (target_uses_expected_layout) return try self.beginDispatchCall(target, expr_id, maybe_plan, expected_ty, next),
                 .lambda,
                 .closure,
                 => return try self.beginCallableExprTypeRef(target, .{ .module = self.module.key, .ty = expected_ty }, expr_id, next),
@@ -17966,6 +18146,10 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         if (self.procedureValueRefForExpr(expr) != null) {
             return try self.beginProcedureValueRefTypeRef(
                 target,
@@ -18003,6 +18187,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         try self.ensureBoundaryTargetDescriptorForSourceRep(target, source_rep);
         if (self.representationBoundaryIsDirect(target_rep, source_rep)) {
@@ -18022,6 +18210,10 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error crashes without producing a value, so it
+        // has no storage of its own to convert into the expected
+        // representation.
+        if (expr.data == .runtime_error) return try self.beginExpr(target, expr_id, next);
         const source_rep = self.repForType(expr.ty);
         if (self.parent.result.store.getLocal(target).layout_idx == self.workerRuntimeLayoutForRep(source_rep).layoutIdx() and
             self.repsUseSameDynamicBoxStorage(target_rep, source_rep))
@@ -18515,8 +18707,23 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const backing = self.module.checked_bodies.expr(backing_id);
-        const backing_local = try self.addFrameLocalForType(backing.ty);
-        const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, self.repForType(nominal_ty), self.repForType(backing.ty), next);
+        const nominal_rep = self.repForType(nominal_ty);
+        const described = try self.prependNominalOwnDescriptorMaterialization(target, nominal_rep, next);
+        // The nominal edge owns the complete constructor representation; its
+        // producer-owned tag child may contain only the selected variant.
+        if (backing.data == .tag and self.nominalPatternSourceRep(nominal_rep) != null) {
+            return .{ .tail = .{ .tag_rep = .{
+                .target = target,
+                .tag_ty = nominal_ty,
+                .rep_id = nominal_rep,
+                .name = backing.data.tag.name,
+                .args = backing.data.tag.args,
+                .next = described,
+            } } };
+        }
+        const backing_ty = self.module.static_dispatch_plans.siteInstanceType(backing_id) orelse backing.ty;
+        const backing_local = try self.addFrameLocalForType(backing_ty);
+        const assign = try self.assignRepresentationBoundaryConsumingSource(target, backing_local, nominal_rep, self.repForType(backing_ty), described);
         return .{ .tail = .{ .expr = .{ .target = backing_local, .expr_id = backing_id, .next = assign } } };
     }
 
@@ -18706,11 +18913,7 @@ const ProcBodyBuilder = struct {
         record_ty: checked.CheckedTypeId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const rep_id = self.repForType(record_ty);
-        if (self.parent.plan.representations.items[@backingInt(rep_id)].kind == .empty_record) {
-            return exprDone(try self.assignZst(target, next));
-        }
-        return try self.beginRecordRep(target, record_expr, rep_id, &.{}, &.{}, null, next);
+        return try self.beginRecordRep(target, record_expr, self.repForType(record_ty), &.{}, &.{}, null, next);
     }
 
     fn beginRecordRep(
@@ -18763,7 +18966,15 @@ const ProcBodyBuilder = struct {
                     return .{ .tail = .{ .chain = .{ .items = chain_items, .current = assign, .scope = scope } } };
                 },
             },
-            .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
+            // A record value with no fields, such as `{}` constructing a
+            // nominal type whose backing is the empty record.
+            .empty_record => {
+                if (expr_fields.len != 0 or unset_fields.len != 0 or extension != null) {
+                    boxyLowerInvariant("record expression with fields had an empty-record representation");
+                }
+                return exprDone(try self.assignZst(target, next));
+            },
+            .in_progress, .primitive, .bool_tag_union, .erased_callable, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .tag_union, .empty_tag_union => boxyLowerInvariant("record expression checked type did not have a boxy record representation"),
         }
     }
 
@@ -19126,7 +19337,7 @@ const ProcBodyBuilder = struct {
     ///
     /// Binder state is swapped to fresh empty arrays for the duration
     /// (`ensureBinderLocals` re-sizes them lazily against the swapped
-    /// module), mirroring `beginRuntimeCallableEval`. This is
+    /// module). This is
     /// required even when `expr_module` is the current module: the caller's
     /// binder arrays index the caller's pattern binders, and boxy binder
     /// slots are write-once, so a second materialization of the same closed
@@ -19171,8 +19382,7 @@ const ProcBodyBuilder = struct {
         self.origin = try self.sourceOrigin(statement.source_region);
 
         const rhs: ?checked.CheckedExprId = switch (statement.data) {
-            .decl => |decl| decl.expr,
-            .var_ => |decl| decl.expr,
+            inline .decl, .var_ => |decl| decl.expr,
             .reassign => |reassign| reassign.expr,
             .expr => |expr| expr,
             .pending,
@@ -19196,14 +19406,22 @@ const ProcBodyBuilder = struct {
             .runtime_error,
             => null,
         };
-        if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) {
-            return exprDone(try self.lowerCheckedRuntimeError());
-        };
+        if (rhs) |expr| {
+            const data = self.module.checked_bodies.expr(expr).data;
+            if (data == .runtime_error) return try self.beginRuntimeError(data.runtime_error.evaluated);
+        }
         return switch (statement.data) {
-            .decl => |decl| try self.beginDeclPattern(decl.pattern, decl.expr, next),
+            // A dangling annotation, such as a derived method marker of a
+            // type declared in this body, has no runtime value to bind.
+            .decl => |decl| if (self.module.checked_bodies.expr(decl.expr).data == .anno_only)
+                exprDone(next)
+            else if (decl.recursive and !try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.beginRecursiveValueDecl(decl.pattern, decl.expr, next) else try self.beginDeclPattern(decl.pattern, decl.expr, next),
             // A promoted procedure is declared by its own template.
             .promoted_proc => exprDone(next),
-            .var_ => |decl| try self.beginDeclPattern(decl.pattern, decl.expr, next),
+            .var_ => |decl| blk: {
+                self.forgetVarDescriptorInitialization(decl.pattern);
+                break :blk try self.beginDeclPattern(decl.pattern, decl.expr, next);
+            },
             .var_uninitialized => |decl| exprDone(try self.lowerUninitializedPattern(decl.pattern, next)),
             .reassign => |reassign| blk: {
                 const pattern = self.module.checked_bodies.pattern(reassign.pattern);
@@ -19213,7 +19431,12 @@ const ProcBodyBuilder = struct {
             },
             .expr => |expr_id| blk: {
                 const expr = self.module.checked_bodies.expr(expr_id);
-                const temp = try self.addFrameLocalForType(expr.ty);
+                // A runtime error produces no value, so its discarded local
+                // is zero-sized.
+                const temp = if (expr.data == .runtime_error)
+                    try self.addFrameLocal(.zst)
+                else
+                    try self.addFrameLocalForType(expr.ty);
                 break :blk .{ .tail = .{ .expr = .{ .target = temp, .expr_id = expr_id, .next = next } } };
             },
             .expect => |expr_id| try self.beginExpectStmt(expr_id, next),
@@ -19328,7 +19551,7 @@ const ProcBodyBuilder = struct {
             .{ .module = self.module.key, .expr = expr_id }
         else switch (source) {
             .nested_expr => |expr_ref| expr_ref,
-            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator, .generated_interpolation_step => null,
+            .procedure_template, .procedure_binding, .procedure_use, .generated_codec, .generated_field_iterator => null,
         };
         if (closure) |closure_ref| {
             if (self.closureCaptureSnapshotLocals(closure_ref)) |locals| {
@@ -19432,6 +19655,9 @@ const ProcBodyBuilder = struct {
         }
 
         const expr = self.module.checked_bodies.expr(expr_id);
+        // A checked runtime error produces no value, so returning it is the
+        // crash itself; its own checked type has no representation.
+        if (expr.data == .runtime_error) return try self.beginRuntimeError(expr.data.runtime_error.evaluated);
         const expr_rep = self.repForType(expr.ty);
         const expr_layout = self.workerRuntimeLayoutForRep(expr_rep).layoutIdx();
         const worker = self.parent.plan.workers.items[@backingInt(self.worker_layout.worker)];
@@ -19441,7 +19667,10 @@ const ProcBodyBuilder = struct {
         const ret_layout = self.workerReturnLayout();
 
         const expr_local = try self.addFrameBoundaryTargetLocalForRep(expr_rep);
-        const ret_local = try self.addWorkerReturnLocal(true);
+        // Every return edge writes the header's value and descriptor locals,
+        // so lexical descriptor bindings cannot change the procedure's ABI.
+        const ret_local = self.worker_return_local orelse
+            boxyLowerInvariant("checked return reached a worker without its reserved return local");
         if (self.parent.result.store.getLocal(expr_local).layout_idx != expr_layout or
             self.parent.result.store.getLocal(ret_local).layout_idx != ret_layout)
         {
@@ -19591,8 +19820,7 @@ const ProcBodyBuilder = struct {
                 .equality, .hash, .map, .map_effectful => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
             },
             .evidence_dependent => return try self.beginUnresolvedDispatchCall(target, call_expr, dispatch, ret_ty, next),
-            .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
-            .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+            .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
         }
 
         const direct_plan = if (self.literal_initializer) |index|
@@ -19811,8 +20039,7 @@ const ProcBodyBuilder = struct {
             .structural,
             => try self.beginDispatchCall(target, plan.expr, maybe_plan, self.module.checked_bodies.expr(plan.expr).ty, next),
             .direct_pending => boxyLowerInvariant("unfinalized direct call reached Boxy lowering"),
-            .checked_error => exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
-            .@"unreachable" => exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
+            .checked_error, .@"unreachable" => try self.beginCrashingDispatch(plan),
         };
     }
 
@@ -19915,14 +20142,44 @@ const ProcBodyBuilder = struct {
                 const plan_id = task.for_.plan orelse
                     boxyLowerInvariant("checked iterator for reached boxy lowering without an iterator dispatch plan");
                 const plan = self.iteratorForPlan(plan_id);
-                inline for (.{ plan.iter.resolution, plan.next.resolution }) |resolution| {
-                    switch (resolution) {
-                        .checked_error => return exprDone(try self.lowerCheckedErrorDispatchInto("method dispatch failed to check")),
-                        .@"unreachable" => return exprDone(try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist")),
-                        .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
-                        .direct_closed, .direct_parametric, .evidence_dependent => {},
-                        .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
-                    }
+                // An `iter` call that cannot run evaluates the iterable it
+                // receives and then crashes; a `next` call that cannot run
+                // crashes once `iter` has produced the iterator it receives.
+                switch (plan.iter.resolution) {
+                    .checked_error, .@"unreachable" => {
+                        const iterable = self.module.checked_bodies.expr(plan.iterable);
+                        const discarded = if (iterable.data == .runtime_error)
+                            try self.addFrameLocal(.zst)
+                        else
+                            try self.addFrameLocalForType(iterable.ty);
+                        const chain_items = try self.parent.allocator.alloc(ExprChainItem, 1);
+                        chain_items[0] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = plan.iterable, .next = undefined } } };
+                        return exprChain(chain_items, try self.lowerDispatchCrashInto(plan.iter.resolution));
+                    },
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
+                }
+                switch (plan.next.resolution) {
+                    .checked_error, .@"unreachable" => {
+                        const iterator_type = if (self.parent.plan.iteratorCallPlanFor(self.module.key, plan_id, .iter, self.worker_layout.worker)) |call_plan|
+                            call_plan.ret_type
+                        else
+                            Plan.CheckedTypeIdentity{ .module = self.module.key, .ty = plan.iterator_ty };
+                        const discarded = try self.addFrameLocalForRepWithFreshDescriptor(self.repForTypeRef(iterator_type));
+                        return .{ .tail = .{ .iter_dispatch = .{
+                            .target = discarded,
+                            .plan_id = plan_id,
+                            .kind = .iter,
+                            .plan = plan,
+                            .call = plan.iter,
+                            .loop_iterator = null,
+                            .next = try self.lowerDispatchCrashInto(plan.next.resolution),
+                        } } };
+                    },
+                    .direct_pending => boxyLowerInvariant("unfinalized iterator call reached Boxy lowering"),
+                    .direct_closed, .direct_parametric, .evidence_dependent => {},
+                    .structural => boxyLowerInvariant("structural iterator dispatch reached boxy lowering"),
                 }
                 if (!self.isZstLocal(task.target)) {
                     boxyLowerInvariant("checked iterator for reached boxy lowering with non-Unit result layout");
@@ -20427,9 +20684,9 @@ const ProcBodyBuilder = struct {
         args: []const checked.CheckedExprId,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
-        const callee = self.module.checked_bodies.expr(callee_expr);
-        const callee_local = try self.addFrameLocalForType(callee.ty);
-        const callee_function = self.functionChildrenForRep(self.repForType(callee.ty)) orelse
+        const callee_ty = self.module.checked_bodies.expr(callee_expr).ty;
+        const callee_local = try self.addFrameLocalForType(callee_ty);
+        const callee_function = self.functionChildrenForRep(self.repForType(callee_ty)) orelse
             boxyLowerInvariant("erased call callee expression did not have an erased callable representation");
         if (callee_function.arg_count != args.len) {
             boxyLowerInvariant("erased call argument count disagreed with callee function representation");
@@ -20439,18 +20696,21 @@ const ProcBodyBuilder = struct {
         const callee_children = self.parent.plan.childSlice(callee_rep.children);
         const callee_arg_children = callee_children[callee_function.args_start..][0..callee_function.arg_count];
 
-        const source_args = try self.lowerExprsToTemps(args);
+        const source_args = try self.parent.allocator.alloc(LIR.LocalId, args.len);
         defer self.parent.allocator.free(source_args);
         const call_args = try self.parent.allocator.alloc(LIR.LocalId, args.len);
         defer self.parent.allocator.free(call_args);
-        for (args, source_args, call_args, callee_arg_children) |arg_expr_id, source_arg, *call_arg, callee_arg| {
-            const arg_expr = self.module.checked_bodies.expr(arg_expr_id);
-            const source_rep = self.repForType(arg_expr.ty);
+        for (args, source_args, call_args, callee_arg_children) |arg_expr_id, *source_arg, *call_arg, callee_arg| {
             const target_rep = callee_arg.rep;
-            const source_layout = self.parent.result.store.getLocal(source_arg).layout_idx;
+            const source_rep = self.repForType(self.module.checked_bodies.expr(arg_expr_id).ty);
+            source_arg.* = if (self.parent.layoutIsBoxStorage(self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
+                try self.addFrameLocalForRepWithFreshDescriptor(source_rep)
+            else
+                try self.addFrameLocalForRep(source_rep);
+            const source_layout = self.parent.result.store.getLocal(source_arg.*).layout_idx;
             const target_layout = self.workerRuntimeLayoutForRep(target_rep).layoutIdx();
             call_arg.* = if (source_layout == target_layout and self.descriptorStorageRep(source_rep) == self.descriptorStorageRep(target_rep))
-                source_arg
+                source_arg.*
             else
                 try self.addFrameBoundaryTargetLocalForRep(target_rep);
         }
@@ -20466,7 +20726,8 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         const call_target = if (!target_desc_is_shared and
             target_layout == callee_ret_layout and
-            self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep))
+            (self.erasedCallResultCanUseTarget(target_rep, callee_ret_rep) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -20785,7 +21046,8 @@ const ProcBodyBuilder = struct {
         if (try self.lowerPlannedLiteralInto(target, expr_id, checked_ty, next)) |body| return exprDone(body);
 
         switch (self.staticDispatchPlan(quote.plan).resolution) {
-            .evidence_dependent, .checked_error, .@"unreachable" => return try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .evidence_dependent => return try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
+            .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(self.staticDispatchPlan(quote.plan)),
             .direct_closed, .direct_parametric => {},
             .direct_pending, .structural => boxyLowerInvariant("quote conversion had an invalid checked dispatch resolution"),
         }
@@ -20800,7 +21062,7 @@ const ProcBodyBuilder = struct {
                 .checked_ty = checked_ty,
                 .next = next,
             } } },
-            .pending => try self.beginRuntimeQuoteConversion(target, expr_id, checked_ty, quote.plan, next),
+            .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
             .fn_value,
             .discarded,
             .expect,
@@ -20809,26 +21071,35 @@ const ProcBodyBuilder = struct {
         };
     }
 
-    fn lowerRuntimeQuoteConversionInto(
+    fn lowerRuntimeStringConversionInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
         target_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        invalid_message: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginRuntimeQuoteConversion(target, expr_id, target_ty, maybe_plan, next));
+        return try self.runExprStep(try self.beginRuntimeStringConversion(target, expr_id, target_ty, maybe_plan, invalid_message, next));
     }
 
-    fn beginRuntimeQuoteConversion(
+    /// A quote's or an interpolation's conversion called here, its `Try`
+    /// result unwrapped into `target`, whose type is `target_ty`.
+    fn beginRuntimeStringConversion(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
         expr_id: checked.CheckedExprId,
         target_ty: checked.CheckedTypeId,
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
+        invalid_message: []const u8,
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const dispatch = self.staticDispatchPlan(maybe_plan);
+        // A rejected conversion crashes before it produces a result.
+        switch (dispatch.resolution) {
+            .checked_error, .@"unreachable" => return try self.beginCrashingDispatch(dispatch),
+            .direct_closed, .direct_parametric, .direct_pending, .evidence_dependent, .structural => {},
+        }
         const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
         const try_rep = self.repForType(callable.ret);
         const try_value = try self.addFrameLocalForRepWithFreshDescriptor(try_rep);
@@ -20837,10 +21108,68 @@ const ProcBodyBuilder = struct {
             self.repForType(target_ty),
             try_value,
             try_rep,
-            "invalid string literal",
+            invalid_message,
             next,
         );
         return try self.beginDispatchCall(try_value, expr_id, maybe_plan, callable.ret, unwrap);
+    }
+
+    /// An interpolation's value: its assembler, the value of its literal
+    /// conversion, called with the interpolated values as a list.
+    fn beginInterpolation(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        expr_id: checked.CheckedExprId,
+        ty: checked.CheckedTypeId,
+        interpolation: checked.CheckedInterpolation,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        const assembler_fn = checkedFunctionPayload(self.module, interpolation.assembler_ty);
+        if (assembler_fn.args.len != 1) boxyLowerInvariant("interpolation assembler did not take exactly the values list");
+        const assembler_rep = self.repForType(interpolation.assembler_ty);
+        const assembler = try self.addFrameLocalForRepWithFreshDescriptor(assembler_rep);
+        const values_ty = assembler_fn.args[0];
+        const values_rep = self.repForType(values_ty);
+        const values = try self.addFrameLocalForRepWithFreshDescriptor(values_rep);
+        const call = try self.lowerErasedCallLocalsInto(target, self.repForType(ty), assembler_rep, assembler, &.{values}, &.{values_rep}, next);
+        const convert = if (try self.lowerPlannedLiteralInto(assembler, expr_id, interpolation.assembler_ty, call)) |body|
+            body
+        else
+            try self.lowerRuntimeStringConversionInto(assembler, expr_id, interpolation.assembler_ty, interpolation.plan, "invalid string interpolation", call);
+        return try self.beginList(values, values_ty, interpolation.values, convert);
+    }
+
+    /// An interpolation's literal segments, as the `List(Str)` its conversion
+    /// receives.
+    fn assignInterpolationSegmentsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const interpolation = switch (self.module.checked_bodies.expr(expr_id).data) {
+            .interpolation => |value| value,
+            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("interpolation segments operand referenced a non-interpolation expression"),
+        };
+        const elem_layout = self.localListElemLayout(target);
+        const elem_locals = try self.parent.allocator.alloc(LIR.LocalId, interpolation.segments.len);
+        defer self.parent.allocator.free(elem_locals);
+        for (elem_locals) |*local| local.* = try self.addFrameLocal(elem_layout);
+        const target_desc_info = try self.stableDescriptorForConstructedValue(target, target_rep);
+        if (target_desc_info.desc) |desc| self.parent.result.store.setLocalBoxyDesc(target, desc);
+        var continuation = try self.assignList(target, elem_locals, next);
+        continuation = try self.prependOptionalDescriptorMaterialization(target_desc_info.materialize, continuation);
+        var index = interpolation.segments.len;
+        while (index > 0) {
+            index -= 1;
+            const literal = switch (self.module.checked_bodies.expr(interpolation.segments[index]).data) {
+                .str_segment => |literal| literal,
+                .pending, .numeral, .str_from_quote, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("interpolation segment was not a checked string segment"),
+            };
+            continuation = try self.assignStringLiteral(elem_locals[index], literal, continuation);
+        }
+        return continuation;
     }
 
     fn lowerLiteralConversionResultInto(
@@ -20994,7 +21323,12 @@ const ProcBodyBuilder = struct {
                 .literal_rejection = .{
                     .owner = owner,
                     .checked_expr = @backingInt(site.source.expr),
-                    .kind = if (self.module.checked_bodies.expr(site.source.expr).data == .numeral) .numeral else .quote,
+                    .kind = switch (self.module.checked_bodies.expr(site.source.expr).data) {
+                        .numeral => .numeral,
+                        .str_from_quote => .quote,
+                        .interpolation => .interpolation,
+                        .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("literal rejection site did not name a checked literal conversion"),
+                    },
                 },
             } }, self.origin);
             const read_message = try self.assignConcreteTagPayloadRead(message, payloads[0].rep, null, error_value, error_rep, variant.name, @intCast(index), 0, 1, rejected);
@@ -21036,7 +21370,7 @@ const ProcBodyBuilder = struct {
                 .checked_ty = checked_ty,
                 .next = next,
             } } },
-            .pending => try self.beginPendingNumeralConversion(target, expr_id, checked_ty, maybe_plan, next),
+            .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, maybe_plan, "invalid numeric literal", next),
             .fn_value,
             .discarded,
             .expect,
@@ -21053,30 +21387,7 @@ const ProcBodyBuilder = struct {
         maybe_plan: ?static_dispatch.StaticDispatchPlanId,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        return try self.runExprStep(try self.beginPendingNumeralConversion(target, expr_id, target_ty, maybe_plan, next));
-    }
-
-    fn beginPendingNumeralConversion(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        expr_id: checked.CheckedExprId,
-        target_ty: checked.CheckedTypeId,
-        maybe_plan: ?static_dispatch.StaticDispatchPlanId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!ExprStep {
-        const dispatch = self.staticDispatchPlan(maybe_plan);
-        const callable = checkedFunctionPayload(self.module, dispatch.callable_ty);
-        const try_rep = self.repForType(callable.ret);
-        const try_value = try self.addFrameLocalForRepWithFreshDescriptor(try_rep);
-        const unwrap = try self.lowerLiteralConversionResultInto(
-            target,
-            self.repForType(target_ty),
-            try_value,
-            try_rep,
-            "invalid numeric literal",
-            next,
-        );
-        return try self.beginDispatchCall(try_value, expr_id, maybe_plan, callable.ret, unwrap);
+        return try self.runExprStep(try self.beginRuntimeStringConversion(target, expr_id, target_ty, maybe_plan, "invalid numeric literal", next));
     }
 
     fn exprStorageRep(
@@ -21309,13 +21620,8 @@ const ProcBodyBuilder = struct {
         method_text: []const u8,
         subject_type: ?Plan.CheckedTypeIdentity,
     ) Plan.GeneratedCodecCallPlan {
-        for (self.parent.plan.generated_codec_calls.items) |call| {
-            if (call.caller != caller or !planTypeRefEql(call.dispatch_type, dispatch_type)) continue;
-            if (!optionalPlanTypeRefEql(call.subject_type, subject_type)) continue;
-            const method_module = procedureModuleById(self.parent.modules, call.method_module);
-            if (std.mem.eql(u8, method_module.canonical_names.methodNameText(call.method), method_text)) return call;
-        }
-        boxyLowerInvariant("generated codec body referenced an unplanned method call");
+        return self.generatedCodecCallPlanOrNull(caller, dispatch_type, method_text, subject_type) orelse
+            boxyLowerInvariant("generated codec body referenced an unplanned method call");
     }
 
     fn generatedCodecCallPlanOrNull(
@@ -22290,6 +22596,20 @@ const ProcBodyBuilder = struct {
         if (@backingInt(node) >= store_module.const_store.values.items.len) {
             boxyLowerInvariant("ConstStore node id was outside the store");
         }
+        // A crash or checked-error node is the value of a root whose
+        // evaluation stopped. It has no shape to unwrap at any
+        // representation, so it restores as that crash before the
+        // representation is consulted.
+        switch (store_module.const_store.get(node)) {
+            .crash => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+            } }, self.scaffoldOrigin())),
+            .checked_error => |str| return exprDone(try self.parent.result.store.addCFStmt(.{ .crash = .{
+                .msg = .{ .literal = try self.parent.result.store.insertString(store_module.const_store.strBytes(str)) },
+                .checked_error = true,
+            } }, self.scaffoldOrigin())),
+            .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .nominal, .fn_value => {},
+        }
         const stored_type_value = store_module.const_store.type_store.get(stored_type);
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
         switch (rep.kind) {
@@ -22314,7 +22634,8 @@ const ProcBodyBuilder = struct {
                     const backing_rep = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
                     const backing_node = switch (store_module.const_store.get(node)) {
                         .nominal => |nominal| nominal.backing,
-                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .tag, .fn_value => node,
+                        .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .tag, .fn_value => node,
+                        .crash, .checked_error => unreachable,
                     };
                     const backing_local = try self.addFrameLocalForRep(backing_rep);
                     const assign = try self.assignRepresentationBoundary(
@@ -22335,7 +22656,8 @@ const ProcBodyBuilder = struct {
                 while (true) switch (store_module.const_store.get(bool_node)) {
                     .nominal => |nominal| bool_node = nominal.backing,
                     .tag => |tag| return exprDone(try self.restoreConstBoolTagInto(target, tag, next)),
-                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .crash, .checked_error, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .pending, .zst, .scalar, .str, .list, .box, .tuple, .record, .fn_value => boxyLowerInvariant("stored Bool constant was not a tag"),
+                    .crash, .checked_error => unreachable,
                 };
             },
             .in_progress, .dynamic, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
@@ -22474,6 +22796,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
+        if (rep.kind == .bool_tag_union) return exprDone(try self.restoreConstBoolTagInto(target, tag, next));
         if (rep.kind != .tag_union) {
             boxyLowerInvariant("stored tag node had a non-tag-union exact representation");
         }
@@ -23208,7 +23531,7 @@ const ProcBodyBuilder = struct {
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
-            null,
+            self.parent.plan.directCallHiddenDictionaryArgSlice(static_fn.hidden_dict_args),
             next,
         );
     }
@@ -23344,7 +23667,7 @@ const ProcBodyBuilder = struct {
             null,
             self.parent.plan.storedCallableCaptureSourceSlice(static_fn.capture_sources),
             self.staticFnHiddenDescArgs(static_fn),
-            null,
+            self.parent.plan.directCallHiddenDictionaryArgSlice(static_fn.hidden_dict_args),
             continuation,
         );
     }
@@ -23582,16 +23905,19 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!ExprStep {
         const use_ref = Plan.CheckedExprIdentity{ .module = self.module.key, .expr = expr_id };
-        if (self.parent.plan.runtimeCallableEvalUsePlan(use_ref, self.worker_layout.worker)) |runtime_eval| {
-            if (runtime_eval.source.expr == expr_id) {
-                boxyLowerInvariant("runtime callable evaluation source recursively referenced its own lookup");
+        // A use of a pending callable-eval binding calls the binding's
+        // producer, which yields the callable value.
+        if (self.parent.plan.directCallPlanForCall(use_ref, self.worker_layout.worker)) |producer_call| {
+            if (!checked_moduleKeyEqual(call_type.module, self.module.key)) {
+                boxyLowerInvariant("boxy producer call type was not owned by the calling module");
             }
-            return try self.beginRuntimeCallableEval(
-                target,
-                call_type,
-                runtime_eval.source,
-                next,
-            );
+            return .{ .tail = .{ .planned_call = .{
+                .target = target,
+                .target_rep = self.repForTypeRef(call_type),
+                .checked_ret_ty = call_type.ty,
+                .direct_plan = producer_call,
+                .next = next,
+            } } };
         }
         const use = self.parent.plan.callableUsePlan(use_ref, self.worker_layout.worker) orelse
             boxyLowerInvariant("checked procedure lookup reached boxy lowering without a callable use plan");
@@ -23611,33 +23937,13 @@ const ProcBodyBuilder = struct {
         );
     }
 
-    fn beginRuntimeCallableEval(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        call_type: Plan.CheckedTypeIdentity,
-        source: Plan.CheckedExprIdentity,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!ExprStep {
-        if (checked_moduleKeyEqual(source.module, self.module.key)) {
-            return .{ .tail = .{ .expected_ref = .{ .target = target, .expected_ty = call_type, .expr_id = source.expr, .next = next } } };
-        }
-        return .{ .tail = .{ .module_expr = .{
-            .expr_module = procedureModuleByKey(self.parent.modules, source.module),
-            .target = target,
-            .expr_id = source.expr,
-            .expected = call_type,
-            .next = next,
-        } } };
-    }
-
     fn procedureValueRefForExpr(
         self: *ProcBodyBuilder,
         expr: checked.CheckedExpr,
     ) ?checked.ResolvedValueRefId {
         const maybe_ref = switch (expr.data) {
             .lookup_local => |lookup| lookup.resolved,
-            .lookup_external => |ref_id| ref_id,
-            .lookup_required => |ref_id| ref_id,
+            .lookup_external, .lookup_required => |ref_id| ref_id,
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => return null,
         };
         const ref_id = maybe_ref orelse return null;
@@ -23775,7 +24081,7 @@ const ProcBodyBuilder = struct {
         defer stored_capture_initializers.deinit(self.parent.allocator);
 
         if (captures.len == 0) {
-            try self.parent.recordFrozenCallable(worker_id, worker_function.rep, worker_function.rep, erased_proc, .zst, .none, worker_function.ret, &.{});
+            try self.parent.recordFrozenCallable(worker_id, null, worker_function.rep, worker_function.rep, erased_proc, .zst, .none, worker_function.ret, &.{});
             const result_desc = try self.exactCallResultDescriptorRef(worker_function.ret);
             try self.appendResultDescriptorInitializers(&result_desc_initializers, result_desc);
             if (result_desc_initializers.items.len != 0) {
@@ -23833,7 +24139,11 @@ const ProcBodyBuilder = struct {
                         if (source_capture_index >= source_captures.len) {
                             boxyLowerInvariant("boxy callable capture plan had more value captures than the source closure");
                         }
-                        field_local.* = self.sourceCaptureLocal(source, maybe_expr, source_capture_index, source_captures[source_capture_index]);
+                        const source_capture = source_captures[source_capture_index];
+                        field_local.* = if (capture.recursive_slot)
+                            self.recursive_value_slots.get(source_capture.capture_id.binder()) orelse boxyLowerInvariant("recursive value capture had no reserved slot")
+                        else
+                            self.sourceCaptureLocal(source, maybe_expr, source_capture_index, source_capture);
                         source_capture_index += 1;
                     }
                 },
@@ -23874,11 +24184,7 @@ const ProcBodyBuilder = struct {
         for (captures, field_locals, capture_desc_sources, hidden_desc_initializers) |capture, field_local, desc_source, *hidden_desc_initializer| {
             if (capture.kind != .hidden_desc) continue;
             const materialization = try self.descriptorMaterializationForSourceRep(desc_source.rep);
-            hidden_desc_initializer.* = .{
-                .local = field_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            hidden_desc_initializer.* = materialization.initializer(field_local);
         }
 
         // Each hidden descriptor field copies a descriptor from the enclosing
@@ -23928,11 +24234,7 @@ const ProcBodyBuilder = struct {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
             self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
-            capture_desc_initializer = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
         const capture_fields = if (capture_desc_initializer) |initializer| blk: {
@@ -23965,15 +24267,22 @@ const ProcBodyBuilder = struct {
         if (self.parent.needsFrozenCallableRecipes()) {
             const fields = try self.parent.allocator.alloc(ProcedureBuilder.FrozenCaptureRecipe, captures.len);
             defer self.parent.allocator.free(fields);
-            for (captures, fields) |capture, *field| {
+            for (captures, capture_desc_sources, hidden_desc_initializers, fields) |capture, desc_source, hidden_desc_initializer, *field| {
                 field.* = switch (capture.kind) {
                     .captured_value => .{ .value = capture.rep },
-                    .hidden_desc => .{ .descriptor = capture.rep },
+                    .hidden_desc => .{ .descriptor = .{
+                        .worker_rep = capture.rep,
+                        .source_rep = desc_source.rep,
+                        .exact = if (hidden_desc_initializer) |initializer| if (initializer.materialize) |materialize| switch (materialize) {
+                            .static => |id| if (initializer.captures.len == 0) id else null,
+                            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+                        } else null else null,
+                    } },
                     .hidden_dict => .{ .dictionary = capture.dictionaries },
                     .hidden_literal => .{ .literal = capture.literal_parameter.? },
                 };
             }
-            try self.parent.recordFrozenCallable(worker_id, worker_function.rep, worker_function.rep, erased_proc, capture_layout, on_drop, worker_function.ret, fields);
+            try self.parent.recordFrozenCallable(worker_id, null, worker_function.rep, worker_function.rep, erased_proc, capture_layout, on_drop, worker_function.ret, fields);
         }
 
         const assign = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
@@ -24268,11 +24577,7 @@ const ProcBodyBuilder = struct {
                 .reuse_existing => self.parent.result.store.setLocalBoxyDesc(field_local, .{ .local = desc_local }),
                 .snapshot_existing => descriptor_overrides.?[index] = .{ .local = desc_local },
             }
-            try initializers.append(self.parent.allocator, .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
+            try initializers.append(self.parent.allocator, materialization.initializer(desc_local));
         }
     }
 
@@ -24526,11 +24831,7 @@ const ProcBodyBuilder = struct {
             const desc_local = try self.addFrameLocal(.opaque_ptr);
             const desc_ref = LIR.BoxyDescRef{ .local = desc_local };
             self.parent.result.store.setLocalBoxyDesc(capture_local, desc_ref);
-            capture_desc_initializer = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            };
+            capture_desc_initializer = materialization.initializer(desc_local);
             break :blk desc_ref;
         } else null;
 
@@ -24561,11 +24862,11 @@ const ProcBodyBuilder = struct {
             defer self.parent.allocator.free(fields);
             for (captures, fields) |capture, *field| field.* = switch (capture.kind) {
                 .captured_value => .{ .value = capture.rep },
-                .hidden_desc => .{ .descriptor = capture.rep },
+                .hidden_desc => .{ .descriptor = .{ .worker_rep = capture.rep, .source_rep = capture.rep } },
                 .hidden_dict => .{ .dictionary = capture.dictionaries },
                 .hidden_literal => .{ .literal = capture.literal_parameter.? },
             };
-            try self.parent.recordFrozenCallable(worker_id, callable_rep, callable_rep, erased_proc, capture_layout, on_drop, result_rep, fields);
+            try self.parent.recordFrozenCallable(worker_id, null, callable_rep, callable_rep, erased_proc, capture_layout, on_drop, result_rep, fields);
         }
         const pack = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
             .target = target,
@@ -24591,12 +24892,7 @@ const ProcBodyBuilder = struct {
     }
 
     fn callableExprCaptures(self: *ProcBodyBuilder, expr_id: checked.CheckedExprId) []const checked.CheckedCapture {
-        const expr = self.module.checked_bodies.expr(expr_id);
-        return switch (expr.data) {
-            .closure => |closure| closure.captures,
-            .lambda => &.{},
-            .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("callable expression capture lookup did not reference a lambda or closure"),
-        };
+        return nestedCallableExprRuntimeCaptures(self.module, expr_id);
     }
 
     fn callableValueSourceCaptures(
@@ -24606,21 +24902,12 @@ const ProcBodyBuilder = struct {
     ) []const checked.CheckedCapture {
         if (maybe_expr) |expr_id| return self.callableExprCaptures(expr_id);
         return switch (source) {
-            .nested_expr => |expr_ref| blk: {
-                const module = procedureModuleById(self.parent.modules, expr_ref.module);
-                const expr = module.checked_bodies.expr(expr_ref.expr);
-                break :blk switch (expr.data) {
-                    .closure => |closure| closure.captures,
-                    .lambda => &.{},
-                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("nested callable value source did not point at a lambda or closure"),
-                };
-            },
+            .nested_expr => |expr_ref| nestedCallableExprRuntimeCaptures(procedureModuleById(self.parent.modules, expr_ref.module), expr_ref.expr),
             .procedure_template,
             .procedure_binding,
             .procedure_use,
             .generated_codec,
             .generated_field_iterator,
-            .generated_interpolation_step,
             => &.{},
         };
     }
@@ -24686,7 +24973,8 @@ const ProcBodyBuilder = struct {
         var continuation = next;
         const call_target = if (!target_desc_is_shared and
             target_layout == callee_ret_layout and
-            self.erasedCallResultCanUseTarget(target_rep, callee_function.ret))
+            (self.erasedCallResultCanUseTarget(target_rep, callee_function.ret) or
+                self.callResultAdoptsCalleeDescriptor(target, target_rep)))
             target
         else blk: {
             const raw_ret = if (self.parent.result.store.getLocal(target).boxy_desc != null)
@@ -24826,7 +25114,7 @@ const ProcBodyBuilder = struct {
             try self.bindLocalDescriptorEnvironment(source);
             var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             if (params.items.len == 0) {
                 const materialization = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                     DescriptorMaterialization{ .desc = desc }
@@ -24931,11 +25219,7 @@ const ProcBodyBuilder = struct {
             if (materialization.desc.localOrNull()) |local| return local;
         }
         const local = try self.addFrameLocal(.opaque_ptr);
-        try initializers.append(self.parent.allocator, .{
-            .local = local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        });
+        try initializers.append(self.parent.allocator, materialization.initializer(local));
         return local;
     }
 
@@ -24983,6 +25267,17 @@ const ProcBodyBuilder = struct {
         };
     }
 
+    /// The crash a dispatch that cannot run ends in: checking rejected it
+    /// (`checked_error`), or no value can reach its dispatcher
+    /// (`unreachable`).
+    fn lowerDispatchCrashInto(self: *ProcBodyBuilder, resolution: static_dispatch.CheckedCallResolution) Allocator.Error!LIR.CFStmtId {
+        return switch (resolution) {
+            .checked_error => try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
+            .@"unreachable" => try self.lowerUnexecutableDispatchInto("dispatch on a value that can never exist"),
+            .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .structural => boxyLowerInvariant("a runnable dispatch reached dispatch crash lowering"),
+        };
+    }
+
     fn lowerUnexecutableDispatchInto(
         self: *ProcBodyBuilder,
         comptime message: []const u8,
@@ -24996,6 +25291,69 @@ const ProcBodyBuilder = struct {
     /// reported; reaching it crashes with the checked-error message.
     fn lowerCheckedRuntimeError(self: *ProcBodyBuilder) Allocator.Error!LIR.CFStmtId {
         return try self.lowerCheckedErrorDispatchInto("runtime error");
+    }
+
+    /// A runtime error first evaluates its `evaluated` operands, in order,
+    /// each into a discarded local, then crashes with the checked error. When
+    /// the last of them is an erroneous operand, its own evaluation crashes
+    /// first.
+    fn beginRuntimeError(self: *ProcBodyBuilder, evaluated: []const checked.CheckedExprId) Allocator.Error!ExprStep {
+        const crash = try self.lowerCheckedRuntimeError();
+        if (evaluated.len == 0) return exprDone(crash);
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, evaluated.len);
+        for (evaluated, 0..) |expr_id, index| {
+            const expr = self.module.checked_bodies.expr(expr_id);
+            const discarded = if (expr.data == .runtime_error)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[evaluated.len - 1 - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = expr_id, .next = undefined } } };
+        }
+        return exprChain(chain_items, crash);
+    }
+
+    /// A dispatch that cannot run (`checked_error` or `unreachable`) uses
+    /// strict evaluation: its receiver and arguments evaluate in order, each
+    /// into a discarded local, and then the call crashes. An interpolation's generated segments operand evaluates the
+    /// interpolation's segments and values; a generated numeral or quote
+    /// operand is literal source text with nothing to evaluate. A checked
+    /// runtime error produces no value, so its discarded local is
+    /// zero-sized.
+    fn beginCrashingDispatch(
+        self: *ProcBodyBuilder,
+        dispatch: static_dispatch.StaticDispatchCallPlan,
+    ) Allocator.Error!ExprStep {
+        var exprs: std.ArrayList(checked.CheckedExprId) = .empty;
+        defer exprs.deinit(self.parent.allocator);
+        for (dispatch.argsSlice(self.module.static_dispatch_plans)) |operand| switch (operand) {
+            .checked_expr => |expr| try exprs.append(self.parent.allocator, expr),
+            .generated_interpolation_segments => |expr| {
+                const interpolation = switch (self.module.checked_bodies.expr(expr).data) {
+                    .interpolation => |value| value,
+                    .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => boxyLowerInvariant("rejected interpolation segments referenced a non-interpolation expression"),
+                };
+                try exprs.append(self.parent.allocator, interpolation.segments[0]);
+                for (interpolation.values, interpolation.segments[1..]) |value, segment| {
+                    try exprs.append(self.parent.allocator, value);
+                    try exprs.append(self.parent.allocator, segment);
+                }
+            },
+            .generated_numeral, .generated_quote => {},
+        };
+        const crash = try self.lowerDispatchCrashInto(dispatch.resolution);
+        if (exprs.items.len == 0) return exprDone(crash);
+        // Chain items run from the last to the first.
+        const chain_items = try self.parent.allocator.alloc(ExprChainItem, exprs.items.len);
+        for (exprs.items, 0..) |expr_id, index| {
+            const expr = self.module.checked_bodies.expr(expr_id);
+            const discarded = if (expr.data == .runtime_error)
+                try self.addFrameLocal(.zst)
+            else
+                try self.addFrameLocalForType(expr.ty);
+            chain_items[exprs.items.len - 1 - index] = .{ .lower = .{ .expr = .{ .target = discarded, .expr_id = expr_id, .next = undefined } } };
+        }
+        return exprChain(chain_items, crash);
     }
 
     fn lowerCheckedErrorDispatchInto(
@@ -25021,11 +25379,11 @@ const ProcBodyBuilder = struct {
         }
         const lhs = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality lhs was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality lhs was not a checked expression operand"),
         };
         const rhs = switch (operands[1]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality rhs was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural equality rhs was not a checked expression operand"),
         };
         return try self.beginStructuralEq(target, lhs, rhs, self.repForType(dispatch.dispatcher_ty), negated, next);
     }
@@ -25042,11 +25400,11 @@ const ProcBodyBuilder = struct {
         }
         const value = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash value was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash value was not a checked expression operand"),
         };
         const hasher = switch (operands[1]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash hasher was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural hash hasher was not a checked expression operand"),
         };
         return try self.beginStructuralHash(target, value, hasher, next);
     }
@@ -25063,7 +25421,7 @@ const ProcBodyBuilder = struct {
         }
         const value = switch (operands[0]) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter, .generated_numeral, .generated_quote => boxyLowerInvariant("structural inspect operand was not a checked expression operand"),
+            .generated_interpolation_segments, .generated_numeral, .generated_quote => boxyLowerInvariant("structural inspect operand was not a checked expression operand"),
         };
         return try self.beginInspectExpr(target, value, next);
     }
@@ -25160,15 +25518,12 @@ const ProcBodyBuilder = struct {
             &call_arg_descriptor_initializers,
         );
         defer self.parent.allocator.free(argument_desc_locals);
-        // A quote or interpolation conversion's leading argument is concrete
-        // Str. An interpolation's item type is its parts' type, which the
-        // parts describe. The remaining type parameters (the conversion's
-        // result and error) belong to the selected dictionary method, rather
-        // than to an explicit argument at this call.
+        // A quote conversion's argument is concrete Str, and an
+        // interpolation conversion's is its concrete `List(Str)` of segments.
+        // The remaining type parameters (the conversion's result and error)
+        // belong to the selected dictionary method, rather than to an explicit
+        // argument at this call.
         const call_data = self.module.checked_bodies.expr(planned.call.expr).data;
-        if (call_data == .interpolation) {
-            try self.bindInterpolationItemDescriptorArgs(hidden_desc_args, call_data.interpolation, &pre_arg_descriptor_initializers);
-        }
         if (call_data == .str_from_quote or call_data == .interpolation) {
             try self.bindConversionResultDescriptorArgs(hidden_desc_args, dict_local, required_method, match.slot, &pre_arg_descriptor_initializers);
         }
@@ -25248,7 +25603,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
         // The operands are lowered last first, under the descriptors this
         // call bound, which are restored once they are lowered. The
@@ -25271,30 +25626,6 @@ const ProcBodyBuilder = struct {
         items[operands.len + 1] = .restore_descriptors;
         snapshot_moved = true;
         return .{ .tail = .{ .chain = .{ .items = items, .current = continuation, .snapshot = descriptor_snapshot } } };
-    }
-
-    /// Every part of an interpolation fills the generated iterator's item
-    /// slot, so the item type is the parts' type and the first part's type
-    /// describes it.
-    fn bindInterpolationItemDescriptorArgs(
-        self: *ProcBodyBuilder,
-        args: []const Plan.DirectCallHiddenDescriptorArg,
-        interpolation: checked.CheckedInterpolation,
-        initializers: *std.ArrayList(DescriptorArgLocal),
-    ) Allocator.Error!void {
-        if (interpolation.parts.len == 0) boxyLowerInvariant("checked interpolation had no interpolated parts");
-        const part_rep = self.repForType(self.module.checked_bodies.expr(interpolation.parts[0].value).ty);
-        for (args) |arg| {
-            if (arg.source_arg_index == null or !self.repIsBareDynamic(arg.rep)) continue;
-            const materialization = try self.descriptorMaterializationForKnownRep(part_rep);
-            const local = try self.addFrameLocal(.opaque_ptr);
-            try initializers.append(self.parent.allocator, .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
-            try self.bindDescriptorIdentityLocalForRep(arg.rep, local, false);
-        }
     }
 
     fn bindConversionResultDescriptorArgs(
@@ -25414,7 +25745,7 @@ const ProcBodyBuilder = struct {
     ) Allocator.Error!Plan.TypeRepId {
         const expr_id = switch (operand) {
             .checked_expr => |expr| expr,
-            .generated_interpolation_iter,
+            .generated_interpolation_segments,
             .generated_numeral,
             .generated_quote,
             => return planned_rep,
@@ -25559,12 +25890,32 @@ const ProcBodyBuilder = struct {
         const descriptor_boundary_is_direct = !runtime_result_desc and
             ((target_desc == null and direct_result_desc.desc == null) or
                 (checked_return_types_match and (target_desc == null or direct_result_desc.desc != null)));
+        // A callee that returns its descriptor at runtime writes both the
+        // value and that descriptor straight into a target whose descriptor
+        // local is this frame's to overwrite, exactly as an erased call does.
+        const target_desc_is_shared = if (target_desc) |desc|
+            if (desc.localOrNull()) |local| self.localIsDescriptorSlot(local) else false
+        else
+            false;
+        const adopts_callee_descriptor = runtime_result_desc and
+            !target_desc_is_shared and
+            self.callResultAdoptsCalleeDescriptor(target, target_rep);
+        const runtime_boundary_is_direct = runtime_result_desc and
+            !target_desc_is_shared and
+            self.callResultOutputDescriptorLocal(target) != null and
+            self.erasedCallResultCanUseTarget(target_rep, worker_ret_rep);
         var fresh_raw_out_desc: ?LIR.LocalId = null;
         const call_target = if (target_layout == ret_layout.layoutIdx() and
-            self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep) and
-            descriptor_boundary_is_direct)
+            (adopts_callee_descriptor or
+                (self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep) and
+                    (descriptor_boundary_is_direct or runtime_boundary_is_direct))))
         blk: {
-            try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
+            // A target that only adopts the callee's descriptor keeps the
+            // bindings of its own representation; the callee's name nothing
+            // the target's other assignments could supply.
+            if (self.descriptorStorageRep(target_rep) == self.descriptorStorageRep(worker_ret_rep)) {
+                try self.recordDirectCallResultDescriptorEnvironment(target, worker_ret_rep, hidden_desc_args, hidden_desc_locals);
+            }
             break :blk target;
         } else blk: {
             const raw_ret = if (runtime_result_desc)
@@ -25578,7 +25929,7 @@ const ProcBodyBuilder = struct {
                     self.parent.result.store.setLocalBoxyDesc(raw_ret, desc);
                 }
             }
-            continuation = try self.lowerDirectCallReturnAdaptation(target, raw_ret, target_rep, worker_ret_rep, continuation);
+            continuation = try self.assignPlannedCallBoundary(target, raw_ret, target_rep, worker_ret_rep, continuation);
             if (runtime_result_desc) {
                 if (self.parent.result.store.getLocal(raw_ret).boxy_desc) |fresh_desc| {
                     fresh_raw_out_desc = fresh_desc.localOrNull();
@@ -25594,7 +25945,7 @@ const ProcBodyBuilder = struct {
             const identity_rep = self.descriptorStorageRep(worker_ret_rep);
             const identity = self.parent.plan.representations.items[@backingInt(identity_rep)];
             const return_layout = self.workerRuntimeLayoutForRep(worker_ret_rep).layoutIdx();
-            std.debug.panic(
+            base.invariant(
                 "boxy lower invariant violated: runtime direct-call result had no descriptor output local: worker={d} callee={d} rep={d} identity={d} descriptor={any} dynamic={any} layout={d} nested={any} target_desc={any}",
                 .{
                     @backingInt(worker_id),
@@ -25652,8 +26003,12 @@ const ProcBodyBuilder = struct {
                 const desc = materialize.materialize orelse
                     boxyLowerInvariant("boxy recursive direct-call static descriptor materialization had no descriptor");
                 static_replacement = try self.prependDescriptorArgMaterialization(materialize, desc, static_replacement);
-            } else if (out_desc != null) {
-                boxyLowerInvariant("boxy recursive direct-call static form had no descriptor materialization");
+            } else if (out_desc) |local| {
+                // A descriptor local initialized at procedure entry already
+                // holds what the static form's result is described by.
+                if (std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) == null) {
+                    boxyLowerInvariant("boxy recursive direct-call static form had no descriptor materialization");
+                }
             }
             try self.parent.pending_direct_call_descriptor_abis.append(self.parent.allocator, .{
                 .callee = callee_proc,
@@ -25675,7 +26030,7 @@ const ProcBodyBuilder = struct {
         self.call_boundary_substitution = hidden_desc_args;
         defer self.call_boundary_substitution = enclosing_call_boundary_substitution;
         continuation = try self.prependWorkerCallArgAdaptations(arg_types, source_args, adapted_args, worker_arg_children, actual_arg_reps, arg_substitutions, continuation);
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         self.restoreDescriptorBindings(call_descriptor_snapshot);
         call_descriptor_bindings_restored = true;
         return try self.prependDescriptorArgMaterializations(pre_adaptation_descriptor_initializers.items, continuation);
@@ -25703,7 +26058,7 @@ const ProcBodyBuilder = struct {
                 substitutions[index].operand_rep
             else
                 self.repForTypeRef(arg_types[index]);
-            continuation = try self.lowerDirectCallArgAdaptation(
+            continuation = try self.assignPlannedCallBoundary(
                 targets[index],
                 sources[index],
                 target_rep,
@@ -25712,28 +26067,6 @@ const ProcBodyBuilder = struct {
             );
         }
         return continuation;
-    }
-
-    fn lowerDirectCallArgAdaptation(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
-    }
-
-    fn lowerDirectCallReturnAdaptation(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
     }
 
     fn assignPlannedCallBoundary(
@@ -25934,17 +26267,6 @@ const ProcBodyBuilder = struct {
         return false;
     }
 
-    fn assignStaticMethodBoundary(
-        self: *ProcBodyBuilder,
-        target: LIR.LocalId,
-        source: LIR.LocalId,
-        target_rep: Plan.TypeRepId,
-        source_rep: Plan.TypeRepId,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.assignPlannedCallBoundary(target, source, target_rep, source_rep, next);
-    }
-
     fn adapterDescriptorForSource(
         self: *ProcBodyBuilder,
         source: LIR.LocalId,
@@ -25960,21 +26282,7 @@ const ProcBodyBuilder = struct {
                 .template = template,
             };
         }
-        const materialization = try self.descriptorMaterializationForSourceRep(source_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        const desc = LIR.BoxyDescRef{ .local = local };
-        return .{
-            .desc = desc,
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(source_rep));
     }
 
     fn adapterDescriptorForKnownRep(
@@ -25994,11 +26302,7 @@ const ProcBodyBuilder = struct {
         const local = try self.addFrameLocal(.opaque_ptr);
         return .{
             .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(local),
         };
     }
 
@@ -27828,7 +28132,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("degenerate checked match alternative reached boxy lowering");
         }
         const remaps = branch_pattern.binderRemapsSlice(self.module.checked_bodies);
-        const needs_miss_join = try self.patternCanMiss(branch_pattern.pattern);
+        const needs_miss_join = try self.patternFromRepCanMiss(branch_pattern.pattern, task.source_rep);
         task.alt_miss = if (needs_miss_join)
             PatternMiss{ .join_id = self.freshJoinPointId() }
         else
@@ -28042,43 +28346,8 @@ const ProcBodyBuilder = struct {
         var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
         defer seen.deinit();
 
-        return try self.dynamicTagPayloadsForNameInner(rep_id, name, &seen) orelse
+        return try self.dynamicTagPayloadsForTextInner(rep_id, self.module.canonical_names.tagLabelText(name), &seen) orelse
             boxyLowerInvariant("dynamic tag expression referenced a variant outside its checked row representation");
-    }
-
-    /// The payloads of the first variant along the tag row `root` whose
-    /// name matches, searching the row and its extensions in order.
-    fn dynamicTagPayloadsForNameInner(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        name: names.TagNameId,
-        seen: *collections.DenseMap(Plan.TypeRepId, void),
-    ) Allocator.Error!?[]const Plan.RepChild {
-        const allocator = self.parent.allocator;
-        var pending: std.ArrayList(Plan.TypeRepId) = .empty;
-        defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |rep_id| {
-            const tag_rep_id = self.tagDomainRep(rep_id) orelse continue;
-            const entry = try seen.getOrPut(tag_rep_id);
-            if (entry.found_existing) continue;
-
-            const rep = self.parent.plan.representations.items[@backingInt(tag_rep_id)];
-            for (self.parent.plan.tagVariantSlice(rep.tag_variants)) |variant| {
-                if (self.tagVariantNameMatches(variant, self.module, name)) {
-                    return self.parent.plan.childSlice(variant.payloads);
-                }
-            }
-
-            const children = self.parent.plan.childSlice(rep.children);
-            var index = children.len;
-            while (index > 0) {
-                index -= 1;
-                if (children[index].role != .tag_ext) continue;
-                try pending.append(allocator, children[index].rep);
-            }
-        }
-        return null;
     }
 
     fn dynamicTagPayloadsForVariantName(
@@ -28141,6 +28410,28 @@ const ProcBodyBuilder = struct {
             }
         }
         return null;
+    }
+
+    /// A nominal that carries descriptor methods is described by its own
+    /// descriptor, not its backing's: the backing's construction describes the
+    /// shared storage with the backing's descriptor, so the nominal's is
+    /// written once the value becomes the nominal.
+    fn prependNominalOwnDescriptorMaterialization(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        nominal_rep: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        if (!self.parent.plan.repOwnsDescriptorMethod(self.parent.descriptorIdentityRep(nominal_rep))) return next;
+        const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return next;
+        const local = target_desc.localOrNull() orelse return next;
+        if (self.localIsReadOnlyDescriptorInput(local)) return next;
+        const materialization = try self.descriptorMaterializationForKnownRepExcludingLocal(nominal_rep, local);
+        return try self.prependDescriptorArgMaterialization(.{
+            .local = local,
+            .materialize = materialization.desc,
+            .captures = materialization.captures,
+        }, materialization.desc, next);
     }
 
     /// The locals one field-access segment reads into, made before the
@@ -28642,6 +28933,44 @@ const ProcBodyBuilder = struct {
     /// Enter the formal scope of each nominal wrapper between `rep_id` and
     /// the structural representation it stores, outermost first: an inner
     /// wrapper's actuals can name an outer wrapper's formals.
+    /// The representation inside `rep_id`'s alias and non-opaque nominal
+    /// wrappers, which share their backing's storage.
+    fn nominalWrapperBackingRep(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Plan.TypeRepId {
+        var current = rep_id;
+        for (0..self.parent.plan.representations.items.len) |_| {
+            const rep = self.parent.plan.representations.items[@backingInt(current)];
+            switch (rep.kind) {
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
+                .nominal => |kind| switch (kind) {
+                    .transparent, .builtin_other => current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep,
+                    .opaque_nominal => return current,
+                },
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return current,
+            }
+        }
+        boxyLowerInvariant("cyclic nominal wrapper chain reached boxy boundary lowering");
+    }
+
+    /// Bind the formals of each nominal wrapper between `rep_id` and the
+    /// callable it stores in the innermost open formal scope. A callable read
+    /// from an opaque nominal's backing (inside its module) is stated over
+    /// that nominal's formals too.
+    fn bindNominalWrapperFormalsInScope(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!void {
+        var current = rep_id;
+        for (0..self.parent.plan.representations.items.len) |_| {
+            const rep = self.parent.plan.representations.items[@backingInt(current)];
+            switch (rep.kind) {
+                .alias => current = self.repQuery().requiredSingleChild(current, .alias_backing).rep,
+                .nominal => {
+                    try self.bindNominalBackingFormals(current, self.nominal_formal_bindings.items.len);
+                    current = self.repQuery().requiredSingleChild(current, .nominal_backing).rep;
+                },
+                .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => return,
+            }
+        }
+        boxyLowerInvariant("cyclic nominal wrapper chain reached formal binding");
+    }
+
     fn enterNominalWrapperFormalScopes(
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
@@ -28849,8 +29178,7 @@ const ProcBodyBuilder = struct {
         for (statements) |statement_id| {
             const statement = self.module.checked_bodies.statement(statement_id);
             const rhs: ?checked.CheckedExprId = switch (statement.data) {
-                .decl => |decl| decl.expr,
-                .var_ => |decl| decl.expr,
+                inline .decl, .var_ => |decl| decl.expr,
                 .reassign => |reassign| reassign.expr,
                 .pending,
                 .promoted_proc,
@@ -28877,11 +29205,13 @@ const ProcBodyBuilder = struct {
             if (rhs) |expr| if (self.module.checked_bodies.expr(expr).data == .runtime_error) continue;
             switch (statement.data) {
                 .decl => |decl| {
-                    if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) try self.reservePatternBindings(decl.pattern);
+                    if (!try self.declOmitsRuntimeBinding(decl.pattern, decl.expr)) {
+                        try self.reservePatternBindings(decl.pattern);
+                        if (decl.recursive) try self.reserveRecursiveValueSlots(decl.pattern);
+                    }
                     try self.reserveClosureCaptureSnapshots(decl.expr);
                 },
-                .var_ => |decl| try self.reservePatternBindings(decl.pattern),
-                .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
+                inline .var_, .var_uninitialized => |decl| try self.reservePatternBindings(decl.pattern),
                 .reassign => |reassign| try self.reserveReassignPatternBindings(reassign.pattern),
                 .import_,
                 .alias_decl,
@@ -28891,6 +29221,149 @@ const ProcBodyBuilder = struct {
                 .promoted_proc,
                 => {},
                 .pending, .crash, .dbg, .expr, .expect, .for_, .while_, .infinite_loop, .breakable_loop, .break_, .return_, .where_alias_decl, .runtime_error => {},
+            }
+        }
+    }
+
+    /// Each binder of a recursive value declaration that a callable captures
+    /// through a slot gets one, held by those callables instead of its value.
+    fn reserveRecursiveValueSlots(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) Allocator.Error!void {
+        var binders = std.ArrayList(checked.PatternBinderId).empty;
+        defer binders.deinit(self.parent.allocator);
+        try self.appendPatternBinderIds(pattern_id, &binders);
+        for (binders.items) |binder| {
+            // A binder no callable captures through a slot needs none.
+            const slot_rep = self.parent.plan.recursiveSlotRepFor(self.repForType(self.binderType(binder))) orelse continue;
+            const slot = try self.addFrameLocal(self.workerRuntimeLayoutForRep(slot_rep).layoutIdx());
+            try self.recursive_value_slots.put(self.parent.allocator, binder, slot);
+        }
+    }
+
+    /// A recursive value declaration allocates each binder's zeroed slot
+    /// before lowering its value, so callables in the value capture the slot,
+    /// then stores each binder's value into its slot.
+    fn beginRecursiveValueDecl(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        expr_id: checked.CheckedExprId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!ExprStep {
+        var binders = std.ArrayList(checked.PatternBinderId).empty;
+        defer binders.deinit(self.parent.allocator);
+        try self.appendPatternBinderIds(pattern_id, &binders);
+
+        var current = next;
+        var index = binders.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binder = binders.items[index];
+            const slot = self.recursive_value_slots.get(binder) orelse continue;
+            const rep = self.repForType(self.binderType(binder));
+            const slot_rep = self.parent.plan.recursiveSlotRepFor(rep) orelse
+                boxyLowerInvariant("boxy recursive value slot had no planned slot representation");
+            const wrapper_rep = self.repQuery().requiredSingleChild(slot_rep, .box_payload).rep;
+            const value = try self.addFrameLocal(self.workerRuntimeLayoutForRep(rep).layoutIdx());
+            const wrapper = try self.addFrameLocal(self.workerRuntimeLayoutForRep(wrapper_rep).layoutIdx());
+            const unit = try self.addFrameLocal(.zst);
+            // Storing through the slot's Box keeps the slot alive through the
+            // store even when nothing captured it.
+            const store_args = [_]LIR.LocalId{ slot, wrapper };
+            current = try self.assignLowLevelLocals(unit, .ptr_store, &store_args, current);
+            current = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
+                .target = wrapper,
+                .fields = try self.parent.result.store.addLocalSpan(&.{value}),
+                .next = current,
+            } }, self.origin);
+            const wrapper_desc = try self.descriptorForConstructedTargetMaterialization(
+                wrapper,
+                try self.descriptorMaterializationForExactRep(wrapper_rep),
+            );
+            current = try self.prependOptionalDescriptorMaterialization(wrapper_desc.materialize, current);
+            current = try self.assignTypedLocalFromRep(value, self.localForBinder(binder), rep, self.binderStorageRep(binder), current);
+        }
+        const items = try self.parent.allocator.alloc(ExprChainItem, 2);
+        items[0] = .{ .lower = .{ .decl_pattern = .{ .pattern = pattern_id, .expr = expr_id, .next = undefined } } };
+        items[1] = .{ .recursive_value_slots = pattern_id };
+        return exprChain(items, current);
+    }
+
+    fn prependRecursiveValueSlotAllocations(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId, next: LIR.CFStmtId) Allocator.Error!LIR.CFStmtId {
+        var binders = std.ArrayList(checked.PatternBinderId).empty;
+        defer binders.deinit(self.parent.allocator);
+        try self.appendPatternBinderIds(pattern_id, &binders);
+        var current = next;
+        var index = binders.items.len;
+        while (index > 0) {
+            index -= 1;
+            const binder = binders.items[index];
+            const slot = self.recursive_value_slots.get(binder) orelse continue;
+            const slot_rep = self.parent.plan.recursiveSlotRepFor(self.repForType(self.binderType(binder))) orelse
+                boxyLowerInvariant("boxy recursive value slot had no planned slot representation");
+            current = try self.assignLowLevelLocals(slot, .box_alloc_zeroed, &.{}, current);
+            // The slot is described like any constructed Box of its payload.
+            const materialization = try self.descriptorMaterializationForExactRep(slot_rep);
+            const slot_desc = try self.descriptorForConstructedTargetMaterialization(slot, materialization);
+            current = try self.prependOptionalDescriptorMaterialization(slot_desc.materialize, current);
+        }
+        return current;
+    }
+
+    /// Describe the value a worker reads from a captured recursive value
+    /// slot before the value's binding is lowered, the way a captured value
+    /// field is described: its descriptor and descriptor environment are
+    /// recorded now, and their initializers run with the captured value field
+    /// descriptors. The read itself is a plain `Box` payload read.
+    fn prepareRecursiveValueSlotRead(self: *ProcBodyBuilder, target: LIR.LocalId, rep: Plan.TypeRepId) Allocator.Error!void {
+        if (self.parent.tagPayloadStorageDescRepIfNeeded(rep) == null) return;
+        const target_desc_info = try self.descriptorRefForPayloadStorageTarget(target, rep);
+        const target_desc = target_desc_info.desc orelse
+            boxyLowerInvariant("boxy recursive value slot read had no target descriptor");
+        self.parent.result.store.setLocalBoxyDesc(target, target_desc);
+        if (target_desc_info.materialize) |materialize| {
+            try self.erased_capture_value_desc_initializers.append(self.parent.allocator, materialize);
+        }
+
+        var bindings = std.ArrayList(LocalDescriptorEnvironmentBinding).empty;
+        defer bindings.deinit(self.parent.allocator);
+        var initializers = std.ArrayList(DescriptorArgLocal).empty;
+        defer initializers.deinit(self.parent.allocator);
+        var seen = collections.DenseMap(Plan.TypeRepId, void).init(self.parent.allocator);
+        defer seen.deinit();
+        try self.collectDescriptorEnvironmentForRep(rep, target_desc, &bindings, &initializers, &seen);
+        try self.recordLocalDescriptorEnvironment(target, rep, bindings.items);
+        try self.erased_capture_value_desc_initializers.appendSlice(self.parent.allocator, initializers.items);
+    }
+
+    fn appendPatternBinderIds(
+        self: *ProcBodyBuilder,
+        pattern_id: checked.CheckedPatternId,
+        out: *std.ArrayList(checked.PatternBinderId),
+    ) Allocator.Error!void {
+        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        defer pending.deinit(self.parent.allocator);
+        try pending.append(self.parent.allocator, pattern_id);
+        while (pending.pop()) |current| {
+            const pattern = self.module.checked_bodies.pattern(current);
+            switch (pattern.data) {
+                .assign => |binder| try out.append(self.parent.allocator, binder),
+                .as => |as| {
+                    try out.append(self.parent.allocator, as.binder);
+                    try pending.append(self.parent.allocator, as.pattern);
+                },
+                .tuple => |items| for (0..items.len) |offset| try pending.append(self.parent.allocator, items[items.len - 1 - offset]),
+                .record_destructure => |destructs| for (0..destructs.len) |offset| switch (destructs[destructs.len - 1 - offset].kind) {
+                    .required, .sub_pattern, .rest => |child| try pending.append(self.parent.allocator, child),
+                },
+                .nominal => |nominal| try pending.append(self.parent.allocator, nominal.backing_pattern),
+                .applied_tag => |tag| for (0..tag.args.len) |offset| try pending.append(self.parent.allocator, tag.args[tag.args.len - 1 - offset]),
+                .list => |list| {
+                    if (list.rest) |rest| if (rest.pattern) |rest_pattern| try pending.append(self.parent.allocator, rest_pattern);
+                    for (0..list.patterns.len) |offset| try pending.append(self.parent.allocator, list.patterns[list.patterns.len - 1 - offset]);
+                },
+                .str_interpolation => |str| for (0..str.steps.len) |offset| {
+                    if (str.steps[str.steps.len - 1 - offset].capture) |capture| try pending.append(self.parent.allocator, capture);
+                },
+                .pending, .underscore, .numeral_literal, .str_literal, .runtime_error => {},
             }
         }
     }
@@ -29011,26 +29484,6 @@ const ProcBodyBuilder = struct {
         /// Bind a literal pattern's value before its equality guard.
         guard_binder: struct { binder: checked.PatternBinderId, source: LIR.LocalId },
     };
-
-    fn stepInterpolationIter(self: *ProcBodyBuilder, task: anytype, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
-        const state = if (task.state) |existing| blk: {
-            existing.continuation = input orelse boxyLowerInvariant("generated interpolation node resumed without its item");
-            try self.parent.finishGeneratedInterpolationNode(self, existing);
-            break :blk existing;
-        } else blk: {
-            const created = try self.parent.beginGeneratedInterpolationIter(self, task.target, task.target_rep, task.expr_id, task.next);
-            task.state = created;
-            break :blk created;
-        };
-        while (state.index < state.iter_values.len) {
-            if (try self.parent.beginGeneratedInterpolationNode(self, state)) |item| return .{ .child = item };
-            try self.parent.finishGeneratedInterpolationNode(self, state);
-        }
-        const stmt = state.continuation;
-        self.parent.freeInterpolationIterState(state);
-        task.state = null;
-        return exprDone(stmt);
-    }
 
     fn stepPattern(self: *ProcBodyBuilder, task: *PatternTask, input: ?LIR.CFStmtId) Allocator.Error!ExprStep {
         const allocator = self.parent.allocator;
@@ -29389,20 +29842,9 @@ const ProcBodyBuilder = struct {
             .record_destructure => |destructs| try self.expandRecordPattern(state, pattern.ty, destructs, source, mode),
             .nominal => |nominal| {
                 const nominal_rep = self.repForType(pattern.ty);
-                switch (self.parent.plan.representations.items[@backingInt(nominal_rep)].kind) {
-                    .nominal => |kind| switch (kind) {
-                        // The value keeps the nominal's representation, whose backing is
-                        // the declaration's shared template; the backing pattern's own
-                        // type is this use's instantiation, which may be laid out
-                        // differently (a concrete row where the template holds boxed
-                        // formals), so the pattern reads it from the nominal's rep.
-                        .transparent, .builtin_other => {
-                            try state.actions.append(allocator, .{ .from_rep = .{ .pattern = nominal.backing_pattern, .source = source, .source_rep = nominal_rep, .context = context } });
-                            return null;
-                        },
-                        .opaque_nominal => {},
-                    },
-                    .in_progress, .dynamic, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => {},
+                if (self.nominalPatternSourceRep(nominal_rep)) |source_rep| {
+                    try state.actions.append(allocator, .{ .from_rep = .{ .pattern = nominal.backing_pattern, .source = source, .source_rep = source_rep, .context = context } });
+                    return null;
                 }
                 try self.expandNominalBacking(state, pattern.ty, nominal.backing_pattern, source, mode);
             },
@@ -29610,7 +30052,7 @@ const ProcBodyBuilder = struct {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         const pattern_rep = self.repForType(pattern.ty);
         if (pattern_rep == source_rep or
-            self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx())
+            (self.workerRuntimeLayoutForRep(pattern_rep).layoutIdx() == self.workerRuntimeLayoutForRep(source_rep).layoutIdx()))
         {
             try state.actions.append(allocator, .{ .pattern = .{ .pattern = pattern_id, .source = source, .mode = .{ .match = context } } });
             return;
@@ -29623,7 +30065,7 @@ const ProcBodyBuilder = struct {
                 try state.actions.append(allocator, .{ .from_rep = .{ .pattern = as.pattern, .source = source, .source_rep = source_rep, .context = context } });
             },
             .applied_tag => |tag| {
-                const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse {
+                const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse {
                     const source_identity = self.descriptorStorageRep(source_rep);
                     const source_rep_value = self.parent.plan.representations.items[@backingInt(source_identity)];
                     if (source_rep_value.kind != .dynamic) {
@@ -29936,6 +30378,19 @@ const ProcBodyBuilder = struct {
         return read;
     }
 
+    /// Transparent nominal patterns read the declaration-owned representation,
+    /// not the possibly projected backing pattern row. Builtin Bool has the
+    /// same contract despite having a dedicated scalar representation.
+    fn nominalPatternSourceRep(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return switch (self.parent.plan.representations.items[@backingInt(rep_id)].kind) {
+            .nominal => |kind| switch (kind) {
+                .transparent, .builtin_other => rep_id,
+                .opaque_nominal => null,
+            },
+            .bool_tag_union => rep_id,
+            .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
+        };
+    }
     fn recordDescriptorPreservingListResult(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -30877,7 +31332,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("boxy iterator dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         continuation = try self.prependDescriptorArgMaterializations(call_arg_descriptor_initializers.items, continuation);
         continuation = try self.prependDescriptorArgMaterializations(pre_arg_descriptor_initializers.items, continuation);
         var chain_items = std.ArrayList(ExprChainItem).empty;
@@ -31417,59 +31872,20 @@ const ProcBodyBuilder = struct {
 
         const children = self.parent.plan.childSlice(self.parent.plan.representations.items[@backingInt(function.rep)].children);
         for (children[function.args_start..][0..function.arg_count]) |child| {
-            try self.collectRuntimeHiddenDescriptorParamsForRep(child.rep, pending, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.runtime, child.rep, pending, &seen_reps, &seen_descs);
         }
         if (include_return) {
-            try self.collectRuntimeHiddenDescriptorParamsForRep(function.ret, pending, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.runtime, function.ret, pending, &seen_reps, &seen_descs);
         }
     }
 
     /// Collect, in pre-order, the hidden descriptor parameters `root`
-    /// carries.
-    fn collectRuntimeHiddenDescriptorParamsForRep(
-        self: *ProcBodyBuilder,
-        root: Plan.TypeRepId,
-        pending: *std.ArrayList(Plan.HiddenDescriptorParam),
-        seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
-        seen_descs: *collections.DenseMap(Plan.DescriptorRequirementId, void),
-    ) Allocator.Error!void {
-        const allocator = self.parent.allocator;
-        var reps: std.ArrayList(Plan.TypeRepId) = .empty;
-        defer reps.deinit(allocator);
-        try reps.append(allocator, root);
-        while (reps.pop()) |rep_id| {
-            const rep_entry = try seen_reps.getOrPut(rep_id);
-            if (rep_entry.found_existing) continue;
-
-            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-            if (rep.descriptor) |desc| {
-                const identity_rep = self.repQuery().descriptorArgumentIdentityRep(rep_id);
-                const identity_desc = self.parent.plan.representations.items[@backingInt(identity_rep)].descriptor orelse desc;
-                const desc_entry = try seen_descs.getOrPut(identity_desc);
-                if (!desc_entry.found_existing) {
-                    try pending.append(allocator, .{
-                        .source_type = rep.source_type,
-                        .rep = rep_id,
-                        .desc = desc,
-                    });
-                }
-            }
-
-            if (rep.kind == .erased_callable) continue;
-            const children = self.parent.plan.childSlice(rep.children);
-            var index = children.len;
-            while (index > 0) {
-                index -= 1;
-                if (!self.parent.plan.childCarriesHiddenDescriptor(rep_id, children[index])) continue;
-                try reps.append(allocator, children[index].rep);
-            }
-        }
-    }
-
-    /// Collect, in pre-order, the hidden descriptor parameters `root`
-    /// carries.
+    /// carries. `.runtime` stops at erased callables and follows only
+    /// children that carry a hidden descriptor; `.all` follows every child
+    /// except shared backing templates.
     fn collectHiddenDescriptorParamsForRep(
         self: *ProcBodyBuilder,
+        comptime scope: enum { all, runtime },
         root: Plan.TypeRepId,
         pending: *std.ArrayList(Plan.HiddenDescriptorParam),
         seen_reps: *collections.DenseMap(Plan.TypeRepId, void),
@@ -31497,11 +31913,16 @@ const ProcBodyBuilder = struct {
                 }
             }
 
+            if (scope == .runtime and rep.kind == .erased_callable) continue;
             const children = self.parent.plan.childSlice(rep.children);
             var index = children.len;
             while (index > 0) {
                 index -= 1;
-                if (self.parent.plan.childIsSharedBackingTemplate(rep_id, children[index])) continue;
+                const skip = switch (scope) {
+                    .runtime => !self.parent.plan.childCarriesHiddenDescriptor(rep_id, children[index]),
+                    .all => self.parent.plan.childIsSharedBackingTemplate(rep_id, children[index]),
+                };
+                if (skip) continue;
                 try reps.append(allocator, children[index].rep);
             }
         }
@@ -31516,7 +31937,7 @@ const ProcBodyBuilder = struct {
         defer seen_reps.deinit();
         var seen_descs = collections.DenseMap(Plan.DescriptorRequirementId, void).init(self.parent.allocator);
         defer seen_descs.deinit();
-        try self.collectHiddenDescriptorParamsForRep(rep_id, pending, &seen_reps, &seen_descs);
+        try self.collectHiddenDescriptorParamsForRep(.all, rep_id, pending, &seen_reps, &seen_descs);
     }
 
     /// Collect, in pre-order, the hidden descriptor arguments a dictionary
@@ -32063,20 +32484,7 @@ const ProcBodyBuilder = struct {
         defer self.restoreDescriptorBindings(snapshot);
 
         try self.bindDirectCallHiddenDescriptorLocals(hidden_args, hidden_locals, true);
-        const materialization = try self.descriptorMaterializationForSourceRep(identity_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(identity_rep));
     }
 
     fn dictionaryCallResultDescriptorRef(
@@ -32122,20 +32530,7 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         result_rep: Plan.TypeRepId,
     ) Allocator.Error!ResultDescriptorSource {
-        const materialization = try self.descriptorMaterializationForExactResultRep(result_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForExactResultRep(result_rep));
     }
 
     fn descriptorMaterializationForExactResultRep(
@@ -32186,6 +32581,18 @@ const ProcBodyBuilder = struct {
         if (target_identity != result_identity) return false;
         if (target_rep == result_rep) return true;
         return self.repIsFullyConcrete(target_identity);
+    }
+
+    /// Whether a call can deliver its result and that result's descriptor
+    /// straight into `target`. A bare dynamic value is described only by the
+    /// descriptor it arrives with, so a target whose descriptor local this
+    /// frame may write takes the callee's in place of its own.
+    fn callResultAdoptsCalleeDescriptor(
+        self: *const ProcBodyBuilder,
+        target: LIR.LocalId,
+        target_rep: Plan.TypeRepId,
+    ) bool {
+        return self.repIsBareDynamic(target_rep) and self.callResultOutputDescriptorLocal(target) != null;
     }
 
     fn callResultOutputDescriptorLocal(
@@ -32286,11 +32693,7 @@ const ProcBodyBuilder = struct {
                     try self.recordDescriptorLocalTemplate(existing_local, materialization);
                     return .{
                         .desc = existing,
-                        .materialize = .{
-                            .local = existing_local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        },
+                        .materialize = materialization.initializer(existing_local),
                     };
                 }
             }
@@ -32303,11 +32706,7 @@ const ProcBodyBuilder = struct {
         try self.recordDescriptorLocalTemplate(desc_local, materialization);
         return .{
             .desc = desc_ref,
-            .materialize = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(desc_local),
         };
     }
 
@@ -32387,20 +32786,7 @@ const ProcBodyBuilder = struct {
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!ResultDescriptorSource {
         const desc_rep = self.parent.tagPayloadStorageDescRepIfNeeded(rep_id) orelse return .{};
-        const materialization = try self.descriptorMaterializationForSourceRep(desc_rep);
-        if (materialization.captures.len == 0) {
-            return .{ .desc = materialization.desc };
-        }
-
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(desc_rep));
     }
 
     fn descriptorRefForPayloadStorageTarget(
@@ -33019,17 +33405,7 @@ const ProcBodyBuilder = struct {
     /// The static-field view of an open record: the record its row names,
     /// which a field read or update projects the complete record onto.
     fn openRecordViewDescriptorSource(self: *ProcBodyBuilder, rep_id: Plan.TypeRepId) Allocator.Error!ResultDescriptorSource {
-        const materialization = try self.descriptorTemplateMaterializationForRep(rep_id, &.{});
-        if (materialization.captures.len == 0) return .{ .desc = materialization.desc };
-        const local = try self.addFrameLocal(.opaque_ptr);
-        return .{
-            .desc = .{ .local = local },
-            .materialize = .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
-        };
+        return try self.adapterDescriptorFromMaterialization(try self.descriptorTemplateMaterializationForRep(rep_id, &.{}));
     }
 
     fn descriptorTemplateMaterializationForRep(
@@ -33369,6 +33745,7 @@ const ProcBodyBuilder = struct {
             inspect_hidden,
             inspect_arg_begin,
             inspect_arg,
+            method_done,
         } = .nested_begin,
         /// Whether the frame's last requested reference is still due.
         awaiting: bool = false,
@@ -33376,8 +33753,8 @@ const ProcBodyBuilder = struct {
         tag_variants: LIR.BoxySpan = .{},
         tag_ext_desc: ?LIR.BoxyDescRef = null,
         field_names: LIR.BoxySpan = .{},
-        inspect_method: ?LirProgram.BoxyMethodSlotId = null,
-        inspect_hidden_descs: LIR.BoxySpan = .{},
+        method_index: usize = 0,
+        methods: [3]ProcedureBuilder.DescriptorMethodParts = @splat(.{}),
         refs: std.ArrayList(LIR.BoxyDescRef) = .empty,
         slots: std.ArrayList(ProcedureBuilder.NestedDescriptorSlot) = .empty,
         index: usize = 0,
@@ -33766,13 +34143,13 @@ const ProcBodyBuilder = struct {
             },
             .fields => {
                 frame.field_names = try self.parent.staticFieldNamesForRep(rep_id);
-                frame.inspect_method = try self.parent.inspectMethodSlotForRep(rep_id);
+                frame.methods[frame.method_index].method = try self.parent.descriptorMethodSlotForRep(rep_id, ProcedureBuilder.descriptor_method_kinds[frame.method_index]);
                 frame.refs.clearRetainingCapacity();
                 frame.index = 0;
                 frame.phase = .inspect_hidden;
             },
             .inspect_hidden => {
-                const args: []const Plan.DirectCallHiddenDescriptorArg = if (plan.inspectMethodForRep(rep_id)) |inspect|
+                const args: []const Plan.DirectCallHiddenDescriptorArg = if (plan.descriptorMethodForRep(rep_id, ProcedureBuilder.descriptor_method_kinds[frame.method_index])) |inspect|
                     plan.directCallHiddenDescriptorArgSlice(inspect.hidden_desc_args)
                 else
                     &.{};
@@ -33793,13 +34170,18 @@ const ProcBodyBuilder = struct {
                     frame.awaiting = true;
                     return .{ .request = arg.rep };
                 }
-                frame.inspect_hidden_descs = if (args.len == 0) .{} else try self.parent.appendStaticHiddenDescRefs(frame.refs.items);
+                frame.methods[frame.method_index].hidden = if (args.len == 0) .{} else try self.parent.appendStaticHiddenDescRefs(frame.refs.items);
                 frame.phase = .inspect_arg_begin;
             },
             .inspect_arg_begin => {
-                const inspect = plan.inspectMethodForRep(rep_id) orelse return try self.finishTemplateDesc(frames, context, .{});
-                if (self.parent.inspectArgumentIsIdentity(inspect)) {
-                    return try self.finishTemplateDesc(frames, context, try self.parent.appendStaticHiddenDescRefs(&.{.{ .static = frame.desc_id }}));
+                const inspect = plan.descriptorMethodForRep(rep_id, ProcedureBuilder.descriptor_method_kinds[frame.method_index]) orelse {
+                    frame.phase = .method_done;
+                    continue;
+                };
+                if (self.parent.descriptorMethodArgumentIsIdentity(inspect)) {
+                    frame.methods[frame.method_index].args = try self.parent.appendDescriptorMethodArgRefs(inspect, .{ .static = frame.desc_id });
+                    frame.phase = .method_done;
+                    continue;
                 }
                 frame.inspect_scope = .{
                     .bindings_start = context.bindings.items.len,
@@ -33811,14 +34193,21 @@ const ProcBodyBuilder = struct {
                 }
                 frame.phase = .inspect_arg;
                 frame.awaiting = true;
-                return .{ .request = self.parent.inspectWorkerArgRep(inspect) };
+                return .{ .request = self.parent.descriptorMethodWorkerArgRep(inspect) };
             },
             .inspect_arg => {
                 const arg_ref = ref orelse boxyLowerInvariant("boxy descriptor template inspect argument had no reference");
-                const arg_descs = try self.parent.appendStaticHiddenDescRefs(&.{arg_ref});
+                const method = plan.descriptorMethodForRep(rep_id, ProcedureBuilder.descriptor_method_kinds[frame.method_index]).?;
+                frame.methods[frame.method_index].args = try self.parent.appendDescriptorMethodArgRefs(method, arg_ref);
                 popDescriptorTemplateExactReps(context, frame.inspect_scope.?);
                 frame.inspect_scope = null;
-                return try self.finishTemplateDesc(frames, context, arg_descs);
+                frame.phase = .method_done;
+            },
+            .method_done => {
+                if (frame.method_index != 0) frame.methods[frame.method_index].dictionaries = try self.parent.descriptorMethodDictRefs(rep_id, ProcedureBuilder.descriptor_method_kinds[frame.method_index]);
+                frame.method_index += 1;
+                if (frame.method_index == ProcedureBuilder.descriptor_method_kinds.len) return try self.finishTemplateDesc(frames, context);
+                frame.phase = .fields;
             },
         };
     }
@@ -33828,7 +34217,6 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         frames: *std.ArrayList(TemplateDescFrame),
         context: *DescriptorTemplateContext,
-        inspect_arg_descs: LIR.BoxySpan,
     ) Allocator.Error!TemplateStep {
         var frame = frames.pop().?;
         defer frame.deinit(self.parent.allocator);
@@ -33844,9 +34232,20 @@ const ProcBodyBuilder = struct {
             .tag_ext_desc = frame.tag_ext_desc,
             .field_names = frame.field_names,
             .inspect_opaque = self.parent.repInspectsOpaque(rep_id),
-            .inspect_method = frame.inspect_method,
-            .inspect_hidden_descs = frame.inspect_hidden_descs,
-            .inspect_arg_descs = inspect_arg_descs,
+            .inspect_method = frame.methods[0].method,
+            .inspect_hidden_descs = frame.methods[0].hidden,
+            .inspect_arg_descs = frame.methods[0].args,
+            .eq_method = frame.methods[1].method,
+            .eq_hidden_descs = frame.methods[1].hidden,
+            .eq_arg_descs = frame.methods[1].args,
+            .eq_nested_dicts = frame.methods[1].dictionaries,
+            .hash_method = frame.methods[2].method,
+            .hash_hidden_descs = frame.methods[2].hidden,
+            .hash_arg_descs = frame.methods[2].args,
+            .hash_nested_dicts = frame.methods[2].dictionaries,
+            .is_bool = self.parent.repDescribesBool(rep_id),
+            .eq_rejected = self.parent.plan.descriptorMethodRejected(rep_id, .equality),
+            .hash_rejected = self.parent.plan.descriptorMethodRejected(rep_id, .hash),
             .presence_slot_present_discriminant = rep.presence_slot_present_discriminant,
             .debug_checked_type = rep.source_type.ty,
         };
@@ -34036,7 +34435,8 @@ const ProcBodyBuilder = struct {
         const plan_id = switch (checked_expr.data) {
             .str_from_quote => |quote| quote.plan,
             .numeral => |numeral| numeral.plan,
-            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
+            .interpolation => |interpolation| interpolation.plan,
+            .pending, .str_segment, .str, .bytes_literal, .lookup_local, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level, .closure, .lambda => unreachable,
         };
         const dispatch = self.staticDispatchPlan(plan_id);
         const result_desc = try self.exactCallResultDescriptorRef(self.repForType(ty));
@@ -34052,14 +34452,6 @@ const ProcBodyBuilder = struct {
             .next = next,
         } }, self.origin);
         return try self.prependOptionalDescriptorMaterialization(result_desc.materialize, body);
-    }
-
-    fn prependHiddenDescriptorArgMaterialization(
-        self: *ProcBodyBuilder,
-        hidden_args: []const DescriptorArgLocal,
-        next: LIR.CFStmtId,
-    ) Allocator.Error!LIR.CFStmtId {
-        return try self.prependDescriptorArgMaterializations(hidden_args, next);
     }
 
     fn prependDescriptorArgMaterializations(
@@ -34281,7 +34673,7 @@ const ProcBodyBuilder = struct {
         true_body: LIR.CFStmtId,
         false_body: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         return try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = cond,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
@@ -35027,6 +35419,48 @@ const ProcBodyBuilder = struct {
         return call;
     }
 
+    /// Feed `value` into `hasher` by `rep_id`'s descriptor at runtime.
+    fn lowerDescriptorHashLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        value: LIR.LocalId,
+        hasher: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const desc = try self.descriptorRefForSourceLocalRep(value, rep_id);
+        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_hash = .{
+            .target = target,
+            .value = value,
+            .hasher = hasher,
+            .desc = desc,
+            .next = next,
+        } }, self.derivedOrigin());
+    }
+
+    /// Compare `lhs` and `rhs`, which share `rep_id`'s descriptor, by that
+    /// descriptor at runtime.
+    fn lowerDescriptorEqLocalsInto(
+        self: *ProcBodyBuilder,
+        target: LIR.LocalId,
+        lhs: LIR.LocalId,
+        rhs: LIR.LocalId,
+        rep_id: Plan.TypeRepId,
+        negated: bool,
+        next: LIR.CFStmtId,
+    ) Allocator.Error!LIR.CFStmtId {
+        const desc = try self.descriptorRefForSourceLocalRep(lhs, rep_id);
+        const raw = if (negated) try self.addFrameLocal(.bool) else target;
+        const after = if (negated) try self.negateBoolInto(target, raw, next) else next;
+        return try self.parent.result.store.addCFStmt(.{ .assign_boxy_eq = .{
+            .target = raw,
+            .lhs = lhs,
+            .rhs = rhs,
+            .desc = desc,
+            .next = after,
+        } }, self.derivedOrigin());
+    }
+
     fn lowerDescriptorInspectLocalsInto(
         self: *ProcBodyBuilder,
         target: LIR.LocalId,
@@ -35063,7 +35497,7 @@ const ProcBodyBuilder = struct {
             .low_level => |op| op,
             .bool_tag_union => return try self.lowerBoolInspectLocalsInto(target, source, next),
             .builtin_method => {
-                const method = self.parent.plan.inspectMethodForRep(rep_id) orelse
+                const method = self.parent.plan.descriptorMethodForRep(rep_id, .inspect) orelse
                     boxyLowerInvariant("primitive inspect had no planned to_inspect worker");
                 return try self.lowerToInspectWorkerInto(target, source, method.worker, next);
             },
@@ -35086,7 +35520,7 @@ const ProcBodyBuilder = struct {
         const false_body = try self.assignStringBytesLiteral(target, "False", next);
         const true_body = try self.assignStringBytesLiteral(target, "True", next);
         const discriminant = try self.addFrameLocal(.u32);
-        const branches = [_]LIR.CFSwitchBranch{.{ .value = 1, .body = true_body }};
+        const branches = [_]LIR.CFSwitchBranch{.{ .value = Common.bool_true_discriminant, .body = true_body }};
         const switch_stmt = try self.parent.result.store.addCFStmt(.{ .switch_stmt = .{
             .cond = discriminant,
             .branches = try self.parent.result.store.addCFSwitchBranches(&branches),
@@ -35291,6 +35725,8 @@ const ProcBodyBuilder = struct {
                 .expand => {},
                 .call => |index| return try self.lowerDerivedEqCallInto(target, lhs, rhs, index, negated, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedEqDictionaryCallInto(target, lhs, rhs, rep_id, requirement, negated, next),
+                .descriptor => return try self.lowerDescriptorEqLocalsInto(target, lhs, rhs, rep_id, negated, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => {
                     if (!negated) return try self.lowerDerivedHelperCallInto(.equality, target, lhs, rhs, rep_id, next);
                     const raw = try self.addFrameLocal(.bool);
@@ -35650,6 +36086,8 @@ const ProcBodyBuilder = struct {
         call: u32,
         /// Call through the frame's dictionary for this scheme requirement.
         scheme_dictionary: Plan.DictionaryRequirementId,
+        /// Compare or hash by the operands' runtime descriptor.
+        descriptor,
         /// Call the recursive helper for this union.
         helper,
         /// Read the component at this representation first: a formal's
@@ -35657,6 +36095,9 @@ const ProcBodyBuilder = struct {
         convert: Plan.TypeRepId,
         /// Read the box's payload first.
         unbox: Plan.TypeRepId,
+        /// The component's own method is a rejected declaration: the
+        /// comparison is a checked-error crash.
+        checked_error,
     };
 
     fn derivedStep(self: *ProcBodyBuilder, method: Plan.DerivedMethod, rep_id: Plan.TypeRepId) Allocator.Error!DerivedStep {
@@ -35680,8 +36121,7 @@ const ProcBodyBuilder = struct {
                 if (resolved != rep_id) return .{ .convert = resolved };
                 return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id));
             },
-            .list => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
-            .nominal => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
+            .list, .nominal => return derivedDecisionStep(try self.derivedComponentDecisionFor(method, rep_id)),
             .box => return .{ .unbox = self.repQuery().requiredSingleChild(rep_id, .box_payload).rep },
             .tag_union => {
                 if (self.derived_context == null) return .expand;
@@ -35713,7 +36153,9 @@ const ProcBodyBuilder = struct {
             .structural => .expand,
             .call => |index| .{ .call = index },
             .scheme_dictionary => |requirement| .{ .scheme_dictionary = requirement },
+            .descriptor => .descriptor,
             .shared_closed => |closed| .{ .convert = closed },
+            .checked_error => .checked_error,
         };
     }
 
@@ -36081,7 +36523,7 @@ const ProcBodyBuilder = struct {
                 boxyLowerInvariant("derived method dictionary call result descriptor materialization had no descriptor");
             continuation = try self.prependDescriptorArgMaterialization(materialize, desc, continuation);
         }
-        continuation = try self.prependHiddenDescriptorArgMaterialization(hidden_desc_locals, continuation);
+        continuation = try self.prependDescriptorArgMaterializations(hidden_desc_locals, continuation);
         return try self.prependDescriptorArgMaterializations(arg_descriptor_initializers.items, continuation);
     }
 
@@ -36280,6 +36722,8 @@ const ProcBodyBuilder = struct {
                 .expand => {},
                 .call => |index| return try self.lowerDerivedComponentCallInto(target, &.{ value, hasher }, index, next),
                 .scheme_dictionary => |requirement| return try self.lowerDerivedDictionaryCallInto(target, &.{ value, hasher }, rep_id, requirement, next),
+                .descriptor => return try self.lowerDescriptorHashLocalsInto(target, value, hasher, rep_id, next),
+                .checked_error => return try self.lowerCheckedErrorDispatchInto("method dispatch failed to check"),
                 .helper => return try self.lowerDerivedHelperCallInto(.hash, target, value, hasher, rep_id, next),
                 .convert => |actual| {
                     const converted = try self.addFrameLocalForRep(actual);
@@ -37053,7 +37497,7 @@ const ProcBodyBuilder = struct {
         }
         const literal = switch (operands[0]) {
             .generated_numeral => |lit| lit,
-            .checked_expr, .generated_interpolation_iter, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
+            .checked_expr, .generated_interpolation_segments, .generated_quote => boxyLowerInvariant("from_numeral plan operand was not a generated numeral"),
         };
         if (self.dynamicLiteralRuntimeDesc(target)) |desc_ref| {
             const exact = self.module.module_env.exactNumeral(literal);
@@ -37194,15 +37638,7 @@ const ProcBodyBuilder = struct {
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
         return switch (scalar) {
-            .i8 => |value| try self.assignIntLiteral(target, value, next),
-            .i16 => |value| try self.assignIntLiteral(target, value, next),
-            .i32 => |value| try self.assignIntLiteral(target, value, next),
-            .i64 => |value| try self.assignIntLiteral(target, value, next),
-            .i128 => |value| try self.assignIntLiteral(target, value, next),
-            .u8 => |value| try self.assignIntLiteral(target, value, next),
-            .u16 => |value| try self.assignIntLiteral(target, value, next),
-            .u32 => |value| try self.assignIntLiteral(target, value, next),
-            .u64 => |value| try self.assignIntLiteral(target, value, next),
+            .i8, .i16, .i32, .i64, .i128, .u8, .u16, .u32, .u64 => |value| try self.assignIntLiteral(target, value, next),
             .u128 => |value| try self.assignIntLiteral(target, @bitCast(value), next),
             .f32_bits => |bits| try self.assignF32Literal(target, @bitCast(bits), next),
             .f64_bits => |bits| try self.assignF64Literal(target, @bitCast(bits), next),
@@ -37270,7 +37706,7 @@ const ProcBodyBuilder = struct {
         value: bool,
         next: LIR.CFStmtId,
     ) Allocator.Error!LIR.CFStmtId {
-        const variant: u32 = if (value) 1 else 0;
+        const variant = Common.boolDiscriminant(value);
         return try self.parent.result.store.addCFStmt(.{ .assign_tag = .{
             .target = target,
             .variant_index = variant,
@@ -37334,11 +37770,7 @@ const ProcBodyBuilder = struct {
         if (self.localIsReadOnlyDescriptorInput(target_desc_local)) return continuation;
 
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        continuation = try self.prependDescriptorArgMaterialization(.{
-            .local = target_desc_local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        }, materialization.desc, continuation);
+        continuation = try self.prependDescriptorArgMaterialization(materialization.initializer(target_desc_local), materialization.desc, continuation);
         return continuation;
     }
 
@@ -37540,11 +37972,7 @@ const ProcBodyBuilder = struct {
                 ) }
             else
                 try self.descriptorMaterializationForSourceRep(capture.materialize_rep);
-            try descriptor_materializations.append(self.parent.allocator, .{
-                .local = local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            });
+            try descriptor_materializations.append(self.parent.allocator, materialization.initializer(local));
         }
         for (descriptor_captures, capture_fields[1..], capture_needs_materialization) |capture, local, needs_materialization| {
             if (!needs_materialization) continue;
@@ -37577,8 +38005,8 @@ const ProcBodyBuilder = struct {
             const fields = try self.parent.allocator.alloc(ProcedureBuilder.FrozenCaptureRecipe, 1 + descriptor_captures.len);
             defer self.parent.allocator.free(fields);
             fields[0] = .{ .value = source_function.rep };
-            for (descriptor_captures, fields[1..]) |capture, *field| field.* = .{ .descriptor = capture.materialize_rep };
-            try self.parent.recordFrozenCallable(self.worker_layout.worker, source_function.rep, target_function.rep, adapter.proc, adapter.capture_layout, self.erasedCallableOnDrop(adapter.capture_layout), target_function.ret, fields);
+            for (descriptor_captures, fields[1..]) |capture, *field| field.* = .{ .descriptor = .{ .worker_rep = capture.materialize_rep, .source_rep = capture.materialize_rep } };
+            try self.parent.recordFrozenCallable(self.worker_layout.worker, self.literal_initializer, source_function.rep, target_function.rep, adapter.proc, adapter.capture_layout, self.erasedCallableOnDrop(adapter.capture_layout), target_function.ret, fields);
         }
 
         const assign_callable = try self.parent.result.store.addCFStmt(.{ .assign_packed_erased_fn = .{
@@ -37598,7 +38026,7 @@ const ProcBodyBuilder = struct {
         } }, self.glueOrigin());
         continuation = try self.prependDescriptorArgMaterializations(result_desc_initializers.items, continuation);
 
-        return try self.prependHiddenDescriptorArgMaterialization(descriptor_materializations.items, continuation);
+        return try self.prependDescriptorArgMaterializations(descriptor_materializations.items, continuation);
     }
 
     fn callableBoundaryNeedsAdapter(
@@ -37830,7 +38258,7 @@ const ProcBodyBuilder = struct {
         for (self.functionArgChildren(function), 0..) |arg, arg_index| {
             var params = std.ArrayList(Plan.HiddenDescriptorParam).empty;
             defer params.deinit(self.parent.allocator);
-            try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             for (params.items, 0..) |param, descriptor_index| {
                 if (arg_index > std.math.maxInt(u32)) {
                     boxyLowerInvariant("boxy callable adapter argument descriptor key exceeded its index range");
@@ -37891,9 +38319,9 @@ const ProcBodyBuilder = struct {
         defer seen_descs.deinit();
         for ([_]FunctionChildren{ target_function, source_function }) |function| {
             for (self.functionArgChildren(function)) |arg| {
-                try self.collectHiddenDescriptorParamsForRep(arg.rep, &params, &seen_reps, &seen_descs);
+                try self.collectHiddenDescriptorParamsForRep(.all, arg.rep, &params, &seen_reps, &seen_descs);
             }
-            try self.collectHiddenDescriptorParamsForRep(function.ret, &params, &seen_reps, &seen_descs);
+            try self.collectHiddenDescriptorParamsForRep(.all, function.ret, &params, &seen_reps, &seen_descs);
         }
 
         const captures = try self.parent.allocator.alloc(CallableAdapterDescriptorCapture, params.items.len);
@@ -38337,11 +38765,7 @@ const ProcBodyBuilder = struct {
                 switch (nested.parent_desc) {
                     .static => {
                         const materialization = try self.descriptorMaterializationForKnownRep(nested.nested_rep);
-                        try initializers.append(allocator, .{
-                            .local = nested_local,
-                            .materialize = materialization.desc,
-                            .captures = materialization.captures,
-                        });
+                        try initializers.append(allocator, materialization.initializer(nested_local));
                     },
                     .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(allocator, .{
                         .local = nested_local,
@@ -38632,8 +39056,7 @@ const ProcBodyBuilder = struct {
 
             switch (a_layout.tag) {
                 .scalar => if (!std.meta.eql(a_layout.getScalar(), b_layout.getScalar())) return false,
-                .zst => {},
-                .erased_box => {},
+                .zst, .erased_box => {},
                 .box, .box_of_zst => try pending.append(allocator, .{
                     layouts.getBoxInfo(a_layout).elem_layout_idx,
                     layouts.getBoxInfo(b_layout).elem_layout_idx,
@@ -38999,7 +39422,12 @@ const ProcBodyBuilder = struct {
         if (target_layout == source_layout) {
             if (self.functionChildrenForRep(identity_target_rep)) |target_function| {
                 if (self.functionChildrenForRep(identity_source_rep)) |source_function| {
-                    return .{ .done = try self.assignErasedCallableBoundary(target, source, target_function, source_function, next) };
+                    const scope = self.beginNominalBackingFormalScope();
+                    errdefer self.dropNominalBackingFormalScope(scope);
+                    try self.bindNominalWrapperFormalsInScope(source_rep);
+                    try self.bindNominalWrapperFormalsInScope(target_rep);
+                    const body = try self.assignErasedCallableBoundary(target, source, target_function, source_function, next);
+                    return .{ .done = try self.leaveNominalBackingFormalScope(scope, body) };
                 }
             }
         }
@@ -39042,21 +39470,8 @@ const ProcBodyBuilder = struct {
                     if (try self.beginConcreteTagUnionToDynamicBoundary(frames, identity_request)) |step| return step;
                     const source_info = if (self.parent.result.store.getLocal(source).boxy_desc) |desc|
                         ResultDescriptorSource{ .desc = desc }
-                    else blk_source: {
-                        const materialization = try self.descriptorMaterializationForSourceRep(identity_source_rep);
-                        if (materialization.captures.len == 0) {
-                            break :blk_source ResultDescriptorSource{ .desc = materialization.desc };
-                        }
-                        const local = try self.addFrameLocal(.opaque_ptr);
-                        break :blk_source ResultDescriptorSource{
-                            .desc = .{ .local = local },
-                            .materialize = .{
-                                .local = local,
-                                .materialize = materialization.desc,
-                                .captures = materialization.captures,
-                            },
-                        };
-                    };
+                    else
+                        try self.adapterDescriptorFromMaterialization(try self.descriptorMaterializationForSourceRep(identity_source_rep));
                     const source_desc = source_info.desc orelse
                         boxyLowerInvariant("boxy concrete-to-dynamic source descriptor was not available");
                     const rep_payload_desc = if (self.descriptorBindingIsBoundForRep(identity_target_rep))
@@ -40233,6 +40648,30 @@ const ProcBodyBuilder = struct {
                 if (!self.localIsReadOnlyDescriptorInput(target_desc_local) and
                     (source_desc == null or !std.meta.eql(desc, source_desc.?)))
                 {
+                    // A runtime adapter cannot convert a callable; a value
+                    // holding one crosses its nominal wrappers into their
+                    // backings, whose structure lowering converts, wrapping
+                    // each callable in an adapter.
+                    if (try self.repHoldsCallableInStructure(target_rep) or
+                        try self.repHoldsCallableInStructure(source_rep))
+                    {
+                        const target_backing = self.nominalWrapperBackingRep(target_rep);
+                        const source_backing = self.nominalWrapperBackingRep(source_rep);
+                        if (target_backing == target_rep and source_backing == source_rep) {
+                            boxyLowerInvariant("boxy callable-holding nominal boundary had no nominal wrapper to cross");
+                        }
+                        const scope = try self.enterNominalWrapperFormalScopes(target_rep);
+                        errdefer self.dropNominalBackingFormalScope(scope);
+                        const body = try self.assignRepresentationBoundaryWithSourceMode(
+                            target,
+                            source,
+                            target_backing,
+                            source_backing,
+                            source_mode,
+                            next,
+                        );
+                        return try self.leaveNominalBackingFormalScope(scope, body);
+                    }
                     return try self.assignRuntimeAdapterBoundary(
                         target,
                         source,
@@ -40381,11 +40820,7 @@ const ProcBodyBuilder = struct {
         const desc_local = try self.addFrameLocal(.opaque_ptr);
         return .{
             .desc = .{ .local = desc_local },
-            .materialize = .{
-                .local = desc_local,
-                .materialize = materialization.desc,
-                .captures = materialization.captures,
-            },
+            .materialize = materialization.initializer(desc_local),
         };
     }
 
@@ -40953,11 +41388,7 @@ const ProcBodyBuilder = struct {
         const target_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return continuation;
         const target_desc_local = target_desc.localOrNull() orelse return continuation;
         const materialization = try self.descriptorMaterializationForSourceStorageLocalRep(source, source_rep);
-        continuation = try self.prependDescriptorArgMaterialization(.{
-            .local = target_desc_local,
-            .materialize = materialization.desc,
-            .captures = materialization.captures,
-        }, materialization.desc, continuation);
+        continuation = try self.prependDescriptorArgMaterialization(materialization.initializer(target_desc_local), materialization.desc, continuation);
         return continuation;
     }
 
@@ -41110,6 +41541,22 @@ const ProcBodyBuilder = struct {
             if (!changed) break;
         }
         return current;
+    }
+
+    /// A var's descriptor local is introduced by its declaration. Statements
+    /// are lowered last to first, so a reassignment already lowered marked it
+    /// initialized; before the declaration nothing has, and the declaration's
+    /// value initializes it.
+    fn forgetVarDescriptorInitialization(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId) void {
+        switch (self.module.checked_bodies.pattern(pattern_id).data) {
+            .assign => {},
+            .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => return,
+        }
+        const desc = self.parent.result.store.getLocal(self.localForPattern(pattern_id)).boxy_desc orelse return;
+        const local = desc.localOrNull() orelse return;
+        if (self.descriptorTemplateForLocal(local) == null) return;
+        const index = std.mem.findScalar(LIR.LocalId, self.runtime_initialized_descriptor_locals.items, local) orelse return;
+        _ = self.runtime_initialized_descriptor_locals.orderedRemove(index);
     }
 
     fn markDescriptorLocalBound(self: *ProcBodyBuilder, local: LIR.LocalId) Allocator.Error!void {
@@ -41394,11 +41841,7 @@ const ProcBodyBuilder = struct {
                     if (materialization.desc.localOrNull() == desc_local) {
                         boxyLowerInvariant("boxy worker return descriptor initializer referenced its own target");
                     }
-                    try self.worker_return_descriptor_initializers.append(self.parent.allocator, .{
-                        .local = desc_local,
-                        .materialize = materialization.desc,
-                        .captures = materialization.captures,
-                    });
+                    try self.worker_return_descriptor_initializers.append(self.parent.allocator, materialization.initializer(desc_local));
                     try appendUniqueLocal(
                         self.parent.allocator,
                         &self.runtime_initialized_descriptor_locals,
@@ -42209,13 +42652,14 @@ const ProcBodyBuilder = struct {
                     try pending.append(allocator, .{ .pattern_id = as.pattern, .source_rep = source_rep });
                 },
                 .applied_tag => |tag| {
-                    const tag_rep = self.tagVariantRepForBoundary(source_rep) orelse
+                    const tag_rep = self.tagPatternRepForBoundary(source_rep) orelse
                         boxyLowerInvariant("boxy tag pattern binder source had no tag representation");
                     const rep = self.parent.plan.representations.items[@backingInt(tag_rep)];
                     const payloads = switch (rep.kind) {
                         .dynamic => try self.dynamicTagPayloadsForName(tag_rep, tag.name),
                         .tag_union => self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads),
-                        .in_progress, .primitive, .bool_tag_union, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
+                        .bool_tag_union => &.{},
+                        .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("boxy tag pattern binder source was not a tag representation"),
                     };
                     if (payloads.len != tag.args.len) {
                         boxyLowerInvariant("boxy tag pattern binder payload count disagreed with its source representation");
@@ -42308,18 +42752,31 @@ const ProcBodyBuilder = struct {
     /// Whether some value fails to match `root`. Which subpatterns are
     /// reached does not depend on visiting order.
     fn patternCanMiss(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!bool {
+        return self.patternFromRepCanMiss(root, self.repForType(self.module.checked_bodies.pattern(root).ty));
+    }
+
+    /// Miss analysis uses the same producer-owned constructor universe as
+    /// pattern lowering, even when a contextual child has a selected-only row.
+    fn patternFromRepCanMiss(
+        self: *ProcBodyBuilder,
+        root: checked.CheckedPatternId,
+        root_source_rep: Plan.TypeRepId,
+    ) Allocator.Error!bool {
         const allocator = self.parent.allocator;
-        var pending: std.ArrayList(checked.CheckedPatternId) = .empty;
+        const Pending = struct { pattern: checked.CheckedPatternId, source_rep: Plan.TypeRepId };
+        var pending: std.ArrayList(Pending) = .empty;
         defer pending.deinit(allocator);
-        try pending.append(allocator, root);
-        while (pending.pop()) |pattern_id| {
-            const pattern = self.module.checked_bodies.pattern(pattern_id);
+        try pending.append(allocator, .{ .pattern = root, .source_rep = root_source_rep });
+        while (pending.pop()) |item| {
+            const pattern = self.module.checked_bodies.pattern(item.pattern);
             switch (pattern.data) {
                 .assign,
                 .underscore,
                 => {},
-                .as => |as| try pending.append(allocator, as.pattern),
-                .tuple => |items| try pending.appendSlice(allocator, items),
+                .as => |as| try pending.append(allocator, .{ .pattern = as.pattern, .source_rep = item.source_rep }),
+                .tuple => |items| for (items) |child| {
+                    try pending.append(allocator, .{ .pattern = child, .source_rep = self.repForType(self.module.checked_bodies.pattern(child).ty) });
+                },
                 .record_destructure => |destructs| for (destructs) |destruct| {
                     const child = switch (destruct.kind) {
                         .required,
@@ -42327,14 +42784,52 @@ const ProcBodyBuilder = struct {
                         .rest,
                         => |child| child,
                     };
-                    try pending.append(allocator, child);
+                    try pending.append(allocator, .{ .pattern = child, .source_rep = self.repForType(self.module.checked_bodies.pattern(child).ty) });
                 },
-                .nominal => |nominal| try pending.append(allocator, nominal.backing_pattern),
+                .nominal => |nominal| {
+                    const nominal_rep = self.repForType(pattern.ty);
+                    const backing = self.module.checked_bodies.pattern(nominal.backing_pattern);
+                    try pending.append(allocator, .{
+                        .pattern = nominal.backing_pattern,
+                        .source_rep = self.nominalPatternSourceRep(nominal_rep) orelse self.repForType(backing.ty),
+                    });
+                },
                 .applied_tag => |tag| {
-                    // A tag misses when its union has other variants; a sole
-                    // variant misses only through its payloads.
-                    if (try self.appliedTagPatternRepCanMiss(pattern.ty, self.repForType(pattern.ty), tag.name, tag.args)) return true;
-                    try pending.appendSlice(allocator, tag.args);
+                    const tag_rep = self.tagPatternRepForBoundary(item.source_rep) orelse {
+                        const source_identity = self.descriptorStorageRep(item.source_rep);
+                        if (self.parent.plan.representations.items[@backingInt(source_identity)].kind != .dynamic) {
+                            boxyLowerInvariant("boxy tag pattern producer had no tag representation during miss analysis");
+                        }
+                        return true;
+                    };
+                    const rep = self.parent.plan.representations.items[@backingInt(tag_rep)];
+                    switch (rep.kind) {
+                        .bool_tag_union => {
+                            if (tag.args.len != 0) {
+                                boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
+                            }
+                            _ = self.boolVariantIndex(tag.name);
+                            return true;
+                        },
+                        .tag_union => {
+                            const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
+                            const payloads = self.parent.plan.childSlice(self.tagVariant(rep, tag.name).payloads);
+                            if (payloads.len != tag.args.len) {
+                                boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
+                            }
+                            if (variants.len > 1) return true;
+                            for (tag.args, payloads) |arg, payload| {
+                                try pending.append(allocator, .{ .pattern = arg, .source_rep = payload.rep });
+                            }
+                        },
+                        .dynamic => {
+                            if ((try self.dynamicTagPayloadsForName(tag_rep, tag.name)).len != tag.args.len) {
+                                boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
+                            }
+                            return true;
+                        },
+                        .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("tag match producer representation was not a tag union during miss analysis"),
+                    }
                 },
                 .list,
                 .str_interpolation,
@@ -42347,56 +42842,6 @@ const ProcBodyBuilder = struct {
             }
         }
         return false;
-    }
-
-    /// Whether a tag pattern misses by its tag alone.
-    fn appliedTagPatternRepCanMiss(
-        self: *ProcBodyBuilder,
-        root_ty: checked.CheckedTypeId,
-        root_rep: Plan.TypeRepId,
-        name: names.TagNameId,
-        args: []const checked.CheckedPatternId,
-    ) Allocator.Error!bool {
-        var tag_ty = root_ty;
-        var rep_id = root_rep;
-        while (true) {
-            const rep = self.parent.plan.representations.items[@backingInt(rep_id)];
-            switch (rep.kind) {
-                .bool_tag_union => {
-                    if (args.len != 0) {
-                        boxyLowerInvariant("builtin Bool match pattern carried a payload during miss analysis");
-                    }
-                    _ = self.boolVariantIndex(name);
-                    return true;
-                },
-                .tag_union => {
-                    const variants = self.parent.plan.tagVariantSlice(rep.tag_variants);
-                    const variant = self.tagVariant(rep, name);
-                    const payloads = self.parent.plan.childSlice(variant.payloads);
-                    if (payloads.len != args.len) {
-                        boxyLowerInvariant("tag match pattern payload count disagreed during miss analysis");
-                    }
-                    return variants.len > 1;
-                },
-                .dynamic => {
-                    const payloads = try self.dynamicTagPayloadsForName(rep_id, name);
-                    if (payloads.len != args.len) {
-                        boxyLowerInvariant("dynamic tag match pattern payload count disagreed during miss analysis");
-                    }
-                    return true;
-                },
-                .alias => rep_id = self.repQuery().requiredSingleChild(rep_id, .alias_backing).rep,
-                .nominal => |kind| switch (kind) {
-                    .transparent, .builtin_other => {
-                        tag_ty = checkedTypeAtNominalBacking(self.module, tag_ty);
-                        rep_id = self.repQuery().requiredSingleChild(rep_id, .nominal_backing).rep;
-                    },
-                    .opaque_nominal => boxyLowerInvariant("opaque nominal tag match pattern reached boxy miss analysis"),
-                },
-                .empty_tag_union => boxyLowerInvariant("empty tag-union match pattern reached boxy miss analysis"),
-                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record => boxyLowerInvariant("tag match pattern checked type did not have a boxy tag-union representation during miss analysis"),
-            }
-        }
     }
 
     fn reserveReassignPatternBindings(self: *ProcBodyBuilder, root: checked.CheckedPatternId) Allocator.Error!void {
@@ -42692,6 +43137,14 @@ const ProcBodyBuilder = struct {
     }
 
     fn tagVariantRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, false);
+    }
+
+    fn tagPatternRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId) ?Plan.TypeRepId {
+        return self.tagRepForBoundary(rep_id, true);
+    }
+
+    fn tagRepForBoundary(self: *const ProcBodyBuilder, rep_id: Plan.TypeRepId, include_bool: bool) ?Plan.TypeRepId {
         var current = rep_id;
         while (true) {
             const rep = self.parent.plan.representations.items[@backingInt(current)];
@@ -42705,7 +43158,8 @@ const ProcBodyBuilder = struct {
                     if (rep.tag_variants.len == 0) return null;
                     return current;
                 },
-                .in_progress, .primitive, .bool_tag_union, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
+                .bool_tag_union => return if (include_bool) current else null,
+                .in_progress, .primitive, .erased_callable, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => return null,
             }
         }
     }
@@ -43365,10 +43819,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn boolVariantIndex(self: *const ProcBodyBuilder, name: names.TagNameId) u32 {
-        const tag_name = self.module.canonical_names.tagLabelText(name);
-        if (std.mem.eql(u8, tag_name, "False")) return 0;
-        if (std.mem.eql(u8, tag_name, "True")) return 1;
-        boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
+        return Common.boolTagDiscriminant(self.module.canonical_names.tagLabelText(name)) orelse
+            boxyLowerInvariant("builtin Bool tag expression referenced a non-Bool tag");
     }
 
     fn tagUnionPayloadLayout(self: *const ProcBodyBuilder, tag_union_layout_idx: layout.Idx, variant_index: u32) layout.Idx {
@@ -43535,20 +43987,32 @@ fn constTagPayloadTypes(
     checked_ty: checked.CheckedTypeId,
     tag_name: []const u8,
 ) ConstTagPayloadTypes {
-    const tag_union = switch (resolvedTypePayload(module, checked_ty)) {
-        .tag_union => |tag_union| tag_union,
+    switch (resolvedTypePayload(module, checked_ty)) {
+        .tag_union => {},
         .pending, .err, .flex, .rigid, .alias, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag restored with a non-tag-union checked type"),
-    };
-    constRowExtensionIsClosed(module, tag_union.ext, .empty_tag_union);
-    for (tag_union.tags) |tag| {
-        if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
-            return .{
-                .name = tag.name,
-                .payload_tys = tag.argsSlice(module.checked_types),
-            };
-        }
     }
-    boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type");
+    constRowExtensionIsClosed(module, checked_ty, .empty_tag_union);
+    // A closed row's tags can span several row segments.
+    var current = checked_ty;
+    while (true) {
+        const tag_union = switch (resolvedTypePayload(module, current)) {
+            .tag_union => |tag_union| tag_union,
+            .alias => |alias| {
+                current = alias.backing;
+                continue;
+            },
+            .pending, .err, .flex, .rigid, .record, .tuple, .nominal, .function, .empty_record, .empty_tag_union => boxyLowerInvariant("ConstStore tag name was missing from checked tag-union type"),
+        };
+        for (tag_union.tags) |tag| {
+            if (std.mem.eql(u8, module.canonical_names.tagLabelText(tag.name), tag_name)) {
+                return .{
+                    .name = tag.name,
+                    .payload_tys = tag.argsSlice(module.checked_types),
+                };
+            }
+        }
+        current = tag_union.ext;
+    }
 }
 
 /// Like `constTagPayloadTypes`, but for restoration into a dynamic (open-row)
@@ -43615,24 +44079,7 @@ fn generatedEncoderKeyMethodForType(
     module: ProcedureModuleView,
     checked_ty: checked.CheckedTypeId,
 ) ?[]const u8 {
-    return switch (checkedBuiltinNominalForType(module, checked_ty) orelse return null) {
-        .bool => "encode_key_bool",
-        .str => "encode_key_str",
-        .u8 => "encode_key_u8",
-        .i8 => "encode_key_i8",
-        .u16 => "encode_key_u16",
-        .i16 => "encode_key_i16",
-        .u32 => "encode_key_u32",
-        .i32 => "encode_key_i32",
-        .u64 => "encode_key_u64",
-        .i64 => "encode_key_i64",
-        .u128 => "encode_key_u128",
-        .i128 => "encode_key_i128",
-        .dec => "encode_key_dec",
-        .f32 => "encode_key_f32",
-        .f64 => "encode_key_f64",
-        .try_, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, .list, .box, .dict, .set, .iter, .stream, .parse_tag_union_spec, .fields, .field, .crypto_sha256_digest, .crypto_sha256_hasher, .crypto_blake3_digest, .crypto_blake3_hasher => null,
-    };
+    return Plan.generatedCodecScalarMethod(checkedBuiltinNominalForType(module, checked_ty) orelse return null, "encode_key_");
 }
 
 fn resolvedTypePayload(module: ProcedureModuleView, checked_ty: checked.CheckedTypeId) checked.CheckedTypePayload {
@@ -43711,6 +44158,49 @@ const ConstPlanBuilder = struct {
         return if (self.active_context) |ctx| evidence.freeze_contexts.items[ctx].callable_types.get(rep).? else evidence.callable_types.get(rep).?;
     }
 
+    /// The descriptor a frozen callable's descriptor capture holds: the one its
+    /// creating frame built. A static descriptor built from none of the frame's
+    /// bindings is held as is, and a closed source representation described
+    /// the capture exactly. Otherwise the frame's bindings filled a generic
+    /// source representation: in its own storage, instantiated by the closed
+    /// type the active freeze context gives a capture the callable reads as a
+    /// bare variable, and otherwise sharing the callable's representation of
+    /// the capture, which the context closes.
+    fn frozenCaptureDescriptor(self: *ConstPlanBuilder, capture: ProcedureBuilder.FrozenDescriptorCapture) Allocator.Error!LIR.BoxyTypeDescId {
+        if (capture.exact) |id| return id;
+        const source = self.plan.representations.items[@backingInt(capture.source_rep)];
+        if (!source.contains_dynamic and source.kind != .dynamic) return try self.procedure_builder.typeDescForRep(capture.source_rep);
+        if (self.contextClosedRep(capture.worker_rep)) |closed| {
+            // The callable reads the capture as a bare variable the context
+            // closes; the value keeps its creating representation's storage,
+            // whose variables the closed type instantiates.
+            var sources = StaticDescriptorSourceMap{};
+            defer sources.deinit(self.allocator);
+            var seen = std.AutoHashMap(u64, void).init(self.allocator);
+            defer seen.deinit();
+            try self.procedure_builder.collectStaticDescriptorSourcesForWorkerSource(capture.source_rep, closed, &.{}, .all_worker_descriptors, &sources, &seen);
+            var context = StaticDescInstantiationContext{};
+            defer context.deinit(self.allocator);
+            return try self.procedure_builder.typeDescForWorkerRepWithSourceMap(capture.source_rep, null, &sources, &context);
+        }
+        return try self.closedDescriptor(capture.worker_rep);
+    }
+
+    /// The closed representation the active freeze context binds a bare
+    /// variable representation to.
+    fn contextClosedRep(self: *ConstPlanBuilder, rep: Plan.TypeRepId) ?Plan.TypeRepId {
+        const ctx = self.active_context orelse return null;
+        const info = self.plan.representations.items[@backingInt(rep)];
+        if (info.kind != .dynamic) return null;
+        const desc = info.descriptor orelse return null;
+        const evidence = &self.plan.literal_evidence.?;
+        const span = evidence.freeze_contexts.items[ctx].bindings;
+        for (evidence.bindings.items[span.start..][0..span.len]) |binding| {
+            if (self.plan.representations.items[@backingInt(binding.scheme_rep)].descriptor == desc) return binding.site_rep;
+        }
+        return null;
+    }
+
     fn closedDescriptor(self: *ConstPlanBuilder, rep: Plan.TypeRepId) Allocator.Error!LIR.BoxyTypeDescId {
         var sources = StaticDescriptorSourceMap{};
         defer sources.deinit(self.allocator);
@@ -43722,7 +44212,13 @@ const ConstPlanBuilder = struct {
             }
         }
         if (self.active_boundary) |boundary| {
-            for (boundary.entries.items) |entry| try sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            // The active freeze context binds its descriptors to the context's
+            // closed instance; the boundary describes the descriptors it
+            // leaves unbound.
+            for (boundary.entries.items) |entry| {
+                if (sources.get(entry.worker_desc) != null) continue;
+                try sources.put(self.allocator, entry.worker_desc, entry.source_rep);
+            }
         }
         var context = StaticDescInstantiationContext{};
         defer context.deinit(self.allocator);
@@ -44255,11 +44751,7 @@ const ConstPlanBuilder = struct {
                 boxyLowerInvariant("Bool checked tag carried a payload");
             }
             const name_text = module.canonical_names.tagLabelText(tag.name);
-            const discriminant: u32 = if (std.mem.eql(u8, name_text, "False"))
-                0
-            else if (std.mem.eql(u8, name_text, "True"))
-                1
-            else
+            const discriminant = Common.boolTagDiscriminant(name_text) orelse
                 boxyLowerInvariant("Bool checked tag union contained a non-boolean tag");
             variant.* = .{
                 .name = try self.allocator.dupe(u8, name_text),
@@ -44292,6 +44784,7 @@ const ConstPlanBuilder = struct {
                 const recipe = self.procedure_builder.frozen_callable_recipes.items[cursor];
                 for (self.plan.literal_evidence.?.freeze_contexts.items, 0..) |context, context_index| {
                     if (context.worker != recipe.worker) continue;
+                    if (!std.meta.eql(context.literal_initializer, recipe.literal_initializer)) continue;
                     self.active_context = @intCast(context_index);
                     defer self.active_context = null;
                     // An adapter's wrapped value retains the source worker's
@@ -44320,7 +44813,7 @@ const ConstPlanBuilder = struct {
                     for (recipe.fields, fields[0..recipe.fields.len], 0..) |field, *out, slot| {
                         out.* = .{ .slot = @intCast(slot), .value = switch (field) {
                             .value => |rep| .{ .value = try self.constPlanForRep(rep) },
-                            .descriptor => |rep| .{ .descriptor = try self.closedDescriptor(rep) },
+                            .descriptor => |descriptor| .{ .descriptor = try self.frozenCaptureDescriptor(descriptor) },
                             .dictionary => |span| blk: {
                                 for (self.plan.directCallHiddenDictionaryArgSlice(context.dictionaries)) |arg| {
                                     if (!std.meta.eql(arg.worker_dictionaries, span)) continue;
@@ -44372,6 +44865,10 @@ const ConstPlanBuilder = struct {
                         .on_drop = .none,
                         .boxy = .{ .key = key, .result_desc = try self.closedDescriptor(recipe.result_rep), .captures = fields },
                     });
+                    const entry_spec = self.result.store.getProcSpecPtr(recipe.entry);
+                    if (entry_spec.static_erased_capture_layout) |recorded| {
+                        if (recorded != recipe.capture_layout) boxyLowerInvariant("frozen erased worker had two capture layouts");
+                    } else entry_spec.static_erased_capture_layout = recipe.capture_layout;
                 }
             }
             self.result.erased_fns.items[@backingInt(demand.set)].entries = try entries.toOwnedSlice(self.allocator);
@@ -44397,7 +44894,9 @@ fn optionalPlanTypeRefEql(a: ?Plan.CheckedTypeIdentity, b: ?Plan.CheckedTypeIden
     return b == null;
 }
 
-fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
+/// The format method (`prefix` plus the scalar's name) that reads or writes a
+/// scalar representation, looking through aliases.
+fn generatedCodecScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId, comptime prefix: []const u8) ?[]const u8 {
     var rep_id = root;
     while (true) return switch (plan.representations.items[@backingInt(rep_id)].kind) {
         .alias => {
@@ -44405,21 +44904,21 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.T
             continue;
         },
         .primitive => |primitive| switch (primitive) {
-            .str => "parse_str",
-            .u8 => "parse_u8",
-            .i8 => "parse_i8",
-            .u16 => "parse_u16",
-            .i16 => "parse_i16",
-            .u32 => "parse_u32",
-            .i32 => "parse_i32",
-            .u64 => "parse_u64",
-            .i64 => "parse_i64",
-            .u128 => "parse_u128",
-            .i128 => "parse_i128",
-            .dec => "parse_dec",
-            .f32 => "parse_f32",
-            .f64 => "parse_f64",
-            .bool => "parse_bool",
+            .str => prefix ++ "str",
+            .u8 => prefix ++ "u8",
+            .i8 => prefix ++ "i8",
+            .u16 => prefix ++ "u16",
+            .i16 => prefix ++ "i16",
+            .u32 => prefix ++ "u32",
+            .i32 => prefix ++ "i32",
+            .u64 => prefix ++ "u64",
+            .i64 => prefix ++ "i64",
+            .u128 => prefix ++ "u128",
+            .i128 => prefix ++ "i128",
+            .dec => prefix ++ "dec",
+            .f32 => prefix ++ "f32",
+            .f64 => prefix ++ "f64",
+            .bool => prefix ++ "bool",
             .u8x16,
             .i8x16,
             .u16x8,
@@ -44430,45 +44929,7 @@ fn generatedParserScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.T
             .i64x2,
             => null,
         },
-        .bool_tag_union => "parse_bool",
-        .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
-    };
-}
-
-fn generatedEncoderScalarMethodForRep(plan: *const Plan.ProgramPlan, root: Plan.TypeRepId) ?[]const u8 {
-    var rep_id = root;
-    while (true) return switch (plan.representations.items[@backingInt(rep_id)].kind) {
-        .alias => {
-            rep_id = requiredPlanChild(plan, rep_id, .alias_backing).rep;
-            continue;
-        },
-        .primitive => |primitive| switch (primitive) {
-            .str => "encode_str",
-            .u8 => "encode_u8",
-            .i8 => "encode_i8",
-            .u16 => "encode_u16",
-            .i16 => "encode_i16",
-            .u32 => "encode_u32",
-            .i32 => "encode_i32",
-            .u64 => "encode_u64",
-            .i64 => "encode_i64",
-            .u128 => "encode_u128",
-            .i128 => "encode_i128",
-            .dec => "encode_dec",
-            .f32 => "encode_f32",
-            .f64 => "encode_f64",
-            .bool => "encode_bool",
-            .u8x16,
-            .i8x16,
-            .u16x8,
-            .i16x8,
-            .u32x4,
-            .i32x4,
-            .u64x2,
-            .i64x2,
-            => null,
-        },
-        .bool_tag_union => "encode_bool",
+        .bool_tag_union => prefix ++ "bool",
         .in_progress, .dynamic, .erased_callable, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
     };
 }
@@ -44526,9 +44987,9 @@ fn lirSymbol(symbol: Common.Symbol) LIR.Symbol {
 
 fn boxyLowerInvariant(comptime message: []const u8) noreturn {
     if (comptime zig_builtin.mode == .debug and zig_builtin.target.os.tag == .freestanding) {
-        @panic("boxy lower invariant violated: " ++ message);
+        base.invariant("{s}", .{"boxy lower invariant violated: " ++ message});
     } else if (comptime zig_builtin.mode == .debug) {
-        std.debug.panic("boxy lower invariant violated: {s}", .{message});
+        base.invariant("boxy lower invariant violated: {s}", .{message});
     }
     unreachable;
 }
@@ -44653,7 +45114,7 @@ fn expectResolvedWorkerCheckedExpr(
 ) error{ TestExpectedEqual, TestUnexpectedResult }!void {
     const body = switch (worker.body) {
         .checked_expr => |checked_body| checked_body,
-        .intrinsic, .hosted, .unimplemented, .generated_codec, .generated_field_iterator, .generated_interpolation_step => return error.TestUnexpectedResult,
+        .intrinsic, .hosted, .unimplemented, .const_crash, .generated_codec, .generated_field_iterator => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(expected_body, body.body_id);
     try std.testing.expectEqual(expected_root, body.root_expr);
@@ -44952,17 +45413,22 @@ test "boxy lowerer emits private worker proc for zero-arg numeric lambda root" {
             try std.testing.expectEqual(@as(i128, 42), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
 
 test "boxy lowerer restores top-level consts from resolved local lookups" {
-    try expectBoxyTopLevelConstLookup(.local);
+    try expectBoxyTopLevelConstLookup(.local, .value);
 }
 
 test "boxy lowerer restores top-level consts from resolved external lookups" {
-    try expectBoxyTopLevelConstLookup(.external);
+    try expectBoxyTopLevelConstLookup(.external, .value);
+}
+
+test "boxy lowerer restores a checked-error top-level const as a checked-error crash" {
+    try expectBoxyTopLevelConstLookup(.local, .checked_error);
+    try expectBoxyTopLevelConstLookup(.external, .checked_error);
 }
 
 const ConstLookupExprKind = enum {
@@ -44970,7 +45436,14 @@ const ConstLookupExprKind = enum {
     external,
 };
 
-fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+/// What the looked-up constant's root stored: the value 5, or the checked
+/// error its evaluation stopped at.
+const ConstLookupStoredKind = enum {
+    value,
+    checked_error,
+};
+
+fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupStoredKind) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -45000,7 +45473,18 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
         @fromBackingInt(@intCast(fixtureTableIndex(0))),
         typeSchemeKey(7),
     );
-    const const_node = try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } });
+    const const_node = switch (stored) {
+        .value => try checked_module.const_store.append(.{ .scalar = .{ .u64 = 5 } }),
+        .checked_error => blk: {
+            const message = "method dispatch failed to check";
+            const data = try checked_module.const_store.addBlobData(message);
+            break :blk try checked_module.const_store.append(.{ .checked_error = .{
+                .data = data,
+                .offset = 0,
+                .len = message.len,
+            } });
+        },
+    };
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
     checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
     var compile_time_roots = [_]checked.CompileTimeRoot{.{
@@ -45092,13 +45576,21 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind) (Allocator.Error || 
     defer out.deinit();
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
-    const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
+    const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
+    switch (stored) {
+        .value => {},
+        .checked_error => {
+            try std.testing.expect(body == .crash and body.crash.checked_error);
+            return;
+        },
+    }
+    const assign = body.assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| {
             try std.testing.expectEqual(@as(i128, 5), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -45176,7 +45668,7 @@ test "boxy lowerer emits small decimal expressions as Dec literals" {
     const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .dec_literal => |dec| try std.testing.expectEqual(value.toRocDec().num, dec),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
@@ -45364,7 +45856,7 @@ test "boxy lowerer emits direct calls to planned private workers" {
     const arg = out.lir_result.store.getCFStmt(root_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (arg.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const call = out.lir_result.store.getCFStmt(arg.next).assign_call;
     try std.testing.expect(call.proc != root_proc_id);
@@ -45656,7 +46148,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
             break :blk .{ adapt.target, adapt.next };
         },
-        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = returned[0] } }, out.lir_result.store.getCFStmt(returned[1]));
 
@@ -45674,7 +46166,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
     const literal = out.lir_result.store.getCFStmt(helper_proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 99), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
@@ -46054,7 +46546,7 @@ test "boxy lowerer emits checked return expressions as terminal ret" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
@@ -46157,14 +46649,14 @@ test "boxy lowerer emits checked return statements as terminal ret" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(assign.next).assign_ref;
     try std.testing.expectEqual(LIR.RefOp{ .local = assign.target }, copy.op);
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = copy.target } }, out.lir_result.store.getCFStmt(copy.next));
 }
 
-test "boxy lowerer emits checked runtime error expressions as checked-error crashes" {
+test "boxy lowerer emits checked runtime error expressions as the runtime error crash" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -46194,7 +46686,7 @@ test "boxy lowerer emits checked runtime error expressions as checked-error cras
         .id = @fromBackingInt(@intCast(1)),
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .source_region = base.Region.zero(),
-        .data = .runtime_error,
+        .data = .{ .runtime_error = .{} },
     });
     try checked_module.checked_bodies.bodies.append(gpa, .{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
@@ -46233,10 +46725,11 @@ test "boxy lowerer emits checked runtime error expressions as checked-error cras
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
-    try std.testing.expect(body == .crash and body.crash.checked_error);
+    try std.testing.expect(body == .crash);
+    try std.testing.expectEqualStrings("runtime error", out.lir_result.store.getString(body.crash.msg.literal));
 }
 
-test "boxy lowerer emits checked runtime error statements as checked-error crashes" {
+test "boxy lowerer emits checked runtime error statements as the runtime error crash" {
     const gpa = std.testing.allocator;
 
     var checked_module = minimalCheckedArtifact(gpa);
@@ -46321,7 +46814,8 @@ test "boxy lowerer emits checked runtime error statements as checked-error crash
 
     const proc = out.lir_result.store.getProcSpec(out.lir_result.root_procs.items[0]);
     const body = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult);
-    try std.testing.expect(body == .crash and body.crash.checked_error);
+    try std.testing.expect(body == .crash);
+    try std.testing.expectEqualStrings("runtime error", out.lir_result.store.getString(body.crash.msg.literal));
 }
 
 test "boxy lowerer emits checked while statements as join-backed loops" {
@@ -46453,7 +46947,7 @@ test "boxy lowerer emits checked while statements as join-backed loops" {
     const after_loop = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
 }
@@ -46583,7 +47077,7 @@ test "boxy lowerer emits checked break as the active loop exit" {
     const after_loop = out.lir_result.store.getCFStmt(break_unit.next).assign_literal;
     switch (after_loop.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = after_loop.target } }, out.lir_result.store.getCFStmt(after_loop.next));
 }
@@ -46711,14 +47205,14 @@ test "boxy lowerer emits checked if expressions with a shared continuation join"
     const then_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (then_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(then_value.next));
 
     const else_value = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (else_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .jump = .{ .target = join.id } }, out.lir_result.store.getCFStmt(else_value.next));
 }
@@ -46866,7 +47360,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const first_value = out.lir_result.store.getCFStmt(GuardedList.at(first_branches, 0).body).assign_literal;
     switch (first_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second_join = out.lir_result.store.getCFStmt(first_join.body).join;
@@ -46882,7 +47376,7 @@ test "boxy lowerer emits checked tag matches as ordered discriminant tests" {
     const second_value = out.lir_result.store.getCFStmt(GuardedList.at(second_branches, 0).body).assign_literal;
     switch (second_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 22), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -47040,7 +47534,7 @@ test "boxy lowerer binds checked tag payload match patterns before branch bodies
     const payload_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     switch (payload_literal.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 41), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const cond_tag = out.lir_result.store.getCFStmt(payload_literal.next).assign_tag;
     try std.testing.expect(cond_tag.payload != null);
@@ -47242,7 +47736,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
             try std.testing.expectEqual(@as(i64, 2), literal.value);
             try std.testing.expectEqual(@as(layout.Idx, .u64), literal.layout_idx);
         },
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const cmp = out.lir_result.store.getCFStmt(required.next).assign_low_level;
@@ -47259,7 +47753,7 @@ test "boxy lowerer emits checked list match patterns as length checks and elemen
     const item_index = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (item_index.value) {
         .i64_literal => |literal| try std.testing.expectEqual(@as(i64, 1), literal.value),
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const item = out.lir_result.store.getCFStmt(item_index.next).assign_low_level;
     try std.testing.expectEqual(LIR.LowLevel.list_get_unsafe, item.op);
@@ -47758,7 +48252,7 @@ test "boxy lowerer emits checked numeric literal match patterns as equality test
     const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -47889,14 +48383,14 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const cond_literal = out.lir_result.store.getCFStmt(outer_join.remainder).assign_literal;
     switch (cond_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const first_join = out.lir_result.store.getCFStmt(cond_literal.next).join;
     const pattern_literal = out.lir_result.store.getCFStmt(first_join.remainder).assign_literal;
     switch (pattern_literal.value) {
         .dec_literal => |literal| try std.testing.expectEqual(expected_dec, literal),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const compare = out.lir_result.store.getCFStmt(pattern_literal.next).assign_low_level;
@@ -47914,7 +48408,7 @@ test "boxy lowerer emits checked small decimal match patterns as Dec equality te
     const matched_value = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (matched_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 11), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 }
 
@@ -48351,12 +48845,12 @@ test "boxy lowerer emits primitive structural equality as low-level equality" {
     const lhs = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (lhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const rhs = out.lir_result.store.getCFStmt(lhs.next).assign_literal;
     switch (rhs.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const eq = out.lir_result.store.getCFStmt(rhs.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), eq.op);
@@ -48618,12 +49112,12 @@ test "boxy lowerer emits primitive structural hash as hasher low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const seed = out.lir_result.store.getCFStmt(value.next).assign_literal;
     switch (seed.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const hash = out.lir_result.store.getCFStmt(seed.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .hasher_write_u64), hash.op);
@@ -48840,7 +49334,7 @@ test "boxy lowerer emits checked string segment literals" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("hello", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -48923,7 +49417,7 @@ test "boxy lowerer emits checked bytes literals as byte-backed LIR literals" {
     const assign = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (assign.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("abc", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = assign.target } }, out.lir_result.store.getCFStmt(assign.next));
 }
@@ -49029,13 +49523,13 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("a", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("b", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const first_concat = out.lir_result.store.getCFStmt(second.next).assign_low_level;
@@ -49048,7 +49542,7 @@ test "boxy lowerer emits checked string interpolation segments as concat chain" 
     const third = out.lir_result.store.getCFStmt(first_concat.next).assign_literal;
     switch (third.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("c", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const second_concat = out.lir_result.store.getCFStmt(third.next).assign_low_level;
@@ -49138,7 +49632,7 @@ test "boxy lowerer emits checked dbg expressions before unit result" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 7), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
@@ -49326,7 +49820,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const payload = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (payload.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const prefix = out.lir_result.store.getCFStmt(payload.next).assign_literal;
@@ -49337,7 +49831,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
                 out.lir_result.store.getStringLiteral(literal),
             );
         },
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const rendered = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
@@ -49356,7 +49850,7 @@ test "boxy lowerer emits expect_err messages from inspected payloads" {
     const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
@@ -49465,7 +49959,7 @@ test "boxy lowerer emits checked dbg statements in block order" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 13), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), message.op);
@@ -49592,7 +50086,7 @@ test "boxy lowerer emits block declaration bindings with checked type layouts" {
             try std.testing.expectEqual(@as(i128, 99), literal.value);
             try std.testing.expectEqual(@as(@TypeOf(literal.layout_idx), .u64), literal.layout_idx);
         },
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const final_copy = out.lir_result.store.getCFStmt(decl_assign.next).assign_ref;
@@ -49703,7 +50197,7 @@ test "boxy lowerer emits uninitialized mutable block bindings" {
     try std.testing.expect(init.target != final_assign.target);
     switch (final_assign.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = final_assign.target } }, out.lir_result.store.getCFStmt(final_assign.next));
 }
@@ -49837,13 +50331,13 @@ test "boxy lowerer emits mutable reassignment as set_local replace" {
     const initial = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (initial.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const replacement = out.lir_result.store.getCFStmt(initial.next).assign_literal;
     switch (replacement.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     const write = out.lir_result.store.getCFStmt(replacement.next).set_local;
@@ -50027,11 +50521,11 @@ test "boxy lowerer destructures tuple declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 1), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 2), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(tuple.target, read_first.op.field.source);
     try std.testing.expectEqual(@as(u32, 0), read_first.op.field.field_idx);
@@ -50229,11 +50723,11 @@ test "boxy lowerer materializes record rest declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 11), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 22), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(source_record.target, read_rest_field.op.field.source);
     try std.testing.expectEqual(@as(u32, 1), read_rest_field.op.field.field_idx);
@@ -50393,11 +50887,11 @@ test "boxy lowerer binds irrefutable list rest declaration patterns" {
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(list.target, bind_rest.op.local);
     try std.testing.expectEqual(bind_rest.target, final_copy.op.local);
@@ -50501,12 +50995,12 @@ test "boxy lowerer emits tuple construction in element order" {
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -50733,12 +51227,12 @@ test "boxy lowerer emits record construction in layout order after source-order 
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 2), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 1), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(second.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -50856,7 +51350,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const extension_value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (extension_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 5), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const extension_message = out.lir_result.store.getCFStmt(extension_value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .u64_to_str), extension_message.op);
@@ -50870,7 +51364,7 @@ test "boxy lowerer evaluates empty record extensions before explicit fields" {
     const field_value = out.lir_result.store.getCFStmt(extension_unit.next).assign_literal;
     switch (field_value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 9), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const build = out.lir_result.store.getCFStmt(field_value.next).assign_struct;
     const fields = out.lir_result.store.getLocalSpan(build.fields);
@@ -51116,7 +51610,7 @@ test "boxy lowerer emits nominal construction for representation-equivalent back
     const literal = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (literal.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 5), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const copy = out.lir_result.store.getCFStmt(literal.next).assign_ref;
     try std.testing.expectEqual(literal.target, copy.op.local);
@@ -51374,11 +51868,11 @@ test "boxy lowerer emits nominal boundary before backing record pattern binding"
 
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 7), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 500), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
 
     // Construction repositions the backing record's fields into the nominal's
@@ -51588,7 +52082,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
-            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -51795,7 +52289,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -51987,11 +52481,11 @@ test "boxy lowerer emits payload tag construction using planned variant payload 
     const tag = out.lir_result.store.getCFStmt(payload.next).assign_tag;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 3), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 4), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 0));
     try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(payload.fields), 1));
@@ -52095,11 +52589,11 @@ test "boxy lowerer emits list construction with committed element layout" {
     const list = out.lir_result.store.getCFStmt(second.next).assign_list;
     switch (first.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 8), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     switch (second.value) {
         .i128_literal => |value| try std.testing.expectEqual(@as(i128, 9), value.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(first.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 0));
     try std.testing.expectEqual(second.target, GuardedList.at(out.lir_result.store.getLocalSpan(list.elems), 1));
@@ -52237,7 +52731,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52250,7 +52744,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52262,7 +52756,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const list = out.lir_result.store.getCFStmt(cursor).assign_list;
@@ -52401,7 +52895,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     const close = out.lir_result.store.getCFStmt(GuardedList.at(branches, 0).body).assign_literal;
     switch (close.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("]", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const finish = out.lir_result.store.getCFStmt(close.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), finish.op);
@@ -52411,7 +52905,7 @@ test "boxy lowerer inspects concrete lists with an index and string accumulator 
     const step_zero = out.lir_result.store.getCFStmt(switch_stmt.default_branch).assign_literal;
     switch (step_zero.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 0), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const separator_check = out.lir_result.store.getCFStmt(step_zero.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_is_eq), separator_check.op);
@@ -52587,12 +53081,12 @@ test "boxy lowerer emits checked low-level calls after source-order argument low
     const first = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (first.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 10), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const second = out.lir_result.store.getCFStmt(first.next).assign_literal;
     switch (second.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 20), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const add = out.lir_result.store.getCFStmt(second.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .num_int_add_crash_on_overflow), add.op);
@@ -52690,7 +53184,7 @@ test "boxy lowerer boxes concrete values with ordinary box low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -52806,7 +53300,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const from_arg = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52828,7 +53322,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
                 if (uses_source_desc) descriptor_materialization_target = assign.target;
                 break :blk assign.next;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52942,7 +53436,7 @@ test "boxy lowerer unboxes concrete values with ordinary box low-level" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 99), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -53051,7 +53545,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const value = out.lir_result.store.getCFStmt(proc.body orelse return error.TestUnexpectedResult).assign_literal;
     switch (value.value) {
         .i128_literal => |literal| try std.testing.expectEqual(@as(i128, 42), literal.value),
-        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const boxed = out.lir_result.store.getCFStmt(value.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_box), boxed.op);
@@ -53059,7 +53553,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const prefix = out.lir_result.store.getCFStmt(boxed.next).assign_literal;
     switch (prefix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings("Box(", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const unboxed = out.lir_result.store.getCFStmt(prefix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .box_unbox), unboxed.op);
@@ -53078,7 +53572,7 @@ test "boxy lowerer inspects concrete Box payloads" {
     const suffix = out.lir_result.store.getCFStmt(with_value.next).assign_literal;
     switch (suffix.value) {
         .str_literal => |literal| try std.testing.expectEqualStrings(")", out.lir_result.store.getStringLiteral(literal)),
-        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     const message = out.lir_result.store.getCFStmt(suffix.next).assign_low_level;
     try std.testing.expectEqual(@as(LIR.LowLevel, .str_concat), message.op);
@@ -53834,7 +54328,7 @@ fn expectListMapCanReuseFalse(out: *Output) error{ TestExpectedEqual, TestUnexpe
             try std.testing.expectEqual(@as(i64, 0), value.value);
             try std.testing.expectEqual(out.lir_result.store.getLocal(literal.target).layout_idx, value.layout_idx);
         },
-        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => return error.TestUnexpectedResult,
+        .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => return error.TestUnexpectedResult,
     }
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = literal.target } }, out.lir_result.store.getCFStmt(literal.next));
 }
@@ -53844,7 +54338,7 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     while (true) {
         cursor = switch (store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
         };
     }
 }

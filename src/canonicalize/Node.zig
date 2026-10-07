@@ -1186,7 +1186,10 @@ pub const Payload = extern union {
     pub const Malformed = extern struct {
         diagnostic: u32,
         source_node_plus_one: u32 = 0,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        /// The expressions a retired expression or statement evaluates, in
+        /// order, before it crashes (`CIR.Expr.e_runtime_error.evaluated`).
+        evaluated_start: u32 = 0,
+        evaluated_len: u32 = 0,
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause
@@ -1291,7 +1294,7 @@ pub const Payload = extern union {
     pub const DiagInternalBuiltinType = extern struct {
         parent_name: u32, // @bitCast(Ident.Idx)
         nested_name: u32, // @bitCast(Ident.Idx)
-        kind: u32, // @intFromEnum(Diagnostic.InternalBuiltinTypeKind)
+        kind: u32, // @backingInt(Diagnostic.InternalBuiltinTypeKind)
         _reserved: [4]u8 = .{ 0, 0, 0, 0 },
     };
 
@@ -1324,8 +1327,8 @@ pub const Payload = extern union {
     /// Diagnostics with two enum values.
     /// Used by: diag_deprecated_number_suffix
     pub const DiagTwoEnums = extern struct {
-        enum1: u32, // @intFromEnum
-        enum2: u32, // @intFromEnum
+        enum1: u32, // @backingInt
+        enum2: u32, // @backingInt
         _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
     };
 

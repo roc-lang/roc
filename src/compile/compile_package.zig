@@ -192,7 +192,7 @@ fn appendCheckOwnerEnvPublicDependencies(
         entry.value_ptr.* = {};
 
         const dependency = availableArtifactByKey(available_artifacts, dependency_key) orelse {
-            std.debug.panic("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
+            base.invariant("compile.typeCheckModule missing public API dependency artifact for imported module", .{});
         };
         try appendCheckOwnerEnvIfMissing(allocator, owner_envs, dependency.module_env);
         try appendCheckOwnerEnvPublicDependencies(
@@ -463,7 +463,7 @@ pub fn typeCheckModule(
     module_envs_map.deinit();
 
     if (!importedArtifactsCoverImportedEnvs(imported_envs, imported_artifacts)) {
-        std.debug.panic("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
+        base.invariant("compile.typeCheckModule received an imported module environment without its checked artifact", .{});
     }
 
     var checked_artifact = try publishCheckedArtifactFromCheckedModule(

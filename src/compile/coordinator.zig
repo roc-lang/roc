@@ -712,20 +712,8 @@ pub const ModuleState = struct {
     reports: std.ArrayList(Report),
     /// Minimum dependency depth from root
     depth: u32,
-    /// DFS visit color for cycle detection
-    visit_color: VisitColor,
     /// Accumulated compile time for this module (parse + canonicalize + type-check)
     compile_time_ns: u64,
-
-    /// DFS colors for cycle detection during import graph traversal
-    pub const VisitColor = enum {
-        /// Not yet visited
-        white,
-        /// Currently being visited (in the DFS stack)
-        gray,
-        /// Fully processed
-        black,
-    };
 
     pub fn init(name: []const u8, qualified_name: []const u8, path: []const u8) ModuleState {
         return .{
@@ -742,7 +730,6 @@ pub const ModuleState = struct {
             .reachable_local_imports = .{},
             .reports = std.ArrayList(Report).empty,
             .depth = std.math.maxInt(u32),
-            .visit_color = .white,
             .compile_time_ns = 0,
         };
     }
@@ -809,7 +796,7 @@ pub const ModuleState = struct {
             semantic.checked_artifact = artifact;
             return;
         }
-        std.debug.panic("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
+        base.invariant("compile.coordinator.ModuleState.replaceCheckedArtifact missing module env for {s}", .{self.name});
     }
 
     fn replaceWithPairedCheckedArtifact(
@@ -828,7 +815,7 @@ pub const ModuleState = struct {
             semantic.checked_artifact = artifact;
             return;
         }
-        std.debug.panic("compile.coordinator.ModuleState.replaceWithPairedCheckedArtifact missing semantic state for {s}", .{self.name});
+        base.invariant("compile.coordinator.ModuleState.replaceWithPairedCheckedArtifact missing semantic state for {s}", .{self.name});
     }
 
     pub fn deinit(self: *ModuleState, gpa: Allocator) void {
@@ -1091,7 +1078,7 @@ pub const PackageState = struct {
         nested_type: ?[]const u8,
     ) Allocator.Error!void {
         if (self.public_modules_ready) {
-            std.debug.panic("cannot add public module '{s}' after registration closed", .{name});
+            base.invariant("cannot add public module '{s}' after registration closed", .{name});
         }
         if (self.public_module_targets.contains(name)) return;
         const owned_name = try gpa.dupe(u8, name);
@@ -1113,7 +1100,7 @@ pub const PackageState = struct {
 
     pub fn finishPublicModules(self: *PackageState, gpa: Allocator) Allocator.Error!void {
         if (self.public_modules_ready) {
-            std.debug.panic("cannot close public module registration twice for package '{s}'", .{self.name});
+            base.invariant("cannot close public module registration twice for package '{s}'", .{self.name});
         }
         const targets = try gpa.alloc(*PublicModuleTarget, self.public_module_targets.count());
         errdefer gpa.free(targets);
@@ -1606,21 +1593,6 @@ pub const Coordinator = struct {
         self.app_package_absent = true;
     }
 
-    /// Set the I/O / core context implementation. Callers must supply a fully
-    /// initialised `CoreCtx`—it must not create a replacement
-    /// `CoreCtx.default(...)` here because the existing context may have been
-    /// constructed via `CoreCtx.testing(undefined, undefined)` (see
-    /// `cache_config.zig`), in which case snapshotting its fields into a
-    /// `default()` vtable would invoke UB the first time the OS-backed
-    /// vtable dereferenced `std_io`.
-    pub fn setCoreCtx(self: *Coordinator, roc_ctx: CoreCtx) void {
-        self.roc_ctx = roc_ctx;
-    }
-
-    /// Back-compat alias for the documented embedding contract
-    /// (`coord.setIo(my_io)` in `src/compile/README.md`).
-    pub const setIo = setCoreCtx;
-
     /// Get the allocator to use for module data.
     /// - In multi-threaded mode: smp_allocator (per-thread freelists)
     /// - In single-threaded mode: gpa (better performance)
@@ -1814,10 +1786,7 @@ pub const Coordinator = struct {
             .compiler_owned => |platform| {
                 const materialized = compiler_platforms.materialize(self.gpa, self.roc_ctx, null, platform) catch |err| switch (err) {
                     error.OutOfMemory => return error.OutOfMemory,
-                    error.AccessDenied,
-                    error.IoError,
-                    error.NoHomeDirectory,
-                    => return error.UnsupportedPlatformSpec,
+                    else => return error.UnsupportedPlatformSpec,
                 };
                 defer self.gpa.free(materialized.root_file);
                 defer self.gpa.free(materialized.root_dir);
@@ -1973,56 +1942,32 @@ pub const Coordinator = struct {
     pub fn rootCheckedArtifact(self: *Coordinator, package_name: []const u8) *const check.CheckedArtifact.CheckedModuleArtifact {
         const pkg = self.packages.get(package_name) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
+                base.invariant("compile.coordinator.rootCheckedArtifact missing package {s}", .{package_name});
             }
             unreachable;
         };
         const root_id = pkg.root_module_id orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
+                base.invariant("compile.coordinator.rootCheckedArtifact missing root module for package {s}", .{package_name});
             }
             unreachable;
         };
         const root_mod = pkg.getModule(root_id) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
+                base.invariant("compile.coordinator.rootCheckedArtifact root id out of range for package {s}", .{package_name});
             }
             unreachable;
         };
         return root_mod.checkedArtifact() orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
+                base.invariant("compile.coordinator.rootCheckedArtifact missing checked artifact for package {s}", .{package_name});
             }
             unreachable;
         };
     }
 
-    pub fn freeWatchInputs(self: *Coordinator, inputs: []const []const u8) void {
-        for (inputs) |path| self.gpa.free(path);
-        self.gpa.free(inputs);
-    }
-
     pub fn freeWatchInputStates(self: *Coordinator, inputs: []const watch_inputs.Input) void {
         watch_inputs.deinit(self.gpa, inputs);
-    }
-
-    fn appendWatchInput(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        path: []const u8,
-    ) Allocator.Error!void {
-        const absolute = try std.fs.path.resolve(self.gpa, &.{path});
-        errdefer self.gpa.free(absolute);
-
-        if (seen.contains(absolute)) {
-            self.gpa.free(absolute);
-            return;
-        }
-
-        try paths.append(self.gpa, absolute);
-        errdefer _ = paths.pop();
-        try seen.put(self.gpa, absolute, {});
     }
 
     fn appendWatchInputState(
@@ -2046,24 +1991,6 @@ pub const Coordinator = struct {
         });
         errdefer _ = inputs.pop();
         try seen.put(self.gpa, absolute, {});
-    }
-
-    fn appendFileDependencyWatchInputs(
-        self: *Coordinator,
-        paths: *std.ArrayList([]const u8),
-        seen: *std.StringHashMapUnmanaged(void),
-        source_dir: []const u8,
-        env: *const ModuleEnv,
-    ) Allocator.Error!void {
-        for (env.file_dependencies.items.items) |dep| {
-            // A module that never reached import resolution has not read its
-            // file imports, so this run read no such file.
-            if (dep.state == .pending) continue;
-            const relative_path = env.fileDependencyRelativePath(dep);
-            const full_path = try std.fs.path.resolve(self.gpa, &.{ source_dir, relative_path });
-            defer self.gpa.free(full_path);
-            try self.appendWatchInput(paths, seen, full_path);
-        }
     }
 
     fn fileDependencyWatchState(dep: ModuleEnv.FileDependency) watch_inputs.State {
@@ -2093,46 +2020,13 @@ pub const Coordinator = struct {
         }
     }
 
-    /// Collect exact filesystem inputs read by this coordinator run. Returned
-    /// paths are owned by the coordinator allocator and must be released with
-    /// `freeWatchInputs`.
-    pub fn collectWatchInputs(self: *Coordinator) Allocator.Error![]const []const u8 {
-        var paths = std.ArrayList([]const u8).empty;
-        errdefer {
-            for (paths.items) |path| self.gpa.free(path);
-            paths.deinit(self.gpa);
-        }
-
-        var seen = std.StringHashMapUnmanaged(void){};
-        defer seen.deinit(self.gpa);
-
-        var pkg_it = self.packages.iterator();
-        while (pkg_it.next()) |entry| {
-            const pkg = entry.value_ptr.*;
-            if (pkg.url != null) continue;
-
-            if (pkg.root_file) |root_file| {
-                try self.appendWatchInput(&paths, &seen, root_file);
-            }
-
-            for (pkg.modules.items) |*mod| {
-                try self.appendWatchInput(&paths, &seen, mod.path);
-
-                const env = mod.moduleEnv() orelse continue;
-                try self.appendFileDependencyWatchInputs(&paths, &seen, mod.canonicalSourceDir(), env);
-            }
-        }
-
-        return paths.toOwnedSlice(self.gpa);
-    }
-
     /// Collect exact filesystem inputs read by this coordinator run, paired
     /// with the state consumed by compilation. Returned paths are owned by the
     /// coordinator allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *Coordinator) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
             if (builtin.mode == .debug) {
-                std.debug.panic("collectWatchInputStates called without watch input tracking enabled", .{});
+                base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
             }
             unreachable;
         }
@@ -2154,7 +2048,7 @@ pub const Coordinator = struct {
             if (pkg.root_file) |root_file| {
                 const state = pkg.root_file_state orelse {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("coordinator package {s} has root_file without root_file_state", .{pkg.name});
+                        base.invariant("coordinator package {s} has root_file without root_file_state", .{pkg.name});
                     }
                     unreachable;
                 };
@@ -2164,7 +2058,7 @@ pub const Coordinator = struct {
             for (pkg.modules.items) |*mod| {
                 const state = mod.source_file_state orelse {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("coordinator module {s} has source path without source_file_state", .{mod.name});
+                        base.invariant("coordinator module {s} has source path without source_file_state", .{mod.name});
                     }
                     unreachable;
                 };
@@ -2230,7 +2124,7 @@ pub const Coordinator = struct {
             for (view.direct_import_artifact_keys) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("compile.coordinator missing direct dependency checked artifact", .{});
+                        base.invariant("compile.coordinator missing direct dependency checked artifact", .{});
                     }
                     unreachable;
                 };
@@ -2240,7 +2134,7 @@ pub const Coordinator = struct {
             for (view.public_api_dependencies.type_owner_artifacts) |dependency_key| {
                 const artifact = self.checkedArtifactByKey(dependency_key) orelse {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("compile.coordinator missing type-owner dependency checked artifact", .{});
+                        base.invariant("compile.coordinator missing type-owner dependency checked artifact", .{});
                     }
                     unreachable;
                 };
@@ -2270,7 +2164,7 @@ pub const Coordinator = struct {
 
     fn coordinatorInvariant(comptime message: []const u8, args: anytype) noreturn {
         if (builtin.mode == .debug) {
-            std.debug.panic("compile.coordinator invariant violated: " ++ message, args);
+            base.invariant("compile.coordinator invariant violated: " ++ message, args);
         }
         unreachable;
     }
@@ -2287,7 +2181,7 @@ pub const Coordinator = struct {
         if (importedArtifactViewExists(views.items, key)) return;
         const artifact = self.checkedArtifactByKey(key) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
+                base.invariant("compile.coordinator invariant violated: public API dependency references unavailable checked artifact", .{});
             }
             unreachable;
         };
@@ -2302,26 +2196,6 @@ pub const Coordinator = struct {
             if (std.mem.eql(u8, &view.key.bytes, &key.bytes)) return true;
         }
         return false;
-    }
-
-    fn appendAvailableArtifactViewByKey(
-        self: *Coordinator,
-        views: *std.ArrayList(check.CheckedArtifact.ImportedModuleView),
-        allocator: Allocator,
-        key: check.CheckedArtifact.CheckedModuleArtifactKey,
-    ) Allocator.Error!void {
-        if (importedArtifactViewExists(views.items, key)) return;
-        const artifact = if (checkedArtifactKeyEql(key, self.builtin_modules.checked_artifact.key))
-            &self.builtin_modules.checked_artifact
-        else
-            self.checkedArtifactByKey(key) orelse {
-                coordinatorInvariant("compile.coordinator missing lowering visibility checked artifact", .{});
-            };
-
-        try views.append(allocator, check.CheckedArtifact.importedView(artifact));
-        for (artifact.lowering_visibility.module_ids) |dependency_key| {
-            try self.appendAvailableArtifactViewByKey(views, allocator, dependency_key);
-        }
     }
 
     /// Finish the immutable platform's independent compile-time work, then
@@ -2438,10 +2312,7 @@ pub const Coordinator = struct {
             const pkg = entry.value_ptr.*;
             for (pkg.modules.items) |*mod| {
                 for (mod.reports.items) |rep| {
-                    switch (rep.severity) {
-                        .warning => {},
-                        .runtime_error, .fatal => return true,
-                    }
+                    if (rep.severity.isError()) return true;
                 }
             }
         }
@@ -2534,7 +2405,7 @@ pub const Coordinator = struct {
     pub fn appRootCheckedArtifact(self: *Coordinator) *const check.CheckedArtifact.CheckedModuleArtifact {
         const app_package_name = self.app_package_name orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
+                base.invariant("compile.coordinator.appRootCheckedArtifact called before markAppPackage", .{});
             }
             unreachable;
         };
@@ -2552,7 +2423,7 @@ pub const Coordinator = struct {
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.checkedArtifactByKey(binding.app_value.artifact) orelse {
                 if (builtin.mode == .debug) {
-                    std.debug.panic("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
+                    base.invariant("compile.coordinator.collectRelationArtifactViews missing app artifact for platform relation", .{});
                 }
                 unreachable;
             };
@@ -2608,25 +2479,25 @@ pub const Coordinator = struct {
         };
         const pkg = self.packages.get(location.pkg_name) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
+                base.invariant("compile.coordinator checked artifact registry points at missing package {s}", .{location.pkg_name});
             }
             unreachable;
         };
         const mod = pkg.getModule(location.module_id) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
+                base.invariant("compile.coordinator checked artifact registry points at missing module {d} in package {s}", .{ location.module_id, location.pkg_name });
             }
             unreachable;
         };
         const artifact = mod.checkedArtifact() orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
+                base.invariant("compile.coordinator checked artifact registry points at unpublished module {s}:{d}", .{ location.pkg_name, location.module_id });
             }
             unreachable;
         };
         if (!std.mem.eql(u8, &artifact.key.bytes, &key.bytes)) {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
+                base.invariant("compile.coordinator checked artifact registry returned stale key for {s}:{d}", .{ location.pkg_name, location.module_id });
             }
             unreachable;
         }
@@ -2647,7 +2518,7 @@ pub const Coordinator = struct {
         const artifact = mod.checkedArtifact() orelse return;
         const module_id = moduleIdForPtr(pkg, mod) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
+                base.invariant("compile.coordinator could not locate checked artifact module {s} in package {s}", .{ mod.name, pkg.name });
             }
             unreachable;
         };
@@ -2707,7 +2578,7 @@ pub const Coordinator = struct {
     pub fn shutdown(self: *Coordinator) void {
         if (!threads_available) return;
         if (self.post_check_session_active.load(.acquire)) {
-            @panic("compiler coordinator shut down during a post-check session");
+            base.invariant("{s}", .{"compiler coordinator shut down during a post-check session"});
         }
 
         // Signal workers to stop before closing channels, so workers that
@@ -2752,7 +2623,7 @@ pub const Coordinator = struct {
                 if (has_workers) {
                     _ = self.inflight.fetchSub(1, .monotonic);
                 }
-                @panic("task channel closed while enqueueing compiler work");
+                base.invariant("{s}", .{"task channel closed while enqueueing compiler work"});
             },
             error.OutOfMemory => {
                 if (has_workers) {
@@ -2890,7 +2761,7 @@ pub const Coordinator = struct {
                         }
                         std.debug.print("\n", .{});
                     }
-                    @panic("Coordinator stuck in infinite loop");
+                    base.invariant("{s}", .{"Coordinator stuck in infinite loop"});
                 }
             }
         }
@@ -3288,7 +3159,7 @@ pub const Coordinator = struct {
     /// used concurrently with coordinator lifecycle methods.
     pub fn postCheckExecutor(self: *Coordinator) post_check_executor.Executor {
         if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            @panic("post-check executor requested outside the completed frontend lifetime");
+            base.invariant("{s}", .{"post-check executor requested outside the completed frontend lifetime"});
         }
         return .{
             .context = self,
@@ -3306,10 +3177,10 @@ pub const Coordinator = struct {
     fn beginPostCheckSession(context: *anyopaque) void {
         const self: *Coordinator = @ptrCast(@alignCast(context));
         if (!self.frontend_complete or self.shutting_down.load(.acquire)) {
-            @panic("post-check session started outside the completed frontend lifetime");
+            base.invariant("{s}", .{"post-check session started outside the completed frontend lifetime"});
         }
         if (self.post_check_session_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-            @panic("compiler coordinator started overlapping post-check sessions");
+            base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
         }
         std.debug.assert(self.inline_post_check_completion == null);
     }
@@ -3341,12 +3212,12 @@ pub const Coordinator = struct {
         const self: *Coordinator = @ptrCast(@alignCast(context));
         if (!threads_available or self.mode == .single_threaded or self.workers.items.len == 0) {
             const completion = self.inline_post_check_completion orelse
-                @panic("inline post-check receive without a submitted task");
+                base.invariant("{s}", .{"inline post-check receive without a submitted task"});
             self.inline_post_check_completion = null;
             return completion;
         }
         const result = self.result_channel.recv() orelse
-            @panic("post-check result channel closed while a session was active");
+            base.invariant("{s}", .{"post-check result channel closed while a session was active"});
         _ = self.inflight.fetchSub(1, .monotonic);
         return switch (result) {
             .post_check => |completion| completion,
@@ -3355,7 +3226,6 @@ pub const Coordinator = struct {
             .canonicalized_cached,
             .type_checked,
             .operation_failed,
-            .cycle_detected,
             .worker_oom,
             => unreachable,
         };
@@ -3410,11 +3280,6 @@ pub const Coordinator = struct {
         for (external_imports.items) |imp| allocator.free(imp.import_name);
         external_imports.deinit(allocator);
         external_imports.* = std.ArrayList(DiscoveredExternalImport).empty;
-    }
-
-    fn deinitReports(reports: *std.ArrayList(Report), allocator: Allocator) void {
-        for (reports.items) |*rep| rep.deinit();
-        reports.deinit(allocator);
     }
 
     fn destroyModuleEnvAndSource(env: *ModuleEnv) void {
@@ -3547,7 +3412,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[canonicalized_module_cache_header_len..][0..env_len]) catch unreachable;
         canonicalized_cache_entry.encode(parse_record, entry[canonicalized_module_cache_header_len + env_len ..][0..record_len]);
 
-        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir);
+        manager.storeRawBytesIn(scratch, .canonicalized, cache_key, entry, entries_dir, env.module_name);
     }
 
     fn resolvedDirectImportsHaveCheckedOutput(
@@ -3600,7 +3465,7 @@ pub const Coordinator = struct {
         };
         writeCheckedModuleCacheHeader(bytes[0..checked_module_cache_header_len], key, 0, writer.total_bytes, @splat(0));
         _ = writer.writeToBuffer(bytes[checked_module_cache_header_len..]) catch unreachable;
-        manager.storeRawBytes(key.bytes, bytes, directory);
+        manager.storeRawBytes(key.bytes, bytes, directory, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedPlatformPairing(self: *Coordinator, platform: *const CheckedArtifact.CheckedModuleArtifact, app: *const CheckedArtifact.CheckedModuleArtifact) ?CheckedArtifact.CheckedModuleArtifact {
@@ -3689,7 +3554,7 @@ pub const Coordinator = struct {
         _ = env_writer.writeToBuffer(entry[checked_module_cache_header_len..][0..env_len]) catch unreachable;
         _ = artifact_writer.writeToBuffer(entry[checked_module_cache_header_len + env_len ..][0..artifact_len]) catch unreachable;
 
-        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir);
+        manager.storeRawBytes(artifact.key.bytes, entry, entries_dir, artifact.moduleEnvConst().module_name);
     }
 
     fn tryLoadCachedCheckedModule(
@@ -3929,7 +3794,6 @@ pub const Coordinator = struct {
 
         mod.phase = .Done;
         mod.completion = .succeeded;
-        mod.visit_color = .black;
 
         if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
             coordinatorInvariant("successful completion counters were already zero for module '{s}'", .{mod.name});
@@ -4026,7 +3890,6 @@ pub const Coordinator = struct {
 
             mod.phase = .Done;
             mod.completion = .failed;
-            mod.visit_color = .black;
 
             if (pkg.remaining_modules == 0 or self.total_remaining == 0) {
                 coordinatorInvariant("failed completion counters were already zero for module '{s}'", .{mod.name});
@@ -4122,7 +3985,6 @@ pub const Coordinator = struct {
             .canonicalized_cached => |*r| try self.handleCanonicalizedCached(r),
             .type_checked => |*r| try self.handleTypeChecked(r),
             .operation_failed => |r| return self.handleOperationFailed(r),
-            .cycle_detected => |*r| try self.handleCycleDetected(r),
             .worker_oom => return error.OutOfMemory,
             .post_check => unreachable,
         }
@@ -4828,7 +4690,6 @@ pub const Coordinator = struct {
         errdefer task_payload_alloc.free(deferred_imports);
 
         mod.phase = .TypeCheck;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .type_check = .{
                 .package_name = pkg.name,
@@ -4989,37 +4850,6 @@ pub const Coordinator = struct {
         const report = try Report.init(self.gpa, title, headline, .fatal);
         try appendReportOwned(self.gpa, &mod.reports, report);
         return operation_error;
-    }
-
-    /// Handle cycle detection
-    fn handleCycleDetected(self: *Coordinator, result: *messages.CycleDetected) Allocator.Error!void {
-        const pkg = self.packages.get(result.package_name) orelse {
-            self.bugReport("BUG: package '{s}' not found for cycle_detected result (id={})\n", .{
-                result.package_name, result.module_id,
-            });
-            unreachable;
-        };
-        const mod = pkg.getModule(result.module_id) orelse {
-            self.bugReport("BUG: module id={} not found in package '{s}' for cycle_detected result\n", .{
-                result.module_id, result.package_name,
-            });
-            unreachable;
-        };
-
-        // Take ownership of module env
-        mod.replaceModuleEnv(result.module_env);
-
-        // Append reports - we take ownership, so clear result.reports after copying
-        for (result.reports.items) |rep| {
-            try mod.reports.append(self.gpa, rep);
-        }
-        // Clear reports to transfer ownership - prevents double-free in WorkerResult.deinit
-        result.reports.clearRetainingCapacity();
-
-        try self.completeModulesWithFailure(&.{.{
-            .pkg_name = pkg.name,
-            .module_id = result.module_id,
-        }});
     }
 
     /// Handle a cycle after its closing edge has been recorded. Reachability is
@@ -5347,7 +5177,6 @@ pub const Coordinator = struct {
 
         if (self.appShouldWaitForPlatformRequirements(mod)) {
             mod.phase = .WaitingOnPlatformRequirements;
-            mod.visit_color = .black;
             return;
         }
 
@@ -5372,7 +5201,6 @@ pub const Coordinator = struct {
         }
 
         mod.phase = .Canonicalize;
-        mod.visit_color = .black;
         try self.enqueueTask(.{
             .canonicalize = .{
                 .package_name = pkg.name,
@@ -5382,7 +5210,7 @@ pub const Coordinator = struct {
                 .source_dir = mod.canonicalSourceDir(),
                 .module_env = mod.moduleEnv().?,
                 .cached_ast = mod.cached_ast orelse
-                    std.debug.panic("compile.coordinator.enqueueCanonicalizeTask missing cached AST for {s}", .{mod.name}),
+                    base.invariant("compile.coordinator.enqueueCanonicalizeTask missing cached AST for {s}", .{mod.name}),
                 .depth = mod.depth,
                 .validation = mod.validation,
                 // The parse task keyed its cache probe on this flag, so it is
@@ -5775,7 +5603,7 @@ pub const Coordinator = struct {
         try can.resolveDeferredFileImports(env, .{ .read = .{ .ctx = self.roc_ctx, .source_dir = task.source_dir } });
 
         var parse_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&parse_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &parse_reports);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -5814,27 +5642,22 @@ pub const Coordinator = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.SourcePinVersionChanged => {
                 releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
-                deinitReports(&parse_reports, worker_alloc);
+                check.module_reports.deinit(worker_alloc, &parse_reports);
                 manager.recordMissFor(.canonicalized);
                 return null;
             },
             error.CorruptParseStageRecord => {
                 releaseDiscoveredImports(worker_alloc, &discovered_local_imports, &discovered_external_imports);
-                deinitReports(&parse_reports, worker_alloc);
+                check.module_reports.deinit(worker_alloc, &parse_reports);
                 manager.recordInvalidationFor(.canonicalized);
                 return null;
             },
         };
 
         var canonicalize_reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&canonicalize_reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &canonicalize_reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &canonicalize_reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &canonicalize_reports, env, 0, task.path);
 
         env_owned = false;
         return .{
@@ -5967,20 +5790,13 @@ pub const Coordinator = struct {
         // allocator. Only import-discovery intermediates use task scratch below.
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
         const parse_ast = try parse.file(worker_alloc, &env.common);
         errdefer parse_ast.deinit();
         parse_ast.store.emptyScratch();
 
-        for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.tokenizeDiagnosticToReport(diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-        for (parse_ast.parse_diagnostics.items) |diagnostic| {
-            const rep = try parse_ast.parseDiagnosticToReport(&env.common, diagnostic, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendSyntax(worker_alloc, &reports, parse_ast, &env.common, task.path);
 
         var discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty;
         errdefer {
@@ -6141,14 +5957,9 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = task_allocs.result;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        const diags = try env.getDiagnostics();
-        defer env.gpa.free(diags);
-        for (diags) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, 0, task.path);
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
         return .{
@@ -6256,33 +6067,18 @@ pub const Coordinator = struct {
         var diagnostics_timer = startStageTimer(self.roc_ctx.std_io);
         const worker_alloc = result_alloc;
         var reports = try std.ArrayList(Report).initCapacity(worker_alloc, 8);
-        errdefer deinitReports(&reports, worker_alloc);
+        errdefer check.module_reports.deinit(worker_alloc, &reports);
 
-        var rb = try check.ReportBuilder.init(
+        try check.module_reports.appendCanonicalize(worker_alloc, &reports, env, canonicalize_diagnostics, task.path);
+        try check.module_reports.appendTypes(
             worker_alloc,
+            &reports,
             env,
-            env,
-            &typecheck_output.checker.snapshots,
-            &typecheck_output.checker.problems,
+            &typecheck_output.checker,
             task.path,
             task.imported_envs,
-            &typecheck_output.checker.import_mapping,
-            &typecheck_output.checker.regions,
             if (task.platform_requirements) |requirements| .{ .env = requirements.env, .filename = requirements.path } else null,
         );
-        defer rb.deinit();
-
-        const import_diagnostics = try env.getDiagnosticsFrom(canonicalize_diagnostics);
-        defer env.gpa.free(import_diagnostics);
-        for (import_diagnostics) |d| {
-            const rep = try env.diagnosticToReport(d, worker_alloc, task.path);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
-
-        for (typecheck_output.checker.problems.problems.items) |prob| {
-            const rep = try rb.build(prob);
-            try appendReportOwned(worker_alloc, &reports, rep);
-        }
 
         const diagnostics_ns = readStageTimer(self.roc_ctx.std_io, &diagnostics_timer);
 
@@ -6815,7 +6611,7 @@ fn compileAppRootIdentityExpecting(
     var reports = coord.iterReports();
     var error_count: usize = 0;
     while (reports.next()) |entry| {
-        if (entry.report.severity == .warning) continue;
+        if (!entry.report.severity.isError()) continue;
         try std.testing.expect(error_count < expected_errors.len);
         try std.testing.expect(std.mem.eql(u8, expected_errors[error_count], entry.report.title));
         error_count += 1;
@@ -8142,7 +7938,7 @@ fn hashPatternExtractionRegionsForView(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation, .pattern_error => continue,
+            .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         count.* += 1;
 
@@ -9882,10 +9678,10 @@ test "Coordinator post-check executor supports incremental sessions and repeated
         fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
             const context: *@This() = @ptrCast(@alignCast(opaque_context));
             if (worker.id >= context.active_by_worker.len) {
-                @panic("post-check executor supplied an unknown worker id");
+                base.invariant("{s}", .{"post-check executor supplied an unknown worker id"});
             }
             if (context.active_by_worker[worker.id].swap(true, .acq_rel)) {
-                @panic("post-check executor overlapped callbacks on one worker id");
+                base.invariant("{s}", .{"post-check executor overlapped callbacks on one worker id"});
             }
             defer context.active_by_worker[worker.id].store(false, .release);
 
@@ -9907,7 +9703,7 @@ test "Coordinator post-check executor supports incremental sessions and repeated
             };
             if (context.lane_data_by_worker[worker.id]) |existing| {
                 if (existing != lane_data) {
-                    @panic("post-check executor replaced persistent lane data");
+                    base.invariant("{s}", .{"post-check executor replaced persistent lane data"});
                 }
             } else {
                 context.lane_data_by_worker[worker.id] = lane_data;
@@ -10009,10 +9805,10 @@ test "Coordinator inline post-check executor supports repeated session tasks" {
 
         fn run(opaque_context: *anyopaque, worker: post_check_executor.Worker) ?*anyopaque {
             const self: *@This() = @ptrCast(@alignCast(opaque_context));
-            if (worker.id != 0) @panic("inline post-check executor changed worker id");
+            if (worker.id != 0) base.invariant("{s}", .{"inline post-check executor changed worker id"});
             if (self.lane_state) |existing| {
                 if (existing != worker.lane_state) {
-                    @panic("inline post-check executor replaced its lane state");
+                    base.invariant("{s}", .{"inline post-check executor replaced its lane state"});
                 }
             } else {
                 self.lane_state = worker.lane_state;
@@ -10662,7 +10458,9 @@ test "shared CTFE and runtime requests specialize once across workers and target
     for ([_]usize{ 1, 4 }) |jobs| {
         for ([_]lir.CheckedPipeline.TargetConfig{
             .{ .target_usize = .native, .inline_expects = .run },
+            .{ .target_usize = .native, .inline_expects = .run, .code_provision = .host_dev_objects },
             .{ .target_usize = other_width, .inline_expects = .run },
+            .{ .target_usize = other_width, .inline_expects = .run, .code_provision = .target_dev_objects },
             .{ .target_usize = .native, .inline_expects = .omit },
         }) |consumer| {
             const width = consumer.target_usize;
@@ -10695,6 +10493,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             const target: lir.CheckedPipeline.TargetConfig = .{
                 .target_usize = width,
                 .inline_expects = consumer.inline_expects,
+                .code_provision = consumer.code_provision,
                 .work_metrics = &metrics,
                 .post_check_executor = coord.postCheckExecutor(),
             };
@@ -10736,7 +10535,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
             }
             while (work.pop()) |stmt_id| {
                 if ((try visited.getOrPut(stmt_id)).found_existing) continue;
-                try lir.BodyClone.appendSuccessors(store, &work, stmt_id);
+                try lir.BodyClone.appendSuccessors(store, &work, stmt_id, allocator);
                 const stmt = store.getCFStmt(stmt_id);
                 if (stmt != .assign_literal) continue;
                 switch (stmt.assign_literal.value) {
@@ -10744,7 +10543,7 @@ test "shared CTFE and runtime requests specialize once across workers and target
                     .i128_literal => |literal| if (literal.value == 42) {
                         literal_answers += 1;
                     },
-                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => {},
+                    .i64_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => {},
                 }
             }
             try std.testing.expectEqual(@as(usize, 0), value_exports);

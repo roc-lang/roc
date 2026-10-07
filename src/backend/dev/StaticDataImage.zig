@@ -44,7 +44,18 @@ pub const StaticDataImage = struct {
         }
     };
 
+    /// Layout choices an in-process consumer makes for its own copy of the graph.
+    pub const Options = struct {
+        /// Bytes reserved immediately before every export that holds an erased
+        /// callable's code relocation, for the consumer's per-callable header.
+        callable_header_size: usize = 0,
+    };
+
     pub fn init(allocator: Allocator, exports: []const StaticDataExport) Error!StaticDataImage {
+        return initWithOptions(allocator, exports, .{});
+    }
+
+    pub fn initWithOptions(allocator: Allocator, exports: []const StaticDataExport, options: Options) Error!StaticDataImage {
         const symbols = try allocator.alloc(Symbol, exports.len);
         var symbols_owned = true;
         errdefer if (symbols_owned) allocator.free(symbols);
@@ -67,6 +78,10 @@ pub const StaticDataImage = struct {
 
             const alignment: usize = static_export.alignment;
             allocation_alignment = @max(allocation_alignment, alignment);
+            if (options.callable_header_size != 0 and exportHoldsCallable(static_export)) {
+                allocation_len = std.math.add(usize, allocation_len, options.callable_header_size) catch
+                    return error.InvalidStaticDataAlignment;
+            }
             allocation_len = alignForwardChecked(allocation_len, alignment) orelse
                 return error.InvalidStaticDataAlignment;
 
@@ -181,6 +196,13 @@ pub const StaticDataImage = struct {
         std.mem.writeInt(usize, self.allocation[allocation_offset..][0..pointer_size], adjusted, .little);
     }
 };
+
+fn exportHoldsCallable(static_export: *const StaticDataExport) bool {
+    for (static_export.relocations) |relocation| {
+        if (relocation.kind == .function_pointer and relocation.callable_capture_offset != null) return true;
+    }
+    return false;
+}
 
 fn alignForwardChecked(value: usize, alignment: usize) ?usize {
     const mask = alignment - 1;

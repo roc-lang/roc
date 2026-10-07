@@ -31,13 +31,7 @@ pub fn generateObjectFile(
 }
 
 /// DWARF debug sections to include in the object file.
-pub const DebugSections = struct {
-    line: []const u8,
-    abbrev: []const u8,
-    info: []const u8,
-    line_relocs: []const object.DebugReloc,
-    info_relocs: []const object.DebugReloc,
-};
+pub const DebugSections = object.DebugSections;
 
 /// Like `generateObjectFile`, with DWARF debug sections. COFF objects carry
 /// them as `.debug_*` sections the way MinGW toolchains do; lld-link keeps
@@ -122,7 +116,7 @@ pub fn generateIndexedObjectFileWithDebug(
             elf.setCode(code);
             elf.setRodata(rodata);
             elf.setZeroFill(zero_fill_size);
-            if (debug) |d| elf.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| elf.debug = d;
 
             // Add symbols
             for ([_]bool{ false, true }) |global| {
@@ -165,7 +159,7 @@ pub fn generateIndexedObjectFileWithDebug(
             macho.setCode(code);
             macho.setRodata(rodata);
             macho.setZeroFill(zero_fill_size);
-            if (debug) |d| macho.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| macho.debug = d;
 
             const referenced = try allocator.alloc(bool, symbols.len);
             defer allocator.free(referenced);
@@ -217,7 +211,7 @@ pub fn generateIndexedObjectFileWithDebug(
             coff_writer.setCode(code);
             coff_writer.setRodata(rodata);
             coff_writer.setZeroFill(zero_fill_size);
-            if (debug) |d| coff_writer.setDebugSections(d.line, d.abbrev, d.info, d.line_relocs, d.info_relocs);
+            if (debug) |d| coff_writer.debug = d;
 
             // Ranges the published symbols already describe, so recorded
             // ranges below are not emitted twice.

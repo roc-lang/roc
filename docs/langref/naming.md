@@ -151,9 +151,9 @@ count_items = |items| {
 When a nested function reads a variable, it sees the value the variable had
 when the nested function was defined, not whatever value the variable may have later.
 
-Unlike constants, variables are never generalized: a variable has exactly one type,
-even if it's given a type annotation with type variables in it. (See
-[Generalization](types#generalization) for more on this.)
+Like every value that is not a function, a variable is never generalized: it has
+exactly one type, and a type annotation that introduces a type variable is an
+error. (See [Generalization](types#generalization) for more on this.)
 
 ### `$` prefix
 

@@ -58,6 +58,11 @@ comptime {
         _ = @import("test_shared_memory_system.zig");
     }
 }
+
+comptime {
+    // The compiler's `memset` on targets whose libc leaves it to compiler_rt.
+    _ = @import("fast_memset");
+}
 const ipc = @import("ipc");
 const fmt = @import("fmt");
 const eval = @import("eval");
@@ -128,6 +133,7 @@ comptime {
         std.testing.refAllDecls(platform_validation);
         std.testing.refAllDecls(cli_context);
         std.testing.refAllDecls(cli_problem);
+        std.testing.refAllDecls(pack_store);
         std.testing.refAllDecls(@import("builder.zig"));
         std.testing.refAllDecls(@import("host_symbols.zig"));
         std.testing.refAllDecls(@import("test/platform_config.zig"));
@@ -172,6 +178,8 @@ const CliBuildEnvOptions = struct {
     /// checked-module cache.
     no_cache: bool = false,
     verbose_cache: bool = false,
+    /// Collect CTFE body work for explicit `--timings`, without changing cache identity.
+    timings: bool = false,
     resolution_config: compile.package_resolution.Config = .{},
     track_watch_inputs: bool = false,
     /// Identity-only synthetic marking for staged default-app roots (check
@@ -209,6 +217,7 @@ fn initCliBuildEnv(ctx: *CliCtx, opts: CliBuildEnvOptions) InitCliBuildEnvError!
 
     build_env.compiler_version = build_options.compiler_compatibility_id;
     build_env.source_pin_version = @import("compiler_version").compiler_version;
+    build_env.detailed_monotype_diagnostics = opts.timings;
     build_env.resolution_config = opts.resolution_config;
     build_env.setWatchInputTracking(opts.track_watch_inputs);
     build_env.setPostCheckPublicationMode(opts.post_check_publication_mode);
@@ -284,6 +293,8 @@ fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: boo
     };
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
     cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
+    // One heap-owned collection supplies both lookup offers and splice artifacts.
+    // Runtime sharing must retain this exact provider, not merely its host domain.
     build_env.setCompileTimeObjectCache(.{
         .spec_cache = cache.packs.specCacheLookup(),
         .splice_source = cache.packs.spliceSource(),
@@ -821,7 +832,13 @@ fn defaultRuntimeDigest(requested: RocTarget) ?[32]u8 {
 /// The digest of `DefaultPlatformCompilerRtObjects.forTarget(requested)`.
 fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
     return switch (requested.defaultCpuTarget()) {
-        inline .x64musl, .arm64musl, .x64glibc, .arm64glibc => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
+        inline .x64musl,
+        .arm64musl,
+        .x64glibc,
+        .arm64glibc,
+        .x64freebsd,
+        .x64netbsd,
+        => |target| embeddedDigest("default_compiler_rt_" ++ @tagName(target)),
         .x64linux => embeddedDigest("default_compiler_rt_x64glibc"),
         .arm64linux => embeddedDigest("default_compiler_rt_arm64glibc"),
         .x64mac,
@@ -830,9 +847,7 @@ fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
         .arm64win,
         .x64mingw,
         .arm64mingw,
-        .x64freebsd,
         .x64openbsd,
-        .x64netbsd,
         .x64elf,
         .x64v1mac,
         .x64v1win,
@@ -857,11 +872,18 @@ fn defaultCompilerRtDigest(requested: RocTarget) ?[32]u8 {
     };
 }
 
+/// The default platform's compiler-rt carrier: compiler-rt and the C math and
+/// memory routines code generation calls, for the targets whose default
+/// platform is freestanding and so has no platform runtime library to provide
+/// them. Every other default platform links its target's C runtime, which
+/// does, and has no carrier.
 const DefaultPlatformCompilerRtObjects = struct {
     const x64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64musl/roc_default_compiler_rt.o");
     const arm64musl = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64musl/roc_default_compiler_rt.o");
     const x64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64glibc/roc_default_compiler_rt.o");
     const arm64glibc = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/arm64glibc/roc_default_compiler_rt.o");
+    const x64freebsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64freebsd/roc_default_compiler_rt.o");
+    const x64netbsd = if (builtin.is_test) &[_]u8{} else @import("embedded_assets").file("targets/x64netbsd/roc_default_compiler_rt.o");
 
     pub fn forTarget(requested: RocTarget) ?[]const u8 {
         return switch (requested.defaultCpuTarget()) {
@@ -869,15 +891,15 @@ const DefaultPlatformCompilerRtObjects = struct {
             .arm64musl => arm64musl,
             .x64glibc, .x64linux => x64glibc,
             .arm64glibc, .arm64linux => arm64glibc,
+            .x64freebsd => x64freebsd,
+            .x64netbsd => x64netbsd,
             .x64mac,
             .arm64mac,
             .x64win,
             .arm64win,
             .x64mingw,
             .arm64mingw,
-            .x64freebsd,
             .x64openbsd,
-            .x64netbsd,
             .x64elf,
             .x64v1mac,
             .x64v1win,
@@ -1662,9 +1684,14 @@ fn buildShimEntrypoints(
 /// If `embedded_lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
+///
+/// The bitcode and object are intermediates written into `scratch_dir`, which
+/// must be a directory only the calling build writes to. Their names do not
+/// identify the program, so two builds sharing a directory would compile and
+/// link each other's files.
 fn generatePlatformHostShimFromLirData(
     ctx: *CliCtx,
-    cache_dir: []const u8,
+    scratch_dir: []const u8,
     entrypoint_names: []const []const u8,
     checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
@@ -1723,10 +1750,10 @@ fn generatePlatformHostShimFromLirData(
     };
     defer bitcode_result.deinit();
 
-    // Name the scratch artifacts by the shim's deterministic inputs. The raw
-    // image bytes contain uninitialized struct padding from serialization, so
-    // hash the derived entrypoint ABI, the hosted table, and the image length
-    // instead of the bytes themselves.
+    // Name the scratch artifacts by the shim's deterministic inputs. This path
+    // also serves `LirImage.ByteContract.mapped` images, whose raw bytes are
+    // not a function of the program, so hash the derived entrypoint ABI, the
+    // hosted table, and the image length instead of the bytes themselves.
     var hash = std.hash.Crc32.init();
     const abi_digest = try entrypointAbiDigestFromLirData(ctx, store, layouts, platform_entrypoints, target);
     hash.update(&abi_digest);
@@ -1757,11 +1784,11 @@ fn generatePlatformHostShimFromLirData(
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
-    const bitcode_path = std.fs.path.join(ctx.arena, &.{ cache_dir, bitcode_filename }) catch |err| {
+    const bitcode_path = std.fs.path.join(ctx.arena, &.{ scratch_dir, bitcode_filename }) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
-    const object_path = std.fs.path.join(ctx.arena, &.{ cache_dir, object_filename }) catch |err| {
+    const object_path = std.fs.path.join(ctx.arena, &.{ scratch_dir, object_filename }) catch |err| {
         return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
@@ -1808,9 +1835,10 @@ fn generatePlatformHostShimFromLirData(
 /// If `lir_image` is present, embed the already-lowered LIR image
 /// and call the interpreter shim entrypoint that views the image directly.
 /// If debug is true, include debug information in the generated object file.
+/// `scratch_dir` must be a directory only the calling build writes to.
 fn generatePlatformHostShim(
     ctx: *CliCtx,
-    cache_dir: []const u8,
+    scratch_dir: []const u8,
     entrypoint_names: []const []const u8,
     checked_hosted_symbols: ?[]const []const u8,
     target: RocTarget,
@@ -1841,7 +1869,7 @@ fn generatePlatformHostShim(
 
     return generatePlatformHostShimFromLirData(
         ctx,
-        cache_dir,
+        scratch_dir,
         entrypoint_names,
         checked_hosted_symbols,
         target,
@@ -1855,9 +1883,36 @@ fn generatePlatformHostShim(
     );
 }
 
+/// Removes a cached executable, if one exists, so a fresh link can take its place.
+fn deleteExistingCacheFile(ctx: *CliCtx, exe_cache_path: []const u8) void {
+    std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        error.AccessDenied,
+        error.BadPathName,
+        error.Canceled,
+        error.FileBusy,
+        error.FileSystem,
+        error.IsDir,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NotDir,
+        error.PermissionDenied,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemResources,
+        error.Unexpected,
+        => std.log.debug("Could not delete existing cache file: {}", .{err}),
+    };
+}
+
 fn ensureCompilerCacheDirExists(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     // This helper is only for compiler-owned internal cache directories.
     // User-facing output paths should still fail normally if the parent directory is missing.
+    return createDirPathIfMissing(std_io, path);
+}
+
+/// Creates `path` and any missing parents, treating an existing directory as success.
+fn createDirPathIfMissing(std_io: std.Io, path: []const u8) std.Io.Dir.CreateDirPathError!void {
     std.Io.Dir.cwd().createDirPath(std_io, path) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         error.AccessDenied,
@@ -2069,7 +2124,7 @@ fn applyHostedBindings(
             .def_idx = @backingInt(binding.target_def),
         }) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
+                base.invariant("default roc command invariant violated: the hosted section names a function with no hosted declaration in scope", .{});
             }
             unreachable;
         };
@@ -2816,8 +2871,8 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     const version_dir = try install_store.versionDir(ctx.arena, root);
     const entry = try install_store.entryPaths(ctx.arena, version_dir, name);
 
-    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
-        error.FileNotFound => {
+    const manifest_bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => {
             var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch {
                 return ctx.fail(.{ .unknown_shorthand = .{ .name = name } });
             };
@@ -2828,38 +2883,7 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
                 .reason = "its install.json manifest is missing",
             } });
         },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .install_entry_corrupt = .{
+        .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = name,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -2934,38 +2958,8 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => {
-            return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
-        },
+    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
     // The final executable name seen in `ps` is the roc filename (e.g., "app.roc")
@@ -3065,7 +3059,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             lowered_result = try lowerLirWithBuildEnv(
                 ctx,
                 ctx.gpa,
-                .{ .dev_run_image = validated_link_spec.target },
+                .{ .dev_run_image = .{ .target = validated_link_spec.target, .hot_reload = args.watch } },
                 args.path,
                 null,
                 null,
@@ -3108,7 +3102,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
+            base.invariant("default roc command invariant violated: no platform entrypoints in checked LIR root metadata", .{});
         }
         unreachable;
     }
@@ -3224,7 +3218,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
             .interpreter => blk: {
                 const shm_handle = shm_handle_opt orelse {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                        base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                     }
                     unreachable;
                 };
@@ -3331,7 +3325,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
                 .interpreter => blk: {
                     const shm_handle = shm_handle_opt orelse {
                         if (builtin.mode == .debug) {
-                            std.debug.panic("interpreter run invariant violated: missing LIR shared-memory handle", .{});
+                            base.invariant("interpreter run invariant violated: missing LIR shared-memory handle", .{});
                         }
                         unreachable;
                     };
@@ -3373,24 +3367,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // After building, hardlink to cache for future runs
         // Force-hardlink (delete existing first) since hash collision means identical content
         std.log.debug("Caching executable to: {s}", .{exe_cache_path});
-        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-            error.FileNotFound => {}, // OK, doesn't exist
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.FileBusy,
-            error.FileSystem,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => std.log.debug("Could not delete existing cache file: {}", .{err}),
-        };
+        deleteExistingCacheFile(ctx, exe_cache_path);
         createHardlink(ctx, exe_path, exe_cache_path) catch |err| {
             // If hardlinking fails, fall back to copying
             std.log.debug("Hardlink to cache failed, copying: {}", .{err});
@@ -3410,7 +3387,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
     const shm_handle = shm_handle_opt orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
+            base.invariant("default roc command invariant violated: missing shared-memory handle before launching shim", .{});
         }
         unreachable;
     };
@@ -3419,7 +3396,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     if (args.watch) {
         const result = if (lowered_result) |*value| value else {
             if (builtin.mode == .debug) {
-                std.debug.panic("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
+                base.invariant("hot reload invariant violated: missing lowered result for dev shim watch run", .{});
             }
             unreachable;
         };
@@ -3702,42 +3679,11 @@ fn stageDefaultApp(
     purpose: default_app.Purpose,
 ) (Allocator.Error || error{CliError})!?default_app.Staged {
     const max_source_size = 256 * 1024 * 1024; // 256 MB
-    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
+    const source = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(max_source_size)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .out_of_memory => return error.OutOfMemory,
         // Any other read failure (e.g. file not found) means this isn't a
         // default app to handle here; fall through to the normal path.
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return null,
+        .file_not_found, .other => return null,
     };
 
     defer ctx.gpa.free(source);
@@ -3900,36 +3846,8 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const exe_cache_dir = cache_manager.config.getExeCacheDir(ctx.arena) catch |err| {
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
-    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } }),
+    ensureCompilerCacheDirExists(ctx.io.std_io, exe_cache_dir) catch |err| {
+        return ctx.fail(.{ .directory_create_failed = .{ .path = exe_cache_dir, .err = err } });
     };
 
     const temp_dir = createUniqueTempDir(ctx) catch |err| {
@@ -3958,7 +3876,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
-        .{ .dev_run_image = selected_target },
+        .{ .dev_run_image = .{ .target = selected_target, .hot_reload = false } },
         app_path,
         original_source_dir,
         .{
@@ -3981,7 +3899,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
     const entrypoint_names = lowered_result.entrypoint_names;
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("default app run invariant violated: no platform entrypoints", .{});
+            base.invariant("default app run invariant violated: no platform entrypoints", .{});
         }
         unreachable;
     }
@@ -4078,24 +3996,7 @@ fn rocRunDefaultAppSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, staged
             } });
         };
 
-        std.Io.Dir.cwd().deleteFile(ctx.io.std_io, exe_cache_path) catch |err| switch (err) {
-            error.FileNotFound => {},
-            error.AccessDenied,
-            error.BadPathName,
-            error.Canceled,
-            error.FileBusy,
-            error.FileSystem,
-            error.IsDir,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NotDir,
-            error.PermissionDenied,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemResources,
-            error.Unexpected,
-            => std.log.debug("Could not delete existing cache file: {}", .{err}),
-        };
+        deleteExistingCacheFile(ctx, exe_cache_path);
         createHardlink(ctx, exe_path, exe_cache_path) catch {
             std.Io.Dir.cwd().copyFile(exe_path, std.Io.Dir.cwd(), exe_cache_path, ctx.io.std_io, .{}) catch |copy_err| {
                 std.log.debug("Failed to copy default run executable to cache: {}", .{copy_err});
@@ -6071,7 +5972,7 @@ const LoweredCoordinatorResult = struct {
 fn successfulInternalStaticData(result: *const LoweredCoordinatorResult, label: []const u8) []const backend.StaticDataExport {
     return result.internal_static_data orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
+            base.invariant("{s} invariant violated: dev RunImage lowering produced no internal static data bundle", .{label});
         }
         unreachable;
     };
@@ -6092,10 +5993,7 @@ fn renderDrainedBuildEnvReports(ctx: *CliCtx, build_env: *BuildEnv, display_path
 
     for (drained) |mod| {
         for (mod.reports) |*report| {
-            switch (report.severity) {
-                .fatal, .runtime_error => counts.errors += 1,
-                .warning => counts.warnings += 1,
-            }
+            if (report.severity.isError()) counts.errors += 1 else counts.warnings += 1;
             if (!builtin.is_test) {
                 reporting.renderReportToTerminal(report, ctx.io.stderr(), reporting.ColorUtils.getPaletteForConfig(report_config), report_config) catch {};
             }
@@ -6421,7 +6319,7 @@ fn rocInternalHotReloadDev(ctx: *CliCtx, raw_args: []const []const u8) CliMainEr
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
-        .{ .dev_run_image = selected_target },
+        .{ .dev_run_image = .{ .target = selected_target, .hot_reload = true } },
         args.path,
         if (source_rewrite) |rewrite| rewrite.source_dir_override else null,
         if (source_rewrite) |rewrite| .{
@@ -6551,7 +6449,7 @@ fn writeDevRunImageToSharedMemory(
             const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
             const compiled = codegen.compiledProcSymbol(proc_id) orelse {
                 if (builtin.mode == .debug) {
-                    std.debug.panic("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
+                    base.invariant("dev run invariant violated: LIR proc {d} was not compiled before image symbol publication", .{i});
                 }
                 unreachable;
             };
@@ -6564,7 +6462,7 @@ fn writeDevRunImageToSharedMemory(
         for (static_rc_helpers) |helper_key| {
             const code_offset = codegen.compiledStaticDataRcHelperOffset(helper_key) orelse {
                 if (builtin.mode == .debug) {
-                    std.debug.panic(
+                    base.invariant(
                         "dev run invariant violated: static RC helper {x} was not compiled before image symbol publication",
                         .{helper_key.encode()},
                     );
@@ -6588,7 +6486,7 @@ fn writeDevRunImageToSharedMemory(
             const ordinal: usize = @intCast(platform_entrypoint.ordinal);
             if (ordinal >= entrypoint_names.len) {
                 if (builtin.mode == .debug) {
-                    std.debug.panic("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
+                    base.invariant("dev run invariant violated: platform entrypoint ordinal {d} exceeds name table length {d}", .{ ordinal, entrypoint_names.len });
                 }
                 unreachable;
             }
@@ -6810,11 +6708,12 @@ fn evaluateLirImageEntrypoint(
     );
     defer interpreter.deinit();
     static_data.install(&interpreter);
+    static_data.ownByInterpreter(&interpreter);
 
     _ = interpreter.runEntrypoint(view, ordinal, arg_ptr, ret_ptr) catch |err| switch (err) {
         error.EntrypointNotFound => {
             if (builtin.mode == .debug) {
-                std.debug.panic("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
+                base.invariant("CLI LIR image invariant violated: missing platform entrypoint ordinal {d}", .{ordinal});
             }
             unreachable;
         },
@@ -6845,7 +6744,14 @@ const PlatformEntrypointArtifact = union(enum) {
     /// Pointer-width-independent LIR consumed directly by the interpreter.
     lir_image,
     /// Target-specific machine code and readonly data consumed by the dev shim.
-    dev_run_image: RocTarget,
+    dev_run_image: DevRunImage,
+};
+
+/// A dev shim image's target, and whether the shim runs it under hot reload,
+/// which reserves a header at the start of every erased callable's capture.
+const DevRunImage = struct {
+    target: RocTarget,
+    hot_reload: bool,
 };
 
 fn lowerLirWithBuildEnv(
@@ -6872,6 +6778,7 @@ fn lowerLirWithBuildEnv(
         ),
         .max_threads = max_threads,
         .no_cache = !enable_checked_cache,
+        .timings = if (reporter) |r| r.always else false,
         .resolution_config = resolution_config,
         .track_watch_inputs = true,
         .source_dir_override = source_dir_override,
@@ -6988,6 +6895,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -6998,7 +6906,7 @@ fn lowerLirWithBuildEnv(
         &lowered,
         switch (artifact) {
             .lir_image => roc_target.RocTarget.detectNative(),
-            .dev_run_image => |target| target,
+            .dev_run_image => |image| image.target,
         },
         .{},
     );
@@ -7088,6 +6996,7 @@ pub fn buildLirImageWithBuildEnv(
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
+        .mapped,
         &lowered.lir_result,
         platform_entrypoints,
         lowered_result.internal_static_data.?,
@@ -7176,7 +7085,7 @@ fn resolvePlatformRefToPaths(
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.AccessDenied,
                 } }),
-                error.IoError => return ctx.fail(.{ .file_write_failed = .{
+                else => return ctx.fail(.{ .file_write_failed = .{
                     .path = compile.compiler_platforms.identity(platform),
                     .err = error.WriteFailed,
                 } }),
@@ -7406,7 +7315,9 @@ fn resolveUrlBundle(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemor
 
         // Download and extract (path-based, no Dir handle needed)
         var gpa_copy = ctx.gpa;
-        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, staging_dir_path, .{}) catch |download_err| {
+        _ = download.downloadAndExtract(&gpa_copy, ctx.io.std_io, url, staging_dir_path, .{
+            .max_expanded_bytes = base.max_bundle_expanded_bytes,
+        }) catch |download_err| {
             std.Io.Dir.cwd().deleteTree(ctx.io.std_io, staging_dir_path) catch {};
             return ctx.fail(.{ .download_failed = .{
                 .url = url,
@@ -7592,8 +7503,8 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
 
     // Same name + same URL is idempotent; same name + different URL fails
     // without touching the existing entry.
-    const existing_bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (err) {
-        error.FileNotFound => existing: {
+    const existing_bytes: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, entry.manifest_path, ctx.arena, .limited(install_manifest_size_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => existing: {
             var entry_dir = std.Io.Dir.cwd().openDir(ctx.io.std_io, entry.entry_dir, .{}) catch break :existing null;
             entry_dir.close(ctx.io.std_io);
             return ctx.fail(.{ .install_entry_corrupt = .{
@@ -7602,38 +7513,7 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
                 .reason = "its install.json manifest is missing",
             } });
         },
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.OutOfMemory,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return ctx.fail(.{ .install_entry_corrupt = .{
+        .out_of_memory, .other => return ctx.fail(.{ .install_entry_corrupt = .{
             .name = args.shorthand,
             .path = entry.entry_dir,
             .reason = "its install.json manifest could not be read",
@@ -7831,6 +7711,33 @@ fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMem
     };
 }
 
+/// Path of a complete copy of the selected shim library that the calling build
+/// may link: `cache_path` or `staged_path`.
+///
+/// `cache_path` names the library's content-addressed entry in the shared
+/// build cache. An entry is published by writing it in full at `staged_path`,
+/// which must lie in a directory only the calling build writes to, and
+/// renaming it into the cache, so a build that finds the entry never reads one
+/// that is still being written. When the rename is refused, the staged copy
+/// is itself complete and is the path returned.
+fn publishedShimLibraryPath(
+    ctx: *CliCtx,
+    kind: ShimLibraryKind,
+    target: RocTarget,
+    cache_path: []const u8,
+    staged_path: []const u8,
+) (std.Io.File.OpenError || std.Io.File.Writer.Error)![]const u8 {
+    const published = blk: {
+        std.Io.Dir.cwd().access(ctx.io.std_io, cache_path, .{}) catch break :blk false;
+        break :blk true;
+    };
+    if (published) return cache_path;
+
+    try extractShimLibrary(ctx, kind, staged_path, target);
+    std.Io.Dir.cwd().rename(staged_path, std.Io.Dir.cwd(), cache_path, ctx.io.std_io) catch return staged_path;
+    return cache_path;
+}
+
 /// Extract the selected embedded shim library to the specified path for the given target.
 fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const u8, target: ?RocTarget) (std.Io.File.OpenError || std.Io.File.Writer.Error)!void {
     if (builtin.is_test) {
@@ -7847,38 +7754,11 @@ fn extractShimLibrary(ctx: *CliCtx, kind: ShimLibraryKind, output_path: []const 
     try shim_file.writeStreamingAll(ctx.io.std_io, shimLibraryBytes(kind, target));
 }
 
-/// Format a bundle path validation reason into a user-friendly error message
-fn formatBundlePathValidationReason(reason: bundle.PathValidationReason) []const u8 {
+/// Format a bundle or unbundle path validation reason into a user-friendly error message
+fn formatPathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
     return switch (reason) {
         .empty_path => "Path cannot be empty",
-        .path_too_long => "Path exceeds maximum length of 255 characters",
-        .windows_reserved_char => |char| switch (char) {
-            0 => "Path contains NUL byte (\\0)",
-            ':' => "Path contains colon (:) which is reserved on Windows",
-            '*' => "Path contains asterisk (*) which is a wildcard on Windows",
-            '?' => "Path contains question mark (?) which is a wildcard on Windows",
-            '"' => "Path contains quote (\") which is reserved on Windows",
-            '<' => "Path contains less-than (<) which is reserved on Windows",
-            '>' => "Path contains greater-than (>) which is reserved on Windows",
-            '|' => "Path contains pipe (|) which is reserved on Windows",
-            '\\' => "Path contains backslash (\\). Use forward slashes (/) for all paths",
-            else => "Path contains reserved character",
-        },
-        .absolute_path => "Absolute paths are not allowed",
-        .path_traversal => "Path traversal (..) is not allowed",
-        .current_directory_reference => "Current directory reference (.) is not allowed",
-        .contained_backslash_on_unix => "Path contains a backslash, which is a directory separator on Windows.",
-        .windows_reserved_name => "Path contains Windows reserved device name (CON, PRN, AUX, NUL, COM1-9, LPT1-9)",
-        .component_ends_with_space => "Path components cannot end with space",
-        .component_ends_with_period => "Path components cannot end with period",
-    };
-}
-
-/// Format an unbundle path validation reason into a user-friendly error message
-fn formatUnbundlePathValidationReason(reason: unbundle.PathValidationReason) []const u8 {
-    return switch (reason) {
-        .empty_path => "Path cannot be empty",
-        .path_too_long => "Path exceeds maximum length of 255 characters",
+        .path_too_long => std.fmt.comptimePrint("Path exceeds maximum length of {d} characters", .{unbundle.format.TAR_PATH_MAX_LENGTH}),
         .windows_reserved_char => |char| switch (char) {
             0 => "Path contains NUL byte (\\0)",
             ':' => "Path contains colon (:) which is reserved on Windows",
@@ -8219,14 +8099,13 @@ pub fn rocBundle(ctx: *CliCtx, args: cli_args.BundleArgs) CliMainError!void {
     ) catch |err| {
         switch (err) {
             error.InvalidPath => {
-                try stderr.print("Error: Invalid file path - {s}\n", .{formatBundlePathValidationReason(error_ctx.reason)});
+                try stderr.print("Error: Invalid file path - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
                 try stderr.print("Path: {s}\n", .{error_ctx.path});
             },
             error.AccessDenied,
             error.CompressionFailed,
             error.FileNotFound,
             error.FileOpenFailed,
-            error.FilePathTooLong,
             error.FileReadFailed,
             error.FileStatFailed,
             error.FileTooLarge,
@@ -8361,7 +8240,7 @@ fn rocUnbundle(ctx: *CliCtx, args: cli_args.UnbundleArgs) CliMainError!void {
                     had_errors = true;
                 },
                 error.InvalidPath => {
-                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatUnbundlePathValidationReason(error_ctx.reason)});
+                    try stderr.print("Error: Invalid path in archive - {s}\n", .{formatPathValidationReason(error_ctx.reason)});
                     try stderr.print("Path: {s}\n", .{error_ctx.path});
                     try stderr.print("Archive: {s}\n", .{archive_path});
                     had_errors = true;
@@ -8893,6 +8772,13 @@ fn packFileBytes(
             withheld += 1;
             continue;
         }
+        // A linking program has no body for an entry, so it sees the entry
+        // outside every call cycle and would reach it with an ordinary call
+        // where the cycle needs a frame-replacing one.
+        if (proc.tail_group != null) {
+            withheld += 1;
+            continue;
+        }
         // Boxy statements index the program's own descriptor sidecar, and a
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
@@ -8911,6 +8797,7 @@ fn packFileBytes(
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
+            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -9155,7 +9042,7 @@ fn nativeBuildEntrypoints(
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
         if (builtin.mode == .debug) {
-            std.debug.panic(
+            base.invariant(
                 "native build invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
             );
@@ -9171,7 +9058,7 @@ fn nativeBuildEntrypoints(
         std.debug.assert(metadata.abi == .platform and metadata.exposure == .exported);
         const root = root_artifact.lookupRootRequestByOrder(metadata.order) orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("native build invariant violated: missing root request order {d}", .{metadata.order});
+                base.invariant("native build invariant violated: missing root request order {d}", .{metadata.order});
             }
             unreachable;
         };
@@ -9202,7 +9089,7 @@ fn nativeEntrypointSymbolName(
 ) []const u8 {
     const entrypoint_name = root_artifact.providedEntrypointName(root) orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic(
+            base.invariant(
                 "platform entrypoint invariant violated: exported platform root has no published FFI symbol",
                 .{},
             );
@@ -9297,8 +9184,7 @@ fn requireLinkedWasmExports(
     try report.document.addLineBreak();
     try report.document.addText("Target: ");
     try report.document.addAnnotated(@tagName(selected.target), .emphasized);
-    try report.document.addLineBreak();
-    try report.document.addLineBreak();
+    try report.document.addLineBreaks(2);
     try report.document.addText("Add an `exports:` field to this target. Use `exports: []` when the module intentionally exports no functions.");
 
     try reporting.renderReportToTerminal(
@@ -9596,6 +9482,35 @@ fn writeDefaultPlatformExecutableObject(ctx: *CliCtx, artifact_dir: []const u8, 
     return runtime_path;
 }
 
+/// Add the default platform's own inputs to a standalone link: its process
+/// startup object and, where the platform is freestanding, its compiler-rt
+/// carrier.
+///
+/// The carrier defines the routines code generation calls for operations the
+/// target has no instruction for (`fmod` for a float remainder, `floor` on a
+/// baseline x86-64 CPU, the stack probe, ...). Nothing else in the link is
+/// certain to: an LLVM app object comes from target-independent builtin
+/// bitcode and bundles no compiler-rt, and neither does the dev backend's
+/// builtins object on the BSDs. Every definition in the carrier is weak, and
+/// it is added after the startup object and the objects holding the Roc
+/// code and builtins, so their definitions of the same routines take
+/// precedence and the carrier only supplies what they lack. A default
+/// platform that links a C runtime gets these routines from it and has no
+/// carrier.
+fn appendDefaultPlatformLinkInputs(
+    ctx: *CliCtx,
+    object_files: *std.array_list.Managed([]const u8),
+    artifact_dir: []const u8,
+    target: RocTarget,
+) CliMainError!void {
+    const runtime_path = (try writeDefaultPlatformExecutableObject(ctx, artifact_dir, target)) orelse
+        return error.UnsupportedTarget;
+    try object_files.append(runtime_path);
+    if (try writeDefaultPlatformCompilerRtObject(ctx, artifact_dir, target)) |compiler_rt_path| {
+        try object_files.append(compiler_rt_path);
+    }
+}
+
 /// The host inputs of a link, in link order.
 fn hostInputPaths(ctx: *CliCtx, link_inputs: PlatformLinkInputs) std.mem.Allocator.Error![]const []const u8 {
     var paths = try std.array_list.Managed([]const u8).initCapacity(
@@ -9805,13 +9720,13 @@ fn wasmOptimizeMode(opt: cli_args.OptLevel) linker.WasmOptimizeMode {
 fn requiredWasmPlatformExports(link_inputs: PlatformLinkInputs) []const []const u8 {
     const wasm = link_inputs.wasm orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
         }
         unreachable;
     };
     return wasm.exports orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic("linked wasm target reached the linker without an exports declaration", .{});
+            base.invariant("linked wasm target reached the linker without an exports declaration", .{});
         }
         unreachable;
     };
@@ -9845,7 +9760,7 @@ fn writeDevWasmObject(
 ) CliMainError![]const u8 {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("wasm object invariant violated: no exported platform entrypoints", .{});
+            base.invariant("wasm object invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -9945,7 +9860,7 @@ fn rocBuildWasm(
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("wasm build invariant violated: no exported platform entrypoints", .{});
+            base.invariant("wasm build invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -10112,7 +10027,7 @@ fn llvmOptimizationLevel(opt: cli_args.OptLevel) builder.OptimizationLevel {
         .speed => .speed,
         .dev, .interpreter => {
             if (builtin.mode == .debug) {
-                std.debug.panic("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
+                base.invariant("LLVM build invariant violated: non-LLVM opt level {s}", .{@tagName(opt)});
             }
             unreachable;
         },
@@ -10466,7 +10381,7 @@ fn rocBuildWasmLlvm(
 ) CliMainError!void {
     if (entrypoints.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
+            base.invariant("LLVM wasm build invariant violated: no exported platform entrypoints", .{});
         }
         unreachable;
     }
@@ -10562,6 +10477,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -10701,6 +10617,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -10724,7 +10641,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
 
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
+            base.invariant("LLVM build invariant violated: no exported platform entrypoints or data symbols", .{});
         }
         unreachable;
     }
@@ -10795,11 +10712,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
             try object_files.append(path);
         }
         if (enable_default_platform_runtime) {
-            if (try writeDefaultPlatformExecutableObject(ctx, app_object.artifact_dir, target)) |runtime_path| {
-                try object_files.append(runtime_path);
-            } else {
-                return error.UnsupportedTarget;
-            }
+            try appendDefaultPlatformLinkInputs(ctx, &object_files, app_object.artifact_dir, target);
         }
         if (lirResultNeedsBoxyRuntime(&lowered.lir_result)) {
             try appendBoxyRuntimeLinkInputs(ctx, &object_files, app_object.artifact_dir, target, &lowered.lir_result);
@@ -10916,42 +10829,13 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -11074,6 +10958,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
+    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -11122,6 +11007,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         &spec_timing,
         build_env.runtimeProgramSession(),
         if (loaded_packs) |packs| packs.specCacheLookup() else null,
+        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11191,7 +11077,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     reporter.begin(code_generation_phase_name);
     if (entrypoints.len == 0 and static_data_exports.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("native build invariant violated: no exported platform entrypoints or data symbols", .{});
+            base.invariant("native build invariant violated: no exported platform entrypoints or data symbols", .{});
         }
         unreachable;
     }
@@ -11254,11 +11140,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     try object_files.append(obj_path);
     try object_files.append(builtins_path);
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformExecutableObject(ctx, build_scratch_dir, target)) |runtime_path| {
-            try object_files.append(runtime_path);
-        } else {
-            return error.UnsupportedTarget;
-        }
+        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
     }
     // Boxy programs reference the `roc_boxy_*` runtime and, in their
     // entrypoints, call `roc_boxy_init_embedded`. Link the boxy runtime object
@@ -11366,42 +11248,13 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     var cache_manager = CacheManager.init(ctx.gpa, cache_config, ctx.coreCtx());
     const cache_dir = try cache_manager.config.getCacheEntriesDir(ctx.arena);
     const build_cache_dir = try std.fs.path.join(ctx.arena, &.{ cache_dir, "roc_build" });
-    ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try ensureCompilerCacheDirExists(ctx.io.std_io, build_cache_dir);
 
     var build_env = try initCliBuildEnv(ctx, .{
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .source_dir_override = args.source_dir_override,
@@ -11524,6 +11377,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11543,6 +11397,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         shm_allocator,
         shm.base_ptr,
         shm.getUsedSize() + shm.getAvailableSize(),
+        .persisted,
         &lowered.lir_result,
         platform_entrypoints,
         image_static_data,
@@ -11550,29 +11405,53 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     try copied.fillHeader(image_header, shm.getUsedSize());
     shm.updateHeader();
 
-    const lir_image = try ctx.arena.dupe(u8, shm.base_ptr[0..shm.getUsedSize()]);
+    // These bytes are embedded in the output executable. The image was copied
+    // under the persisted contract into newly created shared memory, which the
+    // OS supplies zero-filled, and the detached copy's header describes the
+    // copy rather than this process's mapping, so every byte here is a
+    // function of the program.
+    const lir_image = try shm.dupeDetachedImage(ctx.arena);
     const entrypoint_names = try lowered.platformEntrypointNames(ctx.arena, root_artifact);
     if (entrypoint_names.len == 0) {
         if (builtin.mode == .debug) {
-            std.debug.panic("embedded build invariant violated: no platform entrypoints", .{});
+            base.invariant("embedded build invariant violated: no platform entrypoints", .{});
         }
         unreachable;
     }
 
     const link_inputs = try collectPlatformLinkInputs(ctx, platform_dir, resolved_targets_config, target, link_type);
 
+    // Every intermediate file of this build is written into a directory only
+    // this build writes to. The shared build cache holds nothing but
+    // content-addressed entries that are complete whenever they are visible.
+    const build_scratch_dir = createUniqueTempDir(ctx) catch |err| {
+        return ctx.fail(.{ .temp_dir_failed = .{ .err = err } });
+    };
+    if (args.keep_temp) {
+        const palette = reporting.ColorUtils.getPaletteForConfig(reporting.ReportingConfig.initColorTerminal());
+        const config = reporting.ReportingConfig.initColorTerminal();
+        const headline = try std.fmt.allocPrint(ctx.arena, "Kept temporary directory: {s}.", .{build_scratch_dir});
+        var report = try reporting.Report.init(ctx.arena, "Kept Temporary Directory", headline, .warning);
+        defer report.deinit();
+        reporting.renderReportToTerminal(&report, ctx.io.stderr(), palette, config) catch {};
+    }
+    defer if (!args.keep_temp) compile.CacheCleanup.deleteTempDir(ctx.io.std_io, build_scratch_dir);
+
     const shim_filename = try shimLibraryCacheFilename(ctx, .lir, target);
-    const shim_path = try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename });
-    std.Io.Dir.cwd().access(ctx.io.std_io, shim_path, .{}) catch {
-        extractShimLibrary(ctx, .lir, shim_path, target) catch |err| {
-            return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
-        };
+    const shim_path = publishedShimLibraryPath(
+        ctx,
+        .lir,
+        target,
+        try std.fs.path.join(ctx.arena, &.{ build_cache_dir, shim_filename }),
+        try std.fs.path.join(ctx.arena, &.{ build_scratch_dir, shim_filename }),
+    ) catch |err| {
+        return ctx.fail(.{ .shim_generation_failed = .{ .err = err } });
     };
 
     const enable_debug = args.debug or (builtin.mode == .debug);
     const platform_shim_path = try generatePlatformHostShim(
         ctx,
-        build_cache_dir,
+        build_scratch_dir,
         entrypoint_names,
         null,
         target,
@@ -11588,11 +11467,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         try object_files.append(path);
     }
     if (args.synthetic_default_platform) {
-        if (try writeDefaultPlatformExecutableObject(ctx, build_cache_dir, target)) |runtime_path| {
-            try object_files.append(runtime_path);
-        } else {
-            return error.UnsupportedTarget;
-        }
+        try appendDefaultPlatformLinkInputs(ctx, &object_files, build_scratch_dir, target);
     }
     reporter.end();
 
@@ -11629,7 +11504,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
             .wasm_cpu_level = target.cpuLevel(),
             .wasm_global_base = if (link_inputs.wasm) |wasm| wasm.global_base else null,
             .platform_files_dir = link_inputs.platform_files_dir,
-            .scratch_dir = build_cache_dir,
+            .scratch_dir = build_scratch_dir,
         };
 
         linker.link(ctx, link_config) catch |err| {
@@ -11847,7 +11722,7 @@ const CliTestPlanModule = struct {
     fn releaseCachedResults(self: *CliTestPlanModule) []CliTestResultItem {
         const results = self.cached_results orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("CLI test invariant violated: cached results were released from an uncached plan module", .{});
+                base.invariant("CLI test invariant violated: cached results were released from an uncached plan module", .{});
             }
             unreachable;
         };
@@ -12008,11 +11883,15 @@ fn cliTestTranscriptEventPayload(event: CliTestTranscriptEvent) []const u8 {
 fn cliTestCacheKey(
     artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
 ) [32]u8 {
     var hasher = base.Sha256.init(.{});
     hasher.update(cli_test_cache_magic);
     hasher.update(build_options.compiler_compatibility_id);
     hasher.update(@tagName(specialization_strategy));
+    // A result records what one execution mode did with the tests, including
+    // how long they ran and whether they exhausted its resources.
+    hasher.update(@tagName(opt));
     hasher.update(&artifact_key.bytes);
     var out: [32]u8 = undefined;
     hasher.final(&out);
@@ -12023,9 +11902,20 @@ test "CLI test cache key includes specialization strategy" {
     const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
         .bytes = @as([32]u8, @splat(0x5a)),
     };
-    const lss_key = cliTestCacheKey(artifact_key, .lss);
-    const boxy_key = cliTestCacheKey(artifact_key, .boxy);
+    const lss_key = cliTestCacheKey(artifact_key, .lss, .dev);
+    const boxy_key = cliTestCacheKey(artifact_key, .boxy, .dev);
     try std.testing.expect(!std.mem.eql(u8, &lss_key, &boxy_key));
+}
+
+test "CLI test cache key includes execution mode" {
+    const artifact_key: check.CheckedArtifact.CheckedModuleArtifactKey = .{
+        .bytes = @as([32]u8, @splat(0x5a)),
+    };
+    const dev_key = cliTestCacheKey(artifact_key, .lss, .dev);
+    inline for (.{ cli_args.OptLevel.interpreter, cli_args.OptLevel.size, cli_args.OptLevel.speed }) |opt| {
+        const other_key = cliTestCacheKey(artifact_key, .lss, opt);
+        try std.testing.expect(!std.mem.eql(u8, &dev_key, &other_key));
+    }
 }
 
 fn summarizeTestResults(results: []const CliTestResultItem) CliTestRunSummary {
@@ -12046,6 +11936,7 @@ fn storeCliTestResultsInCache(
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
     results: []const CliTestResultItem,
 ) (Allocator.Error || error{NoHomeDirectory})!void {
     const manager = cache_manager orelse return;
@@ -12063,7 +11954,7 @@ fn storeCliTestResultsInCache(
         try appendU64(&bytes, ctx.gpa, result.inline_passed);
         try appendU64(&bytes, ctx.gpa, result.inline_failed);
         if (result.inline_expect and result.source_env == null) {
-            std.debug.panic("inline test cache result has no declaring module", .{});
+            base.invariant("inline test cache result has no declaring module", .{});
         }
         if (result.source_env) |source_env| {
             const qualified_name = source_env.qualifiedModuleName();
@@ -12100,7 +11991,7 @@ fn storeCliTestResultsInCache(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), bytes.items, entries_dir);
+    manager.storeRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), bytes.items, entries_dir, artifact.moduleEnvConst().module_name);
 }
 
 fn loadCliTestTranscriptEvents(
@@ -12158,6 +12049,7 @@ fn loadCachedCliTestResults(
     cache_manager: ?*CacheManager,
     artifact: *const check.CheckedArtifact.CheckedModuleArtifact,
     specialization_strategy: base.SpecializationStrategy,
+    opt: cli_args.OptLevel,
     module: BuildEnv.CompiledModuleInfo,
     source_modules: *const CliTestSourceModuleMap,
     test_roots: []const check.CheckedArtifact.RootRequest,
@@ -12166,7 +12058,7 @@ fn loadCachedCliTestResults(
 
     const entries_dir = try manager.config.getTestCacheDir(ctx.gpa);
     defer ctx.gpa.free(entries_dir);
-    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy), entries_dir) orelse return null;
+    const data = manager.loadRawBytes(cliTestCacheKey(artifact.key, specialization_strategy, opt), entries_dir) orelse return null;
     defer ctx.gpa.free(data);
 
     var offset: usize = 0;
@@ -12425,7 +12317,7 @@ fn testRootRegion(
         .statement => |statement| env.store.getStatementRegion(statement),
         .def, .expr, .required_binding, .hoisted => {
             if (builtin.mode == .debug) {
-                std.debug.panic("CLI test invariant violated: test root was not published from an expect statement", .{});
+                base.invariant("CLI test invariant violated: test root was not published from an expect statement", .{});
             }
             unreachable;
         },
@@ -12493,10 +12385,7 @@ fn collectExpectBindingPatterns(
                 for (0..block.stmts.span.len) |stmt_offset| {
                     const stmt_idx = env.store.statementAt(block.stmts, stmt_offset);
                     switch (env.store.getStatement(stmt_idx)) {
-                        .s_decl => |decl| try stack.append(allocator, decl.expr),
-                        .s_var => |decl| try stack.append(allocator, decl.expr),
-                        .s_reassign => |assign| try stack.append(allocator, assign.expr),
-                        .s_expr => |stmt| try stack.append(allocator, stmt.expr),
+                        inline .s_decl, .s_var, .s_reassign, .s_expr => |decl| try stack.append(allocator, decl.expr),
                         .s_expect => |stmt| try stack.append(allocator, stmt.body),
                         .s_dbg => |stmt| try stack.append(allocator, stmt.expr),
                         .s_return => |stmt| try stack.append(allocator, stmt.expr),
@@ -12547,11 +12436,7 @@ fn collectExpectBindingPatterns(
             },
             .e_unary_minus => |unary| try stack.append(allocator, unary.expr),
             .e_field_access => |field| try stack.append(allocator, field.receiver),
-            .e_method_call => |call| {
-                try stack.append(allocator, call.receiver);
-                try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try stack.append(allocator, call.receiver);
                 try appendExprSpanForExpectBindings(env, allocator, &stack, call.args);
             },
@@ -12610,7 +12495,7 @@ fn collectExpectBindingPatterns(
             .e_break,
             .e_hosted_lambda,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -12854,6 +12739,13 @@ fn checkedRuntimeLoweringConfig(
         },
         .target = .{
             .target_usize = target_usize,
+            .erased_capture_prefix = switch (roots) {
+                .platform_entrypoints => |artifact| switch (artifact) {
+                    .dev_run_image => |image| if (image.hot_reload) @import("builtins").erased_callable.hot_reload_capture_prefix_size else 0,
+                    .lir_image => 0,
+                },
+                .linked_output, .test_plan => 0,
+            },
             .specialization_strategy = specialization_strategy,
             .inline_mode = postCheckInlineModeForOpt(opt),
             .spec_constr_clone_inlining = specConstrCloneInliningForOpt(opt),
@@ -12877,6 +12769,26 @@ fn checkedRuntimeLoweringConfig(
     };
 }
 
+/// Native builds promise object provision only when their emitter has a
+/// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool) lir.CheckedPipeline.CodeProvision {
+    if (!has_splice_source or opt != .dev) return .source_bodies;
+    return if (target == RocTarget.detectNative()) .host_dev_objects else .target_dev_objects;
+}
+
+test "native code provision names the emitter target and splice capability" {
+    const native = RocTarget.detectNative();
+    for (std.enums.values(cli_args.OptLevel)) |opt| {
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false));
+        const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
+        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true));
+    }
+    for (std.enums.values(RocTarget)) |target| {
+        if (target == native) continue;
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true));
+    }
+}
+
 fn lowerCheckedSourceToLir(
     lir_allocator: Allocator,
     gpa: Allocator,
@@ -12892,6 +12804,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: lir.CheckedPipeline.CodeProvision,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12907,6 +12820,7 @@ fn lowerCheckedSourceToLir(
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
+    config.target.code_provision = code_provision;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,
@@ -12975,7 +12889,7 @@ fn collectCliTestRootRuns(
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
         if (builtin.mode == .debug) {
-            std.debug.panic("CLI test invariant violated: root proc count differs from root metadata count", .{});
+            base.invariant("CLI test invariant violated: root proc count differs from root metadata count", .{});
         }
         unreachable;
     }
@@ -12984,7 +12898,7 @@ fn collectCliTestRootRuns(
         if (metadata.kind != .test_expect) continue;
         const test_plan = metadata.test_plan orelse {
             if (builtin.mode == .debug) {
-                std.debug.panic("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
+                base.invariant("CLI test invariant violated: lowered test root metadata is missing its explicit test-plan slot", .{});
             }
             unreachable;
         };
@@ -12992,7 +12906,7 @@ fn collectCliTestRootRuns(
             test_plan.result_index >= planned.first_entry_index + planned.entry_count) continue;
         if (test_plan.root_index >= planned.test_roots.len or test_plan.result_index >= plan_entries.len) {
             if (builtin.mode == .debug) {
-                std.debug.panic(
+                base.invariant(
                     "CLI test invariant violated: lowered test-plan slot root/result ({d}/{d}) is outside module roots/results ({d}/{d})",
                     .{ test_plan.root_index, test_plan.result_index, planned.test_roots.len, plan_entries.len },
                 );
@@ -13009,7 +12923,7 @@ fn collectCliTestRootRuns(
                 plan_entry.root_index != test_plan.root_index or
                 plan_entry.root_order != root.order))
         {
-            std.debug.panic(
+            base.invariant(
                 "CLI test invariant violated: explicit plan metadata ({d}/{d}/{d}/{d}) differs from plan entry/root ({d}/{d}/{d}/{d})",
                 .{
                     test_plan.result_index,
@@ -13041,7 +12955,7 @@ fn collectCliTestRootRuns(
 
     if (runs.items.len != planned.test_roots.len) {
         if (builtin.mode == .debug) {
-            std.debug.panic(
+            base.invariant(
                 "CLI test invariant violated: lowered {d} test roots for {d} checked test roots",
                 .{ runs.items.len, planned.test_roots.len },
             );
@@ -13296,6 +13210,7 @@ fn runInterpreterTestRoots(
     defer interpreter.deinit();
 
     static_values.install(&interpreter);
+    static_values.ownByInterpreter(&interpreter);
 
     const expect_counts = try ctx.gpa.alloc(eval.Inspected.ExpectCounts, lowered.lir_result.expect_sites.items.len);
     defer ctx.gpa.free(expect_counts);
@@ -13464,14 +13379,14 @@ fn appendInlineExpectResults(
         const result: CliTestResult = if (count.failed == 0) .passed else .failed;
         var source_env: ?*const ModuleEnv = null;
         var source_path: ?[]const u8 = null;
-        if (!site.loc.hasLocation()) std.debug.panic("test expect site has no source location", .{});
+        if (!site.loc.hasLocation()) base.invariant("test expect site has no source location", .{});
         const qualified_name = store.sourceFileQualifiedName(site.loc.file);
         if (source_modules.get(qualified_name)) |source_module| {
             source_env = source_module.semantic.env;
             source_path = source_module.path;
         }
         if (source_env == null) {
-            std.debug.panic("test expect source module {s} was absent from the checked module plan", .{qualified_name});
+            base.invariant("test expect source module {s} was absent from the checked module plan", .{qualified_name});
         }
         try results.append(ctx.gpa, .{
             .result = result,
@@ -13654,107 +13569,9 @@ fn runCompiledTestRoots(
             .speed,
         ),
         .interpreter => unreachable,
-    } catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidHostedFunctionSignature,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.PageSizeQueryFailed,
-        error.ParseError,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.TypeCheckError,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
+    } catch |err| switch (ReplSession.programFailureKind(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .type_check, .parse, .operational => {
             try appendCompilerErrorsForRuns(ctx, mode, err, root_runs, results, summary);
             return;
         },
@@ -13814,7 +13631,7 @@ fn runCheckedArtifactTests(
     }
     summary.modules_with_tests = 1;
 
-    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, results.items);
+    try storeCliTestResultsInCache(ctx, cache_manager, artifact, specialization_strategy, opt, results.items);
 
     try module_results.append(ctx.gpa, .{
         .env = module.semantic.env,
@@ -13914,107 +13731,9 @@ fn runCompiledLoweredTestModulesOnce(
             event_callback,
         ),
         .interpreter => unreachable,
-    }) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.BitcodeParseError,
-        error.BrokenPipe,
-        error.Canceled,
-        error.CompilationFailed,
-        error.ComptimeExhaustiveness,
-        error.ConnectionResetByPeer,
-        error.CorruptEmbeddedBuiltins,
-        error.Crash,
-        error.CreateFileMappingFailed,
-        error.DevBackendUnavailable,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.DivisionByZero,
-        error.ElfHashTableNotFound,
-        error.ElfStringSectionNotFound,
-        error.ElfSymSectionNotFound,
-        error.EmptyCode,
-        error.EntrypointNotFound,
-        error.EvaluationFailed,
-        error.ExpectErr,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.FtruncateFailed,
-        error.HostedFunctionNotBound,
-        error.InputOutput,
-        error.Internal,
-        error.InvalidHandle,
-        error.InvalidHostedFunctionSignature,
-        error.InvalidLirImage,
-        error.InvalidUtf8,
-        error.IsDir,
-        error.LinkFailed,
-        error.LlvmBackendUnavailable,
-        error.LlvmModuleVerificationFailed,
-        error.LlvmObjectEmitFailed,
-        error.LockViolation,
-        error.LockedMemoryLimitExceeded,
-        error.MapViewOfFileFailed,
-        error.MappingAlreadyExists,
-        error.MemfdCreateFailed,
-        error.MemoryMappingNotSupported,
-        error.MissingBuiltinBitcode,
-        error.MissingDynamicLinkingInformation,
-        error.MmapFailed,
-        error.ModuleLinkFailed,
-        error.MprotectFailed,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoBitcodeModules,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotDynamicLibrary,
-        error.NotElfFile,
-        error.NotOpenForReading,
-        error.NotOpenForWriting,
-        error.OpenFileMappingFailed,
-        error.PageSizeQueryFailed,
-        error.ParseError,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.RuntimeError,
-        error.ShmOpenFailed,
-        error.ShmUnlinkFailed,
-        error.SocketUnconnected,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.TempFileOpenFailed,
-        error.TempFileUnlinkFailed,
-        error.TestExpectedEqual,
-        error.TestUnexpectedResult,
-        error.ThreadQuotaExceeded,
-        error.TypeCheckError,
-        error.Unexpected,
-        error.Unseekable,
-        error.UnsupportedHostedFunction,
-        error.UnsupportedLirImageVersion,
-        error.UnsupportedLlvmTriple,
-        error.UnsupportedLowLevel,
-        error.UnsupportedPlatform,
-        error.UnsupportedTarget,
-        error.UnwindRegistrationFailed,
-        error.VirtualAllocFailed,
-        error.VirtualProtectFailed,
-        error.WasmExecFailed,
-        error.WindowsSDKNotFound,
-        error.WouldBlock,
-        error.WriteFailed,
-        => {
+    }) catch |err| switch (ReplSession.programFailureKind(err)) {
+        .out_of_memory => return error.OutOfMemory,
+        .type_check, .parse, .operational => {
             for (lowered_modules) |*lowered_module| {
                 var results = std.ArrayList(CliTestResultItem).empty;
                 errdefer {
@@ -14120,7 +13839,7 @@ fn coalesceInlineExpectResults(
         for (@constCast(module_result.results)) |*result| {
             if (!result.inline_expect) continue;
             const source_env = result.source_env orelse {
-                std.debug.panic("inline test result has no declaring module", .{});
+                base.invariant("inline test result has no declaring module", .{});
             };
             const key: InlineExpectResultKey = .{
                 .env = source_env,
@@ -14226,7 +13945,7 @@ fn runCompiledTestPlan(
 
     for (lowered_modules.items) |*lowered_module| {
         const planned = &test_plan.modules[lowered_module.planned_index];
-        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, fresh_results[lowered_module.planned_index].?);
+        try storeCliTestResultsInCache(ctx, cache_manager, planned.artifact, specialization_strategy, opt, fresh_results[lowered_module.planned_index].?);
     }
 
     for (test_plan.modules, 0..) |*planned, planned_index| {
@@ -14400,9 +14119,7 @@ const WatchChildArgv = struct {
 
 fn watchCommandPath(command: WatchCommand) []const u8 {
     return switch (command) {
-        .check => |args| args.path,
-        .test_cmd => |args| args.path,
-        .build => |args| args.path,
+        inline .check, .test_cmd, .build => |args| args.path,
     };
 }
 
@@ -14814,40 +14531,10 @@ fn writeHotReloadWatchPathsFile(
 }
 
 fn readWatchInputsFile(ctx: *CliCtx, file_path: []const u8, extra_paths: []const []const u8) WatchReadInputsError!WatchInputSet {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (err) {
-        error.FileNotFound => return error.WatchInputsMissing,
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return error.WatchInputsReadFailed,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, file_path, ctx.gpa, .limited(watch_inputs_file_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return error.WatchInputsMissing,
+        .out_of_memory => return error.OutOfMemory,
+        .other => return error.WatchInputsReadFailed,
     };
     defer ctx.gpa.free(bytes);
 
@@ -14920,40 +14607,10 @@ fn readWatchInputsFileAfterChild(ctx: *CliCtx, file_path: []const u8, extra_path
 }
 
 fn readWatchFileState(ctx: *CliCtx, path: []const u8) WatchSnapshotError!WatchFileState {
-    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (err) {
-        error.FileNotFound => return .missing,
-        error.OutOfMemory => return error.OutOfMemory,
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.ConnectionResetByPeer,
-        error.DeviceBusy,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileTooBig,
-        error.InputOutput,
-        error.IsDir,
-        error.LockViolation,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.NotOpenForReading,
-        error.PathAlreadyExists,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.SocketUnconnected,
-        error.StreamTooLong,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return .unreadable,
+    const bytes = std.Io.Dir.cwd().readFileAlloc(ctx.io.std_io, path, ctx.gpa, .limited(watch_file_hash_limit)) catch |err| switch (base.read_file_failure.kind(err)) {
+        .file_not_found => return .missing,
+        .out_of_memory => return error.OutOfMemory,
+        .other => return .unreadable,
     };
     defer ctx.gpa.free(bytes);
 
@@ -15446,6 +15103,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         .max_threads = args.max_threads,
         .no_cache = args.no_cache,
         .verbose_cache = args.verbose,
+        .timings = args.timings,
         .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
         .track_watch_inputs = args.watch_inputs_file != null,
         .root_source_url = args.root_source_url,
@@ -15501,7 +15159,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
         const qualified_name = module.semantic.env.qualifiedModuleName();
         const entry = try source_modules.getOrPut(ctx.gpa, qualified_name);
         if (entry.found_existing) {
-            std.debug.panic("compiled module plan contains duplicate source module {s}", .{qualified_name});
+            base.invariant("compiled module plan contains duplicate source module {s}", .{qualified_name});
         }
         entry.value_ptr.* = module;
     }
@@ -15570,6 +15228,7 @@ fn rocTest(ctx: *CliCtx, args_in: cli_args.TestArgs, arg0: []const u8) RocTestEr
             build_env.cache_manager,
             planned.artifact,
             specialization_strategy,
+            args.opt,
             planned.module,
             &source_modules,
             planned.test_roots,
@@ -16102,7 +15761,7 @@ const CliTestTranscriptCoordinator = struct {
         event: CliTestTranscriptEvent,
     ) ReportRenderError!void {
         if (builtin.mode == .debug and result_index >= self.entries.len) {
-            std.debug.panic("CLI test transcript coordinator received out-of-range event index {d} for {d} entries", .{ result_index, self.entries.len });
+            base.invariant("CLI test transcript coordinator received out-of-range event index {d} for {d} entries", .{ result_index, self.entries.len });
         }
         if (result_index < self.next_to_print) return;
         if (result_index == self.next_to_print) {
@@ -16127,7 +15786,7 @@ const CliTestTranscriptCoordinator = struct {
         entry: CliTestRenderEntry,
     ) ReportRenderError!void {
         if (builtin.mode == .debug and result_index >= self.entries.len) {
-            std.debug.panic("CLI test transcript coordinator received out-of-range result index {d} for {d} entries", .{ result_index, self.entries.len });
+            base.invariant("CLI test transcript coordinator received out-of-range result index {d} for {d} entries", .{ result_index, self.entries.len });
         }
         self.entries[result_index] = entry;
         if (result_index == self.next_to_print) {
@@ -16233,10 +15892,10 @@ const CliOptimizedLiveTestOutput = struct {
 
         if (self.err != null) return;
         if (builtin.mode == .debug and result_index >= self.owned_results.len) {
-            std.debug.panic("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
+            base.invariant("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
         }
         if (builtin.mode == .debug and self.owned_results[result_index] != null) {
-            std.debug.panic("CLI optimized live output received duplicate result index {d}", .{result_index});
+            base.invariant("CLI optimized live output received duplicate result index {d}", .{result_index});
         }
 
         const copied = copyCliTestResultItem(self.ctx.gpa, result) catch |err| {
@@ -16259,7 +15918,7 @@ const CliOptimizedLiveTestOutput = struct {
         eval_result: eval.Inspected.BoolRootEvalResult,
     ) void {
         if (builtin.mode == .debug and call_index >= self.runs.len) {
-            std.debug.panic("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
+            base.invariant("CLI optimized live output received out-of-range call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
         const result = cliTestResultItemFromEval(self.ctx, run, eval_result) catch |err| {
@@ -16278,10 +15937,10 @@ const CliOptimizedLiveTestOutput = struct {
         }
         const result_index: usize = @intCast(run.result_index);
         if (builtin.mode == .debug and result_index >= self.owned_results.len) {
-            std.debug.panic("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
+            base.invariant("CLI optimized live output received out-of-range result index {d} for {d} entries", .{ result_index, self.owned_results.len });
         }
         if (builtin.mode == .debug and self.owned_results[result_index] != null) {
-            std.debug.panic("CLI optimized live output received duplicate result index {d}", .{result_index});
+            base.invariant("CLI optimized live output received duplicate result index {d}", .{result_index});
         }
 
         self.owned_results[result_index] = result;
@@ -16300,7 +15959,7 @@ const CliOptimizedLiveTestOutput = struct {
         event_view: eval.Inspected.BoolRootEventView,
     ) void {
         if (builtin.mode == .debug and call_index >= self.runs.len) {
-            std.debug.panic("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
+            base.invariant("CLI optimized live output received out-of-range event call index {d} for {d} roots", .{ call_index, self.runs.len });
         }
         const run = self.runs[call_index];
         const event: CliTestTranscriptEvent = switch (event_view) {
@@ -16464,7 +16123,7 @@ fn renderCliTestResultEntry(
     transcript_events_already_rendered: usize,
 ) ReportRenderError!void {
     if (builtin.mode == .debug and transcript_events_already_rendered > entry.result.transcript.len) {
-        std.debug.panic(
+        base.invariant(
             "CLI test transcript coordinator rendered {d} events before finished result with {d} events",
             .{ transcript_events_already_rendered, entry.result.transcript.len },
         );
@@ -16654,7 +16313,7 @@ fn printTestProblem(
     };
     if (should_print_detail) {
         if (failure_detail) |msg| {
-            if (severity == .warning) try report.addWarningMessage(msg) else try report.addErrorMessage(msg);
+            if (severity.isError()) try report.addErrorMessage(msg) else try report.addWarningMessage(msg);
         }
     }
 
@@ -17024,7 +16683,7 @@ fn makeReporter(ctx: *CliCtx, op_label: []const u8, timings_flag: bool) progress
 /// that work's time summed across threads rather than a slice of wall time.
 fn frontEndBreakdown(timing: anytype) [4]progress.SubTiming {
     return .{
-        .{ .name = "Parsing (summed across threads)", .ns = timing.tokenize_parse_ns },
+        .{ .name = "Parsing (summed)", .ns = timing.tokenize_parse_ns },
         .{ .name = "Name Resolution (summed)", .ns = timing.canonicalize_ns + timing.canonicalize_diagnostics_ns },
         .{ .name = "Type Inference (summed)", .ns = timing.type_checking_ns + timing.check_diagnostics_ns },
         .{ .name = "Module Compile-Time Eval (summed)", .ns = timing.module_compile_time_evaluation_ns },
@@ -17048,7 +16707,7 @@ fn compileTimeEvaluationBreakdown(timing: eval.CompileTimeFinalization.TimingSna
     };
 }
 
-const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (aggregate call time)";
+const aggregate_post_check_lowering_phase_name = "Post-Check Lowering (summed)";
 
 fn postCheckLoweringBreakdown(timing: lir.CheckedPipeline.TimingSnapshot) [25]progress.SubTiming {
     const classified_body_ns = timing.monotype_procedure_body_type_graph_ns +|
@@ -17195,7 +16854,7 @@ fn recordDevTestExecution(reporter: *progress.Reporter, timing: *const eval.test
     );
 }
 
-fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [28]progress.Counter {
+fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnostics) [29]progress.Counter {
     const counters = diagnostics.specialization;
     return .{
         .{ .name = "Template requests", .count = counters.template_requests },
@@ -17226,6 +16885,7 @@ fn monotypeSpecializationCounters(diagnostics: postcheck.Monotype.Lower.Diagnost
         .{ .name = "Nominal backing instantiations", .count = counters.nominal_backing_instantiations },
         .{ .name = "Missing evidence", .count = counters.evidence_missing },
         .{ .name = "Total specialization misses", .count = counters.template_misses +| counters.nested_misses },
+        .{ .name = "Object specialization cache hits", .count = counters.spec_cache_hits },
     };
 }
 
@@ -17740,7 +17400,7 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
     if (timing.program_finalization_ns != 0) {
         var subs_buf: [12]progress.SubTiming = undefined;
         reporter.recordCompletedWithBreakdown(
-            "Shared Lowering and Compile-Time Evaluation",
+            "Shared Lowering + Compile-Time Eval",
             timing.program_finalization_ns,
             .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
@@ -18372,7 +18032,7 @@ fn checkFileWithBuildEnvPreserved(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18390,6 +18050,7 @@ fn checkFileWithBuildEnvPreserved(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .track_watch_inputs = track_watch_inputs,
         .synthetic_default_app = synthetic_default_app,
@@ -18409,10 +18070,7 @@ fn checkFileWithBuildEnvPreserved(
         var warning_count: u32 = 0;
         for (drained) |mod| {
             for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => error_count += 1,
-                    .warning => warning_count += 1,
-                }
+                if (report.severity.isError()) error_count += 1 else warning_count += 1;
             }
         }
 
@@ -18461,10 +18119,7 @@ fn checkFileWithBuildEnvPreserved(
 
     for (drained) |mod| {
         for (mod.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
+            if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
 
@@ -18518,7 +18173,7 @@ fn checkFileWithBuildEnv(
     main_filepath: ?[]const u8,
     root_source_url: ?[]const u8,
     main_source_url: ?[]const u8,
-    _: bool,
+    timings: bool,
     cache_config: CacheConfig,
     max_threads: ?usize,
     resolution_config: compile.package_resolution.Config,
@@ -18533,6 +18188,7 @@ fn checkFileWithBuildEnv(
         .max_threads = max_threads,
         .no_cache = !cache_config.enabled,
         .verbose_cache = cache_config.verbose,
+        .timings = timings,
         .resolution_config = resolution_config,
         .source_dir_override = source_dir_override,
         .synthetic_default_app = synthetic_default_app,
@@ -18556,10 +18212,7 @@ fn checkFileWithBuildEnv(
         var warning_count: u32 = 0;
         for (drained) |mod| {
             for (mod.reports) |report| {
-                switch (report.severity) {
-                    .runtime_error, .fatal => error_count += 1,
-                    .warning => warning_count += 1,
-                }
+                if (report.severity.isError()) error_count += 1 else warning_count += 1;
             }
         }
 
@@ -18596,10 +18249,7 @@ fn checkFileWithBuildEnv(
     var warning_count: u32 = 0;
     for (drained) |mod| {
         for (mod.reports) |report| {
-            switch (report.severity) {
-                .runtime_error, .fatal => error_count += 1,
-                .warning => warning_count += 1,
-            }
+            if (report.severity.isError()) error_count += 1 else warning_count += 1;
         }
     }
 
@@ -18738,7 +18388,7 @@ fn rocCheckDefaultApp(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18793,7 +18443,7 @@ fn rocCheckDefaultAppPreserved(
         null,
         null,
         null,
-        args.time,
+        args.timings,
         cache_config,
         args.max_threads,
         resolutionConfigFromLimits(args.resolve_limits),
@@ -18902,7 +18552,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -18942,7 +18592,7 @@ fn rocCheck(ctx: *CliCtx, args_in: cli_args.CheckArgs, arg0: []const u8) RocChec
             args.main,
             args.root_source_url,
             args.main_source_url,
-            args.time,
+            args.timings,
             cache_config,
             args.max_threads,
             resolutionConfigFromLimits(args.resolve_limits),
@@ -19097,40 +18747,9 @@ fn handleConnection(ctx: *CliCtx, stream: std.Io.net.Stream, docs_dir: []const u
 
     // Read the file (10 MB cap per response).
     const file_content = std.Io.Dir.cwd().readFileAlloc(io, file_path, ctx.gpa, .limited(10 * 1024 * 1024)) catch |err| {
-        switch (err) {
-            error.FileNotFound => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.ConnectionResetByPeer,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileTooBig,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotOpenForReading,
-            error.OutOfMemory,
-            error.PathAlreadyExists,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.SocketUnconnected,
-            error.StreamTooLong,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
+        switch (base.read_file_failure.kind(err)) {
+            .file_not_found => try sendResponse(io, stream, "404 Not Found", "text/plain", "File Not Found"),
+            .out_of_memory, .other => try sendResponse(io, stream, "500 Internal Server Error", "text/plain", "Internal Server Error"),
         }
         return;
     };
@@ -19856,7 +19475,7 @@ fn rocDocs(ctx: *CliCtx, args_in: cli_args.DocsArgs) CliMainError!void {
         args.main,
         args.root_source_url,
         args.main_source_url,
-        args.time,
+        false,
         cache_config,
         null, // max_threads: use default (single-threaded for now)
         resolutionConfigFromLimits(args.resolve_limits),
@@ -20090,37 +19709,7 @@ fn writeDocsSite(
     try std.Io.Dir.cwd().deleteTree(ctx.io.std_io, base_output_dir);
 
     // Create output directory
-    std.Io.Dir.cwd().createDirPath(ctx.io.std_io, base_output_dir) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-    };
+    try createDirPathIfMissing(ctx.io.std_io, base_output_dir);
 
     // Load the language reference articles when requested. They are read from
     // `docs/langref` (relative to the current working directory).

@@ -39,9 +39,9 @@
 //! swept once they are a day old.
 //!
 //! As a defense against decompression bombs, each package bundle's expanded
-//! size is limited (platforms are exempt, since an app declares exactly one
-//! platform on purpose), and the combined content size attributable to any
-//! one of the root's direct dependencies is limited. Both limits count
+//! size is limited (platforms use the larger platform limit), and the
+//! combined content size attributable to any one of the root's direct
+//! dependencies is limited. Both limits count
 //! already-cached packages, so deleting the cache never changes whether a
 //! dependency graph is accepted.
 
@@ -66,13 +66,14 @@ const MAX_CONCURRENT_DOWNLOADS: usize = 8;
 /// Limits applied during resolution.
 pub const Config = struct {
     /// Maximum decompressed size for any single package bundle, in bytes.
-    /// Null means unlimited. Platform bundles are always exempt.
+    /// Null means unlimited. Platform bundles use the platform limit below.
     max_package_expanded_bytes: ?u64 = default_max_package_expanded_bytes,
     /// Maximum combined content size attributable to any single non-platform
     /// direct dependency of the root, in bytes. Null means unlimited.
     max_transitive_expanded_bytes: ?u64 = default_max_transitive_expanded_bytes,
     /// Maximum combined content size attributable to a direct platform
-    /// dependency of the root, in bytes. Null means unlimited.
+    /// dependency of the root, in bytes. Also caps each platform bundle during
+    /// extraction. Null explicitly disables both platform limits.
     max_platform_transitive_expanded_bytes: ?u64 = default_max_platform_transitive_expanded_bytes,
     /// Invocation-scoped `--replace-dep OLD NEW` requests, exactly as given
     /// on the command line. The resolver validates and canonicalizes them.
@@ -80,7 +81,7 @@ pub const Config = struct {
 
     pub const default_max_package_expanded_bytes: u64 = 10 * 1024 * 1024;
     pub const default_max_transitive_expanded_bytes: u64 = 100 * 1024 * 1024;
-    pub const default_max_platform_transitive_expanded_bytes: u64 = 512 * 1024 * 1024;
+    pub const default_max_platform_transitive_expanded_bytes: u64 = base.max_bundle_expanded_bytes;
 };
 
 /// One `--replace-dep OLD NEW` request, as written on the command line.
@@ -198,7 +199,7 @@ pub const Fetcher = struct {
     /// Fetch the bundle for `url` (whose trailing hash segment is `hash`),
     /// allocating all returned strings with `allocator`. Must be safe to call
     /// from multiple threads at once. `max_expanded_bytes` is the per-bundle
-    /// decompression limit to enforce (null for exempt bundles).
+    /// decompression limit to enforce (null for explicitly unlimited bundles).
     fetchUrlFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, url: []const u8, hash: []const u8, max_expanded_bytes: ?u64) FetchError!FetchedPackage,
     /// Load and scan the local package rooted at `root_file_abs`.
     loadLocalFn: *const fn (ctx: ?*anyopaque, allocator: Allocator, root_file_abs: []const u8) FetchError!FetchedPackage,
@@ -444,8 +445,8 @@ const Missing = struct {
     url: []const u8,
     hash: []const u8,
     /// True if any edge requiring this download is a platform dependency,
-    /// which exempts the bundle from the per-package size limit.
-    platform_exempt: bool,
+    /// which selects the larger platform limit for the bundle.
+    is_platform: bool,
 };
 
 const WalkResult = struct {
@@ -843,10 +844,10 @@ pub const Resolver = struct {
                                 .group = group,
                                 .url = follow.url,
                                 .hash = follow.hash,
-                                .platform_exempt = dep.is_platform,
+                                .is_platform = dep.is_platform,
                             });
                         } else if (dep.is_platform) {
-                            result.missing_urls.items[missing_gop.value_ptr.*].platform_exempt = true;
+                            result.missing_urls.items[missing_gop.value_ptr.*].is_platform = true;
                         }
                     }
                 } else {
@@ -1178,7 +1179,7 @@ pub const Resolver = struct {
             task.* = .{
                 .fetcher = self.fetcher,
                 .missing = missing,
-                .max_expanded_bytes = if (missing.platform_exempt) null else self.config.max_package_expanded_bytes,
+                .max_expanded_bytes = if (missing.is_platform) self.config.max_platform_transitive_expanded_bytes else self.config.max_package_expanded_bytes,
                 .task_arena = std.heap.ArenaAllocator.init(self.gpa),
                 .result = error.DownloadFailed,
             };
@@ -1214,9 +1215,14 @@ pub const Resolver = struct {
                 error.ExpandedSizeLimitExceeded => {
                     try self.addDiagnostic(
                         "Package Too Large",
-                        "The package at\n\n    {s}\n\nexpands to more than the per-package limit of {d} bytes.\n\n" ++
-                            "You can raise the limit with the --max-package-mb flag, or stop depending on this package.",
-                        .{ task.missing.url, self.config.max_package_expanded_bytes orelse 0 },
+                        "The {s} at\n\n    {s}\n\nexpands to more than the per-bundle limit of {d} bytes.\n\n" ++
+                            "You can raise the limit with the {s} flag, or stop depending on this package.",
+                        .{
+                            if (task.missing.is_platform) "platform" else "package",
+                            task.missing.url,
+                            task.max_expanded_bytes orelse unreachable,
+                            if (task.missing.is_platform) "--max-transitive-mb" else "--max-package-mb",
+                        },
                     );
                     continue;
                 },
@@ -1311,19 +1317,20 @@ pub const Resolver = struct {
     /// versions group by major, 0.X.Y versions group by 0.X (a 0.minor bump
     /// signals a breaking change), and versionless URLs only ever match
     /// themselves exactly. The url id is the prefix and suffix around the
-    /// version, so URLs that only differ in version share a key.
+    /// version, separated by NUL so a different version position cannot
+    /// produce the same key. URL validation rejects NUL before this point.
     fn urlGroupKey(self: *Resolver, parsed: base.url.ParsedUrl, spec: []const u8) Allocator.Error![]const u8 {
         if (!parsed.version.isPresent()) {
             return try std.fmt.allocPrint(self.arena(), "u@{s}", .{spec});
         }
         if (parsed.version.major == 0) {
-            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}{s}", .{
+            return try std.fmt.allocPrint(self.arena(), "v0.{d}@{s}\x00{s}", .{
                 parsed.version.minor,
                 parsed.urlIdPrefix(spec),
                 parsed.urlIdSuffix(spec),
             });
         }
-        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}{s}", .{
+        return try std.fmt.allocPrint(self.arena(), "v{d}@{s}\x00{s}", .{
             parsed.version.major,
             parsed.urlIdPrefix(spec),
             parsed.urlIdSuffix(spec),
@@ -2172,11 +2179,7 @@ pub const CtxFetcher = struct {
         self.writeSidecar(allocator, sidecar_path, scanned, recorded_expanded) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             // A missing sidecar only costs a rescan next build.
-            error.AccessDenied,
-            error.FileNotFound,
-            error.IoError,
-            error.WriteFailed,
-            => {},
+            else => {},
         };
 
         return scanned;
@@ -2211,7 +2214,7 @@ pub const CtxFetcher = struct {
         const staging_dir = try self.stagingDirPath(allocator, package_dir);
         self.fs.createDir(staging_dir) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied, error.IoError => return error.DownloadFailed,
+            else => return error.DownloadFailed,
         };
 
         const expanded_bytes = self.fs.fetchUrl(self.gpa, url, staging_dir, max_expanded_bytes) catch |err| {
@@ -2312,10 +2315,7 @@ pub const CtxFetcher = struct {
         const self: *CtxFetcher = @ptrCast(@alignCast(ctx.?));
         const materialized = compiler_platforms.materialize(allocator, self.fs, self.compiler_owned_source_dir, platform) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.AccessDenied,
-            error.IoError,
-            error.NoHomeDirectory,
-            => return error.Unsupported,
+            else => return error.Unsupported,
         };
         const src = try self.readNormalizedSource(allocator, materialized.root_file);
         var scanned = try scanHeaderSource(allocator, self.gpa, materialized.root_file, src);
@@ -2732,6 +2732,64 @@ test "selects the highest minor.patch within a major version" {
     }
 }
 
+test "URL group keys distinguish where the version was removed" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    const good = "https://good.com/p/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_host = "https://1.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+    const good_key = try resolver.urlGroupKey(try base.url.parseUrlPath(good), good);
+    const other_key = try resolver.urlGroupKey(try base.url.parseUrlPath(other_host), other_host);
+    try std.testing.expectEqualStrings("v1@good.com/p\x00", good_key);
+    try std.testing.expectEqualStrings("v1@\x00good.com/p", other_key);
+
+    const good_zero = "https://good.com/p/0.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_zero = "https://0.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+    const good_zero_key = try resolver.urlGroupKey(try base.url.parseUrlPath(good_zero), good_zero);
+    const other_zero_key = try resolver.urlGroupKey(try base.url.parseUrlPath(other_zero), other_zero);
+    try std.testing.expectEqualStrings("v0.2@good.com/p\x00", good_zero_key);
+    try std.testing.expectEqualStrings("v0.2@\x00good.com/p", other_zero_key);
+}
+
+test "transitive mention on another host does not replace a package" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const a_url = "https://example.com/a/1.0.0/hashA.tar.zst";
+    const b_url = "https://example.com/b/1.0.0/hashB.tar.zst";
+    const good = "https://good.com/p/1.2.3/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf.tar.zst";
+    const other_host = "https://1.2.9good.com/p/5ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXg.tar.zst";
+
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{
+            .{ .alias = "a", .spec = a_url, .is_platform = false },
+            .{ .alias = "b", .spec = b_url, .is_platform = false },
+        },
+    });
+    try registry.urls.put(a_url, .{ .deps = &.{.{ .alias = "p", .spec = good, .is_platform = false }} });
+    try registry.urls.put(b_url, .{ .deps = &.{.{ .alias = "other", .spec = other_host, .is_platform = false }} });
+    try registry.urls.put(good, .{});
+    try registry.urls.put(other_host, .{});
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    var resolved = try resolver.resolve("/app/main.roc");
+    defer resolved.deinit();
+
+    try std.testing.expectEqual(@as(usize, 5), resolved.packages.len);
+    const a = testFindPackage(&resolved, a_url).?;
+    const b = testFindPackage(&resolved, b_url).?;
+    try std.testing.expectEqualStrings(good, resolved.packages[a.deps[0].target].identity);
+    try std.testing.expectEqualStrings(other_host, resolved.packages[b.deps[0].target].identity);
+}
+
 test "different major versions coexist as separate packages" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
@@ -3065,7 +3123,7 @@ test "platform dependencies have a larger transitive size limit" {
     try std.testing.expect(std.mem.find(u8, diagnostic.message, package_url) != null);
 }
 
-test "per-package size limit is enforced for packages but not platforms" {
+test "platform bundles use the larger platform size limit" {
     const gpa = std.testing.allocator;
     var registry = TestRegistry.init(gpa);
     defer registry.deinit();
@@ -3080,12 +3138,13 @@ test "per-package size limit is enforced for packages but not platforms" {
             .{ .alias = "a", .spec = a_url, .is_platform = false },
         },
     });
-    // Both are bigger than the per-package limit; only the package errors.
+    // Both exceed the package cap but fit within the platform cap.
     try registry.urls.put(platform_url, .{ .kind = .platform, .content_bytes = 9000 });
     try registry.urls.put(a_url, .{ .content_bytes = 9000 });
 
     var resolver = Resolver.init(gpa, registry.fetcher(), .{
         .max_package_expanded_bytes = 5000,
+        .max_platform_transitive_expanded_bytes = 10000,
         .max_transitive_expanded_bytes = null,
     });
     defer resolver.deinit();
@@ -3096,6 +3155,43 @@ test "per-package size limit is enforced for packages but not platforms" {
     try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, a_url) != null);
     try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-package-mb") != null);
+}
+
+test "platform bundle extraction limit rejects oversized downloads and permits explicit opt-out" {
+    const gpa = std.testing.allocator;
+    const platform_url = "https://example.com/pf/1.0.0/hashPf.tar.zst";
+    for ([_]?u64{ base.max_bundle_expanded_bytes, 5000, null }) |limit| {
+        var registry = TestRegistry.init(gpa);
+        defer registry.deinit();
+        try registry.locals.put("/app/main.roc", .{
+            .kind = .app,
+            .deps = &.{.{ .alias = "pf", .spec = platform_url, .is_platform = true }},
+        });
+        try registry.urls.put(platform_url, .{
+            .kind = .platform,
+            .content_bytes = if (limit) |max| max + 1 else base.max_bundle_expanded_bytes + 1,
+        });
+        var resolver = Resolver.init(gpa, registry.fetcher(), .{
+            .max_platform_transitive_expanded_bytes = limit,
+        });
+        defer resolver.deinit();
+        if (limit) |max| {
+            try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+            try std.testing.expectEqual(@as(usize, 1), resolver.diagnostics.items.len);
+            const diagnostic = resolver.diagnostics.items[0];
+            try std.testing.expectEqualStrings("Package Too Large", diagnostic.title);
+            try std.testing.expect(std.mem.find(u8, diagnostic.message, "--max-transitive-mb") != null);
+            var size_buf: [32]u8 = undefined;
+            const size = try std.fmt.bufPrint(&size_buf, "{d} bytes", .{max});
+            try std.testing.expect(std.mem.find(u8, diagnostic.message, size) != null);
+            // Failed downloads never enter the graph for a later transitive check.
+            try std.testing.expectEqual(@as(usize, 0), resolver.url_nodes.count());
+        } else {
+            var resolved = try resolver.resolve("/app/main.roc");
+            defer resolved.deinit();
+            try std.testing.expectEqual(@as(usize, 0), resolver.diagnostics.items.len);
+        }
+    }
 }
 
 test "platform targets must be marked and packages may not depend on apps" {
@@ -3664,6 +3760,26 @@ test "insecure URLs are rejected" {
         .kind = .package,
         .deps = &.{.{ .alias = "a", .spec = "http://example.com/a/1.0.0/hashA.tar.zst", .is_platform = false }},
     });
+
+    var resolver = Resolver.init(gpa, registry.fetcher(), .{});
+    defer resolver.deinit();
+
+    try std.testing.expectError(error.ResolutionFailed, resolver.resolve("/app/main.roc"));
+    try std.testing.expectEqualStrings("Insecure Package URL", resolver.diagnostics.items[0].title);
+}
+
+test "URLs containing the group-key separator are rejected before download" {
+    const gpa = std.testing.allocator;
+    var registry = TestRegistry.init(gpa);
+    defer registry.deinit();
+
+    const invalid_url = "https://example.com/p\x00q/1.0.0/hashA.tar.zst";
+    try registry.locals.put("/app/main.roc", .{
+        .kind = .package,
+        .deps = &.{.{ .alias = "a", .spec = invalid_url, .is_platform = false }},
+    });
+    // This would resolve if the invalid URL were allowed into the download queue.
+    try registry.urls.put(invalid_url, .{});
 
     var resolver = Resolver.init(gpa, registry.fetcher(), .{});
     defer resolver.deinit();

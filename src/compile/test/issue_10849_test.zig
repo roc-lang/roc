@@ -70,7 +70,7 @@ fn countReachableOps(
                 const retained = store.getLocal(stmt.incref.value);
                 if (layouts.getLayout(retained.layout_idx).tag == .list) counts.list_retain += 1;
             }
-            try lir.BodyClone.appendSuccessors(@constCast(store), &stmt_work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &stmt_work, stmt_id, allocator);
         }
     }
     return counts;

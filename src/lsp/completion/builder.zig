@@ -37,9 +37,7 @@ const MethodOwnerLookup = struct {
 
 fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
     return switch (pattern) {
-        .assign => |p| p.ident,
-        .var_assign => |p| p.ident,
-        .as => |p| p.ident,
+        inline .assign, .var_assign, .as => |p| p.ident,
         .applied_tag,
         .nominal,
         .nominal_external,
@@ -57,42 +55,13 @@ fn patternIdent(pattern: CIR.Pattern) ?base.Ident.Idx {
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
-    };
-}
-
-fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
-    return switch (statement) {
-        .s_decl => |decl| decl.pattern,
-        .s_var => |var_stmt| var_stmt.pattern_idx,
-        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
 fn statementTypeHeader(statement: CIR.Statement) ?CIR.TypeHeader.Idx {
     return switch (statement) {
-        .s_alias_decl => |alias| alias.header,
-        .s_nominal_decl => |nominal| nominal.header,
-        .s_where_alias_decl => |where_alias| where_alias.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |alias| alias.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -725,7 +694,7 @@ pub const CompletionBuilder = struct {
         self.logDebug("addRecordFieldCompletions: checking {d} statements", .{statements_slice.len});
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -853,21 +822,6 @@ pub const CompletionBuilder = struct {
             }
             break;
         }
-    }
-
-    /// Add record field completions for a named definition in a specific module.
-    ///
-    /// This is used for module member accesses (e.g., Module.value.) where the
-    /// member is a record. We resolve the member's type from the module's
-    /// definition table, then extract its record fields.
-    pub fn addRecordFieldsForModuleMember(self: *CompletionBuilder, module_env: *ModuleEnv, member_name: []const u8) Allocator.Error!bool {
-        if (module_lookup.findDefinitionByName(module_env, member_name)) |def_info| {
-            const type_var = ModuleEnv.varFrom(def_info.pattern_idx);
-            try self.addFieldsFromTypeVar(module_env, type_var);
-            return true;
-        }
-
-        return false;
     }
 
     /// Resolve a record field's type variable from a receiver type.
@@ -1087,7 +1041,7 @@ pub const CompletionBuilder = struct {
             self.logDebug("addMethodCompletions: checking {d} statements", .{statements_slice.len});
             for (statements_slice) |stmt_idx| {
                 const stmt = module_env.store.getSourceStatement(stmt_idx);
-                const pattern_idx = statementPattern(stmt) orelse continue;
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
                 const pattern = module_env.store.getSourcePattern(pattern_idx);
                 const ident_idx = patternIdent(pattern) orelse continue;
@@ -1162,16 +1116,10 @@ pub const CompletionBuilder = struct {
             }
 
             switch (content) {
-                .flex => |flex| {
+                inline .flex, .rigid => |flex| {
                     self.logDebug("addMethodsFromTypeVar: flex constraints", .{});
                     // Extract method names from flex constraints
                     try self.addMethodsFromConstraints(module_env, flex.constraints);
-                    break;
-                },
-                .rigid => |rigid| {
-                    self.logDebug("addMethodsFromTypeVar: rigid constraints", .{});
-                    // Extract method names from rigid constraints
-                    try self.addMethodsFromConstraints(module_env, rigid.constraints);
                     break;
                 },
                 .alias => |alias| {
@@ -1346,7 +1294,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;
@@ -1384,7 +1332,7 @@ pub const CompletionBuilder = struct {
         const statements_slice = module_env.store.sliceStatements(module_env.all_statements);
         for (statements_slice) |stmt_idx| {
             const stmt = module_env.store.getSourceStatement(stmt_idx);
-            const pattern_idx = statementPattern(stmt) orelse continue;
+            const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse continue;
 
             const pattern = module_env.store.getSourcePattern(pattern_idx);
             const ident_idx = patternIdent(pattern) orelse continue;

@@ -118,7 +118,7 @@ fn countStaticListReads(result: *const lir.Program.Result) usize {
         if (stmt != .assign_literal) continue;
         switch (stmt.assign_literal.value) {
             .static_data, .bytes_literal => count += 1,
-            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+            .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
         }
     }
     return count;

@@ -2787,7 +2787,10 @@ test "Linux watching does not register watches for unrelated build, cache, and V
     try std.testing.expect(watch_descriptors.len >= 1);
 
     for (watch_descriptors) |watch| {
-        var components = std.mem.splitScalar(u8, watch.path, std.fs.path.sep);
+        // Only components below the watched root are checked: the root's own
+        // ancestors may legitimately be named like one of the unrelated trees.
+        try std.testing.expect(std.mem.startsWith(u8, watch.path, temp_path));
+        var components = std.mem.splitScalar(u8, watch.path[temp_path.len..], std.fs.path.sep);
         while (components.next()) |component| {
             for (unrelated_trees) |tree| {
                 try std.testing.expect(!std.mem.eql(u8, component, tree));

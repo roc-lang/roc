@@ -286,7 +286,7 @@ pub const TupleIdx = StructIdx;
 /// A byte value precomputed for both pointer widths, keeping the layout store
 /// target-independent: both targets' values are stored and the right one is a
 /// direct array read once the target is known (no per-read computation). Indexed
-/// by `@intFromEnum(TargetUsize)`—`[0]` is the 32-bit target, `[1]` the 64-bit.
+/// by `@backingInt(TargetUsize)`—`[0]` is the 32-bit target, `[1]` the 64-bit.
 /// Computing both directly (rather than a pointer count) accounts for the
 /// pointer-width-dependent alignment padding exactly.
 pub fn WidthValues(comptime T: type) type {
@@ -428,11 +428,6 @@ pub const TagUnionData = struct {
         }
     }
 
-    /// Get the alignment requirement for this discriminant.
-    pub fn discriminantAlignment(self: TagUnionData) std.mem.Alignment {
-        return alignmentForDiscriminantSize(self.discriminant_size);
-    }
-
     /// Get the alignment requirement for a given discriminant size.
     /// Can be called before a TagUnionData is created.
     pub fn alignmentForDiscriminantSize(size: u8) std.mem.Alignment {
@@ -455,24 +450,6 @@ pub const TagUnionData = struct {
     /// it is the width every backend and glue read back for the layout.
     pub fn discriminantSize(variant_count: usize) u8 {
         return if (variant_count <= 1) 0 else if (variant_count <= 256) 1 else if (variant_count <= 65536) 2 else if (variant_count <= (1 << 32)) 4 else 8;
-    }
-
-    /// Get the integer precision for this discriminant (always unsigned).
-    pub fn discriminantPrecision(self: TagUnionData) types.Int.Precision {
-        return precisionForDiscriminantSize(self.discriminant_size);
-    }
-
-    /// Get the integer precision for a given discriminant size (always unsigned).
-    /// Can be called before a TagUnionData is created.
-    pub fn precisionForDiscriminantSize(size: u8) types.Int.Precision {
-        return switch (size) {
-            0 => .u8,
-            1 => .u8,
-            2 => .u16,
-            4 => .u32,
-            8 => .u64,
-            else => unreachable, // discriminant_size is 0, 1, 2, 4, or 8
-        };
     }
 };
 
@@ -617,19 +594,6 @@ pub const ListInfo = struct {
             return self.count - self.idx;
         }
     };
-
-    /// Create an iterator for traversing list elements.
-    /// The caller should obtain base_ptr and count from RocList methods:
-    ///   - base_ptr from list.getAllocationDataPtr(ops)
-    ///   - count from list.getAllocationElementCount(self.contains_refcounted, ops)
-    pub fn iterateElements(self: ListInfo, base_ptr: [*]u8, count: usize) ElementIterator {
-        return ElementIterator{
-            .base = base_ptr,
-            .elem_size = self.elem_size,
-            .elem_layout = self.elem_layout,
-            .count = count,
-        };
-    }
 };
 
 /// Bundled information about a box's element layout
@@ -756,18 +720,13 @@ pub const Layout = packed struct {
             .scalar => switch (self.getScalar().tag) {
                 .int => self.getScalar().getInt().alignment(),
                 .frac => self.getScalar().getFrac().alignment(),
-                .str => target_usize.alignment(),
-                .opaque_ptr => target_usize.alignment(),
+                .str, .opaque_ptr => target_usize.alignment(),
                 .vector => .@"16",
             },
-            .box, .box_of_zst, .erased_box => target_usize.alignment(),
-            .list, .list_of_zst => target_usize.alignment(),
-            .erased_callable => target_usize.alignment(),
+            .box, .box_of_zst, .erased_box, .list, .list_of_zst, .erased_callable, .closure, .ptr => target_usize.alignment(),
             .struct_ => self.getStruct().sort_key.alignment(target_usize),
             .tag_union => self.getTagUnion().sort_key.alignment(target_usize),
-            .closure => target_usize.alignment(),
             .zst => std.mem.Alignment.@"1",
-            .ptr => target_usize.alignment(),
         };
     }
 
@@ -892,22 +851,6 @@ pub const Layout = packed struct {
         return .{ .data = packData(TagUnionLayout{ .sort_key = tu_sort_key, .idx = tu_idx }), .tag = .tag_union };
     }
 
-    /// Check if a layout represents a heap-allocated type that needs refcounting
-    pub fn isRefcounted(self: Layout) bool {
-        return switch (self.tag) {
-            .scalar => switch (self.getScalar().tag) {
-                .str => true, // RocStr needs refcounting
-                .int, .frac, .opaque_ptr, .vector => false,
-            },
-            .list, .list_of_zst => true, // Lists need refcounting
-            .box => true, // Boxes need refcounting
-            .box_of_zst => false, // Box({}) is represented as a null pointer, not an allocation
-            .erased_box => true, // Descriptor-backed erased boxes are ordinary refcounted allocations
-            .erased_callable => true, // Boxed erased functions need refcounting
-            .struct_, .closure, .zst, .tag_union, .ptr => false,
-        };
-    }
-
     /// Compare two layouts for equality.
     /// This compares only the active variant based on the tag, avoiding
     /// comparison of uninitialized union bytes that would trigger Valgrind warnings.
@@ -921,9 +864,8 @@ pub const Layout = packed struct {
                 .opaque_ptr => true,
                 .vector => self.getScalar().getVector() == other.getScalar().getVector(),
             },
-            .box => self.getIdx() == other.getIdx(),
+            .box, .list, .ptr => self.getIdx() == other.getIdx(),
             .box_of_zst, .erased_box => true, // No additional data
-            .list => self.getIdx() == other.getIdx(),
             .list_of_zst => true, // No additional data
             .struct_ => self.getStruct().sort_key == other.getStruct().sort_key and
                 self.getStruct().idx.int_idx == other.getStruct().idx.int_idx,
@@ -932,7 +874,6 @@ pub const Layout = packed struct {
             .zst => true, // No additional data
             .tag_union => self.getTagUnion().sort_key == other.getTagUnion().sort_key and
                 self.getTagUnion().idx.int_idx == other.getTagUnion().idx.int_idx,
-            .ptr => self.getIdx() == other.getIdx(),
         };
     }
 };

@@ -16,16 +16,18 @@ const can = @import("can");
 const base = @import("base");
 const CirVisitor = @import("cir_visitor.zig").CirVisitor;
 const VisitAction = @import("cir_visitor.zig").VisitAction;
-const line_info = @import("line_info.zig");
+const position = @import("position.zig");
 
 const Token = tokenize.Token;
-const LineInfo = line_info.LineInfo;
+const LineOffsets = position.LineOffsets;
 const ModuleEnv = can.ModuleEnv;
 const AST = parse.AST;
 const CIR = can.CIR;
 const Region = base.Region;
 
-/// Semantic token indices matching TOKEN_TYPES in capabilities.zig.
+/// The semantic token types, named as the LSP specification spells them. A
+/// token is encoded as its type's value, and `capabilities.TOKEN_TYPES` is the
+/// legend generated from these names in value order.
 pub const SemanticType = enum(u32) {
     namespace = 0, // module names
     type = 1, // UpperIdent, type keywords
@@ -102,7 +104,7 @@ fn tokenSemanticTypeAt(tags: []const Token.Tag, token_index: usize) ?u32 {
 pub fn extractSemanticTokens(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
 ) Allocator.Error![]SemanticToken {
     return extractSemanticTokensWithImports(allocator, source, info, null);
 }
@@ -113,7 +115,7 @@ pub fn extractSemanticTokens(
 pub fn extractSemanticTokensWithImports(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     imported_envs: ?[]*ModuleEnv,
 ) Allocator.Error![]SemanticToken {
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
@@ -159,7 +161,7 @@ pub fn extractSemanticTokensWithImports(
 pub fn extractSemanticTokensFromChecked(
     allocator: std.mem.Allocator,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     module_env: *ModuleEnv,
 ) Allocator.Error![]SemanticToken {
     var parse_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
@@ -284,7 +286,7 @@ const CheckedClassifier = struct {
                     .underscore,
                     .runtime_error,
                     => {},
-                    .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+                    .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
                 }
                 return .continue_traversal;
             }
@@ -579,7 +581,7 @@ const CheckedClassifier = struct {
             .e_hosted_lambda,
             .e_run_low_level,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
         return .continue_traversal;
     }
@@ -587,9 +589,7 @@ const CheckedClassifier = struct {
     fn visitPattern(self: *CheckedClassifier, pattern_idx: CIR.Pattern.Idx, pattern: CIR.Pattern) VisitAction {
         const region = self.module_env.store.getPatternRegion(pattern_idx);
         switch (pattern) {
-            .assign => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
-            .var_assign => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
-            .as => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
+            inline .assign, .var_assign, .as => |binding| self.setIdent(region, binding.ident, self.patternClass(pattern_idx)),
             .applied_tag => |tag| self.setIdent(region, tag.name, .enum_member),
             .record_destructure => |record| {
                 for (self.module_env.store.sliceRecordDestructs(record.destructs)) |field_idx| {
@@ -612,7 +612,7 @@ const CheckedClassifier = struct {
             .underscore,
             .runtime_error,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
         return .continue_traversal;
     }
@@ -672,7 +672,7 @@ fn emitTokens(
     ast: *const AST,
     classes: []const Class,
     source: []const u8,
-    info: *const LineInfo,
+    info: *const LineOffsets,
     out: *std.ArrayListUnmanaged(SemanticToken),
 ) Allocator.Error!void {
     const tags = ast.tokens.tokens.items(.tag);
@@ -730,15 +730,15 @@ fn emitTokens(
 fn appendSpan(
     allocator: Allocator,
     out: *std.ArrayListUnmanaged(SemanticToken),
-    info: *const LineInfo,
+    info: *const LineOffsets,
     start: u32,
     end: u32,
     semantic_type: u32,
     modifiers: u32,
 ) Allocator.Error!void {
     if (start >= end) return;
-    const start_pos = info.positionFromOffset(start) orelse return;
-    const end_pos = info.positionFromOffset(end) orelse return;
+    const start_pos = position.offsetToPosition(start, info);
+    const end_pos = position.offsetToPosition(end, info);
     // LSP lengths are UTF-16 code units. A token that spans lines keeps its byte
     // length, which is what clients without multiline support clip anyway.
     const length = if (end_pos.line == start_pos.line and end_pos.character > start_pos.character)
@@ -896,9 +896,7 @@ const Classifier = struct {
                 if (v.body) |body| try self.walkExpr(body);
                 try self.bind(v.name, .variable);
             },
-            .expr => |e| try self.walkExpr(e.expr),
-            .crash => |e| try self.walkExpr(e.expr),
-            .dbg => |e| try self.walkExpr(e.expr),
+            inline .expr, .crash, .dbg => |e| try self.walkExpr(e.expr),
             .expect => |e| try self.walkExpr(e.body),
             .@"return" => |e| try self.walkExpr(e.expr),
             .@"for" => |f| try self.walkFor(f.patt, f.expr, f.body),

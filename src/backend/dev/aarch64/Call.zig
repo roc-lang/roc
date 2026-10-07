@@ -17,9 +17,6 @@ pub const BASE_PTR_REG: GeneralReg = .FP; // X29
 /// Stack pointer register
 pub const STACK_PTR_REG: GeneralReg = .ZRSP; // SP (encoded as 31)
 
-/// Link register (return address)
-pub const LINK_REG: GeneralReg = .LR; // X30
-
 /// Registers used for passing integer/pointer arguments (in order)
 pub const GENERAL_PARAM_REGS = [_]GeneralReg{
     .X0, // 1st argument
@@ -54,10 +51,6 @@ pub const FLOAT_RETURN_REGS = [_]FloatReg{
     .V0, .V1, .V2, .V3, .V4, .V5, .V6, .V7,
 };
 
-/// Indirect result location register
-/// When a function returns a large aggregate, X8 points to the memory location
-pub const INDIRECT_RESULT_REG: GeneralReg = .XR; // X8
-
 /// Caller-saved (volatile) general registers
 pub const CALLER_SAVED_GENERAL = [_]GeneralReg{
     .X0, .X1, .X2,  .X3,  .X4,  .X5,  .X6,  .X7,
@@ -88,9 +81,6 @@ pub const SHADOW_SPACE_SIZE: u8 = 0;
 
 /// Stack alignment requirement (16 bytes)
 pub const STACK_ALIGNMENT: u8 = 16;
-
-/// Platform register (reserved, do not use)
-pub const PLATFORM_REG: GeneralReg = .PR; // X18
 
 /// Check if a general register is callee-saved
 pub fn isCalleeSaved(reg: GeneralReg) bool {

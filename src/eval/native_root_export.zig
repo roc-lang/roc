@@ -6,6 +6,7 @@
 //! returns; the returned exports then own every reachable byte independently.
 
 const std = @import("std");
+const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -452,13 +453,18 @@ const Builder = struct {
         for (set.entries, 0..) |entry, recipe_index| {
             if (entry.entry != resolved.proc) continue;
             if (!try self.matchesBoxyEnvironment(entry, .{ .ptr = resolved.capture_ptr })) continue;
+            // The program's erased capture prefix stays zeroed: a static value
+            // is never dropped, so nothing reads the header it reserves.
+            const prefix = self.program.erased_capture_prefix;
+            const capture_offset = builtins.erased_callable.capture_offset + prefix;
+            const capture_size = prefix + self.size(entry.capture_layout);
             const result = try self.reserveAllocation(.{
                 .address = address,
                 .plan = job.plan,
                 .layout_idx = job.layout_idx,
                 .count = 1,
                 .kind = .erased,
-            }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(self.size(entry.capture_layout)) else builtins.erased_callable.payloadSize(self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            }, if (entry.boxy != null) builtins.erased_callable.compilerPayloadSize(capture_size) else builtins.erased_callable.payloadSize(capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             const proc_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(resolved.proc).identity);
@@ -466,14 +472,14 @@ const Builder = struct {
                 .offset = result.dest.offset,
                 .target_symbol_name = proc_name,
                 .kind = .function_pointer,
-                .callable_capture_offset = builtins.erased_callable.capture_offset,
+                .callable_capture_offset = capture_offset,
                 .procedure = resolved.proc,
                 .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null,
             });
             const on_drop: ?layout.RcHelperKey = switch (entry.on_drop) {
                 .none => null,
                 .rc_helper => |helper| helper,
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable lacks durable producer drop authority"),
+                .boxy_capture => invariant("frozen callable lacks durable producer drop authority"),
             };
             if (on_drop) |helper| {
                 try self.node(result.dest).relocations.append(self.allocator, .{
@@ -486,15 +492,15 @@ const Builder = struct {
             if (entry.boxy) |boxy| {
                 for (boxy.captures) |capture| {
                     const field = self.boxyCaptureLocation(entry.capture_layout, capture.slot);
-                    const dest = result.dest.offsetBy(builtins.erased_callable.capture_offset + field.offset);
+                    const dest = result.dest.offsetBy(capture_offset + field.offset);
                     switch (capture.value) {
                         .value => |plan| try self.enqueue(plan, field.idx, .{ .ptr = resolved.capture_ptr + field.offset }, dest, .value),
                         .descriptor, .contents_descriptor => |id| try self.relocate(dest, try self.frozenDescriptor(id)),
                         .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
                     }
                 }
-                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(self.size(entry.capture_layout))), try self.frozenDescriptor(id));
-            } else try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(builtins.erased_callable.capture_offset));
+                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(builtins.erased_callable.capture_offset + builtins.erased_callable.compilerMetadataOffset(capture_size)), try self.frozenDescriptor(id));
+            } else try self.captures(entry.captures, entry.capture_layout, .{ .ptr = resolved.capture_ptr }, result.dest.offsetBy(capture_offset));
             return;
         }
         invariant("native erased callable did not match an explicit entry");
@@ -558,7 +564,7 @@ fn missingCallableResolver(_: ?*anyopaque, _: [*]u8) error{RuntimeError}!Callabl
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .debug) std.debug.panic("native root export invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .debug) compilerInvariant("native root export invariant violated: {s}", .{message});
     unreachable;
 }
 

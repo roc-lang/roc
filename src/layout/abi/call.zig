@@ -735,7 +735,7 @@ fn placementWin64(
 ) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
     switch (x86_64.classifyWindows(store, idx)) {
-        .memory => return .indirect,
+        .memory, .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
         .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
         .sse => return onePiece(arena, .float, 0, @intCast(@min(@as(u32, 16), size)), .none),
         // Win64 passes a scalar 128-bit integer in memory but returns it in
@@ -756,7 +756,6 @@ fn placementWin64(
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
-        .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
     }
 }
 

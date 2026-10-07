@@ -55,11 +55,6 @@ pub const GeneralReg = enum(u4) {
         return self.rexB();
     }
 
-    /// Get the REX.X bit value for this register (when used in SIB.index)
-    pub fn rexX(self: GeneralReg) u1 {
-        return self.rexB();
-    }
-
     /// Get the 64-bit register name (e.g., "rax", "r8")
     pub fn name64(self: GeneralReg) []const u8 {
         return switch (self) {
@@ -79,72 +74,6 @@ pub const GeneralReg = enum(u4) {
             .R13 => "r13",
             .R14 => "r14",
             .R15 => "r15",
-        };
-    }
-
-    /// Get the 32-bit register name (e.g., "eax", "r8d")
-    pub fn name32(self: GeneralReg) []const u8 {
-        return switch (self) {
-            .RAX => "eax",
-            .RCX => "ecx",
-            .RDX => "edx",
-            .RBX => "ebx",
-            .RSP => "esp",
-            .RBP => "ebp",
-            .RSI => "esi",
-            .RDI => "edi",
-            .R8 => "r8d",
-            .R9 => "r9d",
-            .R10 => "r10d",
-            .R11 => "r11d",
-            .R12 => "r12d",
-            .R13 => "r13d",
-            .R14 => "r14d",
-            .R15 => "r15d",
-        };
-    }
-
-    /// Get the 16-bit register name (e.g., "ax", "r8w")
-    pub fn name16(self: GeneralReg) []const u8 {
-        return switch (self) {
-            .RAX => "ax",
-            .RCX => "cx",
-            .RDX => "dx",
-            .RBX => "bx",
-            .RSP => "sp",
-            .RBP => "bp",
-            .RSI => "si",
-            .RDI => "di",
-            .R8 => "r8w",
-            .R9 => "r9w",
-            .R10 => "r10w",
-            .R11 => "r11w",
-            .R12 => "r12w",
-            .R13 => "r13w",
-            .R14 => "r14w",
-            .R15 => "r15w",
-        };
-    }
-
-    /// Get the 8-bit register name (e.g., "al", "r8b")
-    pub fn name8(self: GeneralReg) []const u8 {
-        return switch (self) {
-            .RAX => "al",
-            .RCX => "cl",
-            .RDX => "dl",
-            .RBX => "bl",
-            .RSP => "spl",
-            .RBP => "bpl",
-            .RSI => "sil",
-            .RDI => "dil",
-            .R8 => "r8b",
-            .R9 => "r9b",
-            .R10 => "r10b",
-            .R11 => "r11b",
-            .R12 => "r12b",
-            .R13 => "r13b",
-            .R14 => "r14b",
-            .R15 => "r15b",
         };
     }
 };

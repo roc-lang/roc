@@ -113,6 +113,11 @@ pub const DescriptorFlags = packed struct(u8) {
     /// Definition-site implicit annotation openness. Codec derivation may
     /// close this tail before generalization; fresh uses do not inherit it.
     annotation_tag_ext: bool = false,
+    /// The class is a frozen copy of a settled ground instance that several
+    /// uses share (design.md "Concrete dispatch replay"). Its descriptor
+    /// never changes while checking: merges keep it, and writes aimed at a
+    /// member detach that member instead.
+    frozen: bool = false,
     /// This class is structure written below the root of a nominal
     /// declaration's backing, reached by opening that declaration rather than
     /// by substituting one of its formals. The declaration fixes this
@@ -124,7 +129,18 @@ pub const DescriptorFlags = packed struct(u8) {
     /// gain a tag (design.md "Polarity"). Instantiation never copies it, so
     /// uses of the definition widen freely.
     bounded_row_ext: bool = false,
-    _unused: u3 = 0,
+    /// A defaulting decision—literal defaulting or a specialization default
+    /// materialization—chose this class's type: the class held a variable
+    /// that was still undetermined when its default was committed. The
+    /// checker keeps that variable's pre-default content, so diagnostics
+    /// describe the type the program wrote rather than the default owner.
+    /// See design.md's "Diagnostics About Defaulted Types" section.
+    default_decided: bool = false,
+    /// A placeholder for a requirement callable that a use's instantiation
+    /// deferred copying (design.md "Whole-use replay"). It stands only in
+    /// requirement records; the checker links it to the callable's copy
+    /// before anything reads it, and reading it unlinked is a compiler bug.
+    deferred_callable: bool = false,
 };
 
 /// A type descriptor
@@ -270,9 +286,7 @@ pub const Content = union(enum(u8)) {
         switch (content) {
             .structure => |flat_type| {
                 switch (flat_type) {
-                    .fn_pure => |func| return func,
-                    .fn_effectful => |func| return func,
-                    .fn_unbound => |func| return func,
+                    inline .fn_pure, .fn_effectful, .fn_unbound => |func| return func,
                     .record,
                     .tuple,
                     .nominal_type,
@@ -319,13 +333,6 @@ pub const Flex = struct {
         return .{
             .name = null,
             .constraints = StaticDispatchConstraint.SafeList.Range.empty(),
-        };
-    }
-
-    pub fn withName(self: Flex, name: ?Ident.Idx) Flex {
-        return .{
-            .name = name,
-            .constraints = self.constraints,
         };
     }
 
@@ -401,26 +408,9 @@ pub const SourceDecl = packed struct(u32) {
 
     pub const none: SourceDecl = .{ .statement = 0, .present = false, .builtin_origin = false };
 
-    pub fn fromOptional(source_decl: ?u32) SourceDecl {
-        return fromOptionalWithBuiltinOrigin(source_decl, false);
-    }
-
-    pub fn fromOptionalChecked(source_decl: ?u32) std.mem.Allocator.Error!SourceDecl {
-        return fromOptionalWithBuiltinOriginChecked(source_decl, false);
-    }
-
-    pub fn fromOptionalWithBuiltinOrigin(source_decl: ?u32, builtin_origin: bool) SourceDecl {
-        const statement = source_decl orelse return .none;
-        return fromStatementWithBuiltinOrigin(statement, builtin_origin);
-    }
-
     pub fn fromOptionalWithBuiltinOriginChecked(source_decl: ?u32, builtin_origin: bool) std.mem.Allocator.Error!SourceDecl {
         const statement = source_decl orelse return .none;
         return fromStatementWithBuiltinOriginChecked(statement, builtin_origin);
-    }
-
-    pub fn fromStatement(statement: u32) SourceDecl {
-        return fromStatementWithBuiltinOrigin(statement, false);
     }
 
     pub fn fromStatementChecked(statement: u32) std.mem.Allocator.Error!SourceDecl {
@@ -775,9 +765,7 @@ pub const RecordField = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// Whether a record field's kind is concretely required or still carried
@@ -888,9 +876,7 @@ pub const Tag = struct {
 
     /// Get the ordering of how a compares to b
     pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
+        return Ident.textOrder(store.getText(a.name), store.getText(b.name));
     }
 
     /// A safe list of tags
@@ -1248,18 +1234,6 @@ pub const StaticDispatchConstraint = struct {
 
     /// A safe multi list of static dispatch constraints
     pub const SafeMultiList = MkSafeMultiList(Self);
-
-    /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByFnNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByFnName(ident_store, a, b) == .lt;
-    }
-
-    /// Get the ordering of how a compares to b
-    pub fn orderByFnName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.fn_name);
-        const b_text = store.getText(b.fn_name);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 /// Source-type identity for the payload slot selected by derived mapping.

@@ -267,10 +267,6 @@ pub const Store = struct {
         return self.fn_variants.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fnVariantAt(self: *const Store, span_: Span, index: usize) FnVariant {
-        return GuardedList.at(self.fnVariantSpan(span_), index);
-    }
-
     pub const View = struct {
         types: []const Content,
         spans: []const TypeId,

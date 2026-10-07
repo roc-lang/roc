@@ -47,6 +47,7 @@
 //! - `Generalizer.generalize()` - Generalize all variables at a given rank
 
 const std = @import("std");
+const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
@@ -741,19 +742,10 @@ pub const VarPool = struct {
     pub fn addVarToRank(self: *Self, variable: Var, rank: Rank) Allocator.Error!void {
         if (builtin.mode == .debug) {
             if (@backingInt(rank) > @backingInt(self.current_rank)) {
-                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @backingInt(rank), @backingInt(self.current_rank) });
+                base.invariant("trying to add var at rank {}, but current rank is {}", .{ @backingInt(rank), @backingInt(self.current_rank) });
             }
         }
         try self.ranks.items[@backingInt(rank)].append(variable);
-    }
-
-    pub fn addVarsToRank(self: *Self, variables: []Var, rank: Rank) Allocator.Error!void {
-        if (builtin.mode == .debug) {
-            if (@backingInt(rank) > @backingInt(self.current_rank)) {
-                std.debug.panic("trying to add var at rank {}, but current rank is {}", .{ @backingInt(rank), @backingInt(self.current_rank) });
-            }
-        }
-        try self.ranks.items[@backingInt(rank)].appendSlice(variables);
     }
 
     /// Shrink the vars recorded for `rank` back to `new_len`, discarding
@@ -768,7 +760,7 @@ pub const VarPool = struct {
     pub fn getVarsForRank(self: *Self, rank: Rank) []Var {
         if (builtin.mode == .debug) {
             if (@backingInt(rank) > @backingInt(self.current_rank)) {
-                std.debug.panic("trying to get vars at rank {}, but current rank is {}", .{ @backingInt(rank), @backingInt(self.current_rank) });
+                base.invariant("trying to get vars at rank {}, but current rank is {}", .{ @backingInt(rank), @backingInt(self.current_rank) });
             }
         }
         return self.ranks.items[@backingInt(rank)].items;

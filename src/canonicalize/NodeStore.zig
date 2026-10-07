@@ -414,14 +414,14 @@ comptime {
 }
 
 /// Canonical and checked data owned by a compiler-created interpolation expression.
-/// Optional type variables use zero for null and otherwise store `@intFromEnum(var) + 1`.
+/// Optional type variables use zero for null and otherwise store `@backingInt(var) + 1`.
 pub const InterpolationData = extern struct {
     parts_start: u32,
     parts_len: u32,
     method_region_start: u32,
     method_region_end: u32,
     constraint_fn_var_plus_one: u32,
-    step_fn_var_plus_one: u32,
+    assembler_fn_var_plus_one: u32,
     dispatcher_var_plus_one: u32,
 };
 
@@ -448,12 +448,12 @@ pub const MatchData = extern struct {
 };
 
 /// If expression data.
-/// Stores branches span, final else, and whether to warn for untaken compile-time branches.
+/// Stores branches span, final else, and the construct the `if` canonicalizes.
 pub const IfData = extern struct {
     branches_start: u32,
     branches_len: u32,
     final_else: u32,
-    warn_unused_branches: u32,
+    origin: u32,
 };
 
 /// Match branch data.
@@ -655,177 +655,88 @@ pub fn init(gpa: Allocator) Allocator.Error!NodeStore {
     return try NodeStore.initCapacity(gpa, 128);
 }
 
+/// Names of `T`'s backing-list fields in declaration order, for `T` either
+/// `NodeStore` or `NodeStore.Serialized`: every field except the allocator and
+/// the scratch buffers. Construction, `clone`, `deinit`, and the `Serialized`
+/// conversions visit exactly these, so declaring a list in both structs is all
+/// it takes to enroll it.
+fn backingLists(comptime T: type) []const []const u8 {
+    comptime {
+        const fields = std.meta.fieldNames(T);
+        var names: [fields.len - 2][]const u8 = undefined;
+        var count: usize = 0;
+        for (fields) |name| {
+            if (std.mem.eql(u8, name, "gpa") or std.mem.eql(u8, name, "scratch")) continue;
+            names[count] = name;
+            count += 1;
+        }
+        const result = names;
+        return &result;
+    }
+}
+
+/// How many nodes a store holds per entry of each backing list: `initCapacity`
+/// reserves `capacity / divisor` entries. Lists not named here start empty.
+const nodes_per_list_entry = .{
+    .nodes = 1,
+    .regions = 1,
+    .int128_values = 8,
+    .literal_dispatch_plans = 8,
+    .interpolation_data = 16,
+    .span2_data = 4,
+    .span_with_node_data = 4,
+    .method_call_data = 8,
+    .match_data = 8,
+    .if_data = 8,
+    .match_branch_data = 8,
+    .closure_data = 16,
+    .zero_arg_tag_data = 16,
+    .def_data = 8,
+    .import_data = 16,
+    .type_apply_data = 16,
+    .pattern_list_data = 16,
+    .pattern_str_interpolation_data = 32,
+    .pattern_str_interpolation_steps = 16,
+    .where_clause_owners = 16,
+    .index_data = 4,
+};
+
+/// A store whose backing lists are all empty and which has no scratch buffers.
+fn initEmpty(gpa: Allocator) NodeStore {
+    var store: NodeStore = undefined;
+    store.gpa = gpa;
+    store.scratch = null;
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name) = .{};
+    return store;
+}
+
 /// Initializes the NodeStore with a specified capacity.
 pub fn initCapacity(gpa: Allocator, capacity: usize) Allocator.Error!NodeStore {
-    var nodes = try Node.List.initCapacity(gpa, capacity);
-    errdefer nodes.deinit(gpa);
-    var regions = try Region.List.initCapacity(gpa, capacity);
-    errdefer regions.deinit(gpa);
-    var int128_values = try collections.SafeList(i128).initCapacity(gpa, capacity / 8);
-    errdefer int128_values.deinit(gpa);
-    const literal_pattern_contexts = collections.SafeList(LiteralPatternContext){};
-    var literal_dispatch_plans = try collections.SafeList(LiteralDispatchPlan).initCapacity(gpa, capacity / 8);
-    errdefer literal_dispatch_plans.deinit(gpa);
-    var interpolation_data = try collections.SafeList(InterpolationData).initCapacity(gpa, capacity / 16);
-    errdefer interpolation_data.deinit(gpa);
-    var span2_data = try collections.SafeList(Span2).initCapacity(gpa, capacity / 4);
-    errdefer span2_data.deinit(gpa);
-    var span_with_node_data = try collections.SafeList(SpanWithNode).initCapacity(gpa, capacity / 4);
-    errdefer span_with_node_data.deinit(gpa);
-    var method_call_data = try collections.SafeList(MethodCallData).initCapacity(gpa, capacity / 8);
-    errdefer method_call_data.deinit(gpa);
-    var match_data = try collections.SafeList(MatchData).initCapacity(gpa, capacity / 8);
-    errdefer match_data.deinit(gpa);
-    var if_data = try collections.SafeList(IfData).initCapacity(gpa, capacity / 8);
-    errdefer if_data.deinit(gpa);
-    var match_branch_data = try collections.SafeList(MatchBranchData).initCapacity(gpa, capacity / 8);
-    errdefer match_branch_data.deinit(gpa);
-    var closure_data = try collections.SafeList(ClosureData).initCapacity(gpa, capacity / 16);
-    errdefer closure_data.deinit(gpa);
-    var zero_arg_tag_data = try collections.SafeList(ZeroArgTagData).initCapacity(gpa, capacity / 16);
-    errdefer zero_arg_tag_data.deinit(gpa);
-    var def_data = try collections.SafeList(DefData).initCapacity(gpa, capacity / 8);
-    errdefer def_data.deinit(gpa);
-    var import_data = try collections.SafeList(ImportData).initCapacity(gpa, capacity / 16);
-    errdefer import_data.deinit(gpa);
-    var type_apply_data = try collections.SafeList(TypeApplyData).initCapacity(gpa, capacity / 16);
-    errdefer type_apply_data.deinit(gpa);
-    var pattern_list_data = try collections.SafeList(PatternListData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_list_data.deinit(gpa);
-    var pattern_str_interpolation_data = try collections.SafeList(PatternStrInterpolationData).initCapacity(gpa, capacity / 32);
-    errdefer pattern_str_interpolation_data.deinit(gpa);
-    var pattern_str_interpolation_steps = try collections.SafeList(PatternStrInterpolationStepData).initCapacity(gpa, capacity / 16);
-    errdefer pattern_str_interpolation_steps.deinit(gpa);
-    var where_clause_owners = try collections.SafeList(WhereClauseOwnerData).initCapacity(gpa, capacity / 16);
-    errdefer where_clause_owners.deinit(gpa);
-    var index_data = try collections.SafeList(u32).initCapacity(gpa, capacity / 4);
-    errdefer index_data.deinit(gpa);
-    const scratch = try Scratch.init(gpa);
-    errdefer scratch.deinit(gpa);
-
-    return .{
-        .gpa = gpa,
-        .nodes = nodes,
-        .replaced_source_nodes = .{},
-        .regions = regions,
-        .write_occurrences = .{},
-        .int128_values = int128_values,
-        .literal_dispatch_plans = literal_dispatch_plans,
-        .literal_pattern_contexts = literal_pattern_contexts,
-        .interpolation_data = interpolation_data,
-        .span2_data = span2_data,
-        .span_with_node_data = span_with_node_data,
-        .method_call_data = method_call_data,
-        .match_data = match_data,
-        .if_data = if_data,
-        .match_branch_data = match_branch_data,
-        .closure_data = closure_data,
-        .zero_arg_tag_data = zero_arg_tag_data,
-        .def_data = def_data,
-        .import_data = import_data,
-        .type_apply_data = type_apply_data,
-        .pattern_list_data = pattern_list_data,
-        .pattern_str_interpolation_data = pattern_str_interpolation_data,
-        .pattern_str_interpolation_steps = pattern_str_interpolation_steps,
-        .where_clause_owners = where_clause_owners,
-        .index_data = index_data,
-        .scratch = scratch,
-    };
+    var store = initEmpty(gpa);
+    errdefer store.deinit();
+    inline for (comptime std.meta.fieldNames(@TypeOf(nodes_per_list_entry))) |name| {
+        @field(store, name) = try @FieldType(NodeStore, name).initCapacity(gpa, capacity / @field(nodes_per_list_entry, name));
+    }
+    store.scratch = try Scratch.init(gpa);
+    return store;
 }
 
 /// Public function `clone`.
 pub fn clone(self: *const NodeStore, gpa: Allocator) Allocator.Error!NodeStore {
-    var cloned = NodeStore{
-        .gpa = gpa,
-        .nodes = try self.nodes.clone(gpa),
-        .replaced_source_nodes = try self.replaced_source_nodes.clone(gpa),
-        .regions = try self.regions.clone(gpa),
-        .write_occurrences = try self.write_occurrences.clone(gpa),
-        .int128_values = try self.int128_values.clone(gpa),
-        .literal_dispatch_plans = try self.literal_dispatch_plans.clone(gpa),
-        .literal_pattern_contexts = try self.literal_pattern_contexts.clone(gpa),
-        .interpolation_data = try self.interpolation_data.clone(gpa),
-        .span2_data = try self.span2_data.clone(gpa),
-        .span_with_node_data = try self.span_with_node_data.clone(gpa),
-        .method_call_data = try self.method_call_data.clone(gpa),
-        .match_data = try self.match_data.clone(gpa),
-        .if_data = try self.if_data.clone(gpa),
-        .match_branch_data = try self.match_branch_data.clone(gpa),
-        .closure_data = try self.closure_data.clone(gpa),
-        .zero_arg_tag_data = try self.zero_arg_tag_data.clone(gpa),
-        .def_data = try self.def_data.clone(gpa),
-        .import_data = try self.import_data.clone(gpa),
-        .type_apply_data = try self.type_apply_data.clone(gpa),
-        .pattern_list_data = try self.pattern_list_data.clone(gpa),
-        .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.clone(gpa),
-        .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.clone(gpa),
-        .where_clause_owners = try self.where_clause_owners.clone(gpa),
-        .index_data = try self.index_data.clone(gpa),
-        .scratch = null,
-    };
+    var cloned = initEmpty(gpa);
     errdefer cloned.deinit();
+    inline for (comptime backingLists(NodeStore)) |name| {
+        @field(cloned, name) = try @field(self, name).clone(gpa);
+    }
     return cloned;
 }
 
 /// Deinitializes the NodeStore, freeing any allocated resources.
 pub fn deinit(store: *NodeStore) void {
-    store.nodes.deinit(store.gpa);
-    store.replaced_source_nodes.deinit(store.gpa);
-    store.regions.deinit(store.gpa);
-    store.write_occurrences.deinit(store.gpa);
-    store.int128_values.deinit(store.gpa);
-    store.literal_dispatch_plans.deinit(store.gpa);
-    store.literal_pattern_contexts.deinit(store.gpa);
-    store.interpolation_data.deinit(store.gpa);
-    store.span2_data.deinit(store.gpa);
-    store.span_with_node_data.deinit(store.gpa);
-    store.method_call_data.deinit(store.gpa);
-    store.match_data.deinit(store.gpa);
-    store.if_data.deinit(store.gpa);
-    store.match_branch_data.deinit(store.gpa);
-    store.closure_data.deinit(store.gpa);
-    store.zero_arg_tag_data.deinit(store.gpa);
-    store.def_data.deinit(store.gpa);
-    store.import_data.deinit(store.gpa);
-    store.type_apply_data.deinit(store.gpa);
-    store.pattern_list_data.deinit(store.gpa);
-    store.pattern_str_interpolation_data.deinit(store.gpa);
-    store.pattern_str_interpolation_steps.deinit(store.gpa);
-    store.where_clause_owners.deinit(store.gpa);
-    store.index_data.deinit(store.gpa);
+    inline for (comptime backingLists(NodeStore)) |name| @field(store, name).deinit(store.gpa);
     if (store.scratch) |scratch| {
         scratch.deinit(store.gpa);
     }
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// This is used when loading a NodeStore from shared memory at a different address.
-pub fn relocate(store: *NodeStore, offset: isize) void {
-    store.nodes.relocate(offset);
-    store.replaced_source_nodes.relocate(offset);
-    store.regions.relocate(offset);
-    store.write_occurrences.relocate(offset);
-    store.int128_values.relocate(offset);
-    store.literal_dispatch_plans.relocate(offset);
-    store.literal_pattern_contexts.relocate(offset);
-    store.interpolation_data.relocate(offset);
-    store.span2_data.relocate(offset);
-    store.span_with_node_data.relocate(offset);
-    store.method_call_data.relocate(offset);
-    store.match_data.relocate(offset);
-    store.if_data.relocate(offset);
-    store.match_branch_data.relocate(offset);
-    store.closure_data.relocate(offset);
-    store.zero_arg_tag_data.relocate(offset);
-    store.def_data.relocate(offset);
-    store.import_data.relocate(offset);
-    store.type_apply_data.relocate(offset);
-    store.pattern_list_data.relocate(offset);
-    store.pattern_str_interpolation_data.relocate(offset);
-    store.pattern_str_interpolation_steps.relocate(offset);
-    store.where_clause_owners.relocate(offset);
-    store.index_data.relocate(offset);
-    // scratch is null for deserialized NodeStores, no need to relocate
 }
 
 /// Compile-time constants for union variant counts to ensure we don't miss cases
@@ -935,7 +846,7 @@ fn setLiteralDispatchPlanPlusOne(store: *NodeStore, node_idx: Node.Idx, plan_plu
     var node = store.nodes.get(node_idx);
     const payload = node.getPayload();
     const tag = narrowNodeTag(LiteralNodeTag, node.tag) orelse
-        std.debug.panic("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
+        base.invariant("literal dispatch plan attached to non-literal node {s}", .{@tagName(node.tag)});
     switch (tag) {
         .expr_num => {
             var data = payload.expr_num;
@@ -1081,7 +992,7 @@ pub fn finalizeLiteralDispatchResolution(
     var plan = store.literal_dispatch_plans.get(@fromBackingInt(@intCast(plan_plus_one - 1))).*;
     const previous = plan.dispatchResolution();
     if (previous != .unresolved and previous != resolution) {
-        std.debug.panic(
+        base.invariant(
             "literal dispatch plan for node {d} finalized twice ({s}, then {s})",
             .{ @backingInt(node_idx), @tagName(previous), @tagName(resolution) },
         );
@@ -1260,7 +1171,7 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(StatementNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a statement tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a statement tag: {}", .{node.tag});
     switch (tag) {
         .statement_decl => {
             const p = payload.statement_decl;
@@ -1449,7 +1360,8 @@ fn statementFromNode(store: *const NodeStore, node: Node) CIR.Statement {
         .malformed => {
             const p = payload.malformed;
             return CIR.Statement{ .s_runtime_error = .{
-                .diagnostic = @fromBackingInt(@intCast(p.diagnostic)),
+                .diagnostic = @fromBackingInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
@@ -1472,7 +1384,7 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExprNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not an expression tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not an expression tag: {}", .{node.tag});
     switch (tag) {
         .expr_var => {
             const p = payload.expr_var;
@@ -1917,8 +1829,8 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
 
             return CIR.Expr{ .e_if = .{
                 .branches = .{ .span = .{ .start = if_data.branches_start, .len = if_data.branches_len } },
-                .final_else = @fromBackingInt(@intCast(if_data.final_else)),
-                .warn_unused_branches = if_data.warn_unused_branches != 0,
+                .final_else = @fromBackingInt(if_data.final_else),
+                .origin = @fromBackingInt(if_data.origin),
             } };
         },
         .expr_field_access => {
@@ -1967,11 +1879,11 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
                 .constraint_fn_var = if (data.constraint_fn_var_plus_one == 0)
                     null
                 else
-                    @fromBackingInt(@intCast(data.constraint_fn_var_plus_one - 1)),
-                .step_fn_var = if (data.step_fn_var_plus_one == 0)
+                    @fromBackingInt(data.constraint_fn_var_plus_one - 1),
+                .assembler_fn_var = if (data.assembler_fn_var_plus_one == 0)
                     null
                 else
-                    @fromBackingInt(@intCast(data.step_fn_var_plus_one - 1)),
+                    @fromBackingInt(data.assembler_fn_var_plus_one - 1),
                 .dispatcher_var = if (data.dispatcher_var_plus_one == 0)
                     null
                 else
@@ -2027,39 +1939,11 @@ fn exprFromNode(store: *const NodeStore, node_idx: Node.Idx, node: Node) CIR.Exp
         .malformed => {
             const p = payload.malformed;
             return CIR.Expr{ .e_runtime_error = .{
-                .diagnostic = @fromBackingInt(@intCast(p.diagnostic)),
+                .diagnostic = @fromBackingInt(p.diagnostic),
+                .evaluated = .{ .span = .{ .start = p.evaluated_start, .len = p.evaluated_len } },
             } };
         },
     }
-}
-
-/// Replaces an existing expression with an e_zero_argument_tag expression in-place.
-/// This is used for constant folding tag unions (like Bool) during compile-time evaluation.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithZeroArgumentTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    closure_name: Ident.Idx,
-    variant_var: types.Var,
-    ext_var: types.Var,
-    name: Ident.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
-
-    const zero_arg_tag_idx: u32 = @intCast(store.zero_arg_tag_data.len());
-    _ = try store.zero_arg_tag_data.append(store.gpa, .{
-        .closure_name = @bitCast(closure_name),
-        .variant_var = @backingInt(variant_var),
-        .ext_var = @backingInt(ext_var),
-        .name = @bitCast(name),
-    });
-
-    var node = Node.init(.expr_zero_argument_tag);
-    node.setPayload(.{ .expr_zero_argument_tag = .{
-        .zero_arg_tag_idx = zero_arg_tag_idx,
-    } });
-    store.nodes.set(node_idx, node);
 }
 
 /// Replaces an imported-type associated lookup with its exact checked target.
@@ -2284,32 +2168,6 @@ pub fn replaceTypeAnnoWithRuntimeError(
     store.nodes.set(node_idx, node);
 }
 
-/// Replaces an existing expression with an e_tuple expression in-place.
-/// This is used for constant folding tuples during compile-time evaluation.
-/// The elem_indices slice contains the indices of the tuple element expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTuple(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    elem_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
-
-    // Store element indices in index_data
-    const index_data_start = store.index_data.len();
-    for (elem_indices) |elem_idx| {
-        _ = try store.index_data.append(store.gpa, @backingInt(elem_idx));
-    }
-
-    var node = Node.init(.expr_tuple);
-    node.setPayload(.{ .expr_tuple = .{
-        .elems_start = @intCast(index_data_start),
-        .elems_len = @intCast(elem_indices.len),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
 /// Replaces an existing expression with an explicit structural equality node.
 /// This is used when the checker has already decided that equality is structural
 /// rather than an attached method dispatch.
@@ -2465,7 +2323,7 @@ pub fn replaceExprWithInterpolationConstraint(
     parts: CIR.Expr.Span,
     method_name_region: Region,
     constraint_fn_var: types.Var,
-    step_fn_var: types.Var,
+    assembler_fn_var: types.Var,
     dispatcher_var: types.Var,
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
@@ -2476,7 +2334,7 @@ pub fn replaceExprWithInterpolationConstraint(
         .method_region_start = method_name_region.start.offset,
         .method_region_end = method_name_region.end.offset,
         .constraint_fn_var_plus_one = @backingInt(constraint_fn_var) + 1,
-        .step_fn_var_plus_one = @backingInt(step_fn_var) + 1,
+        .assembler_fn_var_plus_one = @backingInt(assembler_fn_var) + 1,
         .dispatcher_var_plus_one = @backingInt(dispatcher_var) + 1,
     });
     var node = Node.init(.expr_interpolation);
@@ -2523,35 +2381,6 @@ pub fn replaceExprWithTypeDispatchCall(
     store.nodes.set(node_idx, node);
 }
 
-/// Replaces an existing expression with an if expression in-place.
-/// Replaces an existing expression with an e_tag expression in-place.
-/// This is used for constant folding tag unions with payloads during compile-time evaluation.
-/// The arg_indices slice contains the indices of the tag argument expressions.
-/// Note: This modifies only the CIR node and should only be called after type-checking
-/// is complete. Type information is stored separately and remains unchanged.
-pub fn replaceExprWithTag(
-    store: *NodeStore,
-    expr_idx: CIR.Expr.Idx,
-    name: Ident.Idx,
-    arg_indices: []const CIR.Expr.Idx,
-) Allocator.Error!void {
-    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
-
-    // Store argument indices in index_data
-    const index_data_start = store.index_data.len();
-    for (arg_indices) |arg_idx| {
-        _ = try store.index_data.append(store.gpa, @backingInt(arg_idx));
-    }
-
-    var node = Node.init(.expr_tag);
-    node.setPayload(.{ .expr_tag = .{
-        .name = @bitCast(name),
-        .args_start = @intCast(index_data_start),
-        .args_len = @intCast(arg_indices.len),
-    } });
-    store.nodes.set(node_idx, node);
-}
-
 /// Replaces an existing expression with an in-place runtime error node.
 /// Used when an earlier compilation stage has already determined that the
 /// expression is erroneous and later stages must observe an explicit crash.
@@ -2561,9 +2390,21 @@ pub fn replaceExprWithRuntimeError(
     expr_idx: CIR.Expr.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
 ) Allocator.Error!void {
-    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    try store.replaceExprWithRuntimeErrorAfter(expr_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
+}
+
+/// Replaces an existing expression with an in-place runtime error node that
+/// evaluates `evaluated` (`CIR.Expr.e_runtime_error.evaluated`) before it
+/// crashes.
+pub fn replaceExprWithRuntimeErrorAfter(
+    store: *NodeStore,
+    expr_idx: CIR.Expr.Idx,
+    diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
+) Allocator.Error!void {
+    const node_idx: Node.Idx = @fromBackingInt(@backingInt(expr_idx));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, evaluated);
 }
 
 /// Replaces an existing statement with an in-place runtime error node after
@@ -2573,8 +2414,9 @@ pub fn replaceStatementWithRuntimeError(
     store: *NodeStore,
     stmt_idx: CIR.Statement.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
 ) Allocator.Error!void {
-    try store.replaceSourceNodeWithRuntimeError(@fromBackingInt(@intCast(@backingInt(stmt_idx))), diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(@fromBackingInt(@backingInt(stmt_idx)), diagnostic_idx, evaluated);
 }
 
 /// Replace a rejected literal leaf while retaining the surrounding definition
@@ -2587,7 +2429,7 @@ pub fn replacePatternWithRuntimeError(
 ) Allocator.Error!void {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(pattern_idx)));
     _ = store.retireLiteralDispatchPlan(node_idx);
-    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx);
+    try store.replaceSourceNodeWithRuntimeError(node_idx, diagnostic_idx, .{ .span = .{ .start = 0, .len = 0 } });
 }
 
 /// Keep the node being replaced in `replaced_source_nodes` and put a runtime
@@ -2598,6 +2440,7 @@ fn replaceSourceNodeWithRuntimeError(
     store: *NodeStore,
     node_idx: Node.Idx,
     diagnostic_idx: CIR.Diagnostic.Idx,
+    evaluated: CIR.Expr.Span,
 ) Allocator.Error!void {
     const replaced = store.nodes.get(node_idx);
     const source_node_plus_one: u32 = if (replaced.tag == .malformed)
@@ -2608,6 +2451,8 @@ fn replaceSourceNodeWithRuntimeError(
     node.setPayload(.{ .malformed = .{
         .diagnostic = @backingInt(diagnostic_idx),
         .source_node_plus_one = source_node_plus_one,
+        .evaluated_start = evaluated.span.start,
+        .evaluated_len = evaluated.span.len,
     } });
     store.nodes.set(node_idx, node);
 }
@@ -2670,20 +2515,6 @@ pub fn updateLambdaBody(store: *NodeStore, lambda_idx: CIR.Expr.Idx, body_idx: C
     store.nodes.set(node_idx, node);
 }
 
-/// Get the more-specific expr index. Used to make error messages nicer.
-///
-/// For example, if the provided expr is a `block`, then this will return the
-/// expr idx of the last expr in that block. This allows the error message to
-/// reference the exact expr that has a problem, making the problem easier to
-/// understand.
-///
-/// But for most exprs, this just returns the same expr idx provided.
-pub fn getExprSpecific(store: *const NodeStore, expr_idx: CIR.Expr.Idx) CIR.Expr.Idx {
-    const expr = store.getExpr(expr_idx);
-    if (expr == .e_block) return expr.e_block.final_expr;
-    return expr_idx;
-}
-
 /// Retrieves a 'when' branch from the store.
 pub fn getMatchBranch(store: *const NodeStore, branch: CIR.Expr.Match.Branch.Idx) CIR.Expr.Match.Branch {
     const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(branch)));
@@ -2733,7 +2564,7 @@ pub fn getWhereClause(store: *const NodeStore, whereClause: CIR.WhereClause.Idx)
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(WhereNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a where tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a where tag: {}", .{node.tag});
     switch (tag) {
         .where_method => {
             const p = payload.where_clause;
@@ -2792,7 +2623,7 @@ fn patternFromNode(store: *const NodeStore, node: Node) CIR.Pattern {
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(PatternNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a pattern tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a pattern tag: {}", .{node.tag});
     switch (tag) {
         .pattern_identifier => {
             const p = payload.pattern_identifier;
@@ -2987,7 +2818,7 @@ pub fn getTypeAnno(store: *const NodeStore, typeAnno: CIR.TypeAnno.Idx) CIR.Type
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(TypeAnnoNodeTag, node.tag) orelse
-        std.debug.panic("unreachable, node is not a type annotation tag: {}", .{node.tag});
+        base.invariant("unreachable, node is not a type annotation tag: {}", .{node.tag});
     switch (tag) {
         .ty_apply => {
             const p = payload.ty_apply;
@@ -3197,7 +3028,7 @@ pub fn getExposedItem(store: *const NodeStore, exposedItem: CIR.ExposedItem.Idx)
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(ExposedItemNodeTag, node.tag) orelse
-        std.debug.panic("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
+        base.invariant("Expected exposed_item node, got {s}\n", .{@tagName(node.tag)});
     switch (tag) {
         .exposed_item => {
             const p = payload.exposed_item;
@@ -3429,6 +3260,8 @@ fn makeStatementNode(store: *NodeStore, statement: CIR.Statement) Allocator.Erro
             node.tag = .malformed;
             node.setPayload(.{ .malformed = .{
                 .diagnostic = @backingInt(s.diagnostic),
+                .evaluated_start = s.evaluated.span.start,
+                .evaluated_len = s.evaluated.span.len,
             } });
         },
     }
@@ -3695,7 +3528,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .method_region_start = e.method_name_region.start.offset,
                 .method_region_end = e.method_name_region.end.offset,
                 .constraint_fn_var_plus_one = if (e.constraint_fn_var) |var_| @backingInt(var_) + 1 else 0,
-                .step_fn_var_plus_one = if (e.step_fn_var) |var_| @backingInt(var_) + 1 else 0,
+                .assembler_fn_var_plus_one = if (e.assembler_fn_var) |var_| @backingInt(var_) + 1 else 0,
                 .dispatcher_var_plus_one = if (e.dispatcher_var) |var_| @backingInt(var_) + 1 else 0,
             });
             node.setPayload(.{ .expr_interpolation = .{
@@ -3750,6 +3583,8 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
             node.tag = .malformed;
             node.setPayload(.{ .malformed = .{
                 .diagnostic = @backingInt(e.diagnostic),
+                .evaluated_start = e.evaluated.span.start,
+                .evaluated_len = e.evaluated.span.len,
             } });
         },
         .e_crash => |c| {
@@ -3846,7 +3681,7 @@ pub fn addExpr(store: *NodeStore, expr: CIR.Expr, region: base.Region) Allocator
                 .branches_start = e.branches.span.start,
                 .branches_len = e.branches.span.len,
                 .final_else = @backingInt(e.final_else),
-                .warn_unused_branches = @intFromBool(e.warn_unused_branches),
+                .origin = @backingInt(e.origin),
             });
 
             node.setPayload(.{ .expr_if_then_else = .{
@@ -4614,8 +4449,8 @@ fn loadWhereClauseSpan(store: *const NodeStore, idx: u32) CIR.WhereClause.Span {
 }
 
 /// Whether a type annotation mentions a type variable (a user-written var like
-/// `a`, or an anonymous open-extension var from `..`). This is the pre-filter
-/// for value generalization.
+/// `a`, or an anonymous open-extension var from `..`), introduced by the
+/// annotation or looked up from an enclosing one.
 fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var, .rigid_var_lookup => true,
@@ -4626,7 +4461,8 @@ fn mentionsTypeVar(anno: CIR.TypeAnno) ?bool {
 
 /// Whether a type annotation *introduces* a type variable (`.rigid_var`), not
 /// one it references from an enclosing scope. Detects a variable the
-/// annotation introduces but cannot bind (rejected on a mutable `var`).
+/// annotation introduces but its binding cannot quantify (rejected on a
+/// mutable `var` and on a value binding that does not generalize).
 fn introducesTypeVar(anno: CIR.TypeAnno) ?bool {
     return switch (anno) {
         .rigid_var => true,
@@ -5409,11 +5245,6 @@ pub fn strPatternStepSpanFromSlice(store: *NodeStore, steps: []const CIR.Pattern
     return .{ .span = .{ .start = start, .len = @intCast(steps.len) } };
 }
 
-/// Clears scratch definitions starting from a specified index.
-pub fn clearScratchDefsFrom(store: *NodeStore, start: u32) void {
-    store.clearScratchFrom("defs", start);
-}
-
 /// Creates a slice corresponding to a span.
 pub fn sliceFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) []T {
     if (span.len == 0) return &.{};
@@ -5439,11 +5270,6 @@ pub fn defAt(store: *const NodeStore, span: CIR.Def.Span, offset: usize) CIR.Def
 /// Returns a slice of expressions from the store.
 pub fn sliceExpr(store: *const NodeStore, span: CIR.Expr.Span) []CIR.Expr.Idx {
     return store.sliceFromSpan(CIR.Expr.Idx, span.span);
-}
-
-/// Returns a single expression index from a span.
-pub fn exprAt(store: *const NodeStore, span: CIR.Expr.Span, offset: usize) CIR.Expr.Idx {
-    return store.getFromSpan(CIR.Expr.Idx, span.span, offset);
 }
 
 /// Returns a slice of `CanIR.Pattern.Idx`
@@ -5494,26 +5320,6 @@ pub fn sliceMatchBranches(store: *const NodeStore, span: CIR.Expr.Match.Branch.S
 /// Retrieve a slice of Match.BranchPattern Idx's from a span
 pub fn sliceMatchBranchPatterns(store: *const NodeStore, span: CIR.Expr.Match.BranchPattern.Span) []CIR.Expr.Match.BranchPattern.Idx {
     return store.sliceFromSpan(CIR.Expr.Match.BranchPattern.Idx, span.span);
-}
-
-/// Creates a slice corresponding to a span.
-pub fn firstFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @fromBackingInt(@intCast(store.index_data.items.items[span.start])));
-}
-
-/// Creates a slice corresponding to a span.
-pub fn lastFromSpan(store: *const NodeStore, comptime T: type, span: base.DataSpan) T {
-    return @as(T, @fromBackingInt(@intCast(store.index_data.items.items[span.start + span.len - 1])));
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn firstFromIfBranches(store: *const NodeStore, span: CIR.Expr.IfBranch.Span) CIR.Expr.IfBranch.Idx {
-    return store.firstFromSpan(CIR.Expr.IfBranch.Idx, span.span);
-}
-
-/// Retrieve a slice of IfBranch Idx's from a span
-pub fn lastFromStatements(store: *const NodeStore, span: CIR.Statement.Span) CIR.Statement.Idx {
-    return store.lastFromSpan(CIR.Statement.Idx, span.span);
 }
 
 /// Returns a slice of if branches from the store.
@@ -5641,26 +5447,55 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.feature) } });
         },
-        .invalid_num_literal => |r| {
-            node.tag = .diag_invalid_num_literal;
+        inline .invalid_num_literal,
+        .empty_tuple,
+        .erroneous_value_expr,
+        .expr_not_canonicalized,
+        .expr_syntax_error,
+        .unreachable_string_pattern_capture,
+        .pattern_arg_invalid,
+        .pattern_not_canonicalized,
+        .if_expr_without_else,
+        .malformed_type_annotation,
+        .malformed_where_clause,
+        .where_clause_not_allowed_in_type_decl,
+        .open_ext_not_allowed_in_type_decl,
+        .unnamed_field_not_allowed_in_structural_record,
+        .optional_field_cannot_have_default,
+        .unnamed_field_cannot_have_default,
+        .default_not_allowed_in_structural_record,
+        .default_not_allowed_on_local_type_decl,
+        .execution_requires_app_or_default_app,
+        .module_header_deprecated,
+        .var_across_function_boundary,
+        .crash_expects_string,
+        .f64_pattern_literal,
+        .break_outside_loop,
+        .infinite_loop_never_exits,
+        .trailing_try_suffix,
+        .range_op_chained,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
         },
-        .empty_tuple => |r| {
-            node.tag = .diag_empty_tuple;
-            region = r.region;
-        },
-        .ident_already_in_scope => |r| {
-            node.tag = .diag_ident_already_in_scope;
+        inline .ident_already_in_scope,
+        .provided_value_is_required,
+        .ident_not_in_scope,
+        .read_uninitialized_var,
+        .self_referential_definition,
+        .circular_value_definition,
+        .local_reference_before_definition,
+        .erroneous_value_use,
+        .qualified_ident_does_not_exist,
+        .unused_variable,
+        .used_underscore_variable,
+        => |r, tag| {
+            node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .exposed_but_not_implemented => |r| {
             node.tag = .diagnostic_exposed_but_not_implemented;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .provided_value_is_required => |r| {
-            node.tag = .diag_provided_value_is_required;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
@@ -5674,49 +5509,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_single_ident_extra = .{ .ident = @bitCast(r.ident), .region_span2_idx = region_span2_idx } });
         },
-        .ident_not_in_scope => |r| {
-            node.tag = .diag_ident_not_in_scope;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .read_uninitialized_var => |r| {
-            node.tag = .diag_read_uninitialized_var;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .self_referential_definition => |r| {
-            node.tag = .diag_self_referential_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .circular_value_definition => |r| {
-            node.tag = .diag_circular_value_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .local_reference_before_definition => |r| {
-            node.tag = .diag_local_reference_before_definition;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .mutually_recursive_local_definitions => |r| {
             node.tag = .diag_mutually_recursive_local_definitions;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.ident1), .ident2 = @bitCast(r.ident2) } });
-        },
-        .erroneous_value_use => |r| {
-            node.tag = .diag_erroneous_value_use;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .erroneous_value_expr => |r| {
-            node.tag = .diag_erroneous_value_expr;
-            region = r.region;
-        },
-        .qualified_ident_does_not_exist => |r| {
-            node.tag = .diag_qualified_ident_does_not_exist;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
         },
         .invalid_top_level_statement => |r| {
             node.tag = .diag_invalid_top_level_statement;
@@ -5728,70 +5524,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.stmt) } });
         },
-        .expr_not_canonicalized => |r| {
-            node.tag = .diag_expr_not_canonicalized;
-            region = r.region;
-        },
-        .expr_syntax_error => |r| {
-            node.tag = .diag_expr_syntax_error;
-            region = r.region;
-        },
-        .unreachable_string_pattern_capture => |r| {
-            node.tag = .diag_unreachable_string_pattern_capture;
-            region = r.region;
-        },
-        .pattern_arg_invalid => |r| {
-            node.tag = .diag_pattern_arg_invalid;
-            region = r.region;
-        },
-        .pattern_not_canonicalized => |r| {
-            node.tag = .diag_pattern_not_canonicalized;
-            region = r.region;
-        },
-        .if_expr_without_else => |r| {
-            node.tag = .diag_if_expr_without_else;
-            region = r.region;
-        },
-        .malformed_type_annotation => |r| {
-            node.tag = .diag_malformed_type_annotation;
-            region = r.region;
-        },
-        .malformed_where_clause => |r| {
-            node.tag = .diag_malformed_where_clause;
-            region = r.region;
-        },
-        .where_clause_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_where_clause_not_allowed_in_type_decl;
-            region = r.region;
-        },
         .where_alias_constraint_not_on_receiver => |r| {
             node.tag = .diag_where_alias_constraint_not_on_receiver;
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.receiver_name) } });
-        },
-        .open_ext_not_allowed_in_type_decl => |r| {
-            node.tag = .diag_open_ext_not_allowed_in_type_decl;
-            region = r.region;
-        },
-        .unnamed_field_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_unnamed_field_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .optional_field_cannot_have_default => |r| {
-            node.tag = .diag_optional_field_cannot_have_default;
-            region = r.region;
-        },
-        .unnamed_field_cannot_have_default => |r| {
-            node.tag = .diag_unnamed_field_cannot_have_default;
-            region = r.region;
-        },
-        .default_not_allowed_in_structural_record => |r| {
-            node.tag = .diag_default_not_allowed_in_structural_record;
-            region = r.region;
-        },
-        .default_not_allowed_on_local_type_decl => |r| {
-            node.tag = .diag_default_not_allowed_on_local_type_decl;
-            region = r.region;
         },
         .record_default_reference_cycle => |r| {
             node.tag = .diag_record_default_reference_cycle;
@@ -5823,18 +5559,10 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.region;
             node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.module_name) } });
         },
-        .execution_requires_app_or_default_app => |r| {
-            node.tag = .diag_execution_requires_app_or_default_app;
-            region = r.region;
-        },
         .type_name_case_mismatch => |r| {
             node.tag = .diag_type_name_case_mismatch;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.module_name), .ident2 = @bitCast(r.type_name) } });
-        },
-        .module_header_deprecated => |r| {
-            node.tag = .diag_module_header_deprecated;
-            region = r.region;
         },
         .roc_version_mismatch => |r| {
             node.tag = .diag_roc_version_mismatch;
@@ -5850,10 +5578,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_invalid_main_type_rename_in_exposing;
             region = r.region;
             node.setPayload(.{ .diag_two_idents = .{ .ident1 = @bitCast(r.type_name), .ident2 = @bitCast(r.alias) } });
-        },
-        .var_across_function_boundary => |r| {
-            node.tag = .diag_var_across_function_boundary;
-            region = r.region;
         },
         .shadowing_warning => |r| {
             node.tag = .diag_shadowing_warning;
@@ -6006,16 +5730,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             });
             node.setPayload(.{ .diag_two_idents_extra = .{ .ident1 = @bitCast(r.name), .ident2 = @bitCast(r.parameter_name), .region_span2_idx = region_span2_idx } });
         },
-        .unused_variable => |r| {
-            node.tag = .diag_unused_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
-        .used_underscore_variable => |r| {
-            node.tag = .diag_used_underscore_variable;
-            region = r.region;
-            node.setPayload(.{ .diag_single_ident = .{ .ident = @bitCast(r.ident) } });
-        },
         .duplicate_record_field => |r| {
             node.tag = .diag_duplicate_record_field;
             region = r.duplicate_region;
@@ -6031,14 +5745,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             region = r.duplicate_region;
             node.setPayload(.{ .diag_ident_with_region = .{ .ident = @bitCast(r.tag_name), .region_start = r.original_region.start.offset, .region_end = r.original_region.end.offset } });
         },
-        .crash_expects_string => |r| {
-            node.tag = .diag_crash_expects_string;
-            region = r.region;
-        },
-        .f64_pattern_literal => |r| {
-            node.tag = .diag_f64_pattern_literal;
-            region = r.region;
-        },
         .type_var_starting_with_dollar => |r| {
             node.tag = .diag_type_var_starting_with_dollar;
             region = r.region;
@@ -6048,18 +5754,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_underscore_in_type_declaration;
             region = r.region;
             node.setPayload(.{ .diag_single_value = .{ .value = @backingInt(r.declared) } });
-        },
-        .break_outside_loop => |r| {
-            node.tag = .diag_break_outside_loop;
-            region = r.region;
-        },
-        .infinite_loop_never_exits => |r| {
-            node.tag = .diag_infinite_loop_never_exits;
-            region = r.region;
-        },
-        .trailing_try_suffix => |r| {
-            node.tag = .diag_trailing_try_suffix;
-            region = r.region;
         },
         .return_outside_fn => |r| {
             node.tag = .diag_return_outside_fn;
@@ -6090,10 +5784,6 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
             node.tag = .diag_deprecated_number_suffix;
             region = r.region;
             node.setPayload(.{ .diag_two_enums = .{ .enum1 = @backingInt(r.suffix), .enum2 = @backingInt(r.suggested) } });
-        },
-        .range_op_chained => |r| {
-            node.tag = .diag_range_op_chained;
-            region = r.region;
         },
     }
 
@@ -6139,27 +5829,58 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
     const payload = node.getPayload();
 
     const tag = narrowNodeTag(DiagnosticNodeTag, node.tag) orelse
-        @panic("getDiagnostic called with non-diagnostic node - this indicates a compiler bug");
+        base.invariant("{s}", .{"getDiagnostic called with non-diagnostic node - this indicates a compiler bug"});
     switch (tag) {
         .diag_not_implemented => return CIR.Diagnostic{ .not_implemented = .{
             .feature = @fromBackingInt(@intCast(payload.diag_single_value.value)),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_invalid_num_literal => return CIR.Diagnostic{ .invalid_num_literal = .{
+        inline .diag_invalid_num_literal,
+        .diag_empty_tuple,
+        .diag_erroneous_value_expr,
+        .diag_expr_not_canonicalized,
+        .diag_expr_syntax_error,
+        .diag_unreachable_string_pattern_capture,
+        .diag_pattern_arg_invalid,
+        .diag_pattern_not_canonicalized,
+        .diag_if_expr_without_else,
+        .diag_var_across_function_boundary,
+        .diag_malformed_type_annotation,
+        .diag_malformed_where_clause,
+        .diag_where_clause_not_allowed_in_type_decl,
+        .diag_open_ext_not_allowed_in_type_decl,
+        .diag_unnamed_field_not_allowed_in_structural_record,
+        .diag_optional_field_cannot_have_default,
+        .diag_unnamed_field_cannot_have_default,
+        .diag_default_not_allowed_in_structural_record,
+        .diag_default_not_allowed_on_local_type_decl,
+        .diag_execution_requires_app_or_default_app,
+        .diag_module_header_deprecated,
+        .diag_crash_expects_string,
+        .diag_f64_pattern_literal,
+        .diag_break_outside_loop,
+        .diag_infinite_loop_never_exits,
+        .diag_trailing_try_suffix,
+        .diag_range_op_chained,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .region = store.getRegionAt(node_idx),
-        } },
-        .diag_empty_tuple => return CIR.Diagnostic{ .empty_tuple = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_ident_already_in_scope => return CIR.Diagnostic{ .ident_already_in_scope = .{
+        }),
+        inline .diag_ident_already_in_scope,
+        .diag_provided_value_is_required,
+        .diag_ident_not_in_scope,
+        .diag_read_uninitialized_var,
+        .diag_self_referential_definition,
+        .diag_circular_value_definition,
+        .diag_local_reference_before_definition,
+        .diag_erroneous_value_use,
+        .diag_qualified_ident_does_not_exist,
+        .diag_unused_variable,
+        .diag_used_underscore_variable,
+        => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
-        } },
+        }),
         .diagnostic_exposed_but_not_implemented => return CIR.Diagnostic{ .exposed_but_not_implemented = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_provided_value_is_required => return CIR.Diagnostic{ .provided_value_is_required = .{
             .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
@@ -6175,40 +5896,9 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_ident_not_in_scope => return CIR.Diagnostic{ .ident_not_in_scope = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_read_uninitialized_var => return CIR.Diagnostic{ .read_uninitialized_var = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_self_referential_definition => return CIR.Diagnostic{ .self_referential_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_circular_value_definition => return CIR.Diagnostic{ .circular_value_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_local_reference_before_definition => return CIR.Diagnostic{ .local_reference_before_definition = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_mutually_recursive_local_definitions => return CIR.Diagnostic{ .mutually_recursive_local_definitions = .{
             .ident1 = @bitCast(payload.diag_two_idents.ident1),
             .ident2 = @bitCast(payload.diag_two_idents.ident2),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_erroneous_value_use => return CIR.Diagnostic{ .erroneous_value_use = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_erroneous_value_expr => return CIR.Diagnostic{ .erroneous_value_expr = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_qualified_ident_does_not_exist => return CIR.Diagnostic{ .qualified_ident_does_not_exist = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
         .diag_invalid_top_level_statement => return CIR.Diagnostic{ .invalid_top_level_statement = .{
@@ -6217,27 +5907,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         } },
         .diag_invalid_associated_statement => return CIR.Diagnostic{ .invalid_associated_statement = .{
             .stmt = @fromBackingInt(@intCast(payload.diag_single_value.value)),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_not_canonicalized => return CIR.Diagnostic{ .expr_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_expr_syntax_error => return CIR.Diagnostic{ .expr_syntax_error = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unreachable_string_pattern_capture => return CIR.Diagnostic{ .unreachable_string_pattern_capture = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_arg_invalid => return CIR.Diagnostic{ .pattern_arg_invalid = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_pattern_not_canonicalized => return CIR.Diagnostic{ .pattern_not_canonicalized = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_if_expr_without_else => return CIR.Diagnostic{ .if_expr_without_else = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_var_across_function_boundary => return CIR.Diagnostic{ .var_across_function_boundary = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_shadowing_warning => {
@@ -6380,35 +6049,8 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_malformed_type_annotation => return CIR.Diagnostic{ .malformed_type_annotation = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_malformed_where_clause => return CIR.Diagnostic{ .malformed_where_clause = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_where_clause_not_allowed_in_type_decl => return CIR.Diagnostic{ .where_clause_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_where_alias_constraint_not_on_receiver => return CIR.Diagnostic{ .where_alias_constraint_not_on_receiver = .{
             .receiver_name = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_open_ext_not_allowed_in_type_decl => return CIR.Diagnostic{ .open_ext_not_allowed_in_type_decl = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_not_allowed_in_structural_record => return CIR.Diagnostic{ .unnamed_field_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_optional_field_cannot_have_default => return CIR.Diagnostic{ .optional_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_unnamed_field_cannot_have_default => return CIR.Diagnostic{ .unnamed_field_cannot_have_default = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_in_structural_record => return CIR.Diagnostic{ .default_not_allowed_in_structural_record = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_default_not_allowed_on_local_type_decl => return CIR.Diagnostic{ .default_not_allowed_on_local_type_decl = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_record_default_reference_cycle => return CIR.Diagnostic{ .record_default_reference_cycle = .{
@@ -6435,9 +6077,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
             .module_name = @bitCast(payload.diag_single_ident.ident),
             .region = store.getRegionAt(node_idx),
         } },
-        .diag_execution_requires_app_or_default_app => return CIR.Diagnostic{ .execution_requires_app_or_default_app = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_name_case_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_name_case_mismatch = .{
@@ -6446,9 +6085,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_module_header_deprecated => return CIR.Diagnostic{ .module_header_deprecated = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_roc_version_mismatch => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .roc_version_mismatch = .{
@@ -6523,14 +6159,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_unused_variable => return CIR.Diagnostic{ .unused_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_used_underscore_variable => return CIR.Diagnostic{ .used_underscore_variable = .{
-            .ident = @bitCast(payload.diag_single_ident.ident),
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_duplicate_record_field => {
             const p = payload.diag_ident_with_region;
             return CIR.Diagnostic{ .duplicate_record_field = .{
@@ -6564,12 +6192,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 },
             } };
         },
-        .diag_crash_expects_string => return CIR.Diagnostic{ .crash_expects_string = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_f64_pattern_literal => return CIR.Diagnostic{ .f64_pattern_literal = .{
-            .region = store.getRegionAt(node_idx),
-        } },
         .diag_type_var_starting_with_dollar => {
             const p = payload.diag_two_idents;
             return CIR.Diagnostic{ .type_var_starting_with_dollar = .{
@@ -6580,15 +6202,6 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         },
         .diag_underscore_in_type_declaration => return CIR.Diagnostic{ .underscore_in_type_declaration = .{
             .declared = @fromBackingInt(@intCast(payload.diag_single_value.value)),
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_break_outside_loop => return CIR.Diagnostic{ .break_outside_loop = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_infinite_loop_never_exits => return CIR.Diagnostic{ .infinite_loop_never_exits = .{
-            .region = store.getRegionAt(node_idx),
-        } },
-        .diag_trailing_try_suffix => return CIR.Diagnostic{ .trailing_try_suffix = .{
             .region = store.getRegionAt(node_idx),
         } },
         .diag_return_outside_fn => {
@@ -6637,55 +6250,12 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
                 .region = store.getRegionAt(node_idx),
             } };
         },
-        .diag_range_op_chained => return CIR.Diagnostic{ .range_op_chained = .{
-            .region = store.getRegionAt(node_idx),
-        } },
     }
 }
 
 /// Computes the span of a diagnostic starting from a given index.
 pub fn diagnosticSpanFrom(store: *NodeStore, start: u32) Allocator.Error!CIR.Diagnostic.Span {
     return try store.spanFrom("diagnostics", CIR.Diagnostic.Span, start);
-}
-
-/// Ensure the node store has capacity for at least the requested number of
-/// slots. Then return the *final* index.
-pub fn predictNodeIndex(store: *NodeStore, count: u32) Allocator.Error!Node.Idx {
-    const start_idx = store.nodes.len();
-    try store.nodes.ensureTotalCapacity(store.gpa, start_idx + count);
-    // Return where the LAST node will actually be placed
-    return @fromBackingInt(@intCast(start_idx + count - 1));
-}
-
-/// Adds an type variable slot to the store.
-///
-/// IMPORTANT: You should not use this function directly! Instead, use it's
-/// corresponding function in `ModuleEnv`.
-pub fn addTypeVarSlot(store: *NodeStore, parent_node_idx: Node.Idx, region: base.Region) Allocator.Error!Node.Idx {
-    var node = Node.init(.type_var_slot);
-    node.setPayload(.{ .type_var_slot = .{
-        .parent_node_idx = @backingInt(parent_node_idx),
-    } });
-    const nid = try store.nodes.append(store.gpa, node);
-    _ = try store.regions.append(store.gpa, region);
-    return @fromBackingInt(@intCast(@backingInt(nid)));
-}
-
-/// Given a target node idx, check that the it is in bounds
-/// If it is, do nothing
-/// If it's not, then fill in the store with type_var_slots for all missing
-/// intervening nodes, *up to and including* the provided node
-pub fn fillInTypeVarSlotsThru(store: *NodeStore, target_idx: Node.Idx, parent_node_idx: Node.Idx, region: Region) Allocator.Error!void {
-    const idx = @backingInt(target_idx);
-    try store.nodes.items.ensureTotalCapacity(store.gpa, idx);
-    while (store.nodes.items.len <= idx) {
-        var node = Node.init(.type_var_slot);
-        node.setPayload(.{ .type_var_slot = .{
-            .parent_node_idx = @backingInt(parent_node_idx),
-        } });
-        store.nodes.items.appendAssumeCapacity(node);
-        _ = try store.regions.append(store.gpa, region);
-    }
 }
 
 /// Return the current top index for scratch match branches.
@@ -6750,6 +6320,10 @@ pub const Serialized = extern struct {
     index_data: collections.SafeList(u32).Serialized,
     scratch: u64, // Reserve enough space for a 64-bit pointer
 
+    comptime {
+        collections.serde_validation.assertBidirectionalFieldSet(NodeStore, Serialized, &.{}, &.{}, &.{});
+    }
+
     /// Serialize a NodeStore into this Serialized struct, appending data to the writer
     pub fn serialize(
         self: *Serialized,
@@ -6757,118 +6331,33 @@ pub const Serialized = extern struct {
         allocator: Allocator,
         writer: *CompactWriter,
     ) Allocator.Error!void {
-        // Serialize int128_values FIRST to ensure 16-byte alignment (i128 requires it)
-        try self.int128_values.serialize(&store.int128_values, allocator, writer);
-        try self.literal_dispatch_plans.serialize(&store.literal_dispatch_plans, allocator, writer);
-        try self.literal_pattern_contexts.serialize(&store.literal_pattern_contexts, allocator, writer);
-        try self.interpolation_data.serialize(&store.interpolation_data, allocator, writer);
-        // Serialize nodes
-        try self.nodes.serialize(&store.nodes, allocator, writer);
-        try self.replaced_source_nodes.serialize(&store.replaced_source_nodes, allocator, writer);
-        // Serialize regions
-        try self.regions.serialize(&store.regions, allocator, writer);
-        try self.write_occurrences.serialize(&store.write_occurrences, allocator, writer);
-        // Serialize span2_data
-        try self.span2_data.serialize(&store.span2_data, allocator, writer);
-        // Serialize span_with_node_data
-        try self.span_with_node_data.serialize(&store.span_with_node_data, allocator, writer);
-        // Serialize method_call_data
-        try self.method_call_data.serialize(&store.method_call_data, allocator, writer);
-        // Serialize match_data
-        try self.match_data.serialize(&store.match_data, allocator, writer);
-        // Serialize if_data
-        try self.if_data.serialize(&store.if_data, allocator, writer);
-        // Serialize match_branch_data
-        try self.match_branch_data.serialize(&store.match_branch_data, allocator, writer);
-        // Serialize closure_data
-        try self.closure_data.serialize(&store.closure_data, allocator, writer);
-        // Serialize zero_arg_tag_data
-        try self.zero_arg_tag_data.serialize(&store.zero_arg_tag_data, allocator, writer);
-        // Serialize def_data
-        try self.def_data.serialize(&store.def_data, allocator, writer);
-        // Serialize import_data
-        try self.import_data.serialize(&store.import_data, allocator, writer);
-        // Serialize type_apply_data
-        try self.type_apply_data.serialize(&store.type_apply_data, allocator, writer);
-        // Serialize pattern_list_data
-        try self.pattern_list_data.serialize(&store.pattern_list_data, allocator, writer);
-        // Serialize pattern_str_interpolation_data
-        try self.pattern_str_interpolation_data.serialize(&store.pattern_str_interpolation_data, allocator, writer);
-        // Serialize pattern_str_interpolation_steps
-        try self.pattern_str_interpolation_steps.serialize(&store.pattern_str_interpolation_steps, allocator, writer);
-        // Serialize canonical where-clause ownership
-        try self.where_clause_owners.serialize(&store.where_clause_owners, allocator, writer);
-        // Serialize index_data
-        try self.index_data.serialize(&store.index_data, allocator, writer);
+        // Lists are written in this struct's field order, so int128_values
+        // goes first to ensure 16-byte alignment (i128 requires it).
+        inline for (comptime backingLists(Serialized)) |name| {
+            try @field(self, name).serialize(&@field(store, name), allocator, writer);
+        }
     }
 
     /// Deserialize into a NodeStore value (no in-place modification of cache buffer).
     /// The base_addr parameter is the base address of the serialized buffer in memory.
-    /// WARNING: The returned NodeStore points into the cache buffer and is read-only.
+    /// WARNING: The returned NodeStore points into the cache buffer and is read-only,
+    /// so it has no scratch memory.
     /// Use deserializeWithCopy() if the store needs to be mutable.
     pub fn deserializeInto(self: *const Serialized, base_addr: usize, gpa: Allocator) NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
-            .regions = self.regions.deserializeInto(base_addr),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null, // A deserialized NodeStore is read-only, so it has no need for scratch memory!
-        };
+        var store = initEmpty(gpa);
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = @field(self, name).deserializeInto(base_addr);
+        }
+        return store;
     }
 
     /// Deserialize into a NodeStore value with fresh memory allocation for fields that may need to grow.
     /// Use this for cache modules where regions may need to be extended during type checking.
     pub fn deserializeWithCopy(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        return NodeStore{
-            .gpa = gpa,
-            .nodes = self.nodes.deserializeInto(base_addr),
-            .replaced_source_nodes = self.replaced_source_nodes.deserializeInto(base_addr),
-            // Regions needs to be mutable (grown during type checking)
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = self.write_occurrences.deserializeInto(base_addr),
-            .int128_values = self.int128_values.deserializeInto(base_addr),
-            .literal_dispatch_plans = self.literal_dispatch_plans.deserializeInto(base_addr),
-            .literal_pattern_contexts = self.literal_pattern_contexts.deserializeInto(base_addr),
-            .interpolation_data = self.interpolation_data.deserializeInto(base_addr),
-            .span2_data = self.span2_data.deserializeInto(base_addr),
-            .span_with_node_data = self.span_with_node_data.deserializeInto(base_addr),
-            .method_call_data = self.method_call_data.deserializeInto(base_addr),
-            .match_data = self.match_data.deserializeInto(base_addr),
-            .if_data = self.if_data.deserializeInto(base_addr),
-            .match_branch_data = self.match_branch_data.deserializeInto(base_addr),
-            .closure_data = self.closure_data.deserializeInto(base_addr),
-            .zero_arg_tag_data = self.zero_arg_tag_data.deserializeInto(base_addr),
-            .def_data = self.def_data.deserializeInto(base_addr),
-            .import_data = self.import_data.deserializeInto(base_addr),
-            .type_apply_data = self.type_apply_data.deserializeInto(base_addr),
-            .pattern_list_data = self.pattern_list_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_data = self.pattern_str_interpolation_data.deserializeInto(base_addr),
-            .pattern_str_interpolation_steps = self.pattern_str_interpolation_steps.deserializeInto(base_addr),
-            .where_clause_owners = self.where_clause_owners.deserializeInto(base_addr),
-            .index_data = self.index_data.deserializeInto(base_addr),
-            .scratch = null,
-        };
+        var store = self.deserializeInto(base_addr, gpa);
+        // Regions needs to be mutable (grown during type checking)
+        store.regions = try self.regions.deserializeWithCopy(base_addr, gpa);
+        return store;
     }
 
     /// Deserialize into a NodeStore that owns every list it holds and carries
@@ -6876,41 +6365,65 @@ pub const Serialized = extern struct {
     /// regions, and extra data to it. `deinit` releases it exactly like a
     /// freshly constructed `NodeStore`.
     pub fn deserializeOwned(self: *const Serialized, base_addr: usize, gpa: Allocator) Allocator.Error!NodeStore {
-        var store = NodeStore{
-            .gpa = gpa,
-            .nodes = try self.nodes.deserializeWithCopy(base_addr, gpa),
-            .replaced_source_nodes = try self.replaced_source_nodes.deserializeWithCopy(base_addr, gpa),
-            .regions = try self.regions.deserializeWithCopy(base_addr, gpa),
-            .write_occurrences = try self.write_occurrences.deserializeWithCopy(base_addr, gpa),
-            .int128_values = try self.int128_values.deserializeWithCopy(base_addr, gpa),
-            .literal_dispatch_plans = try self.literal_dispatch_plans.deserializeWithCopy(base_addr, gpa),
-            .literal_pattern_contexts = try self.literal_pattern_contexts.deserializeWithCopy(base_addr, gpa),
-            .interpolation_data = try self.interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .span2_data = try self.span2_data.deserializeWithCopy(base_addr, gpa),
-            .span_with_node_data = try self.span_with_node_data.deserializeWithCopy(base_addr, gpa),
-            .method_call_data = try self.method_call_data.deserializeWithCopy(base_addr, gpa),
-            .match_data = try self.match_data.deserializeWithCopy(base_addr, gpa),
-            .if_data = try self.if_data.deserializeWithCopy(base_addr, gpa),
-            .match_branch_data = try self.match_branch_data.deserializeWithCopy(base_addr, gpa),
-            .closure_data = try self.closure_data.deserializeWithCopy(base_addr, gpa),
-            .zero_arg_tag_data = try self.zero_arg_tag_data.deserializeWithCopy(base_addr, gpa),
-            .def_data = try self.def_data.deserializeWithCopy(base_addr, gpa),
-            .import_data = try self.import_data.deserializeWithCopy(base_addr, gpa),
-            .type_apply_data = try self.type_apply_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_list_data = try self.pattern_list_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_data = try self.pattern_str_interpolation_data.deserializeWithCopy(base_addr, gpa),
-            .pattern_str_interpolation_steps = try self.pattern_str_interpolation_steps.deserializeWithCopy(base_addr, gpa),
-            .where_clause_owners = try self.where_clause_owners.deserializeWithCopy(base_addr, gpa),
-            .index_data = try self.index_data.deserializeWithCopy(base_addr, gpa),
-            .scratch = null,
-        };
+        var store = initEmpty(gpa);
         errdefer store.deinit();
-
+        inline for (comptime backingLists(NodeStore)) |name| {
+            @field(store, name) = try @field(self, name).deserializeWithCopy(base_addr, gpa);
+        }
         try store.ensureScratch();
-
         return store;
     }
 };
+
+test "NodeStore round-trips every backing list" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+    const lists = comptime backingLists(NodeStore);
+
+    // Every list gets a distinct, nonzero number of entries, so a conversion
+    // that skips a list or crosses two of them changes a length.
+    var original = initEmpty(gpa);
+    defer original.deinit();
+    inline for (lists, 1..) |name, entry_count| {
+        const Entry = @FieldType(Serialized, name).SerializedElement;
+        for (0..entry_count) |_| _ = try @field(original, name).append(gpa, std.mem.zeroes(Entry));
+    }
+
+    var cloned = try original.clone(gpa);
+    defer cloned.deinit();
+
+    var writer = CompactWriter.init();
+    defer writer.deinit(gpa);
+    const serialized = try writer.appendAlloc(gpa, Serialized);
+    try serialized.serialize(&original, gpa, &writer);
+    const buffer = try gpa.alignedAlloc(u8, .@"16", @intCast(writer.total_bytes));
+    defer gpa.free(buffer);
+    _ = try writer.writeToBuffer(buffer);
+    const loaded: *const Serialized = @ptrCast(@alignCast(buffer.ptr));
+    const base_addr = @intFromPtr(buffer.ptr);
+
+    const borrowed = loaded.deserializeInto(base_addr, gpa);
+    var regions_owned = try loaded.deserializeWithCopy(base_addr, gpa);
+    defer regions_owned.regions.deinit(gpa);
+    var owned = try loaded.deserializeOwned(base_addr, gpa);
+    defer owned.deinit();
+
+    inline for (lists, 1..) |name, entry_count| {
+        inline for (.{ &cloned, &borrowed, &regions_owned, &owned }) |store| {
+            try testing.expectEqual(@as(u64, entry_count), @field(store, name).len());
+        }
+    }
+
+    // Serializing the reloaded store reproduces the original bytes.
+    var rewriter = CompactWriter.init();
+    defer rewriter.deinit(gpa);
+    const reserialized = try rewriter.appendAlloc(gpa, Serialized);
+    try reserialized.serialize(&owned, gpa, &rewriter);
+    const rebuffer = try gpa.alignedAlloc(u8, .@"16", @intCast(rewriter.total_bytes));
+    defer gpa.free(rebuffer);
+    _ = try rewriter.writeToBuffer(rebuffer);
+    try testing.expectEqualSlices(u8, buffer, rebuffer);
+}
 
 test "NodeStore empty CompactWriter roundtrip" {
     const testing = std.testing;

@@ -4,6 +4,7 @@
 //! function prologues/epilogues and instruction selection.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
@@ -249,26 +250,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             return (self.callee_saved_used & (mask1 | mask2)) != 0;
         }
 
-        /// Emit callee-saved register saves at fixed offsets from FP
-        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
-        /// Saves to [FP + 16], [FP + 32], etc. for each used pair
-        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
-        pub fn emitSaveCalleeSavedToFrame(self: *Self) Allocator.Error!void {
-            var builder = DeferredFrameBuilder.init();
-            builder.setCalleeSavedMask(self.callee_saved_used);
-            try builder.emitSaveCalleeSaved(&self.emit);
-        }
-
-        /// Emit callee-saved register restores from fixed offsets from FP
-        /// Used by MonoExprCodeGen for procedures that pre-allocate the frame
-        /// Restores from [FP + 16], [FP + 32], etc. for each used pair
-        /// The offset is scaled by 8 for stp/ldp (i.e., offset=2 means 16 bytes)
-        pub fn emitRestoreCalleeSavedFromFrame(self: *Self) Allocator.Error!void {
-            var builder = DeferredFrameBuilder.init();
-            builder.setCalleeSavedMask(self.callee_saved_used);
-            try builder.emitRestoreCalleeSaved(&self.emit);
-        }
-
         /// Emit function prologue (called at start of function)
         /// Note: Call this AFTER register allocation is complete to know which
         /// callee-saved registers need to be preserved.
@@ -283,20 +264,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             var builder = DeferredFrameBuilder.init();
             builder.setCalleeSavedMask(self.callee_saved_used);
             try builder.emitEpilogue(&self.emit);
-        }
-
-        /// Emit stack frame setup with given local size
-        pub fn emitStackAlloc(self: *Self, size: u32) Allocator.Error!void {
-            if (size > 0) {
-                // sub sp, sp, #size
-                if (size <= 4095) {
-                    try self.emit.subRegRegImm12(.w64, .ZRSP, .ZRSP, @intCast(size));
-                } else {
-                    // For larger sizes, need to load immediate first
-                    try self.emit.movRegImm64(.IP0, size);
-                    try self.emit.subRegRegReg(.w64, .ZRSP, .ZRSP, .IP0);
-                }
-            }
         }
 
         // Integer operations
@@ -370,13 +337,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn emitNot(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg) Allocator.Error!void {
             // MVN <dst>, <src> is an alias for ORN <dst>, XZR, <src>.
             try self.emit.ornRegRegReg(width, dst, .ZRSP, src);
-        }
-
-        /// Emit bitwise XOR with immediate: dst = src ^ imm
-        pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) Allocator.Error!void {
-            // Load immediate into scratch register and use EOR
-            try self.emit.movRegImm32(width, .IP0, imm);
-            try self.emit.eorRegRegReg(width, dst, src, .IP0);
         }
 
         // Comparison operations
@@ -703,7 +663,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         fn branchSiteIndex(self: *Self, loc: usize) u32 {
             return self.branch_site_index.get(loc) orelse {
                 if (builtin.mode == .debug) {
-                    std.debug.panic("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
+                    invariant("AArch64 branch patch at 0x{x} names no registered branch site", .{loc});
                 }
                 unreachable;
             };
@@ -841,7 +801,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn patchJump(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
             if (builtin.mode == .debug and self.branch_sites.items[index].kind != .jump and self.branch_sites.items[index].kind != .cond_jump) {
-                std.debug.panic("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
+                invariant("AArch64 patchJump called for the call site at 0x{x}", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
         }
@@ -850,7 +810,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         pub fn patchCall(self: *Self, patch_loc: usize, target_loc: usize) Allocator.Error!void {
             const index = self.branchSiteIndex(patch_loc);
             if (builtin.mode == .debug and self.branch_sites.items[index].kind != .call) {
-                std.debug.panic("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
+                invariant("AArch64 patchCall called for a site at 0x{x} that is not a pending call", .{patch_loc});
             }
             try self.patchBranchSite(index, target_loc);
         }
@@ -952,7 +912,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             std.debug.assert(site.veneer == null);
             if (builtin.mode == .debug) {
                 if (!fitsSignedBits(@divExact(branchByteOffset(site.directWordLoc(), veneer), 4), 26)) {
-                    std.debug.panic("AArch64 branch site at 0x{x} cannot reach its veneer at 0x{x}", .{ site.loc, veneer });
+                    invariant("AArch64 branch site at 0x{x} cannot reach its veneer at 0x{x}", .{ site.loc, veneer });
                 }
             }
             if (site.target == null) self.branch_open_unveneered -= 1;
@@ -1021,7 +981,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (builtin.mode == .debug) {
                 for (self.branch_sites.items) |site| {
                     if (site.kind != .extern_call and site.target == null) {
-                        std.debug.panic("AArch64 branch site at 0x{x} was never patched", .{site.loc});
+                        invariant("AArch64 branch site at 0x{x} was never patched", .{site.loc});
                     }
                 }
             }
@@ -1090,7 +1050,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
                     if (veneer_moved != target_moved) self.writePcRelSequence(veneer, target_loc, .IP0, .IP1);
                 } else if (loc_moved != target_moved) {
                     if (builtin.mode == .debug) {
-                        std.debug.panic("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
+                        invariant("AArch64 resolved branch at 0x{x} straddles the shifted body [0x{x}, 0x{x})", .{ site.loc, body_start, body_end });
                     }
                     unreachable;
                 }
@@ -1136,7 +1096,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (fitsSignedBits(offset_words, bits)) return;
 
             if (builtin.mode == .debug) {
-                std.debug.panic(
+                invariant(
                     "AArch64 {s} target out of range: word offset {d} does not fit in signed {d}-bit immediate",
                     .{ kind, offset_words, bits },
                 );

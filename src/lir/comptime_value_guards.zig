@@ -1,5 +1,6 @@
 //! Final post-ARC guards borrow the immutable compile-time failure image.
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const DenseMap = @import("collections").DenseMap;
 const LIR = core.LIR;
@@ -40,20 +41,20 @@ pub fn insert(allocator: std.mem.Allocator, program: *Program.Result, completed:
         const admitted = proc.shapes.static_literal;
         if (!admitted and @import("builtin").mode != .debug) continue;
         const uses_before = uses.items.len;
-        defer if (!admitted and uses.items.len != uses_before) @panic("compile-time value guards found a use in a procedure whose shapes excluded it");
+        defer if (!admitted and uses.items.len != uses_before) invariant("{s}", .{"compile-time value guards found a use in a procedure whose shapes excluded it"});
         visited.clearRetainingCapacity();
         work.clearRetainingCapacity();
         if (proc.body) |body| try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
             if ((try visited.getOrPut(stmt_id)).found_existing) continue;
-            try Body.appendSuccessors(store, &work, stmt_id);
+            try Body.appendSuccessors(store, &work, stmt_id, allocator);
             const assign = switch (store.getCFStmt(stmt_id)) {
                 .assign_literal => |a| a,
-                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
+                .init_uninitialized, .assign_ref, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => continue,
             };
             const slot = switch (assign.value) {
                 .static_data => |id| id,
-                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .null_ptr, .proc_ref => continue,
+                .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .bytes_literal, .proc_ref => continue,
             };
             const root = program.static_data_values.items[@backingInt(slot)].compile_time_root orelse continue;
             if (root.role != .value) continue;
@@ -174,7 +175,7 @@ fn exportsBySlot(allocator: std.mem.Allocator, program: *const Program.Result, f
 /// `failed` flag of its failure record in the frozen image.
 fn completedValueFailed(program: *const Program.Result, frozen: *const Program.FrozenStaticData, exports: []const ?u32, failure_slot: LIR.StaticDataId) bool {
     const fields = program.static_data_values.items[@backingInt(failure_slot)].compile_time_root.?.role.failure_message;
-    const index = exports[@backingInt(failure_slot)] orelse @panic("completed program omitted a compile-time value's failure record");
+    const index = exports[@backingInt(failure_slot)] orelse invariant("{s}", .{"completed program omitted a compile-time value's failure record"});
     const record = frozen.exports[index];
     return record.bytes[record.symbol_offset + fields.failed_offset] != 0;
 }

@@ -769,6 +769,35 @@ const cases = [_]Case{
         ,
     },
     .{
+        .name = "list clear, prefetch, and borrowed sublists, unique and shared inputs",
+        .source =
+        \\{
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a fourth list element long enough to allocate"],
+        \\    )
+        \\    middle_len = |list| List.len(List.sublist(list, { start: 1, len: 2 }))
+        \\    unique_prefetched = List.prefetched(unique, 1)
+        \\    shared_prefetched = List.prefetched(shared, 1)
+        \\    borrowed_len = middle_len(unique_prefetched) + middle_len(shared_prefetched)
+        \\    unique_cleared = List.clear(unique_prefetched)
+        \\    shared_cleared = List.clear(shared_prefetched)
+        \\    borrowed_len
+        \\        + List.len(unique_cleared)
+        \\        + List.len(shared_cleared)
+        \\        + List.len(holder)
+        \\}
+        ,
+        // A sublist the caller only reads is borrowed once `List.sublist`'s
+        // wrapper is inlined into it.
+        .inline_wrappers = true,
+    },
+    .{
         .name = "inspect renders values as fresh strings",
         .source =
         \\{
@@ -888,6 +917,42 @@ const cases = [_]Case{
         \\    )
         \\    holder = [shared, shared]
         \\    count_tail(shared) + count_middle(shared) + List.len(holder)
+        \\}
+        ,
+    },
+    .{
+        // With its wrapper inlined, a sublist that is only read keeps the
+        // list it slices borrowed, which ARC lowers to `list_sublist_borrowed`.
+        // `List.clear` and `List.prefetched` are their own low-level ops.
+        .name = "borrowed sublist, clear, and prefetch hint",
+        .source_kind = .module,
+        .inline_wrappers = true,
+        .source =
+        \\window_bytes : List(Str), U64 -> U64
+        \\window_bytes = |items, start| {
+        \\    window = List.sublist(items, { start, len: 2 })
+        \\    match window {
+        \\        [first, ..] => Str.count_utf8_bytes(first) + List.len(window)
+        \\        [] => 0
+        \\    }
+        \\}
+        \\
+        \\main = || {
+        \\    shared = List.concat(
+        \\        ["a list element long enough to allocate", "another list element long enough"],
+        \\        ["a third list element long enough to allocate"],
+        \\    )
+        \\    holder = [shared, shared]
+        \\    unique = List.concat(
+        \\        ["a fourth list element long enough to allocate"],
+        \\        ["a fifth list element long enough to allocate"],
+        \\    )
+        \\    hinted = List.prefetched(shared, 1)
+        \\    window_bytes(shared, 0)
+        \\        + window_bytes(shared, 1)
+        \\        + List.len(List.clear(unique))
+        \\        + List.len(List.clear(hinted))
+        \\        + List.len(holder)
         \\}
         ,
     },
@@ -1029,9 +1094,10 @@ const cases = [_]Case{
 /// Ops that this source-level sweep cannot reach. Each needs a reason; the
 /// sweep fails when one turns out to be covered after all.
 ///
-/// Every entry here is an op nothing produces: no name in `Builtin.roc` maps to
-/// it through `canonicalize/BuiltinLowLevel.zig`, and no lowering pass emits
-/// it. They are reachable only from a backend's switch, which is why their rows
+/// Every entry here is an op no LIR statement carries: either no name in
+/// `Builtin.roc` maps to it through `canonicalize/BuiltinLowLevel.zig`, or
+/// lowering replaces it with other statements, and no lowering pass emits it.
+/// They are reachable only from a backend's switch, which is why their rows
 /// have gone unchecked. Wiring one up is what makes its row matter, and doing
 /// that removes it from this table.
 const exemptions = [_]Exemption{
@@ -1041,10 +1107,12 @@ const exemptions = [_]Exemption{
     .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
     .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
     .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
+    .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
     .{ .op = .list_split_first, .reason = "no producer: List.split_first is written in Roc" },
     .{ .op = .list_split_last, .reason = "no producer: List.split_last is written in Roc" },
     .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
+    .{ .op = .list_prefetched, .reason = "replaced: LIR lowering splits List.prefetched into list_prefetch and an alias of the list" },
 };
 
 /// Loaded once and kept for the life of the test binary: publishing the

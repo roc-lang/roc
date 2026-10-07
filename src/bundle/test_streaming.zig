@@ -6,11 +6,27 @@
 const std = @import("std");
 const bundle = @import("bundle.zig");
 const streaming_writer = @import("streaming_writer.zig");
-const streaming_reader = @import("streaming_reader.zig");
 const c = @import("zstd");
 
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
+
+/// Decompress `compressed` with Zig's zstd, the decoder the shipped unbundler
+/// uses, after checking that `hash` is the BLAKE3 hash of the compressed bytes.
+fn decompressVerified(allocator: std.mem.Allocator, compressed: []const u8, hash: [32]u8) error{ OutOfMemory, ReadFailed, WriteFailed, TestExpectedEqual }![]u8 {
+    var actual: [32]u8 = undefined;
+    std.crypto.hash.Blake3.hash(compressed, &actual, .{});
+    try std.testing.expectEqualSlices(u8, &hash, &actual);
+
+    var input = std.Io.Reader.fixed(compressed);
+    const window = try allocator.alloc(u8, std.compress.zstd.default_window_len + std.compress.zstd.block_size_max);
+    defer allocator.free(window);
+    var decompressor = std.compress.zstd.Decompress.init(&input, window, .{});
+    var decompressed: std.Io.Writer.Allocating = .init(allocator);
+    errdefer decompressed.deinit();
+    _ = try decompressor.reader.streamRemaining(&decompressed.writer);
+    return decompressed.toOwnedSlice();
+}
 
 test "simple streaming write" {
     const allocator = std.testing.allocator;
@@ -65,27 +81,9 @@ test "simple streaming read" {
     defer compressed_list.deinit(allocator);
 
     // Now decompress it
-    var stream = std.Io.Reader.fixed(compressed_list.items);
-    var allocator_copy2 = allocator;
-    var reader = try streaming_reader.DecompressingHashReader.init(
-        &allocator_copy2,
-        &stream,
-        hash,
-        bundle.allocForZstd,
-        bundle.freeForZstd,
-    );
-    defer reader.deinit();
-
-    var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer decompressed_writer.deinit();
-
-    // Stream the data from reader to writer
-    _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
-    try decompressed_writer.writer.flush();
-
-    var decompressed_list = decompressed_writer.toArrayList();
-    defer decompressed_list.deinit(allocator);
-    try std.testing.expectEqualStrings(test_data, decompressed_list.items);
+    const decompressed = try decompressVerified(allocator, compressed_list.items, hash);
+    defer allocator.free(decompressed);
+    try std.testing.expectEqualStrings(test_data, decompressed);
 }
 
 test "streaming write with exact buffer boundary" {
@@ -120,49 +118,6 @@ test "streaming write with exact buffer boundary" {
     try std.testing.expect(list.items.len > 0);
 }
 
-test "streaming read with hash mismatch" {
-    const allocator = std.testing.allocator;
-
-    // First compress some data
-    var compressed_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer compressed_writer.deinit();
-
-    var allocator_copy = allocator;
-    var writer = try streaming_writer.CompressingHashWriter.init(
-        &allocator_copy,
-        3,
-        &compressed_writer.writer,
-        bundle.allocForZstd,
-        bundle.freeForZstd,
-    );
-    defer writer.deinit();
-
-    try writer.interface.writeAll("Test data");
-    try writer.finish();
-    try writer.interface.flush();
-
-    // Use wrong hash
-    var wrong_hash: [32]u8 = undefined;
-    @memset(&wrong_hash, 0xFF);
-
-    // Try to decompress with wrong hash
-    var compressed_list = compressed_writer.toArrayList();
-    defer compressed_list.deinit(allocator);
-    var stream_reader = std.Io.Reader.fixed(compressed_list.items);
-    var allocator_copy2 = allocator;
-    var reader = try streaming_reader.DecompressingHashReader.init(
-        &allocator_copy2,
-        &stream_reader,
-        wrong_hash,
-        bundle.allocForZstd,
-        bundle.freeForZstd,
-    );
-    defer reader.deinit();
-
-    // verifyComplete discards remaining data and checks hash
-    try std.testing.expectEqual(error.HashMismatch, reader.verifyComplete());
-}
-
 test "different compression levels" {
     const allocator = std.testing.allocator;
 
@@ -195,23 +150,9 @@ test "different compression levels" {
         sizes[i] = output_list.items.len;
 
         // Verify we can decompress
-        var stream_reader = std.Io.Reader.fixed(output_list.items);
-        var allocator_copy2 = allocator;
-        var reader = try streaming_reader.DecompressingHashReader.init(
-            &allocator_copy2,
-            &stream_reader,
-            writer.getHash(),
-            bundle.allocForZstd,
-            bundle.freeForZstd,
-        );
-        defer reader.deinit();
-
-        var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
-        defer decompressed_writer.deinit();
-
-        _ = try reader.interface.streamRemaining(&decompressed_writer.writer);
-
-        try std.testing.expectEqualStrings(test_data, decompressed_writer.written());
+        const decompressed = try decompressVerified(allocator, output_list.items, writer.getHash());
+        defer allocator.free(decompressed);
+        try std.testing.expectEqualStrings(test_data, decompressed);
     }
 
     // Higher compression levels should generally produce smaller output
@@ -252,25 +193,10 @@ test "large data roundtrip" {
     const compressed_list = compressed_writer.written();
 
     // Decompress
-    var stream = std.Io.Reader.fixed(compressed_list);
-    var reader = try streaming_reader.DecompressingHashReader.init(
-        &allocator_copy,
-        &stream,
-        hash,
-        bundle.allocForZstd,
-        bundle.freeForZstd,
-    );
-    defer reader.deinit();
-
-    var decompressed_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer decompressed_writer.deinit();
-
-    const size_written = try reader.interface.streamRemaining(&decompressed_writer.writer);
-    try reader.verifyComplete();
-    try std.testing.expectEqual(large_size, size_written);
-    try decompressed_writer.writer.flush();
-
-    try std.testing.expectEqualSlices(u8, large_data, decompressed_writer.written());
+    const decompressed = try decompressVerified(allocator, compressed_list, hash);
+    defer allocator.free(decompressed);
+    try std.testing.expectEqual(large_size, decompressed.len);
+    try std.testing.expectEqualSlices(u8, large_data, decompressed);
 }
 
 test "large file streaming extraction" {

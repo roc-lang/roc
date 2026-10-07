@@ -226,7 +226,7 @@ fn countProc(
             if (low_level.op == .list_replace_unsafe) counts.list_replace += 1;
             if (low_level.op == .list_append_unsafe) counts.list_append += 1;
         }
-        try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+        try lir.BodyClone.appendSuccessors(store, &work, stmt_id, std.testing.allocator);
     }
     return counts;
 }

@@ -421,8 +421,7 @@ const InlineAnalyzer = struct {
                 },
                 .expr => |expr_id| switch (self.solved.lifted.getExpr(expr_id).data) {
                     .return_ => return .open,
-                    .break_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
-                    .continue_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
+                    .break_, .continue_ => if (depth == 0) return .open else try Lifted.appendChildren(self.allocator, &self.solved.lifted, expr_id, &children),
                     .loop_ => |loop| {
                         const initial_values = self.solved.lifted.exprSpan(loop.initial_values);
                         for (0..initial_values.len) |index| try children.append(self.allocator, .{ .expr = GuardedList.at(initial_values, index) });

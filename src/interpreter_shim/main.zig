@@ -6,6 +6,7 @@
 //! the LIR interpreter.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const builtins = @import("builtins");
 const eval = @import("eval");
@@ -111,6 +112,25 @@ const RuntimeStateError = ipc.CoordinationError || ipc.platform.SharedMemoryErro
 var runtime_state_initialized: std.atomic.Value(bool) = .init(false);
 var runtime_state: RuntimeState = undefined;
 var runtime_state_mutex: std.Io.Mutex = .init;
+/// The program every static erased callable in `runtime_state`'s image runs
+/// against. Hosts may invoke those callables after the provided root that
+/// returned them has finished, so they reach this through their headers.
+var static_callable_program: eval.LirInterpreter.StaticCallableProgram = undefined;
+
+/// Make the installed `runtime_state`'s program the owner of its image's
+/// static callables.
+fn bindStaticCallableProgram() void {
+    static_callable_program.bind(.{
+        .allocator = allocator(),
+        .store = &runtime_state.view.store,
+        .layout_store = &runtime_state.view.layouts,
+        .boxy_tables = eval.LirInterpreter.BoxyTables.fromImageView(&runtime_state.view),
+        .static_strings = runtime_state.static_strings.view(),
+        .static_addresses = runtime_state.static_data.addresses,
+        .synchronization_io = shimIo(),
+    });
+    runtime_state.static_data.ownByProgram(&static_callable_program);
+}
 
 /// IO used for the shim's coordination reads and mutex.
 fn shimIo() std.Io {
@@ -169,6 +189,7 @@ fn ensureRuntimeState(ops: *RocOps) *RuntimeState {
     runtime_state = openRuntimeState(allocator()) catch {
         ops.crash("LIR shim could not map the compiled Roc image");
     };
+    bindStaticCallableProgram();
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
 }
@@ -207,7 +228,7 @@ fn evaluateEntrypointInState(
     const view = &state.view;
     const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
         if (builtin.mode == .debug) {
-            std.debug.panic("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
+            invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;
     };
@@ -291,6 +312,7 @@ fn ensureEmbeddedRuntimeState(image_base: *anyopaque, image_len: usize, ops: *Ro
         .static_strings = static_strings,
         .entrypoints = entrypoints,
     };
+    bindStaticCallableProgram();
     runtime_state_initialized.store(true, .release);
     return &runtime_state;
 }

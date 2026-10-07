@@ -482,8 +482,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
-            .uninitialized => return .uninitialized,
-            .uninitialized_payload => return .uninitialized,
+            .uninitialized, .uninitialized_payload => return .uninitialized,
             .if_initialized_payload => |switch_| return try self.evalInitializedPayload(frame, switch_),
             .try_sequence => |seq| return try self.evalTrySequence(frame, expr.ty, seq),
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),
@@ -3315,7 +3314,7 @@ pub const Evaluator = struct {
     /// of them crashes, and `roc_crashed` never returns, so reaching this is a
     /// bug in the evaluator.
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        std.debug.panic("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+        base.invariant("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
     }
 };
 

@@ -7,6 +7,7 @@
 //! alignment, and aggregate placement.
 
 const std = @import("std");
+const base = @import("base");
 const check = @import("check");
 const collections = @import("collections");
 const layout = @import("layout");
@@ -292,8 +293,7 @@ const Builder = struct {
         for (captures, fields, 0..) |capture, *field, index| {
             const field_layout: layout.Idx = switch (capture.kind) {
                 .captured_value => (try self.runtimeLayoutForRep(capture.rep)).layoutIdx(),
-                .hidden_desc => .opaque_ptr,
-                .hidden_dict, .hidden_literal => .opaque_ptr,
+                .hidden_desc, .hidden_dict, .hidden_literal => .opaque_ptr,
             };
             field.* = .{ .index = @intCast(index), .layout = field_layout };
         }
@@ -547,16 +547,17 @@ const Builder = struct {
                 continue;
             }
             if (rep.kind == .dynamic and rep.tag_variants.len != 0) {
-                return try self.tagUnionPayloadLayout(rep_id);
+                return try self.aggregatePayloadLayout(.tag_union, rep_id);
             }
             if (rep.kind == .dynamic and repHasRecordFields(self.program, rep)) {
-                return try self.recordPayloadLayout(rep_id);
+                return try self.aggregatePayloadLayout(.record, rep_id);
             }
             return (try self.runtimeLayoutForRep(rep_id)).layoutIdx();
         }
     }
 
-    fn recordPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
+    /// The descriptor payload layout of the record or tag union `rep_id`.
+    fn aggregatePayloadLayout(self: *Builder, comptime shape: enum { record, tag_union }, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
         var graph = layout.Graph{};
         defer graph.deinit(self.allocator);
 
@@ -571,29 +572,10 @@ const Builder = struct {
         };
         const root = try graph.reserveNode(self.allocator);
         try local_nodes.put(rep_id, root);
-        try graph_builder.buildNode(.{ .state = .{ .fields = .{ .node = root, .rep_id = rep_id, .kind = .record } } });
-
-        var commit = try self.store.commitGraph(&graph, .{ .local = root });
-        defer commit.deinit(self.allocator);
-        return commit.value_layouts[@backingInt(root)];
-    }
-
-    fn tagUnionPayloadLayout(self: *Builder, rep_id: Plan.TypeRepId) Allocator.Error!layout.Idx {
-        var graph = layout.Graph{};
-        defer graph.deinit(self.allocator);
-
-        const local_nodes = &self.graph_nodes;
-        local_nodes.clearRetainingCapacity();
-
-        var graph_builder = GraphBuilder{
-            .parent = self,
-            .descriptor_payload = true,
-            .graph = &graph,
-            .local_nodes = local_nodes,
-        };
-        const root = try graph.reserveNode(self.allocator);
-        try local_nodes.put(rep_id, root);
-        try graph_builder.buildNode(.{ .state = .{ .tag = .{ .node = root, .rep_id = rep_id, .mode = .descriptor_payload } } });
+        try graph_builder.buildNode(.{ .state = switch (shape) {
+            .record => .{ .fields = .{ .node = root, .rep_id = rep_id, .kind = .record } },
+            .tag_union => .{ .tag = .{ .node = root, .rep_id = rep_id, .mode = .descriptor_payload } },
+        } });
 
         var commit = try self.store.commitGraph(&graph, .{ .local = root });
         defer commit.deinit(self.allocator);
@@ -1033,7 +1015,7 @@ fn repHasRecordFields(program: *const Plan.ProgramPlan, rep: Plan.TypeRepresenta
 
 fn boxyLayoutInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
-        std.debug.panic("boxy layout invariant violated: {s}", .{message});
+        base.invariant("boxy layout invariant violated: {s}", .{message});
     }
     unreachable;
 }
@@ -1156,6 +1138,61 @@ test "boxy layout planner preserves zero-payload tag variants" {
     try std.testing.expectEqual(@as(usize, 2), info.variants.len);
     try std.testing.expectEqual(layout.Idx.zst, info.variants.get(0).payload_layout);
     try std.testing.expectEqual(layout.Idx.u64, info.variants.get(1).payload_layout);
+}
+
+test "boxy projected closed singleton layouts cannot alias multi-variant storage" {
+    const gpa = std.testing.allocator;
+    const payload_cases = [_]checked.StoredCheckedTypePayload{
+        .empty_record,
+        .{ .nominal = builtinNominal(.u64, @fromBackingInt(fixtureTableIndex(0)), .{}) },
+        .{ .nominal = builtinNominal(.str, @fromBackingInt(fixtureTableIndex(0)), .{}) },
+        .{ .flex = .{} },
+        .{ .tag_union = .{ .tags = .{ .start = 3, .len = 2 }, .ext = @fromBackingInt(1) } },
+    };
+    for (payload_cases) |payload| {
+        for (0..3) |arity| {
+            const type_pool = [_]checked.CheckedTypeId{
+                @fromBackingInt(fixtureTableIndex(0)),
+                @fromBackingInt(fixtureTableIndex(0)),
+            };
+            const tags = [_]checked.CheckedTag{
+                .{ .name = @fromBackingInt(1), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @fromBackingInt(2), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @fromBackingInt(3), .args_start = 0, .args_len = @intCast(arity) },
+                .{ .name = @fromBackingInt(4), .args_start = 0, .args_len = 0 },
+                .{ .name = @fromBackingInt(5), .args_start = 0, .args_len = 1 },
+            };
+            const payloads = [_]checked.StoredCheckedTypePayload{
+                payload,
+                .empty_tag_union,
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 1 }, .ext = @fromBackingInt(1) } },
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(1) } },
+                .{ .tag_union = .{ .tags = .{ .start = 0, .len = 3 }, .ext = @fromBackingInt(1) } },
+            };
+            const view = checked.CheckedTypeStoreView{
+                .stored_payloads = &payloads,
+                .type_id_pool = &type_pool,
+                .tag_pool = &tags,
+            };
+            var program = try Plan.analyzeCheckedTypes(gpa, view, &.{
+                @fromBackingInt(2), @fromBackingInt(3), @fromBackingInt(4),
+            }, .{});
+            defer program.deinit();
+            var store = try layout.Store.init(gpa, .u64);
+            defer store.deinit();
+            var layouts = try build(gpa, &program, &store, .{});
+            defer layouts.deinit();
+            const singleton = layouts.rep_layouts[@backingInt(program.root_reps.items[0])].worker.layoutIdx();
+            for (program.root_reps.items) |rep_id| {
+                // Dynamic payload storage does not turn a closed root row into
+                // an open-row representation that erases its variant universe.
+                try std.testing.expectEqual(Plan.RepresentationKind.tag_union, program.representations.items[@backingInt(rep_id)].kind);
+            }
+            for (program.root_reps.items[1..]) |rep_id| {
+                try std.testing.expect(singleton != layouts.rep_layouts[@backingInt(rep_id)].worker.layoutIdx());
+            }
+        }
+    }
 }
 
 test "boxy layout planner gives open tag descriptors a row-extension payload layout" {

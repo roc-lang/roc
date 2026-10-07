@@ -7,7 +7,6 @@
 
 const std = @import("std");
 const Sha256 = @import("base").Sha256;
-const Allocator = std.mem.Allocator;
 const can = @import("can");
 const check = @import("check");
 
@@ -82,12 +81,6 @@ fn hashLengthPrefixed(hasher: *Sha256, bytes: []const u8) void {
 /// Public `CheckedModuleArtifactKey` declaration.
 pub const CheckedModuleArtifactKey = CheckedArtifact.CheckedModuleArtifactKey;
 
-/// Public `DirectImportArtifactKey` declaration.
-pub const DirectImportArtifactKey = struct {
-    import_order: u32,
-    key: CheckedModuleArtifactKey,
-};
-
 /// Public `CacheKeyInput` declaration.
 pub const CacheKeyInput = struct {
     source: []const u8,
@@ -104,13 +97,6 @@ pub fn checkedModuleArtifactKey(input: CacheKeyInput) CheckedModuleArtifactKey {
         input.checking_context_identity,
         input.direct_import_artifact_keys,
     );
-}
-
-/// Public `cacheFileName` function.
-pub fn cacheFileName(allocator: std.mem.Allocator, key: CheckedModuleArtifactKey) std.mem.Allocator.Error![]u8 {
-    const filename = try allocator.alloc(u8, key.bytes.len * 2);
-    _ = std.fmt.bufPrint(filename, "{x}", .{&key.bytes}) catch unreachable;
-    return filename;
 }
 
 /// Public `eql` function.

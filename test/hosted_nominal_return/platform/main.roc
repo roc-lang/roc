@@ -9,7 +9,7 @@ platform ""
         "roc_foo_idx_get": Foo.Idx.get!,
     }
     targets: {
-        inputs_dir: "../../fx/platform/targets/",
+        inputs_dir: "targets/",
         arm64mac: { inputs: ["libhost.a", app] },
         arm64musl: { inputs: ["libhost.a", app] },
         arm64v1musl: { inputs: ["libhost.a", app] },

@@ -611,7 +611,16 @@ getUser = |id| if
 				(ty-lookup (name "Str") (builtin)))))
 	(d-let
 		(p-assign (ident "getUser"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "id")))
+			(e-if
+				(if-branches
+					(if-branch
+						(e-runtime-error (tag "expr_syntax_error"))
+						(e-runtime-error (tag "expr_syntax_error"))))
+				(if-else
+					(e-empty_record)))))
 	(s-alias-decl
 		(ty-header (name "UserId"))
 		(ty-lookup (name "U64") (builtin))))
@@ -622,12 +631,12 @@ getUser = |id| if
 	(defs
 		(patt (type "Error"))
 		(patt (type "UserId -> Str"))
-		(patt (type "_arg -> Error")))
+		(patt (type "_arg -> {}")))
 	(type_decls
 		(alias (type "UserId")
 			(ty-header (name "UserId"))))
 	(expressions
 		(expr (type "Error"))
 		(expr (type "UserId -> Str"))
-		(expr (type "_arg -> Error"))))
+		(expr (type "_arg -> {}"))))
 ~~~

@@ -4,6 +4,7 @@
 //! Names are borrowed from the producer and live until its code is consumed.
 
 const std = @import("std");
+const base = @import("base");
 
 /// Index in one code generator's symbol-name column.
 pub const Id = enum(u32) { _ };
@@ -44,7 +45,7 @@ pub const Table = struct {
         const id = try self.internEmitted(allocator, name);
         const declared = &self.scopes.items[@backingInt(id)];
         if (declared.*) |existing| {
-            if (existing != scope_) std.debug.panic("symbol {s} was declared with two scopes", .{name});
+            if (existing != scope_) base.invariant("symbol {s} was declared with two scopes", .{name});
         } else {
             declared.* = scope_;
         }
@@ -77,7 +78,7 @@ pub const Table = struct {
     /// The scope generated code declared for `id`.
     pub fn scope(self: *const Table, id: Id) Scope {
         return self.scopes.items[@backingInt(id)] orelse
-            std.debug.panic("generated code refers to {s} without declaring its scope", .{self.names.items[@backingInt(id)]});
+            base.invariant("generated code refers to {s} without declaring its scope", .{self.names.items[@backingInt(id)]});
     }
 
     pub fn clearRetainingCapacity(self: *Table) void {

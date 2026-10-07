@@ -1,6 +1,7 @@
 //! Match a materialized CTFE environment to its producer's closed recipe.
 //! Traversal follows explicit descriptor and dictionary references only.
 const std = @import("std");
+const invariant = @import("base").invariant;
 const lir = @import("lir");
 const Program = lir.Program;
 const Runtime = @import("boxy_runtime.zig").BoxyRuntime;
@@ -59,7 +60,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyTypeDesc(id),
             .runtime => |id| self.runtime.runtime_boxy_type_descs.items[id],
-            .local, .dict_method_arg, .dict_method_hidden => @panic("materialized freeze witness retained frame evidence"),
+            .local, .dict_method_arg, .dict_method_hidden => invariant("{s}", .{"materialized freeze witness retained frame evidence"}),
         };
     }
 
@@ -67,7 +68,7 @@ pub const Matcher = struct {
         return switch (ref) {
             .static => |id| self.runtime.requireBoxyDict(id),
             .runtime => |id| self.runtime.runtime_boxy_dicts.dicts.items[id],
-            .local => @panic("materialized freeze witness retained a dictionary local"),
+            .local => invariant("{s}", .{"materialized freeze witness retained a dictionary local"}),
         };
     }
 
@@ -121,10 +122,10 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = false };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method" }) |field| {
+        inline for (.{ "payload_layout", "contains_refcounted", "shape", "presence_slot_present_discriminant", "inspect_opaque", "inspect_method", "eq_method", "eq_nested_dicts", "eq_rejected", "hash_method", "hash_nested_dicts", "hash_rejected", "is_bool" }) |field| {
             if (!std.meta.eql(@field(a, field), @field(b, field))) return false;
         }
-        inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs" }) |field| {
+        inline for (.{ "nested_descs", "inspect_hidden_descs", "inspect_arg_descs", "eq_hidden_descs", "eq_arg_descs", "hash_hidden_descs", "hash_arg_descs" }) |field| {
             if (!try self.descriptors(@field(a, field), @field(b, field))) return false;
         }
         if (!try self.optionalDescriptor(a.tag_ext_desc, b.tag_ext_desc)) return false;
@@ -153,7 +154,7 @@ pub const Matcher = struct {
         if (a == b) return true;
         const key: Pair = .{ .left = @intFromPtr(a), .right = @intFromPtr(b), .dictionary = true };
         if ((try self.seen.getOrPut(self.allocator, key)).found_existing) return true;
-        if (a.template or b.template) @panic("frozen dictionary witness retained frame captures");
+        if (a.template or b.template) invariant("{s}", .{"frozen dictionary witness retained frame captures"});
         if (a.method_slots.len != b.method_slots.len) return false;
         for (self.runtime.requireBoxyMethodSlots(a.method_slots), self.runtime.requireBoxyMethodSlots(b.method_slots)) |left, right| {
             if (left.present != right.present) return false;

@@ -1,25 +1,31 @@
-//! Host implementations for the compiler-rt runtime calls that native LLVM
-//! codegen emits but a self-contained merged module does not define.
+//! Host bindings for the runtime calls that native LLVM codegen emits but a
+//! self-contained merged module does not define.
 //!
 //! The eval LLVM backend merges the (target-independent) builtins bitcode into
 //! the user module and re-codegens the whole thing for the host's native
 //! target. That final instruction selection lowers operations with no native
-//! instruction (128-bit multiply/divide/remainder and 128-bit<->float
-//! conversions) to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...). Those
-//! symbols are not in the builtins bitcode (they are introduced after it,
-//! during native codegen), so the produced object references them as
-//! undefined symbols.
+//! instruction to calls: 128-bit multiply/divide/remainder and 128-bit<->float
+//! conversions to compiler-rt libcalls (`__divti3`, `__fixsfti`, ...), a float
+//! remainder to `fmod`, float rounding on a CPU without the instruction to
+//! `floor` and its siblings, and block copies and fills to the C memory
+//! routines. Those symbols are not in the builtins bitcode (they are
+//! introduced after it, during native codegen), so the produced object
+//! references them as undefined symbols.
 //!
-//! For a normally-linked program the system linker resolves these against
-//! compiler-rt. The compiler's relocatable loader instead binds each such
-//! symbol through `resolve` to the matching decomposed-64-bit implementation
-//! already maintained for the builtins in `compiler_rt_128`, keeping the
-//! loaded image self-contained without depending on the host's own
-//! compiler-rt.
+//! For a normally-linked program the linker resolves these against the
+//! platform's C runtime or the default platform's compiler-rt carrier. The
+//! compiler's relocatable loader instead binds each such symbol through
+//! `resolve`. A compiler-rt arithmetic helper binds to the matching
+//! decomposed-64-bit implementation already maintained for the builtins in
+//! `compiler_rt_128`, keeping the loaded image independent of the host's own
+//! compiler-rt. A C routine binds to the definition this binary carries; the
+//! set of those is `shim_symbols.c_memory_set` and `shim_symbols.c_math_set`,
+//! the same names a platform's C runtime owes compiled Roc code.
 
 const std = @import("std");
 const builtin = @import("builtin");
 const compiler_rt = @import("compiler_rt_128.zig");
+const shim_symbols = @import("shim_symbols.zig");
 
 // `callconv(.c)` wrappers matching each compiler-rt symbol's ABI. The
 // underlying implementations decompose to 64-bit arithmetic only, so
@@ -102,37 +108,32 @@ const entries = .{
     .{ "__floatuntidf", &__floatuntidf },
 };
 
-/// The C memory routines and stack probes native codegen may also emit
-/// calls to, bound to the definitions this binary already carries. These
-/// are resolved for a loaded object but never exported by `exportLibcalls`,
-/// since a linked program gets them from its own C runtime.
+/// The routines native codegen may also emit calls to that only some targets
+/// name, bound to the definitions this binary already carries. Like the C
+/// routines `resolve` binds, they are resolved for a loaded object but never
+/// exported by `exportLibcalls`, since a linked program gets them from its own
+/// C runtime.
 const host_routines = struct {
-    extern fn memcpy(dest: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
-    extern fn memmove(dest: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
-    extern fn memset(dest: ?[*]u8, value: c_int, len: usize) callconv(.c) ?[*]u8;
-    extern fn memcmp(a: ?[*]const u8, b: ?[*]const u8, len: usize) callconv(.c) c_int;
     /// Apple targets lower a zero-filling `memset` to `bzero`.
     extern fn bzero(dest: ?[*]u8, len: usize) callconv(.c) void;
     /// LLVM's stack probe for frames past a page on Windows x64.
     extern fn ___chkstk_ms() callconv(.c) void;
-
-    const entries = .{
-        .{ "memcpy", &memcpy },
-        .{ "memmove", &memmove },
-        .{ "memset", &memset },
-        .{ "memcmp", &memcmp },
-    };
 };
 
+/// The C memory and math routines native codegen may emit calls to, exactly
+/// the ones the boundary contract names. A loaded object's reference to one
+/// binds to the definition this binary already carries.
+const c_routines = shim_symbols.c_memory_set ++ shim_symbols.c_math_set;
+
 /// Resolve a symbol native codegen emits a call to (a compiler-rt libcall, a
-/// C memory routine, or a stack probe) to its host implementation, or null
-/// if it is not one we provide.
+/// C memory or math routine, or a stack probe) to its host implementation, or
+/// null if it is not one we provide.
 pub fn resolve(name: []const u8) ?usize {
     inline for (entries) |entry| {
         if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
     }
-    inline for (host_routines.entries) |entry| {
-        if (std.mem.eql(u8, name, entry[0])) return @intFromPtr(entry[1]);
+    inline for (c_routines) |routine| {
+        if (std.mem.eql(u8, name, routine)) return @intFromPtr(@extern(*const anyopaque, .{ .name = routine }));
     }
     if (builtin.os.tag.isDarwin()) {
         // Darwin codegen also emits the libc __bzero entry point.
@@ -164,6 +165,43 @@ test "resolve maps known compiler-rt symbols and rejects others" {
     try std.testing.expect(resolve("__floatuntidf") != null);
     try std.testing.expect(resolve("not_a_runtime_symbol") == null);
     try std.testing.expect(resolve(@import("builtin_registry.zig").BuiltinFn.float_tan.symbolName()) == null);
+}
+
+test "resolve binds every C routine the boundary contract names" {
+    inline for (shim_symbols.c_memory_set ++ shim_symbols.c_math_set) |routine| {
+        try std.testing.expect(resolve(routine) != null);
+    }
+}
+
+test "resolved C math routines compute float remainder and rounding" {
+    const Binary64 = *const fn (f64, f64) callconv(.c) f64;
+    const Binary32 = *const fn (f32, f32) callconv(.c) f32;
+    const Unary64 = *const fn (f64) callconv(.c) f64;
+    const Unary32 = *const fn (f32) callconv(.c) f32;
+
+    const fmod: Binary64 = @ptrFromInt(resolve("fmod").?);
+    const fmodf: Binary32 = @ptrFromInt(resolve("fmodf").?);
+    // The remainder keeps the sign of the dividend.
+    try std.testing.expectEqual(@as(f64, 1.5), fmod(7.5, 2.0));
+    try std.testing.expectEqual(@as(f64, -1.5), fmod(-7.5, 2.0));
+    try std.testing.expectEqual(@as(f32, 1.5), fmodf(7.5, 2.0));
+    try std.testing.expectEqual(@as(f32, -1.5), fmodf(-7.5, 2.0));
+
+    inline for (.{
+        .{ "floor", "floorf", -8.0 },
+        .{ "ceil", "ceilf", -7.0 },
+        .{ "trunc", "truncf", -7.0 },
+    }) |case| {
+        const wide: Unary64 = @ptrFromInt(resolve(case[0]).?);
+        const narrow: Unary32 = @ptrFromInt(resolve(case[1]).?);
+        try std.testing.expectEqual(@as(f64, case[2]), wide(-7.5));
+        try std.testing.expectEqual(@as(f32, case[2]), narrow(-7.5));
+    }
+
+    const sqrt: Unary64 = @ptrFromInt(resolve("sqrt").?);
+    const sqrtf: Unary32 = @ptrFromInt(resolve("sqrtf").?);
+    try std.testing.expectEqual(@as(f64, 1.5), sqrt(2.25));
+    try std.testing.expectEqual(@as(f32, 1.5), sqrtf(2.25));
 }
 
 test "resolved division and remainder match native i128 arithmetic" {

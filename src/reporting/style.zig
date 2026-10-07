@@ -11,15 +11,12 @@ const ReportingConfig = @import("config.zig").ReportingConfig;
 /// ANSI escape codes for terminal styling.
 pub const AnsiCodes = struct {
     // Colors
-    pub const BLACK = "\x1b[30m";
     pub const RED = "\x1b[31m";
     pub const GREEN = "\x1b[32m";
     pub const YELLOW = "\x1b[33m";
     pub const BLUE = "\x1b[34m";
     pub const MAGENTA = "\x1b[35m";
     pub const CYAN = "\x1b[36m";
-    pub const WHITE = "\x1b[37m";
-
     // Bright colors
     pub const BRIGHT_BLACK = "\x1b[90m";
     pub const BRIGHT_RED = "\x1b[91m";
@@ -28,26 +25,13 @@ pub const AnsiCodes = struct {
     pub const BRIGHT_BLUE = "\x1b[94m";
     pub const BRIGHT_MAGENTA = "\x1b[95m";
     pub const BRIGHT_CYAN = "\x1b[96m";
-    pub const BRIGHT_WHITE = "\x1b[97m";
-
     // Styles
     pub const RESET = "\x1b[0m";
     pub const BOLD = "\x1b[1m";
     pub const DIM = "\x1b[2m";
     pub const ITALIC = "\x1b[3m";
     pub const UNDERLINE = "\x1b[4m";
-    pub const BLINK = "\x1b[5m";
-    pub const REVERSE = "\x1b[7m";
-    pub const STRIKETHROUGH = "\x1b[9m";
-
     // Reset specific styles
-    pub const RESET_BOLD = "\x1b[22m";
-    pub const RESET_DIM = "\x1b[22m";
-    pub const RESET_ITALIC = "\x1b[23m";
-    pub const RESET_UNDERLINE = "\x1b[24m";
-    pub const RESET_BLINK = "\x1b[25m";
-    pub const RESET_REVERSE = "\x1b[27m";
-    pub const RESET_STRIKETHROUGH = "\x1b[29m";
 };
 
 /// Terminal colors and style codes, including the unstyled text palette.
@@ -211,46 +195,6 @@ pub const Style = struct {
     pub fn init(color: []const u8) Style {
         return Style{ .color = color };
     }
-
-    pub fn withBold(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = true,
-            .dim = self.dim,
-            .underline = self.underline,
-            .italic = self.italic,
-        };
-    }
-
-    pub fn withDim(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = self.bold,
-            .dim = true,
-            .underline = self.underline,
-            .italic = self.italic,
-        };
-    }
-
-    pub fn withUnderline(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = self.bold,
-            .dim = self.dim,
-            .underline = true,
-            .italic = self.italic,
-        };
-    }
-
-    pub fn withItalic(self: Style) Style {
-        return Style{
-            .color = self.color,
-            .bold = self.bold,
-            .dim = self.dim,
-            .underline = self.underline,
-            .italic = true,
-        };
-    }
 };
 
 /// Utilities for color handling.
@@ -306,18 +250,6 @@ test "ColorPalette annotation mapping" {
     try testing.expectEqualStrings(AnsiCodes.YELLOW, palette.colorForAnnotation(.warning_highlight));
     try testing.expectEqualStrings(AnsiCodes.MAGENTA, palette.colorForAnnotation(.keyword));
     try testing.expectEqualStrings(AnsiCodes.BLUE, palette.colorForAnnotation(.type_variable));
-}
-
-test "Style composition" {
-    const style = Style.init(AnsiCodes.RED)
-        .withBold()
-        .withUnderline();
-
-    try testing.expectEqualStrings(AnsiCodes.RED, style.color);
-    try testing.expect(style.bold);
-    try testing.expect(style.underline);
-    try testing.expect(!style.dim);
-    try testing.expect(!style.italic);
 }
 
 test "ColorUtils palette selection" {

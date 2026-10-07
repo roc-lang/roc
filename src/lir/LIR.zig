@@ -450,11 +450,14 @@ pub const LoweringModuleId = enum(u32) {
 pub const LiteralRejectionKind = enum(u8) {
     numeral,
     quote,
+    /// An interpolated string literal, whose conversion sees only the
+    /// literal's segments.
+    interpolation,
 };
 
 /// The source literal a literal-rejection crash reports: the checked
-/// expression, in its owning module, whose `from_numeral` or `from_quote`
-/// conversion returned `Err`.
+/// expression, in its owning module, whose `from_numeral`, `from_quote`, or
+/// `from_interpolation` conversion returned `Err`.
 pub const LiteralRejectionSite = struct {
     owner: LoweringModuleId,
     /// The literal's `CheckedExprId` in `owner`.
@@ -617,6 +620,9 @@ pub const ErasedArgDescParam = extern struct {
     /// Tag whose payload a `tag_payload` read names.
     source_tag_name: BoxyNameId,
     read: ErasedArgDescRead,
+    /// The bytes alignment adds after `read`, declared so that every byte of
+    /// the struct is defined wherever its raw bytes are persisted.
+    _padding: [3]u8 = @as([3]u8, @splat(0)),
 };
 
 /// How a boxy operation observes or transfers its source value.
@@ -899,7 +905,6 @@ pub const LiteralValue = union(enum) {
     },
     static_data: StaticDataId,
     bytes_literal: ListLiteral,
-    null_ptr,
     proc_ref: LirProcSpecId,
 };
 
@@ -1018,7 +1023,6 @@ pub const ErasedCallableOnDrop = union(enum) {
         capture_layout: layout.Idx,
         desc_field_offset: u32,
     },
-    interpreter_context_drop,
 };
 
 /// Concrete callable ABI used to enter a LIR procedure.
@@ -1026,6 +1030,61 @@ pub const ProcAbi = enum {
     roc,
     erased_callable,
 };
+
+/// Where the erased calls a callee left pending are run. A tail call through
+/// an erased function value cannot replace its caller's frame, because the
+/// erased-call runtime sits between the two and the callee returns its result
+/// differently. Instead the call is recorded as pending and its procedure
+/// returns; whoever is waiting on that procedure's result then makes the
+/// pending call, and repeats while that call leaves another pending.
+pub const PendingDrive = enum(u8) {
+    /// Nothing can be pending after this statement.
+    none,
+    /// A call can be pending, and this procedure returns to a caller that
+    /// makes it. While one is, the statement's target holds no value.
+    handed_up,
+    /// Every pending call is run here, and the last one's result replaces
+    /// this statement's.
+    always,
+    /// In an erased-callable procedure: as `always` when the procedure was
+    /// entered by anything but the erased-call runtime, which runs pending
+    /// calls itself, and as `handed_up` otherwise.
+    unless_caller_drives,
+
+    /// Whether a call can still be pending once the statement has finished,
+    /// leaving its target without a value.
+    pub fn canLeavePending(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .always => false,
+            .handed_up, .unless_caller_drives => true,
+        };
+    }
+
+    /// Whether the statement makes pending calls itself in some invocation of
+    /// its procedure, which needs the procedure's frame afterwards.
+    pub fn canDriveHere(self: PendingDrive) bool {
+        return switch (self) {
+            .none, .handed_up => false,
+            .always, .unless_caller_drives => true,
+        };
+    }
+};
+
+/// What a procedure does when it returns early because a call is pending.
+/// Whoever makes that call converts its result to this procedure's return
+/// layout in the procedure's place.
+pub const PendingReturn = struct {
+    /// The descriptor the last skipped conversion would have stored the
+    /// result as, when it is one the procedure holds before the call.
+    result_desc: ?BoxyDescRef,
+    /// The last skipped conversion stores the result under the descriptor
+    /// the value arrives with, so `result_desc` names none.
+    keeps_own_desc: bool = false,
+};
+
+/// Identity shared by procedures that reach one another through
+/// frame-replacing calls. It names the group only; it is not a procedure id.
+pub const TailGroupId = enum(u32) { _ };
 
 /// Producer-proven sites and their reserved loop identity, consumed before ARC.
 pub const TailCalls = struct {
@@ -1118,6 +1177,20 @@ pub const CFStmt = union(enum) {
         /// Producer-proven self-tail site, linked for procedure finalization.
         /// Consumed before ARC; no backend tail-call inference is required.
         tail_call: ?struct { next: ?CFStmtId } = null,
+        /// Set by ARC emission on a call to a procedure in the caller's own
+        /// call-graph SCC whose next statement returns `target`: the caller
+        /// frame owns nothing afterwards, so every backend must replace that
+        /// frame with the callee's instead of growing the stack.
+        replaces_frame: bool = false,
+        /// Set by the tail-drive pass on a call whose callee can return with
+        /// an erased call pending.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a call whose value reaches the
+        /// procedure's return only through representation conversions. When
+        /// a call is still pending after this statement, the procedure
+        /// returns at once without a value: the caller that makes the pending
+        /// call stores its result in the representation that caller reads.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_call_erased: struct {
@@ -1151,6 +1224,20 @@ pub const CFStmt = union(enum) {
         /// unit. Debug certification proves that allocation identity through
         /// the exact representation-transparent producer chain.
         reuse_source: ?LocalId = null,
+        /// Set by ARC emission on an erased call whose value the procedure
+        /// returns, as it is or after representation conversions only: the
+        /// call is left pending instead of made. The pending call owns the
+        /// reference to `closure` this statement was given, and whoever runs
+        /// it releases that reference afterwards. `target` holds no value
+        /// until a `drive` replaces it.
+        deferred: bool = false,
+        /// Set by the tail-drive pass: where calls pending after this
+        /// statement are run.
+        drive: PendingDrive = .none,
+        /// Set by the tail-drive pass on a deferred call whose value is
+        /// converted before the procedure returns it. When the call is still
+        /// pending after this statement, the procedure returns at once.
+        returns_pending: ?PendingReturn = null,
         next: CFStmtId,
     },
     assign_packed_erased_fn: struct {
@@ -1250,6 +1337,28 @@ pub const CFStmt = union(enum) {
         source: LocalId,
         source_desc: BoxyDescRef,
         source_mode: BoxyTransferMode = .borrow,
+        next: CFStmtId,
+    },
+    /// `target` (a Bool) is whether the borrowed `lhs` and `rhs`, both stored
+    /// as `desc` describes, are equal under derived `is_eq`: each component
+    /// whose type declares its own `is_eq` compares with that method, named
+    /// by the descriptor's equality method slot.
+    assign_boxy_eq: struct {
+        target: LocalId,
+        lhs: LocalId,
+        rhs: LocalId,
+        desc: BoxyDescRef,
+        next: CFStmtId,
+    },
+    /// `target` (a Hasher) is `hasher` fed the borrowed `value`, stored as
+    /// `desc` describes, under derived `to_hash`: each component whose type
+    /// declares its own `to_hash` hashes with that method, named by the
+    /// descriptor's hash method slot.
+    assign_boxy_hash: struct {
+        target: LocalId,
+        value: LocalId,
+        hasher: LocalId,
+        desc: BoxyDescRef,
         next: CFStmtId,
     },
     assign_boxy_tag: struct {
@@ -1562,9 +1671,12 @@ pub const ProcShapes = packed struct(u16) {
     struct_build: bool = false,
     /// A tag construction.
     tag_build: bool = false,
-    /// A numeric equality or ordering comparison.
-    num_comparison: bool = false,
-    _padding: u3 = 0,
+    /// An equality or ordering comparison of fixed-width unsigned integers of
+    /// at most 64 bits, the only comparison a value-range proof can decide.
+    unsigned_compare: bool = false,
+    /// A SIMD byte concat-shift, whose count a value-range proof can fix.
+    simd_concat_shift: bool = false,
+    _padding: u2 = 0,
 
     pub fn merged(self: ProcShapes, other: ProcShapes) ProcShapes {
         return @bitCast(@as(u16, @bitCast(self)) | @as(u16, @bitCast(other)));
@@ -1619,6 +1731,11 @@ pub const LirProcSpec = struct {
     erased_arg_desc_params: BoxySpan = .{},
     /// Hidden capture-pointer parameter for an erased callable procedure.
     erased_capture_arg: ?LocalId = null,
+    /// Capture layout of this erased worker's callable values that compile-time
+    /// evaluation froze into static data. No packing statement builds those
+    /// values, so backends register the worker with the Boxy runtime at
+    /// startup, for the capture this layout describes.
+    static_erased_capture_layout: ?layout.Idx = null,
     abi: ProcAbi = .roc,
     /// This callable can be invoked as an external function pointer before a
     /// normal Roc root runs, so its entry must initialize the embedded Boxy
@@ -1636,8 +1753,18 @@ pub const LirProcSpec = struct {
     external: bool = false,
     /// Exact self-tail sites produced by LIR construction, consumed by TRMC/TCE.
     tail_calls: ?TailCalls = null,
+    /// Set by the tail-drive pass on an erased-callable procedure with an
+    /// `unless_caller_drives` statement: its entry records whether the
+    /// erased-call runtime made the call.
+    reads_caller_drives: bool = false,
     /// Tail-recursion rewrite applied by the TRMC pass, if any.
     tail_transform: TailTransform = .none,
+    /// Set by ARC on every procedure that makes or receives a same-SCC tail
+    /// call; procedures connected by such calls share one identity. A value
+    /// passed in memory to a frame-replacing call cannot live in the frame
+    /// being replaced, so a backend that passes arguments that way gives
+    /// every member of a group one storage contract for them.
+    tail_group: ?TailGroupId = null,
     /// What the body contains, for pass admission.
     shapes: ProcShapes = .{},
     /// Explicit native-stack probing requirement for this proc.

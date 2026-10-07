@@ -127,12 +127,6 @@ pub const ErasedFnsId = enum(u32) { _ };
 /// Identifier for one finite callable variant.
 pub const FnVariantId = enum(u32) { _ };
 
-/// Callable lowering result used by const plans.
-pub const FnResult = union(enum) {
-    finite: FnSetId,
-    erased: ErasedFnsId,
-};
-
 /// Exact member context in the common target-independent Lambda Solved graph.
 /// Own captures belong to `source`; solved captures name their producer span.
 pub const FrozenCallableContext = struct {
@@ -411,6 +405,40 @@ pub const BoxyTypeDesc = struct {
     /// One descriptor: this value in the storage of `inspect_method`'s
     /// worker parameter, instantiated at this descriptor's type arguments.
     inspect_arg_descs: BoxySpan = .{},
+    /// The type's own `is_eq`, which descriptor-guided equality calls in
+    /// place of comparing the value's structure.
+    eq_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `eq_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    eq_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of each of `eq_method`'s
+    /// worker parameters.
+    eq_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `eq_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    eq_nested_dicts: BoxySpan = .{},
+    /// The type declares `is_eq`, but checking rejected that declaration:
+    /// descriptor-guided equality reaching this type crashes as code checking
+    /// rejected, exactly as a specialized comparison of it does.
+    eq_rejected: bool = false,
+    /// The type's own `to_hash`, which descriptor-guided hashing calls in
+    /// place of hashing the value's structure.
+    hash_method: ?BoxyMethodSlotId = null,
+    /// The hidden descriptors `hash_method`'s worker receives, in worker
+    /// parameter order, like `inspect_hidden_descs`.
+    hash_hidden_descs: BoxySpan = .{},
+    /// Two descriptors: this value in the storage of `hash_method`'s worker
+    /// value parameter, and the Hasher.
+    hash_arg_descs: BoxySpan = .{},
+    /// The static dictionaries `hash_method`'s worker receives at this
+    /// descriptor's type, in worker parameter order.
+    hash_nested_dicts: BoxySpan = .{},
+    /// The type declares `to_hash`, but checking rejected that declaration,
+    /// like `eq_rejected`.
+    hash_rejected: bool = false,
+    /// The described value is builtin Bool, which derived hashing writes as a
+    /// Bool rather than as a tag.
+    is_bool: bool = false,
     debug_checked_type: ?checked.CheckedTypeId = null,
     /// Set for static descriptors once lowering has produced every descriptor;
     /// a descriptor built at runtime reads runtime context.
@@ -627,6 +655,9 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
 pub const SpecProc = struct {
     key: [32]u8,
     proc: LIR.LirProcSpecId,
+    /// Producer-established app filling on which this procedure depends;
+    /// absent for code reusable independently of any platform requirement.
+    platform_requirement_relation: ?[32]u8 = null,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the
@@ -646,6 +677,11 @@ pub const Result = struct {
     const_type_names: names.NameStore,
     fn_sets: std.ArrayList(FnSet),
     erased_fns: std.ArrayList(ErasedFns),
+    /// Bytes every erased callable value of this program reserves at the
+    /// start of its capture: the dev shim's hot-reload header when the
+    /// program runs under hot reload, and none otherwise. Workers read their
+    /// captures after it, so a value frozen into static data reserves it too.
+    erased_capture_prefix: u32 = 0,
     boxy_type_descs: std.ArrayList(BoxyTypeDesc),
     boxy_dicts: std.ArrayList(BoxyDict),
     /// Selected implementation behind each Boxy dictionary boundary adapter.
@@ -774,13 +810,6 @@ pub const Result = struct {
         self.store.deinit();
     }
 
-    pub fn requestedLayoutForType(self: *const Result, ty: names.TypeDigest) ?layout.Idx {
-        for (self.requested_layouts.items) |entry| {
-            if (std.mem.eql(u8, entry.ty.bytes[0..], ty.bytes[0..])) return entry.layout_idx;
-        }
-        return null;
-    }
-
     pub fn addComptimeSite(
         self: *Result,
         kind: LIR.ComptimeSiteKind,
@@ -815,7 +844,7 @@ pub const Result = struct {
     pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
         const raw = @backingInt(id);
         if (raw >= self.lowering_modules.items.len) {
-            @panic("LIR program invariant violated: lowering module id has no published checked module");
+            base.invariant("{s}", .{"LIR program invariant violated: lowering module id has no published checked module"});
         }
         return self.lowering_modules.items[raw];
     }
@@ -939,6 +968,10 @@ pub const Result = struct {
                             }
                         }
                     },
+                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
+                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
+                    9 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
+                    10 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
                     else => return null,
                 }
                 self.section += 1;

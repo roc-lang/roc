@@ -6,21 +6,6 @@ const str = @import("str.zig");
 const float_bits = @import("float_bits.zig");
 const mem = std.mem;
 
-/// TODO: Document wyhash.
-pub fn wyhash(seed: u64, bytes: ?[*]const u8, length: usize) callconv(.c) u64 {
-    if (bytes) |nonnull| {
-        const slice = nonnull[0..length];
-        return wyhash_hash(seed, slice);
-    } else {
-        return 42;
-    }
-}
-
-/// TODO: Document wyhash_rocstr.
-pub fn wyhash_rocstr(seed: u64, input: str.RocStr) callconv(.c) u64 {
-    return wyhash_hash(seed, input.asSlice());
-}
-
 const primes = [_]u64{
     0xa0761d6478bd642f,
     0xe7037ed1a0b428db,
@@ -193,10 +178,6 @@ pub const Wyhash = struct {
         return WyhashStateless.hash(seed, input);
     }
 };
-
-fn wyhash_hash(seed: u64, input: []const u8) u64 {
-    return Wyhash.hash(seed, input);
-}
 
 /// Domain byte mixed before each value written to a builtin Hasher.
 pub const HasherDomain = enum(u8) {

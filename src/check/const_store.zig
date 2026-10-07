@@ -1,6 +1,7 @@
 //! Checked compile-time constant store.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 
 const checked_ids = @import("checked_ids.zig");
@@ -557,12 +558,6 @@ pub const ConstTypeStore = struct {
         return self.declared_field_pool.items[range.start .. range.start + range.len];
     }
 
-    pub fn cloneTypeFrom(self: *ConstTypeStore, source: *const ConstTypeStore, ty: ConstTypeId) Allocator.Error!ConstTypeId {
-        var map = collections.DenseMap(ConstTypeId, ConstTypeId).init(self.allocator);
-        defer map.deinit();
-        return try self.cloneTypeFromInner(source, null, ty, &map);
-    }
-
     pub fn cloneTypeFromTranslated(
         self: *ConstTypeStore,
         source: *const ConstTypeStore,
@@ -1072,9 +1067,7 @@ pub const ConstStore = struct {
             // A node's nested vector precedes its callable contracts, so the
             // contracts wait beneath it on the stack.
             const contracts = switch (node) {
-                .target => |target| target.callable_contracts,
-                .structural => |structural| structural.callable_contracts,
-                .from_callable => |use| use.callable_contracts,
+                inline .target, .structural, .from_callable => |target| target.callable_contracts,
                 .from_scheme, .unreachable_value, .checked_error => 0,
             };
             if (contracts != 0) try open.append(allocator, .{ .remaining = contracts, .nested = null });
@@ -1226,7 +1219,7 @@ pub const ConstStore = struct {
     pub fn verifyComplete(self: *const ConstStore) Allocator.Error!void {
         if (@import("builtin").mode != .debug) return;
         for (self.values.items) |value| {
-            if (value == .pending) std.debug.panic("const store invariant violated: completed store contains a pending node", .{});
+            if (value == .pending) base.invariant("const store invariant violated: completed store contains a pending node", .{});
         }
         const value_state = try self.allocator.alloc(VisitState, self.values.items.len);
         defer self.allocator.free(value_state);
@@ -1389,7 +1382,7 @@ pub const ConstStore = struct {
 
 fn constStoreInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .debug) {
-        std.debug.panic("const store invariant violated: {s}", .{message});
+        base.invariant("const store invariant violated: {s}", .{message});
     }
     unreachable;
 }

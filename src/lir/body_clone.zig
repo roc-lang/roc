@@ -11,6 +11,7 @@
 //! procedure task independently of the store receiving its cloned output.
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
@@ -125,7 +126,7 @@ pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
         const stmt = store.getCFStmt(@fromBackingInt(@intCast(index)));
         if (stmt != .join) continue;
         const raw = @backingInt(stmt.join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
     }
     return next;
@@ -157,14 +158,14 @@ pub const JoinParamIndex = struct {
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
         const raw = @backingInt(join.id);
-        if (raw == std.math.maxInt(u32)) @panic("join-point id space exhausted");
+        if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
 
     /// Reserve an identity in the same domain used by subtree clones.
     pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
-        if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
-        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
+        if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
+        const id: LIR.JoinPointId = @fromBackingInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
     }
@@ -234,17 +235,9 @@ fn forwardLocalAliasChainImpl(
 /// Push every control-flow successor of `stmt_id` onto `work`, covering
 /// straight-line `next` edges, switch branches and continuations, initialized
 /// payload arms, string-match arms, and join bodies. This is the reachability
-/// step shared by the proc walkers.
+/// step shared by the proc walkers. `allocator` must be the one that owns
+/// `work`.
 pub fn appendSuccessors(
-    store: *const LirStore,
-    work: *std.ArrayList(CFStmtId),
-    stmt_id: CFStmtId,
-) Allocator.Error!void {
-    return appendSuccessorsWithAllocator(store, work, stmt_id, store.allocator);
-}
-
-/// Like `appendSuccessors`, using the walk owner's scratch allocator.
-pub fn appendSuccessorsWithAllocator(
     store: *const LirStore,
     work: *std.ArrayList(CFStmtId),
     stmt_id: CFStmtId,
@@ -265,6 +258,8 @@ pub fn appendSuccessorsWithAllocator(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -296,11 +291,7 @@ pub fn appendSuccessorsWithAllocator(
             try work.append(allocator, s.initialized_branch);
             try work.append(allocator, s.uninitialized_branch);
         },
-        .str_match => |s| {
-            try work.append(allocator, s.on_match);
-            try work.append(allocator, s.on_miss);
-        },
-        .boxy_tag_match => |s| {
+        inline .str_match, .boxy_tag_match => |s| {
             try work.append(allocator, s.on_match);
             try work.append(allocator, s.on_miss);
         },
@@ -353,6 +344,8 @@ pub fn redirectSuccessors(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -371,11 +364,7 @@ pub fn redirectSuccessors(
         .decref_if_initialized,
         .free,
         => |*s| s.next = resolve(ctx, s.next),
-        .boxy_tag_match => |*s| {
-            s.on_match = resolve(ctx, s.on_match);
-            s.on_miss = resolve(ctx, s.on_miss);
-        },
-        .str_match => |*s| {
+        inline .boxy_tag_match, .str_match => |*s| {
             s.on_match = resolve(ctx, s.on_match);
             s.on_miss = resolve(ctx, s.on_miss);
         },
@@ -473,12 +462,8 @@ pub fn forEachStmtRead(
     switch (stmt) {
         .assign_ref => |s| switch (s.op) {
             .local => |source| note(ctx, source),
-            .discriminant => |ref| note(ctx, ref.source),
-            .field => |ref| note(ctx, ref.source),
-            .tag_payload => |ref| note(ctx, ref.source),
-            .tag_payload_struct => |ref| note(ctx, ref.source),
-            .list_reinterpret => |ref| note(ctx, ref.backing_ref),
-            .nominal => |ref| note(ctx, ref.backing_ref),
+            inline .discriminant, .field, .tag_payload, .tag_payload_struct => |ref| note(ctx, ref.source),
+            inline .list_reinterpret, .nominal => |ref| note(ctx, ref.backing_ref),
         },
         .assign_call => |s| {
             if (s.result_desc) |desc| emitDesc(ctx, note, desc);
@@ -531,22 +516,24 @@ pub fn forEachStmtRead(
             if (s.source_desc) |desc| emitDesc(ctx, note, desc);
             if (s.target_desc) |desc| emitDesc(ctx, note, desc);
         },
-        .assign_boxy_inspect => |s| {
+        inline .assign_boxy_inspect, .assign_boxy_tag_payload, .boxy_tag_match => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
+        },
+        .assign_boxy_eq => |s| {
+            note(ctx, s.lhs);
+            note(ctx, s.rhs);
+            emitDesc(ctx, note, s.desc);
+        },
+        .assign_boxy_hash => |s| {
+            note(ctx, s.value);
+            note(ctx, s.hasher);
+            emitDesc(ctx, note, s.desc);
         },
         .assign_boxy_tag => |s| {
             emitDesc(ctx, note, s.target_desc);
             if (s.payload) |payload| note(ctx, payload);
             if (s.payload_desc) |desc| emitDesc(ctx, note, desc);
-        },
-        .assign_boxy_tag_payload => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
-        },
-        .boxy_tag_match => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.source_desc);
         },
         .assign_call_dict => |s| {
             emitDict(ctx, note, s.dict);
@@ -577,26 +564,20 @@ pub fn forEachStmtRead(
             note(ctx, s.dest);
             if (s.payload) |payload| note(ctx, payload);
         },
-        .set_local => |s| note(ctx, s.value),
-        .debug => |s| note(ctx, s.message),
+        inline .set_local, .ret, .incref, .decref, .free => |s| note(ctx, s.value),
+        inline .debug, .expect_err => |s| note(ctx, s.message),
         .expect => |s| note(ctx, s.condition),
-        .expect_err => |s| note(ctx, s.message),
         .switch_stmt => |s| note(ctx, s.cond),
         .switch_initialized_payload => |s| {
             note(ctx, s.cond);
             note(ctx, s.payload);
         },
-        .str_match => |s| note(ctx, s.source),
-        .str_match_set => |s| note(ctx, s.source),
-        .ret => |s| note(ctx, s.value),
+        inline .str_match, .str_match_set => |s| note(ctx, s.source),
         .crash => |s| if (s.msg.localId()) |message| note(ctx, message),
-        .incref => |s| note(ctx, s.value),
-        .decref => |s| note(ctx, s.value),
         .decref_if_initialized => |s| {
             note(ctx, s.cond);
             note(ctx, s.value);
         },
-        .free => |s| note(ctx, s.value),
         .init_uninitialized,
         .assign_literal,
         .comptime_branch_taken,
@@ -608,13 +589,6 @@ pub fn forEachStmtRead(
         .loop_break,
         => {},
     }
-}
-
-/// Count definitions of every local reachable from `body`, walking all
-/// successor edges: statement targets, join parameters, descriptor outputs,
-/// and pattern-match captures. Operand reads are not definitions.
-pub fn countReachableDefs(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return countReachableDefsWithAllocator(store, body, store.allocator);
 }
 
 /// Like `countReachableDefs`, using the procedure task's scratch allocator.
@@ -672,6 +646,8 @@ pub fn forEachStmtDef(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -680,11 +656,7 @@ pub fn forEachStmtDef(
         .assign_tag,
         .set_local,
         => |s| note(ctx, s.target),
-        .assign_call => |s| {
-            note(ctx, s.target);
-            if (s.out_desc) |out_desc| note(ctx, out_desc);
-        },
-        .assign_call_erased => |s| {
+        inline .assign_call, .assign_call_erased => |s| {
             note(ctx, s.target);
             if (s.out_desc) |out_desc| note(ctx, out_desc);
         },
@@ -841,19 +813,12 @@ pub const ReachableStmts = struct {
         while (self.work.pop()) |stmt_id| {
             const entry = try self.visited.getOrPut(stmt_id);
             if (entry.found_existing) continue;
-            try appendSuccessorsWithAllocator(self.store, &self.work, stmt_id, self.allocator);
+            try appendSuccessors(self.store, &self.work, stmt_id, self.allocator);
             return stmt_id;
         }
         return null;
     }
 };
-
-/// Return only binders reachable from `body`. Clone passes give these fresh
-/// identities while retaining read-only external inputs. Unlike write counts,
-/// this excludes `set_local` and includes maybe-uninitialized join binders.
-pub fn collectReachableDefinitions(store: *LirStore, body: CFStmtId) Allocator.Error!ReadCounts {
-    return collectReachableDefinitionsWithAllocator(store, body, store.allocator);
-}
 
 /// Like `collectReachableDefinitions`, with independently owned scratch.
 pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId, allocator: Allocator) Allocator.Error!ReadCounts {
@@ -863,11 +828,6 @@ pub fn collectReachableDefinitionsWithAllocator(store: *LirStore, body: CFStmtId
 /// Collect lexical binders using an independent lease from the worker's storage.
 pub fn collectReachableDefinitionsWithScratch(store: *LirStore, body: CFStmtId, scratch: *AnalysisScratch) Allocator.Error!ReadCounts {
     return countReachable(store, body, scratch.counts.allocator, scratch, .binders);
-}
-
-/// Add every local defined by `stmt_id` to an existing definition set.
-pub fn markStmtDefinitions(store: *const LirStore, defined: []bool, stmt_id: CFStmtId) void {
-    visitStmtDefinitions(store, defined, stmt_id);
 }
 
 /// Add exact lexical binders without allocating for unrelated local identities.
@@ -898,6 +858,8 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_call_dict,
         .assign_low_level,
@@ -905,11 +867,7 @@ fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStm
         .assign_struct,
         .assign_tag,
         => |stmt| noteDefinition(defined, stmt.target),
-        .assign_call => |stmt| {
-            noteDefinition(defined, stmt.target);
-            if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
-        },
-        .assign_call_erased => |stmt| {
+        inline .assign_call, .assign_call_erased => |stmt| {
             noteDefinition(defined, stmt.target);
             if (stmt.out_desc) |out_desc| noteDefinition(defined, out_desc);
         },
@@ -1032,7 +990,7 @@ pub fn collectCopiedStmts(
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             try predecessors.append(allocator, .{ .key = @backingInt(successor), .stmt = stmt_id });
         }
@@ -1041,7 +999,7 @@ pub fn collectCopiedStmts(
         forEachStmtRead(store, stmt, &collector, ReaderCollector.note);
         if (stmt == .jump) {
             const params = join_params.get(stmt.jump.target) orelse
-                @panic("subtree copy plan found a jump to an unknown join");
+                base.invariant("{s}", .{"subtree copy plan found a jump to an unknown join"});
             emitSpan(store, &collector, ReaderCollector.note, params);
             try jumps.append(allocator, .{ .key = @backingInt(stmt.jump.target), .stmt = stmt_id });
         }
@@ -1128,7 +1086,7 @@ pub fn cloneCallVariant(
 ) Allocator.Error!LIR.LirProcSpecId {
     const source_spec = store.getProcSpec(source);
     const source_body = source_spec.body orelse
-        @panic("call-variant clone reached a proc with no body");
+        base.invariant("{s}", .{"call-variant clone reached a proc with no body"});
     const source_args = store.getLocalSpan(source_spec.args);
 
     var variant_args = try std.ArrayList(LocalId).initCapacity(
@@ -1469,7 +1427,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .literal_rejection = s.literal_rejection,
                 } }, origin),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -1592,6 +1550,20 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .source = try self.mapLocal(s.source),
                     .source_desc = try self.mapBoxyDescRef(s.source_desc),
                     .source_mode = s.source_mode,
+                    .next = s.next,
+                } },
+                .assign_boxy_eq => |s| .{ .assign_boxy_eq = .{
+                    .target = try self.mapLocal(s.target),
+                    .lhs = try self.mapLocal(s.lhs),
+                    .rhs = try self.mapLocal(s.rhs),
+                    .desc = try self.mapBoxyDescRef(s.desc),
+                    .next = s.next,
+                } },
+                .assign_boxy_hash => |s| .{ .assign_boxy_hash = .{
+                    .target = try self.mapLocal(s.target),
+                    .value = try self.mapLocal(s.value),
+                    .hasher = try self.mapLocal(s.hasher),
+                    .desc = try self.mapBoxyDescRef(s.desc),
                     .next = s.next,
                 } },
                 .assign_boxy_tag => |s| .{ .assign_boxy_tag = .{
@@ -1838,7 +1810,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -1941,7 +1913,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             if (self.join_remap != .declared or self.declared_joins.contains(jump.target)) return next;
 
             const params = self.join_params.?.get(jump.target) orelse
-                @panic("subtree clone jumped to an unknown external join");
+                base.invariant("{s}", .{"subtree clone jumped to an unknown external join"});
             next = try self.bridgeExternalJoinParams(params, origin, next);
             return next;
         }
@@ -2049,7 +2021,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
             return switch (dict) {
                 .static => |id| .{ .static = id },
                 .local => |local| .{ .local = try self.mapLocal(local) },
-                .runtime => std.debug.panic("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
+                .runtime => base.invariant("LIR invariant violated: a runtime dictionary reference reached LIR cloning", .{}),
             };
         }
 
@@ -2143,8 +2115,8 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 if (self.join_params) |params| {
                     entry.value_ptr.* = params.freshJoinPoint();
                 } else {
-                    if (self.next_join_point == std.math.maxInt(u32)) @panic("join-point id space exhausted");
-                    entry.value_ptr.* = @fromBackingInt(@intCast(self.next_join_point));
+                    if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
+                    entry.value_ptr.* = @fromBackingInt(self.next_join_point);
                     self.next_join_point += 1;
                 }
             }
@@ -2193,6 +2165,8 @@ fn linearNext(stmt: LIR.CFStmt) CFStmtId {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -2245,6 +2219,8 @@ fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,

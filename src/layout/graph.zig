@@ -21,14 +21,6 @@ pub const Ref = union(enum) {
     local: NodeId,
 };
 
-/// Public function `refKey`.
-pub fn refKey(ref: Ref) u64 {
-    return switch (ref) {
-        .canonical => |idx| 0x8000_0000_0000_0000 | @as(u64, @backingInt(idx)),
-        .local => |node_id| @backingInt(node_id),
-    };
-}
-
 /// Struct field edge in a temporary layout graph.
 pub const Field = struct {
     index: u32,

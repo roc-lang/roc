@@ -5,6 +5,7 @@
 //! different phases of compilation.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const collections = @import("collections");
@@ -87,50 +88,6 @@ pub fn clone(self: *const CommonEnv, gpa: std.mem.Allocator) std.mem.Allocator.E
         .line_starts = line_starts,
         .source = self.source,
     };
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-pub fn relocate(self: *CommonEnv, offset: isize) void {
-    // Relocate all sub-structures
-    self.idents.relocate(offset);
-    self.strings.relocate(offset);
-    self.exposed_items.relocate(offset);
-    self.line_starts.relocate(offset);
-    // Relocate source slice pointer if it is non-empty.
-    // The underlying bytes live in the same allocation as the rest of the
-    // module data (e.g. shared memory used by the interpreter), so we can
-    // adjust the pointer by the same offset.
-    if (self.source.len > 0) {
-        const old_ptr = @intFromPtr(self.source.ptr);
-        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
-        self.source.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
-    }
-}
-
-/// Serialize this CommonEnv to the given CompactWriter.
-/// IMPORTANT: The returned pointer points to memory inside the writer!
-/// Attempting to dereference this pointer or calling any methods on it
-/// is illegal behavior!
-pub fn serialize(
-    self: *const CommonEnv,
-    allocator: std.mem.Allocator,
-    writer: *CompactWriter,
-) std.mem.Allocator.Error!*const CommonEnv {
-    // First, write the CommonEnv struct itself
-    const offset_self = try writer.appendAlloc(allocator, CommonEnv);
-
-    // Then serialize the sub-structures and update the struct
-    offset_self.* = .{
-        .idents = (try self.idents.serialize(allocator, writer)).*,
-        .strings = (try self.strings.serialize(allocator, writer)).*,
-        .string_builder = .{},
-        .strings_insertable = false,
-        .exposed_items = (try self.exposed_items.serialize(allocator, writer)).*,
-        .line_starts = (try self.line_starts.serialize(allocator, writer)).*,
-        .source = "", // Will be set when deserializing
-    };
-
-    return @constCast(offset_self);
 }
 
 /// Serialized representation of CommonEnv
@@ -273,12 +230,6 @@ pub fn findIdentFrom(self: *const CommonEnv, source: *const CommonEnv, source_id
     return self.findIdent(source.getIdent(source_idx));
 }
 
-/// Finds or creates an identifier from another CommonEnv's store in this store.
-/// Performs cross-store ident resolution without exposing string operations to callers.
-pub fn insertIdentFrom(self: *CommonEnv, gpa: std.mem.Allocator, source: *const CommonEnv, source_idx: Ident.Idx) std.mem.Allocator.Error!Ident.Idx {
-    return self.insertIdent(gpa, Ident.for_text(source.getIdent(source_idx)));
-}
-
 /// Retrieves the text of an identifier by its index.
 pub fn getIdent(self: *const CommonEnv, idx: Ident.Idx) []const u8 {
     return self.idents.getText(idx);
@@ -300,16 +251,11 @@ pub fn getString(self: *const CommonEnv, idx: StringLiteral.Idx) []const u8 {
     return self.strings.get(idx);
 }
 
-/// Returns a mutable reference to the string literal store.
-pub fn getStringStore(self: *CommonEnv) *StringLiteral.Store {
-    return &self.strings;
-}
-
 fn assertStringsInsertable(self: *const CommonEnv) void {
     if (self.strings_insertable) return;
 
     if (comptime builtin.mode == .debug) {
-        std.debug.panic("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
+        invariant("CommonEnv invariant violated: attempted to insert into frozen string literal store", .{});
     }
     unreachable;
 }

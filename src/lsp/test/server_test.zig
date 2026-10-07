@@ -53,6 +53,7 @@ fn expectSingleErrorResponse(
 
     var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
+    server.client.trusted_workspace = true;
     server.state = switch (initial_state) {
         .waiting_for_initialize => .waiting_for_initialize,
         .running => .running,
@@ -91,7 +92,7 @@ fn lifecycleInput(allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
     const messages = [_][]const u8{
         \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/before.roc","version":1,"text":"before"}}}
         ,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":7,"rootUri":"file:///tmp","clientInfo":{"name":"test-client","version":"1.0.0"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
         ,
         \\{"jsonrpc":"2.0","method":"initialized","params":{}}
         ,
@@ -174,10 +175,10 @@ test "server handles initialize/shutdown/exit handshake" {
 test "server rejects re-initialization requests" {
     const allocator = std.testing.allocator;
     const init =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const reinit =
-        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":3,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const shutdown =
         \\{"jsonrpc":"2.0","id":2,"method":"shutdown"}
@@ -304,7 +305,7 @@ test "server enforces request lifecycle state before dispatch" {
 test "server propagates response write failures without committing initialization" {
     const allocator = std.testing.allocator;
     const request =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const input = try frame(allocator, request);
     defer allocator.free(input);
@@ -389,6 +390,7 @@ test "server tracks documents on didOpen/didChange" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
+    server.client.trusted_workspace = true;
     try server.run();
     try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
@@ -444,6 +446,7 @@ test "server applies sequential incremental changes in a single didChange" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
+    server.client.trusted_workspace = true;
     try server.run();
     try std.testing.expectEqual(@as(usize, 2), server.syntax_checker.check_calls);
 
@@ -522,6 +525,7 @@ test "server handles burst of incremental didChange messages" {
     var server = try TestServer(ReaderType, WriterType).init(allocator, std.testing.io, reader_stream, writer_stream, null, .{});
     defer server.deinit();
     server.state = .running;
+    server.client.trusted_workspace = true;
     try server.run();
     try std.testing.expectEqual(@as(usize, 4), server.syntax_checker.check_calls);
 
@@ -545,7 +549,7 @@ test "server responds to semantic tokens request" {
 
     // Full lifecycle: init -> initialized -> didOpen -> semanticTokens -> shutdown -> exit
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -638,7 +642,7 @@ test "server returns error for semantic tokens on unknown document" {
     const allocator = std.testing.allocator;
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -723,7 +727,7 @@ test "server returns empty tokens for empty document" {
     defer allocator.free(file_uri);
 
     const init_body =
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":1,"rootUri":null,"clientInfo":{"name":"test"},"capabilities":{},"initializationOptions":{"trustedWorkspace":true}}}
     ;
     const init_msg = try frame(allocator, init_body);
     defer allocator.free(init_msg);
@@ -805,4 +809,85 @@ test "server returns empty tokens for empty document" {
         break;
     }
     try std.testing.expect(found_tokens_response);
+}
+
+test "workspace trust gates document builds and all semantic requests" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "", ",\"initializationOptions\":null", ",\"initializationOptions\":{}", ",\"initializationOptions\":{\"trustedWorkspace\":false}", ",\"initializationOptions\":{\"trustedWorkspace\":true}" }, 0..) |options, index| {
+        const trusted = index == 4;
+        var input: std.ArrayList(u8) = .empty;
+        defer input.deinit(allocator);
+        const initialize = try std.fmt.allocPrint(allocator,
+            \\{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"processId":null,"rootUri":null,"capabilities":{{}}{s}}}}}
+        , .{options});
+        defer allocator.free(initialize);
+        const messages = [_][]const u8{
+            initialize,
+            \\{"jsonrpc":"2.0","method":"initialized","params":{}}
+            ,
+            \\{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","languageId":"roc","version":1,"text":"module [x]\nx = 1\n"}}}
+            ,
+            \\{"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/untrusted.roc","version":2},"contentChanges":[{"text":"module [x]\nx = 2\n"}]}}
+            ,
+        };
+        for (messages) |message| {
+            const framed = try frame(allocator, message);
+            defer allocator.free(framed);
+            try input.appendSlice(allocator, framed);
+        }
+        // Even malformed params must not reach any compiler-backed handler
+        // before the session is trusted.
+        const semantic_methods = [_][]const u8{
+            "semanticTokens/full", "hover",      "definition", "documentSymbol",
+            "documentHighlight",   "completion", "rename",     "prepareRename",
+            "references",          "inlayHint",  "codeAction",
+        };
+        if (!trusted) for (semantic_methods) |method| {
+            const body = try std.fmt.allocPrint(allocator,
+                \\{{"jsonrpc":"2.0","id":2,"method":"textDocument/{s}","params":{{}}}}
+            , .{method});
+            defer allocator.free(body);
+            const framed = try frame(allocator, body);
+            defer allocator.free(framed);
+            try input.appendSlice(allocator, framed);
+        };
+        const syntax_methods = [_][]const u8{ "formatting", "foldingRange", "selectionRange" };
+        if (!trusted) for (syntax_methods) |method| {
+            const body = try std.fmt.allocPrint(allocator,
+                \\{{"jsonrpc":"2.0","id":3,"method":"textDocument/{s}","params":{{"textDocument":{{"uri":"file:///tmp/untrusted.roc"}},"positions":[{{"line":1,"character":0}}],"options":{{"tabSize":4,"insertSpaces":true}}}}}}
+            , .{method});
+            defer allocator.free(body);
+            const framed = try frame(allocator, body);
+            defer allocator.free(framed);
+            try input.appendSlice(allocator, framed);
+        };
+        const reader: std.Io.Reader = .fixed(input.items);
+        var output: [16384]u8 = undefined;
+        const writer: std.Io.Writer = .fixed(&output);
+        var server = try TestServer(std.Io.Reader, std.Io.Writer).init(allocator, std.testing.io, reader, writer, null, .{});
+        defer server.deinit();
+        try server.run();
+        try std.testing.expectEqual(trusted, server.client.trusted_workspace);
+        try std.testing.expectEqual(@as(usize, if (trusted) 2 else 0), server.syntax_checker.check_calls);
+        const doc = server.getDocumentForTesting("file:///tmp/untrusted.roc").?;
+        try std.testing.expectEqualStrings("module [x]\nx = 2\n", doc.text);
+        if (!trusted) {
+            const responses = try collectResponses(allocator, output[0..server.transport.writer.end]);
+            defer {
+                for (responses) |body| allocator.free(body);
+                allocator.free(responses);
+            }
+            try std.testing.expectEqual(1 + semantic_methods.len + syntax_methods.len, responses.len);
+            for (responses[1 .. 1 + semantic_methods.len]) |body| {
+                const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+                defer parsed.deinit();
+                try std.testing.expectEqual(@as(i64, @backingInt(protocol.ErrorCode.request_failed)), parsed.value.object.get("error").?.object.get("code").?.integer);
+            }
+            for (responses[1 + semantic_methods.len ..]) |body| {
+                const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+                defer parsed.deinit();
+                try std.testing.expect(parsed.value.object.contains("result"));
+            }
+        }
+    }
 }

@@ -66,13 +66,10 @@ fn compileWithCache(
 
     var reports = coord.iterReports();
     while (reports.next()) |entry| {
-        switch (entry.report.severity) {
-            .warning => {},
-            .runtime_error, .fatal => std.debug.print(
-                "{s} compile reported {s}: {s}\n",
-                .{ label, @tagName(entry.report.severity), entry.report.title },
-            ),
-        }
+        if (entry.report.severity.isError()) std.debug.print(
+            "{s} compile reported {s}: {s}\n",
+            .{ label, @tagName(entry.report.severity), entry.report.title },
+        );
     }
 
     return .{

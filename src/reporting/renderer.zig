@@ -185,10 +185,10 @@ const IconAndColor = struct {
 
 fn getSeverityIcon(severity: @import("severity.zig").Severity, title: []const u8, palette: ColorPalette) IconAndColor {
     if (std.mem.eql(u8, title, "FAIL")) return .{ .icon = "✗", .color = palette.error_color, .width = 1 };
-    return switch (severity) {
-        .fatal, .runtime_error => .{ .icon = "✗", .color = palette.error_color, .width = 1 },
-        .warning => .{ .icon = "●", .color = palette.warning, .width = 1 },
-    };
+    return if (severity.isError())
+        .{ .icon = "✗", .color = palette.error_color, .width = 1 }
+    else
+        .{ .icon = "●", .color = palette.warning, .width = 1 };
 }
 
 /// A source region pulled out of a document, normalized for rendering.
@@ -723,11 +723,7 @@ fn renderReportPlainFallback(report: *const Report, writer: *std.Io.Writer, pale
 /// Render a report to HTML.
 pub fn renderReportToHtml(report: *const Report, writer: *std.Io.Writer, config: ReportingConfig) (Allocator.Error || error{WriteFailed})!void {
     assertValidHeadline(report);
-    const title_class = switch (report.severity) {
-        .fatal => "error",
-        .runtime_error => "error",
-        .warning => "warning",
-    };
+    const title_class = if (report.severity.isError()) "error" else "warning";
 
     try writer.print("<div class=\"report {s}\">\n", .{title_class});
     try writer.writeAll("<h1 class=\"report-title\">");

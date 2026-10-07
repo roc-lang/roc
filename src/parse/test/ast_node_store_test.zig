@@ -132,7 +132,24 @@ test "NodeStore round trip - Headers" {
         },
     });
 
+    try headers.append(gpa, AST.Header{
+        .type_module = .{
+            .region = rand_region(random),
+        },
+    });
+
+    try headers.append(gpa, AST.Header{
+        .default_app = .{
+            .main_fn_idx = random.int(u32),
+            .region = rand_region(random),
+        },
+    });
+
+    // `malformed` headers are not stored through `addHeader`.
+    var covered = std.EnumSet(std.meta.Tag(AST.Header)).initOne(.malformed);
+
     for (headers.items) |header| {
+        covered.insert(header);
         const idx = try store.addHeader(header);
         const retrieved = store.getHeader(idx);
 
@@ -143,8 +160,7 @@ test "NodeStore round trip - Headers" {
         };
     }
 
-    // Note + 1 here because we don't include the malformed
-    const actual_test_count = headers.items.len + 1;
+    const actual_test_count = covered.count();
 
     if (actual_test_count < NodeStore.AST_HEADER_NODE_COUNT) {
         std.debug.print("Header test coverage insufficient! Need at least {d} test cases but found {d}.\n", .{ NodeStore.AST_HEADER_NODE_COUNT, actual_test_count });

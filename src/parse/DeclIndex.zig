@@ -481,12 +481,6 @@ pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident
     return scope.value_decls.get(ident) orelse .{};
 }
 
-/// Return all type declarations for a name in a scope.
-pub fn scopeTypeDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@backingInt(scope_idx)];
-    return scope.type_decls.get(ident) orelse .{};
-}
-
 /// Record the module alias introduced by an import declaration.
 pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
     try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
@@ -700,11 +694,6 @@ pub fn typeDependencySegments(self: *const DeclIndex, dependency: TypeDependency
 /// Number of scopes in this declaration index.
 pub fn scopeCount(self: *const DeclIndex) usize {
     return self.scopes.items.len;
-}
-
-/// Number of declarations in this declaration index.
-pub fn declCount(self: *const DeclIndex) usize {
-    return self.decls.items.len;
 }
 
 test "scopeDeclaresValue records only value-binding declarations" {

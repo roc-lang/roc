@@ -9,6 +9,7 @@
 //! finishes. They never appear in LirImage or any later stage.
 
 const std = @import("std");
+const base = @import("base");
 const core = @import("lir_core");
 
 const LIR = core.LIR;
@@ -155,15 +156,11 @@ pub const SigTable = struct {
         const len: usize = @intCast(sig.outcomes.len);
         if (start > self.outcomes.len or len > self.outcomes.len - start) {
             if (@import("builtin").mode == .debug) {
-                std.debug.panic("ARC signature outcome span exceeded its table", .{});
+                base.invariant("ARC signature outcome span exceeded its table", .{});
             }
             unreachable;
         }
         return self.outcomes[start..][0..len];
-    }
-
-    pub fn outcomesForProc(self: SigTable, proc: LIR.LirProcSpecId) []const Outcome {
-        return self.outcomesOf(self.get(proc));
     }
 
     pub fn retConditionsOf(self: SigTable, sig: RcSig) []const RetCondition {
@@ -171,7 +168,7 @@ pub const SigTable = struct {
         const len: usize = @intCast(sig.ret_conditions.len);
         if (start > self.ret_conditions.len or len > self.ret_conditions.len - start) {
             if (@import("builtin").mode == .debug) {
-                std.debug.panic("ARC signature return-condition span exceeded its table", .{});
+                base.invariant("ARC signature return-condition span exceeded its table", .{});
             }
             unreachable;
         }

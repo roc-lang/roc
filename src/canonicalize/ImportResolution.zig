@@ -212,7 +212,7 @@ const ValueTarget = union(enum) {
 
 /// The import a deferred reference whose kind always names one goes through.
 fn entryImport(entry: DeferredImportRef) CIR.Import.Idx {
-    return entry.importIdx() orelse std.debug.panic(
+    return entry.importIdx() orelse base.invariant(
         "compiler invariant violated: a deferred reference of kind {s} names a module import",
         .{@tagName(entry.kind)},
     );
@@ -418,9 +418,7 @@ const Resolver = struct {
 
         for (other.store.sliceStatements(other.all_statements)) |stmt_idx| {
             const header_idx = switch (other.store.getStatement(stmt_idx)) {
-                .s_nominal_decl => |decl| decl.header,
-                .s_alias_decl => |decl| decl.header,
-                .s_where_alias_decl => |decl| decl.header,
+                inline .s_nominal_decl, .s_alias_decl, .s_where_alias_decl => |decl| decl.header,
                 .s_decl,
                 .s_var,
                 .s_var_uninitialized,
@@ -1156,7 +1154,7 @@ const Resolver = struct {
             .builtin, .pending => return,
         };
 
-        const binding = entry.methodBinding() orelse std.debug.panic(
+        const binding = entry.methodBinding() orelse base.invariant(
             "compiler invariant violated: a receiver method owner reference carries its method binding",
             .{},
         );
@@ -1309,9 +1307,7 @@ const Resolver = struct {
 fn selectedPrefix(other: *const ModuleEnv, selected: ?Statement.Idx) ?[]const u8 {
     const stmt_idx = selected orelse return null;
     const header_idx = switch (other.store.getStatement(stmt_idx)) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,

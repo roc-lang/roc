@@ -21,51 +21,6 @@ fn filtersContain(haystack: []const []const u8, needle: []const u8) bool {
     return false;
 }
 
-fn aggregatorFilters(module_type: ModuleType) []const []const u8 {
-    return switch (module_type) {
-        .base => &.{"base tests"},
-        .collections => &.{"collections tests"},
-        .builtins => &.{"builtins tests"},
-        .compile => &.{"compile tests"},
-        .can => &.{"compile tests"},
-        .check => &.{"check tests"},
-        .parse => &.{"parser tests"},
-        .layout => &.{"layout tests"},
-        .lir_core => &.{"lir core declarations are referenced"},
-        .postcheck => &.{"postcheck declarations are referenced"},
-        .values => &.{"values tests"},
-        .eval => &.{"eval tests"},
-        .ipc => &.{"ipc tests"},
-        .fmt => &.{"fmt tests"},
-        .lsp_unit => &.{"lsp unit tests"},
-        .glue => &.{"glue tests"},
-        .roc_src,
-        .types,
-        .reporting,
-        .tracy,
-        .ctx,
-        .build_options,
-        .static_data,
-        .watch,
-        .bundle,
-        .unbundle,
-        .base58,
-        .lsp,
-        .lsp_integration,
-        .backend,
-        .lir,
-        .symbol,
-        .roc_target,
-        .sljmp,
-        .roc_args,
-        .echo_platform,
-        .docs,
-        .bump,
-        .host_alloc,
-        => &.{},
-    };
-}
-
 const glue_platform_files = [_][]const u8{
     "AbiFieldLayout.roc",
     "AbiLayout.roc",
@@ -141,7 +96,7 @@ fn ensureAggregatorFilters(
         return .{ .filters = base_filters, .forced_count = 0 };
     }
 
-    const aggregators = aggregatorFilters(module_type);
+    const aggregators = module_type.aggregators();
     if (aggregators.len == 0) {
         return .{ .filters = base_filters, .forced_count = 0 };
     }
@@ -207,93 +162,372 @@ pub const ModuleTestsResult = struct {
     forced_passes: usize,
 };
 
+/// Whether a module's tests run, and where.
+pub const Tests = union(enum) {
+    /// The module's root file is compiled as a Zig test binary behind a
+    /// `run-test-zig-module-<name>` step.
+    unit: struct {
+        /// The test blocks that bring the rest of the module's tests into the
+        /// build through `std.testing.refAllDecls`. A filtered run keeps them,
+        /// so the inner tests the filter names still get compiled.
+        aggregators: []const []const u8 = &.{},
+        /// Whether MiniCI runs the step. A step it does not run is covered
+        /// only by the nightly `run-test-zig` aggregate.
+        minici: bool = true,
+    },
+    /// The module is the spec list of a test runner that build.zig wires to
+    /// `run-test-zig-module-<name>` itself.
+    harness,
+    /// The module has no test step, for the stated reason.
+    no_tests: []const u8,
+};
+
+/// Which compiler binaries import a module through `RocModules.addAll`.
+pub const Availability = enum {
+    /// Every binary.
+    all,
+    /// Every binary except wasm32 ones, which have no threads and cannot link
+    /// the zstd C library.
+    native,
+    /// None: only the modules that name it as a dependency import it.
+    dependents_only,
+};
+
+/// Everything the build knows about one compiler module. The one table of
+/// these, `ModuleType.info`, is what module creation, dependency wiring,
+/// `RocModules.addAll`, the unit-test steps, and MiniCI's module jobs all
+/// read, each in `ModuleType` declaration order.
+pub const ModuleInfo = struct {
+    /// The module's root source file. Null only for `build_options`, whose
+    /// source the build generates.
+    root: ?[]const u8,
+    /// The compiler modules it imports, each under its own name.
+    deps: []const ModuleType = &.{},
+    /// The modules outside this table it imports: fields of `RocModules`
+    /// vendored from Zig or shared with code built without the compiler.
+    extra_imports: []const []const u8 = &.{},
+    tests: Tests,
+    available: Availability = .all,
+    /// Built without builtin function recognition, so loops that store bytes
+    /// stay stores instead of becoming calls to the function they implement.
+    no_builtin: bool = false,
+};
+
 /// Enumerates the different modules in the Roc compiler codebase.
+///
+/// The declaration order is the order `RocModules.addAll` imports them in,
+/// which is the order their `--dep` arguments reach the compiler.
 pub const ModuleType = enum {
-    collections,
     base,
-    roc_src,
+    collections,
     types,
-    builtins,
-    compile,
     reporting,
     parse,
     can,
     check,
     tracy,
+    builtins,
     ctx,
     build_options,
     layout,
     static_data,
-    values,
     eval,
-    ipc,
     fmt,
-    watch,
-    bundle,
     unbundle,
     base58,
-    lsp,
-    lsp_unit,
-    lsp_integration,
+    roc_target,
     backend,
     lir_core,
     postcheck,
     lir,
     symbol,
-    roc_target,
     sljmp,
     roc_args,
     echo_platform,
     docs,
     bump,
     glue,
+    compile,
+    ipc,
+    watch,
+    lsp,
+    bundle,
+    roc_src,
+    lsp_unit,
+    lsp_integration,
     host_alloc,
+    fast_memset,
+
+    /// The build's facts about this module. Adding a module means adding its
+    /// arm here and its field to `RocModules`; both are checked at comptime.
+    pub fn info(self: ModuleType) ModuleInfo {
+        return switch (self) {
+            .base => .{
+                .root = "src/base/mod.zig",
+                .deps = &.{ .collections, .builtins },
+                .tests = .{ .unit = .{ .aggregators = &.{"base tests"} } },
+            },
+            .collections => .{
+                .root = "src/collections/mod.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"collections tests"} } },
+            },
+            .types => .{
+                .root = "src/types/mod.zig",
+                .deps = &.{ .tracy, .base, .collections },
+                .tests = .{ .unit = .{} },
+            },
+            .reporting => .{
+                .root = "src/reporting/mod.zig",
+                .deps = &.{ .collections, .base },
+                .tests = .{ .unit = .{} },
+            },
+            .parse => .{
+                .root = "src/parse/mod.zig",
+                .deps = &.{ .tracy, .collections, .base, .reporting },
+                .tests = .{ .unit = .{ .aggregators = &.{"parser tests"} } },
+            },
+            .can => .{
+                .root = "src/canonicalize/mod.zig",
+                .deps = &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
+                .tests = .{ .unit = .{ .aggregators = &.{"compile tests"} } },
+            },
+            .check => .{
+                .root = "src/check/mod.zig",
+                .deps = &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options, .fmt },
+                .tests = .{ .unit = .{ .aggregators = &.{"check tests"} } },
+            },
+            .tracy => .{
+                .root = "src/build/tracy.zig",
+                .deps = &.{.build_options},
+                .tests = .{ .no_tests = "a tracing shim with no test blocks" },
+            },
+            .builtins => .{
+                .root = "src/builtins/mod.zig",
+                .deps = &.{.tracy},
+                // `roc_str_view` lets a `builtins` test assert that the
+                // default-platform `RocStr` view matches the canonical `RocStr`.
+                .extra_imports = &.{ "vendor_parse_float", "vendor_ryu", "roc_str_view" },
+                .tests = .{ .unit = .{ .aggregators = &.{"builtins tests"} } },
+            },
+            .ctx => .{
+                .root = "src/ctx/mod.zig",
+                .tests = .{ .unit = .{} },
+            },
+            .build_options => .{
+                .root = null,
+                .tests = .{ .no_tests = "generated constants" },
+            },
+            .layout => .{
+                .root = "src/layout/mod.zig",
+                .deps = &.{ .tracy, .collections, .base, .types, .builtins, .can },
+                .tests = .{ .unit = .{ .aggregators = &.{"layout tests"} } },
+            },
+            .static_data => .{
+                .root = "src/static_data.zig",
+                .deps = &.{ .base, .builtins, .check, .collections, .layout, .lir, .roc_target },
+                .tests = .{ .unit = .{} },
+            },
+            .eval => .{
+                .root = "src/eval/mod.zig",
+                .deps = &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
+                .extra_imports = &.{"vendor_relocatable_loader"},
+                .tests = .{ .unit = .{ .aggregators = &.{"eval tests"} } },
+            },
+            .fmt => .{
+                .root = "src/fmt/mod.zig",
+                .deps = &.{ .base, .parse, .collections, .can, .ctx, .tracy, .reporting },
+                .tests = .{ .unit = .{ .aggregators = &.{"fmt tests"} } },
+            },
+            .unbundle => .{
+                .root = "src/unbundle/mod.zig",
+                .deps = &.{ .base, .collections, .base58 },
+                .tests = .{ .unit = .{} },
+            },
+            .base58 => .{
+                .root = "src/base58/mod.zig",
+                .tests = .{ .unit = .{} },
+            },
+            .roc_target => .{
+                .root = "src/target/mod.zig",
+                .deps = &.{.base},
+                .tests = .{ .unit = .{} },
+            },
+            .backend => .{
+                .root = "src/backend/mod.zig",
+                .deps = &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
+                .tests = .{ .unit = .{} },
+            },
+            .lir_core => .{
+                .root = "src/lir/core.zig",
+                .deps = &.{ .base, .collections, .layout, .types, .can, .check },
+                .tests = .{ .unit = .{ .aggregators = &.{"lir core declarations are referenced"} } },
+            },
+            .postcheck => .{
+                .root = "src/postcheck/mod.zig",
+                .deps = &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types },
+                .tests = .{ .unit = .{ .aggregators = &.{"postcheck declarations are referenced"} } },
+            },
+            .lir => .{
+                .root = "src/lir/mod.zig",
+                .deps = &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck, .builtins },
+                .tests = .{ .unit = .{} },
+            },
+            .symbol => .{
+                .root = "src/symbol/mod.zig",
+                .deps = &.{.base},
+                .tests = .{ .unit = .{} },
+            },
+            .sljmp => .{
+                .root = "src/sljmp/mod.zig",
+                .tests = .{ .unit = .{} },
+            },
+            .roc_args => .{
+                .root = "src/default_platform/roc_args.zig",
+                .extra_imports = &.{"roc_str_view"},
+                .tests = .{ .unit = .{} },
+            },
+            .echo_platform => .{
+                .root = "src/echo_platform/mod.zig",
+                .deps = &.{ .builtins, .roc_args },
+                .tests = .{ .unit = .{} },
+            },
+            .docs => .{
+                .root = "src/docs/mod.zig",
+                .deps = &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
+                .tests = .{ .unit = .{} },
+            },
+            .bump => .{
+                .root = "src/bump/mod.zig",
+                .deps = &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
+                .tests = .{ .unit = .{} },
+            },
+            .glue => .{
+                .root = "src/glue/mod.zig",
+                .deps = &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
+                .extra_imports = &.{"compiler_platform_sources"},
+                .tests = .{ .unit = .{ .aggregators = &.{"glue tests"}, .minici = false } },
+            },
+            .compile => .{
+                .root = "src/compile/mod.zig",
+                .deps = &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
+                .extra_imports = &.{"compiler_platform_sources"},
+                .tests = .{ .unit = .{ .aggregators = &.{"compile tests"} } },
+            },
+            .ipc => .{
+                .root = "src/ipc/mod.zig",
+                .tests = .{ .unit = .{ .aggregators = &.{"ipc tests"} } },
+                .available = .native,
+            },
+            .watch => .{
+                .root = "src/watch/watch.zig",
+                .deps = &.{.build_options},
+                .tests = .{ .unit = .{} },
+                .available = .native,
+            },
+            .lsp => .{
+                .root = "src/lsp/mod.zig",
+                .deps = &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
+                .tests = .{ .unit = .{} },
+                .available = .native,
+            },
+            .bundle => .{
+                .root = "src/bundle/mod.zig",
+                .deps = &.{ .base, .collections, .base58, .unbundle },
+                .tests = .{ .unit = .{} },
+                .available = .native,
+            },
+            .roc_src => .{
+                .root = "src/roc_src/mod.zig",
+                .tests = .{ .no_tests = "no test blocks" },
+                .available = .dependents_only,
+            },
+            .lsp_unit => .{
+                .root = "src/lsp/test/unit.zig",
+                .deps = lsp_test_deps,
+                .tests = .{ .unit = .{ .aggregators = &.{"lsp unit tests"} } },
+                .available = .dependents_only,
+            },
+            .lsp_integration => .{
+                .root = "src/lsp/test/integration.zig",
+                .deps = lsp_test_deps,
+                .tests = .harness,
+                .available = .dependents_only,
+            },
+            // The size-tracking host allocator shared by the test platform
+            // hosts: consumed only by hosts, never by the compiler.
+            .host_alloc => .{
+                .root = "src/host_alloc/mod.zig",
+                .deps = &.{ .builtins, .build_options },
+                .tests = .{ .unit = .{} },
+                .available = .dependents_only,
+            },
+            // The compiler executable's `memset` on musl targets. It is
+            // tested as it is built: with its stores kept as stores.
+            .fast_memset => .{
+                .root = "src/fast_memset.zig",
+                .tests = .{ .unit = .{} },
+                .no_builtin = true,
+            },
+        };
+    }
+
+    const lsp_test_deps: []const ModuleType = &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target };
 
     /// Returns the dependencies for this module type
     pub fn getDependencies(self: ModuleType) []const ModuleType {
-        return switch (self) {
-            .build_options => &.{},
-            .builtins => &.{.tracy},
-            .ctx => &.{},
-            .tracy => &.{.build_options},
-            .collections => &.{},
-            .base => &.{ .collections, .builtins },
-            .roc_src => &.{},
-            .types => &.{ .tracy, .base, .collections },
-            .reporting => &.{ .collections, .base },
-            .parse => &.{ .tracy, .collections, .base, .reporting },
-            .can => &.{ .tracy, .builtins, .collections, .types, .base, .parse, .reporting, .build_options, .ctx },
-            .check => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .reporting, .build_options, .fmt },
-            .layout => &.{ .tracy, .collections, .base, .types, .builtins, .can },
-            .static_data => &.{ .base, .builtins, .check, .collections, .layout, .lir, .roc_target },
-            .values => &.{ .collections, .base, .builtins, .layout },
-            .eval => &.{ .tracy, .ctx, .collections, .base, .types, .builtins, .parse, .can, .check, .layout, .static_data, .values, .build_options, .reporting, .backend, .lir, .symbol, .roc_target, .sljmp, .ipc },
-            .compile => &.{ .tracy, .build_options, .ctx, .builtins, .collections, .base, .types, .parse, .can, .check, .reporting, .layout, .static_data, .eval, .unbundle, .roc_target, .backend, .lir, .symbol, .sljmp },
-            .ipc => &.{},
+        return self.info().deps;
+    }
 
-            .fmt => &.{ .base, .parse, .collections, .can, .ctx, .tracy, .reporting },
-            .watch => &.{.build_options},
-            .bundle => &.{ .base, .collections, .base58, .unbundle },
-            .unbundle => &.{ .base, .collections, .base58 },
-            .base58 => &.{},
-            .lsp => &.{ .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .lsp_unit, .lsp_integration => &.{ .lsp, .compile, .reporting, .build_options, .ctx, .base, .parse, .can, .types, .fmt, .eval, .roc_target },
-            .backend => &.{ .collections, .base, .layout, .builtins, .can, .lir, .static_data, .roc_target, .ctx },
-            .lir_core => &.{ .base, .collections, .layout, .types, .can, .check },
-            .postcheck => &.{ .base, .builtins, .can, .check, .collections, .layout, .lir_core, .types },
-            .lir => &.{ .base, .collections, .layout, .types, .can, .check, .build_options, .lir_core, .postcheck, .builtins },
-            .symbol => &.{.base},
-            .roc_target => &.{.base},
-            .sljmp => &.{},
-            .roc_args => &.{},
-            .echo_platform => &.{ .builtins, .roc_args },
-            .docs => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .bump => &.{ .tracy, .builtins, .collections, .base, .parse, .types, .can, .check, .reporting },
-            .glue => &.{ .base, .collections, .parse, .compile, .can, .check, .reporting, .echo_platform, .builtins, .roc_target, .types, .layout, .backend, .eval, .lir, .build_options },
-            .host_alloc => &.{ .builtins, .build_options },
+    /// The module's aggregator test blocks; see `Tests.unit`.
+    fn aggregators(self: ModuleType) []const []const u8 {
+        return switch (self.info().tests) {
+            .unit => |unit| unit.aggregators,
+            .harness, .no_tests => &.{},
         };
     }
 };
+
+/// A module outside the `ModuleType` dependency graph: wired into its specific
+/// consumers by `ModuleInfo.extra_imports` or by hand, so it stays clear which
+/// code is vendored or shared with builds that leave the compiler out.
+const ExtraModule = struct {
+    name: []const u8,
+    root: []const u8,
+};
+
+const extra_modules = [_]ExtraModule{
+    .{ .name = "embedded_lld", .root = "src/build/embedded_lld.zig" },
+    .{ .name = "roc_str_view", .root = "src/default_platform/roc_str_view.zig" },
+    .{ .name = "shim_symbols", .root = "src/builtins/shim_symbols.zig" },
+    .{ .name = "raw_pages", .root = "src/raw_pages.zig" },
+    .{ .name = "memory_fault", .root = "src/base/memory_fault.zig" },
+    .{ .name = "vendor_parse_float", .root = "vendor/parse_float/parse_float.zig" },
+    .{ .name = "vendor_ryu", .root = "vendor/ryu.zig" },
+    .{ .name = "vendor_relocatable_loader", .root = "vendor/relocatable_loader/mod.zig" },
+    .{ .name = "vendor_macho", .root = "vendor/macho/mod.zig" },
+    .{ .name = "vendor_llvm_ir", .root = "vendor/llvm_ir/mod.zig" },
+    .{ .name = "vendor_llvm_compile_bindings", .root = "vendor/llvm_compile_bindings.zig" },
+};
+
+/// The one `RocModules` field `create` builds from generated source.
+const generated_module = "compiler_platform_sources";
+
+comptime {
+    // `RocModules.create` fills the struct from `ModuleType`, `extra_modules`,
+    // and `generated_module`, so its fields must be exactly those names.
+    const field_count = @typeInfo(RocModules).@"struct".field_names.len;
+    for (std.enums.values(ModuleType)) |module_type| {
+        if (!@hasField(RocModules, @tagName(module_type))) {
+            @compileError("RocModules has no field for module `" ++ @tagName(module_type) ++ "`");
+        }
+    }
+    for (extra_modules) |extra| {
+        if (!@hasField(RocModules, extra.name)) @compileError("RocModules has no field for `" ++ extra.name ++ "`");
+    }
+    if (field_count != std.enums.values(ModuleType).len + extra_modules.len + 1) {
+        @compileError("RocModules has a field that is neither a ModuleType, an extra module, nor the generated module");
+    }
+}
 
 /// Manages all Roc compiler modules and their dependencies
 pub const RocModules = struct {
@@ -312,7 +546,6 @@ pub const RocModules = struct {
     build_options: *Module,
     layout: *Module,
     static_data: *Module,
-    values: *Module,
     eval: *Module,
     ipc: *Module,
     fmt: *Module,
@@ -335,14 +568,15 @@ pub const RocModules = struct {
     docs: *Module,
     bump: *Module,
     glue: *Module,
+    host_alloc: *Module,
+    fast_memset: *Module,
     embedded_lld: *Module,
     compiler_platform_sources: *Module,
 
     // The default-platform runtimes (`src/default_platform/*_runtime.zig`) are
     // compiled as standalone freestanding objects without the `builtins` module,
     // so they read the host-boundary `RocStr` encoding through this single-file
-    // module instead of restating it. It is wired into the `builtins` module too
-    // so a `builtins` test can assert the view matches the canonical `RocStr`.
+    // module instead of restating it.
     roc_str_view: *Module,
 
     // Boundary symbol names (`src/builtins/shim_symbols.zig`) as a standalone
@@ -358,16 +592,13 @@ pub const RocModules = struct {
     // only be defined once.
     raw_pages: *Module,
 
-    // The size-tracking host allocator (`src/host_alloc/mod.zig`) shared by
-    // the test platform hosts. Part of the module dependency graph so its
-    // tests run with the other module tests, but consumed only by hosts, never
-    // by the compiler.
-    host_alloc: *Module,
+    // Memory-fault classification (`src/base/memory_fault.zig`) as a standalone
+    // module for the default-platform Linux runtime, which is compiled without
+    // the `base` module; the compiler's own crash handler reaches the same file
+    // through `base.memory_fault`, so both report a stack overflow by one rule.
+    memory_fault: *Module,
 
-    // Vendored-from-Zig modules. Kept out of the `ModuleType` dependency graph
-    // (like `embedded_lld`) and wired into their specific consumers via
-    // `applyVendorImports`, so it stays clear which code comes from elsewhere.
-    // The sources live under `vendor/`.
+    // Vendored-from-Zig modules. The sources live under `vendor/`.
     vendor_parse_float: *Module,
     vendor_ryu: *Module,
     vendor_relocatable_loader: *Module,
@@ -376,65 +607,18 @@ pub const RocModules = struct {
     vendor_llvm_compile_bindings: *Module,
 
     pub fn create(b: *Build, build_options_step: *Step.Options, zstd: ?*Dependency) RocModules {
-        const self = RocModules{
-            .collections = b.addModule(
-                "collections",
-                .{ .root_source_file = b.path("src/collections/mod.zig") },
-            ),
-            .base = b.addModule("base", .{ .root_source_file = b.path("src/base/mod.zig") }),
-            .roc_src = b.addModule("roc_src", .{ .root_source_file = b.path("src/roc_src/mod.zig") }),
-            .types = b.addModule("types", .{ .root_source_file = b.path("src/types/mod.zig") }),
-            .builtins = b.addModule("builtins", .{ .root_source_file = b.path("src/builtins/mod.zig") }),
-            .compile = b.addModule("compile", .{ .root_source_file = b.path("src/compile/mod.zig") }),
-            .reporting = b.addModule("reporting", .{ .root_source_file = b.path("src/reporting/mod.zig") }),
-            .parse = b.addModule("parse", .{ .root_source_file = b.path("src/parse/mod.zig") }),
-            .can = b.addModule("can", .{ .root_source_file = b.path("src/canonicalize/mod.zig") }),
-            .check = b.addModule("check", .{ .root_source_file = b.path("src/check/mod.zig") }),
-            .tracy = b.addModule("tracy", .{ .root_source_file = b.path("src/build/tracy.zig") }),
-            .ctx = b.addModule("ctx", .{ .root_source_file = b.path("src/ctx/mod.zig") }),
-            .build_options = b.addModule(
-                "build_options",
-                .{ .root_source_file = build_options_step.getOutput() },
-            ),
-            .layout = b.addModule("layout", .{ .root_source_file = b.path("src/layout/mod.zig") }),
-            .static_data = b.addModule("static_data", .{ .root_source_file = b.path("src/static_data.zig") }),
-            .values = b.addModule("values", .{ .root_source_file = b.path("src/values/mod.zig") }),
-            .eval = b.addModule("eval", .{ .root_source_file = b.path("src/eval/mod.zig") }),
-            .ipc = b.addModule("ipc", .{ .root_source_file = b.path("src/ipc/mod.zig") }),
-            .fmt = b.addModule("fmt", .{ .root_source_file = b.path("src/fmt/mod.zig") }),
-            .watch = b.addModule("watch", .{ .root_source_file = b.path("src/watch/watch.zig") }),
-            .bundle = b.addModule("bundle", .{ .root_source_file = b.path("src/bundle/mod.zig") }),
-            .unbundle = b.addModule("unbundle", .{ .root_source_file = b.path("src/unbundle/mod.zig") }),
-            .base58 = b.addModule("base58", .{ .root_source_file = b.path("src/base58/mod.zig") }),
-            .lsp = b.addModule("lsp", .{ .root_source_file = b.path("src/lsp/mod.zig") }),
-            .lsp_unit = b.addModule("lsp_unit", .{ .root_source_file = b.path("src/lsp/test/unit.zig") }),
-            .lsp_integration = b.addModule("lsp_integration", .{ .root_source_file = b.path("src/lsp/test/integration.zig") }),
-            .backend = b.addModule("backend", .{ .root_source_file = b.path("src/backend/mod.zig") }),
-            .lir_core = b.addModule("lir_core", .{ .root_source_file = b.path("src/lir/core.zig") }),
-            .postcheck = b.addModule("postcheck", .{ .root_source_file = b.path("src/postcheck/mod.zig") }),
-            .lir = b.addModule("lir", .{ .root_source_file = b.path("src/lir/mod.zig") }),
-            .symbol = b.addModule("symbol", .{ .root_source_file = b.path("src/symbol/mod.zig") }),
-            .roc_target = b.addModule("roc_target", .{ .root_source_file = b.path("src/target/mod.zig") }),
-            .sljmp = b.addModule("sljmp", .{ .root_source_file = b.path("src/sljmp/mod.zig") }),
-            .roc_args = b.addModule("roc_args", .{ .root_source_file = b.path("src/default_platform/roc_args.zig") }),
-            .echo_platform = b.addModule("echo_platform", .{ .root_source_file = b.path("src/echo_platform/mod.zig") }),
-            .docs = b.addModule("docs", .{ .root_source_file = b.path("src/docs/mod.zig") }),
-            .bump = b.addModule("bump", .{ .root_source_file = b.path("src/bump/mod.zig") }),
-            .glue = b.addModule("glue", .{ .root_source_file = b.path("src/glue/mod.zig") }),
-            .embedded_lld = b.addModule("embedded_lld", .{ .root_source_file = b.path("src/build/embedded_lld.zig") }),
-            .compiler_platform_sources = createCompilerPlatformSourcesModule(b),
-            .roc_str_view = b.addModule("roc_str_view", .{ .root_source_file = b.path("src/default_platform/roc_str_view.zig") }),
-            .shim_symbols = b.addModule("shim_symbols", .{ .root_source_file = b.path("src/builtins/shim_symbols.zig") }),
-            .raw_pages = b.addModule("raw_pages", .{ .root_source_file = b.path("src/raw_pages.zig") }),
-            .host_alloc = b.addModule("host_alloc", .{ .root_source_file = b.path("src/host_alloc/mod.zig") }),
-
-            .vendor_parse_float = b.addModule("vendor_parse_float", .{ .root_source_file = b.path("vendor/parse_float/parse_float.zig") }),
-            .vendor_ryu = b.addModule("vendor_ryu", .{ .root_source_file = b.path("vendor/ryu.zig") }),
-            .vendor_relocatable_loader = b.addModule("vendor_relocatable_loader", .{ .root_source_file = b.path("vendor/relocatable_loader/mod.zig") }),
-            .vendor_macho = b.addModule("vendor_macho", .{ .root_source_file = b.path("vendor/macho/mod.zig") }),
-            .vendor_llvm_ir = b.addModule("vendor_llvm_ir", .{ .root_source_file = b.path("vendor/llvm_ir/mod.zig") }),
-            .vendor_llvm_compile_bindings = b.addModule("vendor_llvm_compile_bindings", .{ .root_source_file = b.path("vendor/llvm_compile_bindings.zig") }),
-        };
+        var self: RocModules = undefined;
+        inline for (comptime std.enums.values(ModuleType)) |module_type| {
+            const root = if (comptime module_type.info().root) |path| b.path(path) else build_options_step.getOutput();
+            @field(self, @tagName(module_type)) = b.addModule(@tagName(module_type), .{
+                .root_source_file = root,
+                .no_builtin = if (comptime module_type.info().no_builtin) true else null,
+            });
+        }
+        inline for (extra_modules) |extra| {
+            @field(self, extra.name) = b.addModule(extra.name, .{ .root_source_file = b.path(extra.root) });
+        }
+        @field(self, generated_module) = createCompilerPlatformSourcesModule(b);
 
         self.fmt.addAnonymousImport("builtin_source", .{ .root_source_file = b.path("src/build/builtin_source.zig") });
 
@@ -459,12 +643,12 @@ pub const RocModules = struct {
         // to an empty object on targets without a trampoline (e.g. wasm).
         self.eval.addAssemblyFile(b.path("src/eval/host_trampoline.S"));
 
-        // Setup module dependencies using our generic helper
-        self.setupModuleDependencies();
+        inline for (comptime std.enums.values(ModuleType)) |module_type| {
+            self.addImports(self.getModule(module_type), module_type);
+        }
 
-        // `embedded_lld` is created outside the dependency table above; it needs
-        // `collections` for the single-threaded arena and `build_options` for the
-        // Darwin sysroot path baked in at build time.
+        // `embedded_lld` needs `collections` for the single-threaded arena and
+        // `build_options` for the Darwin sysroot path baked in at build time.
         self.embedded_lld.addImport("collections", self.collections);
         self.embedded_lld.addImport("build_options", self.build_options);
 
@@ -478,119 +662,16 @@ pub const RocModules = struct {
         return self;
     }
 
-    fn setupModuleDependencies(self: RocModules) void {
-        const all_modules = [_]ModuleType{
-            .collections,
-            .base,
-            .types,
-            .builtins,
-            .compile,
-            .reporting,
-            .parse,
-            .can,
-            .check,
-            .tracy,
-            .ctx,
-            .build_options,
-            .layout,
-            .static_data,
-            .values,
-            .eval,
-            .ipc,
-            .fmt,
-            .watch,
-            .bundle,
-            .unbundle,
-            .base58,
-            .lsp,
-            .lsp_unit,
-            .lsp_integration,
-            .backend,
-            .lir_core,
-            .postcheck,
-            .lir,
-            .symbol,
-            .roc_target,
-            .sljmp,
-            .roc_args,
-            .echo_platform,
-            .docs,
-            .bump,
-            .glue,
-            .host_alloc,
-        };
-
-        // Setup dependencies for each module
-        for (all_modules) |module_type| {
-            const module = self.getModule(module_type);
-            const dependencies = module_type.getDependencies();
-
-            for (dependencies) |dep_type| {
-                const dep_module = self.getModule(dep_type);
-                module.addImport(@tagName(dep_type), dep_module);
-            }
-
-            self.applyVendorImports(module, module_type);
+    /// Gives `module` the imports `module_type` declares: its compiler-module
+    /// dependencies, then its extra imports. Called for the persistent modules
+    /// and for the per-module test builds, so an `@import` resolves in both.
+    fn addImports(self: RocModules, module: *Module, comptime module_type: ModuleType) void {
+        const module_info = comptime module_type.info();
+        inline for (module_info.deps) |dep_type| {
+            module.addImport(@tagName(dep_type), self.getModule(dep_type));
         }
-    }
-
-    /// Wire vendored-from-Zig modules into the specific roc modules that use
-    /// them. Called for both the persistent modules and the per-module test
-    /// builds, so a `@import("vendor_x")` resolves in both. Vendored modules
-    /// are deliberately not part of the `ModuleType` dependency graph.
-    fn applyVendorImports(self: RocModules, module: *Module, module_type: ModuleType) void {
-        switch (module_type) {
-            .builtins => {
-                module.addImport("vendor_parse_float", self.vendor_parse_float);
-                module.addImport("vendor_ryu", self.vendor_ryu);
-                // Lets a `builtins` test assert the default-platform `RocStr` view
-                // matches the canonical `RocStr` (see `roc_str_view` above).
-                module.addImport("roc_str_view", self.roc_str_view);
-            },
-            .roc_args => {
-                module.addImport("roc_str_view", self.roc_str_view);
-            },
-            .eval => {
-                module.addImport("vendor_relocatable_loader", self.vendor_relocatable_loader);
-            },
-            .compile, .glue => {
-                module.addImport("compiler_platform_sources", self.compiler_platform_sources);
-            },
-            .collections,
-            .base,
-            .roc_src,
-            .types,
-            .reporting,
-            .parse,
-            .can,
-            .check,
-            .tracy,
-            .ctx,
-            .build_options,
-            .layout,
-            .static_data,
-            .values,
-            .ipc,
-            .fmt,
-            .watch,
-            .bundle,
-            .unbundle,
-            .base58,
-            .lsp,
-            .lsp_unit,
-            .lsp_integration,
-            .backend,
-            .lir_core,
-            .postcheck,
-            .lir,
-            .symbol,
-            .roc_target,
-            .sljmp,
-            .echo_platform,
-            .docs,
-            .bump,
-            .host_alloc,
-            => {},
+        inline for (module_info.extra_imports) |name| {
+            module.addImport(name, @field(self, name));
         }
     }
 
@@ -608,110 +689,44 @@ pub const RocModules = struct {
             step.root_module.addImport("windows_c", translate.createModule());
         }
 
-        step.root_module.addImport("base", self.base);
-        step.root_module.addImport("collections", self.collections);
-        step.root_module.addImport("types", self.types);
-        step.root_module.addImport("reporting", self.reporting);
-        step.root_module.addImport("parse", self.parse);
-        step.root_module.addImport("can", self.can);
-        step.root_module.addImport("check", self.check);
-        step.root_module.addImport("tracy", self.tracy);
-        step.root_module.addImport("builtins", self.builtins);
-        step.root_module.addImport("ctx", self.ctx);
-        step.root_module.addImport("build_options", self.build_options);
-        step.root_module.addImport("layout", self.layout);
-        step.root_module.addImport("static_data", self.static_data);
-        step.root_module.addImport("eval", self.eval);
-        step.root_module.addImport("fmt", self.fmt);
-        step.root_module.addImport("unbundle", self.unbundle);
-        step.root_module.addImport("base58", self.base58);
-        step.root_module.addImport("roc_target", self.roc_target);
-        step.root_module.addImport("backend", self.backend);
-        step.root_module.addImport("lir_core", self.lir_core);
-        step.root_module.addImport("postcheck", self.postcheck);
-        step.root_module.addImport("lir", self.lir);
-        step.root_module.addImport("symbol", self.symbol);
-        step.root_module.addImport("sljmp", self.sljmp);
-        step.root_module.addImport("roc_args", self.roc_args);
-        step.root_module.addImport("echo_platform", self.echo_platform);
-        step.root_module.addImport("docs", self.docs);
-        step.root_module.addImport("bump", self.bump);
-        step.root_module.addImport("glue", self.glue);
-        step.root_module.addImport("compile", self.compile);
+        inline for (comptime std.enums.values(ModuleType)) |module_type| {
+            if (comptime module_type.info().available == .all) {
+                step.root_module.addImport(@tagName(module_type), self.getModule(module_type));
+            }
+        }
         step.root_module.addImport("embedded_lld", self.embedded_lld);
 
         // Vendored, used by the CLI linker (Mach-O code signing). Harmless where
         // unused (it is only @import-ed from CLI code, never from wasm).
         step.root_module.addImport("vendor_macho", self.vendor_macho);
 
-        // Don't add thread-dependent or native-only modules for WASM targets
         if (!is_wasm) {
-            step.root_module.addImport("ipc", self.ipc);
-            step.root_module.addImport("watch", self.watch);
-            step.root_module.addImport("lsp", self.lsp);
-            // Don't add bundle module for WASM targets (zstd C library not available)
-            step.root_module.addImport("bundle", self.bundle);
+            inline for (comptime std.enums.values(ModuleType)) |module_type| {
+                if (comptime module_type.info().available == .native) {
+                    step.root_module.addImport(@tagName(module_type), self.getModule(module_type));
+                }
+            }
         }
-    }
-
-    pub fn addAllToTest(self: RocModules, step: *Step.Compile) void {
-        self.addAll(step);
     }
 
     /// Get a module by its type
     pub fn getModule(self: RocModules, module_type: ModuleType) *Module {
-        return switch (module_type) {
-            .collections => self.collections,
-            .base => self.base,
-            .roc_src => self.roc_src,
-            .types => self.types,
-            .builtins => self.builtins,
-            .compile => self.compile,
-            .reporting => self.reporting,
-            .parse => self.parse,
-            .can => self.can,
-            .check => self.check,
-            .tracy => self.tracy,
-            .ctx => self.ctx,
-            .build_options => self.build_options,
-            .layout => self.layout,
-            .static_data => self.static_data,
-            .values => self.values,
-            .eval => self.eval,
-            .ipc => self.ipc,
-            .fmt => self.fmt,
-            .watch => self.watch,
-            .bundle => self.bundle,
-            .unbundle => self.unbundle,
-            .base58 => self.base58,
-            .lsp => self.lsp,
-            .lsp_unit => self.lsp_unit,
-            .lsp_integration => self.lsp_integration,
-            .backend => self.backend,
-            .lir_core => self.lir_core,
-            .postcheck => self.postcheck,
-            .lir => self.lir,
-            .symbol => self.symbol,
-            .roc_target => self.roc_target,
-            .sljmp => self.sljmp,
-            .roc_args => self.roc_args,
-            .echo_platform => self.echo_platform,
-            .docs => self.docs,
-            .bump => self.bump,
-            .glue => self.glue,
-            .host_alloc => self.host_alloc,
-        };
+        inline for (comptime std.enums.values(ModuleType)) |candidate| {
+            if (module_type == candidate) return @field(self, @tagName(candidate));
+        }
+        unreachable;
     }
 
     /// Add dependencies for a specific module type to a compile step
-    pub fn addModuleDependencies(self: RocModules, step: *Step.Compile, module_type: ModuleType) void {
-        const dependencies = module_type.getDependencies();
-        for (dependencies) |dep_type| {
-            const dep_module = self.getModule(dep_type);
-            step.root_module.addImport(@tagName(dep_type), dep_module);
+    pub fn addModuleDependencies(self: RocModules, step: *Step.Compile, comptime module_type: ModuleType) void {
+        const module_info = comptime module_type.info();
+        inline for (module_info.deps) |dep_type| {
+            step.root_module.addImport(@tagName(dep_type), self.getModule(dep_type));
         }
         if (module_type == .fmt) step.root_module.addImport("builtin_source", self.fmt.import_table.get("builtin_source").?);
-        self.applyVendorImports(step.root_module, module_type);
+        inline for (module_info.extra_imports) |name| {
+            step.root_module.addImport(name, @field(self, name));
+        }
     }
 
     pub fn createModuleTests(
@@ -722,49 +737,11 @@ pub const RocModules = struct {
         zstd: ?*Dependency,
         test_filters: []const []const u8,
     ) ModuleTestsResult {
-        const test_configs = [_]ModuleType{
-            .collections,
-            .base,
-            .types,
-            .builtins,
-            .compile,
-            .reporting,
-            .parse,
-            .can,
-            .check,
-            .ctx,
-            .eval,
-            .layout,
-            .static_data,
-            .values,
-            .ipc,
-            .fmt,
-            .watch,
-            .bundle,
-            .unbundle,
-            .base58,
-            .lsp,
-            .lsp_unit,
-            .backend,
-            .lir_core,
-            .roc_target,
-            .postcheck,
-            .lir,
-            .symbol,
-            .sljmp,
-            .roc_args,
-            .echo_platform,
-            .docs,
-            .bump,
-            .glue,
-            .host_alloc,
-        };
-
-        const tests = b.allocator.alloc(ModuleTest, test_configs.len) catch
-            @panic("OOM while creating module tests");
+        var tests: std.ArrayList(ModuleTest) = .empty;
         var forced_passes: usize = 0;
 
-        inline for (test_configs, 0..) |module_type, i| {
+        inline for (comptime std.enums.values(ModuleType)) |module_type| {
+            if (comptime module_type.info().tests != .unit) continue;
             const module = self.getModule(module_type);
             const filter_injection = ensureAggregatorFilters(b, module_type, test_filters);
             forced_passes += filter_injection.forced_count;
@@ -781,6 +758,7 @@ pub const RocModules = struct {
                     // modules import ctx/unbundle transitively. It's simpler (and has no
                     // practical cost for native-only tests) to enable link_libc uniformly.
                     .link_libc = true,
+                    .no_builtin = if (comptime module_type.info().no_builtin) true else null,
                 }),
                 .filters = filter_injection.filters,
             });
@@ -809,13 +787,11 @@ pub const RocModules = struct {
                 }
             }
 
-            tests[i] = .{
-                .test_step = test_step,
-            };
+            tests.append(b.allocator, .{ .test_step = test_step }) catch @panic("OOM while creating module tests");
         }
 
         return .{
-            .tests = tests,
+            .tests = tests.items,
             .forced_passes = forced_passes,
         };
     }

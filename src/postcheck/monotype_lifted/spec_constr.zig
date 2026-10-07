@@ -216,6 +216,7 @@
 //! whose store this walk never grows is unnecessary.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const builtin = @import("builtin");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const collections = @import("collections");
@@ -1492,7 +1493,7 @@ const Pass = struct {
                     // verification for it is the producer scan itself.
                     if (phase == .iterator_fusion) {
                         if (try exprContainsIteratorProducer(self.allocator, self.program, body.roc)) {
-                            std.debug.panic("SpecConstr iterator_fusion excluded function {d} whose shapes {any} hide an iterator producer", .{ @backingInt(fn_id), self.program.getFn(fn_id).shapes });
+                            invariant("SpecConstr iterator_fusion excluded function {d} whose shapes {any} hide an iterator producer", .{ @backingInt(fn_id), self.program.getFn(fn_id).shapes });
                         }
                         continue;
                     }
@@ -1546,7 +1547,7 @@ const Pass = struct {
                 const output = item.output orelse Common.invariant("SpecConstr task completed without output");
                 if (item.verify_only) {
                     if (output.changed or output.requests.items.items.len != 0) {
-                        std.debug.panic("SpecConstr {s} changed function {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(item.fn_id), self.program.getFn(item.fn_id).shapes });
+                        invariant("SpecConstr {s} changed function {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(item.fn_id), self.program.getFn(item.fn_id).shapes });
                     }
                     if (self.options.metrics_out) |metrics| {
                         if (self.options.executor != null) {
@@ -1981,7 +1982,15 @@ const Pass = struct {
             if (uses.external_calls != 1 or uses.value_refs != 0) continue;
             const call_expr = uses.external_call_expr orelse
                 Common.invariant("single-use specialized worker had no external call expression");
+            const caller_id = uses.external_call_owner orelse
+                Common.invariant("single-use specialized worker had no external call owner");
+            // The worker body cloned into the caller contributes its calls,
+            // constructions, and loops to the caller's shapes.
+            const outer_shapes = self.program.beginFnShapes(caller_id);
             try self.localizeTailRecursiveWorker(worker_id, call_expr);
+            var caller = self.program.getFn(caller_id);
+            caller.shapes = self.program.finishFnShapes(outer_shapes).merged(caller.shapes);
+            self.program.setFn(caller_id, caller);
 
             // Localization clones one worker body into its caller, changing
             // downstream use edges. Collect a fresh program-wide usage snapshot
@@ -2148,8 +2157,7 @@ const Pass = struct {
                     try tails.append(self.allocator, payload_switch.initialized);
                     try tails.append(self.allocator, payload_switch.uninitialized);
                 },
-                .try_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
-                .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
+                inline .try_sequence, .try_record_sequence => |sequence| try tails.append(self.allocator, sequence.ok_body),
                 .comptime_branch_taken => |taken| try tails.append(self.allocator, taken.body),
                 .typed_boundary => |boundary| try tails.append(self.allocator, boundary.value),
                 .local,
@@ -2494,8 +2502,7 @@ const Pass = struct {
                     // selected by operational consumers, but must never cause
                     // argument specialization; the standard child list
                     // excludes them.
-                    .join_point => {},
-                    .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
+                    .join_point, .local, .unit, .@"unreachable", .int_lit, .frac_f32_lit, .frac_f64_lit, .dec_lit, .str_lit, .bytes_lit, .static_data_candidate, .typed_boundary, .list, .tuple, .record, .record_update, .tag, .nominal, .let_, .fn_ref, .call_value, .low_level, .structural_eq, .structural_hash, .if_, .uninitialized, .uninitialized_payload, .if_initialized_payload, .try_sequence, .try_record_sequence, .block, .break_, .continue_, .jump, .return_, .crash, .checked_error, .comptime_branch_taken, .comptime_exhaustiveness_failed, .dbg, .expect_err, .expect, .literal_rejected => {},
                 }
                 try Ast.appendChildren(self.allocator, self.program, id, &stack);
             },
@@ -2750,12 +2757,18 @@ const Pass = struct {
         // already-emitted specialization bodies need this in-place update.
         const fn_count = self.program.fnCount();
         for (self.plans.len..fn_count) |index| {
-            const fn_ = self.program.getFnAt(index);
+            const fn_id: Ast.FnId = @fromBackingInt(@as(u32, @intCast(index)));
+            var fn_ = self.program.getFn(fn_id);
             const body = switch (fn_.body) {
                 .roc => |body| body,
                 .hosted => continue,
             };
+            // A redirected call names the specialization it now targets, which
+            // may be this very body; its shapes are recorded against this owner.
+            const outer_shapes = self.program.beginFnShapes(fn_id);
             try self.rewriteCallsInExpr(body, done);
+            fn_.shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
+            self.program.setFn(fn_id, fn_);
         }
     }
 
@@ -5747,19 +5760,21 @@ const Cloner = struct {
         var input: ?CloneResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
-            switch (try self.stepClone(frame, input)) {
-                .call => |task| {
-                    try frames.append(self.pass.allocator, .{ .task = task });
+            const step = try self.stepClone(frame, input);
+            switch (step) {
+                .call => {
+                    const next = try frames.addOne(self.pass.allocator);
+                    next.* = .{ .task = step.call };
                     input = null;
                 },
-                .tail => |task| {
-                    frame.* = .{ .task = task };
+                .tail => {
+                    frame.* = .{ .task = step.tail };
                     input = null;
                 },
-                .ret => |result| {
-                    _ = frames.pop();
-                    if (frames.items.len == 0) return result;
-                    input = result;
+                .ret => {
+                    frames.items.len -= 1;
+                    if (frames.items.len == 0) return step.ret;
+                    input = step.ret;
                 },
             }
         }
@@ -5791,7 +5806,7 @@ const Cloner = struct {
                 task.new_values.deinit(allocator);
                 task.new_values_owned = false;
             },
-            .loop_value => |*task| if (task.attempt_lists_owned) {
+            .loop_value => |task| if (task.attempt_lists_owned) {
                 task.new_params.deinit(allocator);
                 task.new_initials.deinit(allocator);
                 task.attempt_lists_owned = false;
@@ -5899,7 +5914,7 @@ const Cloner = struct {
 
     fn cloneLoopWithSelectedExit(self: *Cloner, ty: Type.TypeId, loop: @FieldType(Ast.ExprData, "loop_"), selection: LoopExitSelection) Common.LowerError!Ast.ExprId {
         const chain = try self.newChain();
-        return (try self.runClone(try self.wrappedValueTask(.{ .loop_value = .{ .ty = ty, .loop = loop, .bindings = chain, .exit_selection = selection } }, chain))).get(.expr);
+        return (try self.runClone(try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = ty, .loop = loop, .bindings = chain, .exit_selection = selection }) }, chain))).get(.expr);
     }
 
     const CloneTask = union(enum) {
@@ -5939,7 +5954,9 @@ const Cloner = struct {
         inline_let_case_join: InlineLetCaseJoinTask,
         finalize_let_case_join: FinalizeLetCaseJoinTask,
         rebuild_let_case_join_value: RebuildLetCaseJoinValueTask,
-        loop_value: LoopValueTask,
+        /// Stored in the cloner's arena: a loop's state is far larger than
+        /// any other task's, and frames copy their task.
+        loop_value: *LoopValueTask,
         block_value: BlockValueTask,
         exit_block_value: ExitBlockValueTask,
         emit_block_with_tail: EmitBlockWithTailTask,
@@ -5972,7 +5989,8 @@ const Cloner = struct {
         if_branch_span: IfBranchSpanTask,
         materialize: MaterializeTask,
         materialize_callable: struct { callable: CallableValue },
-        materialize_worker: MaterializeWorkerTask,
+        /// Stored in the cloner's arena, like `loop_value`.
+        materialize_worker: *MaterializeWorkerTask,
         materialize_with_captures: MaterializeWithCapturesTask,
         value_flow_bind: ValueFlowBindTask,
         collect: CollectTask,
@@ -6007,7 +6025,7 @@ const Cloner = struct {
             .inline_let_case_join => |*task| self.stepInlineLetCaseJoin(frame, task, input),
             .finalize_let_case_join => |*task| self.stepFinalizeLetCaseJoin(frame, task, input),
             .rebuild_let_case_join_value => |*task| self.stepRebuildLetCaseJoinValue(frame, task, input),
-            .loop_value => |*task| self.stepLoopValue(frame, task, input),
+            .loop_value => |task| self.stepLoopValue(frame, task, input),
             .block_value => |*task| self.stepBlockValue(frame, task, input),
             .exit_block_value => |*task| self.stepExitBlockValue(frame, task, input),
             .emit_block_with_tail => |*task| self.stepEmitBlockWithTail(frame, task, input),
@@ -6038,7 +6056,7 @@ const Cloner = struct {
             .if_branch_span => |*task| self.stepIfBranchSpan(frame, task, input),
             .materialize => |*task| self.stepMaterialize(frame, task, input),
             .materialize_callable => |task| self.stepMaterializeCallable(task.callable),
-            .materialize_worker => |*task| self.stepMaterializeWorker(frame, task, input),
+            .materialize_worker => |task| self.stepMaterializeWorker(frame, task, input),
             .materialize_with_captures => |*task| self.stepMaterializeWithCaptures(frame, task, input),
             .value_flow_bind => |*task| self.stepValueFlowBind(frame, task, input),
             .collect => |*task| self.stepCollect(frame, task, input),
@@ -6281,7 +6299,7 @@ const Cloner = struct {
             .loop_ => |loop| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
                 frame.cursor = 1;
-                return .{ .call = .{ .loop_value = .{ .ty = expr.ty, .loop = loop, .bindings = bindings, .exit_selection = null } } };
+                return .{ .call = .{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = expr.ty, .loop = loop, .bindings = bindings, .exit_selection = null }) } };
             },
             .block => |block| {
                 if (frame.cursor != 0) return self.finishExprValue(task, input.?.get(.value));
@@ -6795,6 +6813,14 @@ const Cloner = struct {
         chain: *BindingChain,
     };
 
+    /// `task` stored in the cloner's arena, for a `CloneTask` variant that
+    /// holds it by pointer.
+    fn storedTask(self: *Cloner, comptime T: type, task: T) Allocator.Error!*T {
+        const stored = try self.arena.allocator().create(T);
+        stored.* = task;
+        return stored;
+    }
+
     fn wrappedValueTask(self: *Cloner, child: CloneTask, chain: *BindingChain) Allocator.Error!CloneTask {
         const stored = try self.arena.allocator().create(CloneTask);
         stored.* = child;
@@ -6965,8 +6991,7 @@ const Cloner = struct {
                     .payloads = input.?.get(.expr_span),
                 } });
             },
-            .static_data_candidate => return self.finishPlainExpr(task, expr_id),
-            .comptime_value => return self.finishPlainExpr(task, expr_id),
+            .static_data_candidate, .comptime_value => return self.finishPlainExpr(task, expr_id),
             .typed_boundary => |boundary| {
                 if (cursor == 0) return .{ .call = .{ .expr = boundary.value } };
                 return self.finishPlainData(task, expr, .{ .typed_boundary = .{ .value = input.?.get(.expr) } });
@@ -7090,7 +7115,7 @@ const Cloner = struct {
             .loop_ => |loop| {
                 if (cursor == 0) {
                     const chain = try self.newChain();
-                    return .{ .call = try self.wrappedValueTask(.{ .loop_value = .{ .ty = expr.ty, .loop = loop, .bindings = chain, .exit_selection = null } }, chain) };
+                    return .{ .call = try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{ .ty = expr.ty, .loop = loop, .bindings = chain, .exit_selection = null }) }, chain) };
                 }
                 return self.finishPlainExpr(task, input.?.get(.expr));
             },
@@ -7535,12 +7560,12 @@ const Cloner = struct {
                 // Initial values are in the enclosing scope, before result bindings.
                 const chain = try self.newChain();
                 frame.cursor = 1;
-                return .{ .call = try self.wrappedValueTask(.{ .loop_value = .{
+                return .{ .call = try self.wrappedValueTask(.{ .loop_value = try self.storedTask(LoopValueTask, .{
                     .ty = task.result_ty,
                     .loop = loop_expr.data.loop_,
                     .bindings = chain,
                     .exit_selection = selection,
-                } }, chain) };
+                }) }, chain) };
             },
             1 => {
                 task.loop = input.?.get(.expr);
@@ -7717,7 +7742,12 @@ const Cloner = struct {
                     return .{ .call = .{ .materialize = .{ .value = value } } };
                 }
                 task.budget.* -= 1;
-                if (try self.valueCanSubstitute(value)) return retValue(value);
+                // A value whose every part is substitutable is already
+                // reusable: decomposing it would return each part unchanged
+                // and produce an equal value. Its expanded size bounds
+                // substitution at use sites, not reuse, so it does not
+                // decide this.
+                if (try valueIsSubstitutable(self.pass.program, self.pass.allocator, value)) return retValue(value);
                 switch (value) {
                     .expr => |expr| {
                         const ty = self.pass.program.getExpr(expr).ty;
@@ -11194,9 +11224,7 @@ const Cloner = struct {
     fn stepSpan(self: *Cloner, frame: *CloneFrame, task: *SpanTask, input: ?CloneResult) Common.LowerError!CloneStep {
         if (frame.cursor == 0) {
             task.count = switch (task.span) {
-                .exprs => |span| span.len,
-                .captures => |span| span.len,
-                .fields => |span| span.len,
+                .exprs, .captures, .fields => |span| span.len,
             };
             task.values = try self.arena.allocator().alloc(Ast.ExprId, task.count);
             task.unchanged = self.source_reuse == .original_body;
@@ -11420,7 +11448,7 @@ const Cloner = struct {
         }
     }
 
-    fn stepMaterializeCallable(self: *Cloner, callable: CallableValue) CloneStep {
+    fn stepMaterializeCallable(self: *Cloner, callable: CallableValue) Allocator.Error!CloneStep {
         const fn_ = self.pass.program.getFn(callable.fn_id);
         const captures = self.pass.program.typedLocalSpan(fn_.captures);
         if (captures.len != callable.captures.len) {
@@ -11452,7 +11480,7 @@ const Cloner = struct {
             }
         }
 
-        if (!all_original and self.emit_callable_workers) return .{ .tail = .{ .materialize_worker = .{ .callable = callable } } };
+        if (!all_original and self.emit_callable_workers) return .{ .tail = .{ .materialize_worker = try self.storedTask(MaterializeWorkerTask, .{ .callable = callable }) } };
 
         return .{ .tail = .{ .materialize_with_captures = .{
             .ty = callable.ty,
@@ -12279,8 +12307,7 @@ const Cloner = struct {
             .typed_boundary,
             .comptime_branch_taken,
             => Common.invariant("known-shape probe did not unwrap a transparent wrapper"),
-            .comptime_value => false,
-            .comptime_exhaustiveness_failed => false,
+            .comptime_value, .comptime_exhaustiveness_failed => false,
             .unit,
             .@"unreachable",
             .int_lit,
@@ -14655,12 +14682,12 @@ const ProgramProcedureUsage = struct {
             const shapes = program.getFnAt(owner_index).shapes;
             if (builtin.mode == .debug) {
                 if (try exprContainsReturn(allocator, program, body) and !shapes.contains_return) {
-                    std.debug.panic("function {d} contains a return its shapes {any} do not record", .{ owner_index, shapes });
+                    invariant("function {d} contains a return its shapes {any} do not record", .{ owner_index, shapes });
                 }
                 if (!shapes.self_call) {
                     const summary = try tailSelfCallSummary(allocator, program, body, owner);
                     if (!summary.valid or summary.count != 0) {
-                        std.debug.panic("function {d} calls itself although its shapes {any} do not record it", .{ owner_index, shapes });
+                        invariant("function {d} calls itself although its shapes {any} do not record it", .{ owner_index, shapes });
                     }
                 }
             }
@@ -15546,7 +15573,7 @@ fn writeShapeDigest(program: *Ast.Program, hasher: *TypeDigestHasher, root: Shap
             },
             .callable => |callable| {
                 writePatternType(program, hasher, callable.ty);
-                const target = program.fnSourceDigest(callable.fn_id) orelse
+                const target = (try program.fnSourceDigest(callable.fn_id)) orelse
                     Common.invariant("call-pattern callable target has no checked source identity");
                 hasher.update(&target);
                 writePatternU32(hasher, @intCast(callable.captures.len));
@@ -17216,6 +17243,66 @@ test "issue 10313 value-aware call-pattern collection does not append lifted IR"
     try std.testing.expectEqual(@as(usize, 0), pass.arena.queryCapacity());
 }
 
+test "a specialization call redirected to its own body records the self call in its shapes" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    const unit_ty = try program.types.add(.zst);
+    const source_arg = try program.addLocal(@fromBackingInt(1), unit_ty);
+    const source_body = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+    const source_fn_id = try program.addFn(.{
+        .shapes = program.finishFnShapes(.{}),
+        .symbol = @fromBackingInt(2),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = source_arg, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = source_body },
+        .ret = unit_ty,
+    });
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+
+    // The specialization body still calls the source function; redirecting
+    // that call to the specialization makes it a self call.
+    const spec_fn_id = try program.reserveFnSlot();
+    const spec_arg = try program.addLocal(@fromBackingInt(3), unit_ty);
+    const outer_shapes = program.beginFnShapes(spec_fn_id);
+    const spec_arg_ref = try program.addExpr(.{ .ty = unit_ty, .data = .{ .local = spec_arg } });
+    const spec_body = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+        .callee = .{ .lifted = source_fn_id },
+        .args = try program.addExprSpan(&.{spec_arg_ref}),
+        .captures = Ast.Span(Ast.CaptureOperand).empty(),
+    } } });
+    program.setFn(spec_fn_id, .{
+        .shapes = program.finishFnShapes(outer_shapes),
+        .symbol = @fromBackingInt(4),
+        .args = try program.addTypedLocalSpan(&.{.{ .local = spec_arg, .ty = unit_ty }}),
+        .captures = Ast.Span(Ast.TypedLocal).empty(),
+        .body = .{ .roc = spec_body },
+        .ret = unit_ty,
+    });
+    try std.testing.expect(!program.getFn(spec_fn_id).shapes.self_call);
+
+    const pattern_args = try pass.arena.allocator().dupe(Shape, &.{.{ .any = unit_ty }});
+    try pass.plans[@backingInt(source_fn_id)].specs.append(allocator, .{
+        .pattern = .{ .args = pattern_args },
+        .fn_id = spec_fn_id,
+        .written = true,
+    });
+    try pass.rewriteExistingCalls();
+
+    const redirected = program.getExpr(spec_body).data.call_proc;
+    try std.testing.expectEqual(@as(?Ast.FnId, spec_fn_id), Ast.localDirectCallee(redirected));
+    try std.testing.expect(program.getFn(spec_fn_id).shapes.self_call);
+
+    var usage = try ProgramProcedureUsage.collect(allocator, &program);
+    defer usage.deinit(allocator);
+    const tail = usage.tail_self_calls[@backingInt(spec_fn_id)];
+    try std.testing.expect(tail.valid);
+    try std.testing.expectEqual(@as(usize, 1), tail.count);
+}
+
 test "SpecConstr admission uses body size and worker count before cloning" {
     const allocator = std.testing.allocator;
     var program = emptyLiftedProgramForTest(allocator);
@@ -17970,6 +18057,42 @@ test "value substitutability is exact at any depth" {
     try std.testing.expect(try valueIsSubstitutable(&program, allocator, reads));
     try std.testing.expect(!try valueIsSubstitutable(&program, allocator, works));
     try std.testing.expectEqual(@as(usize, depth + 1), valueExpandedSize(reads));
+}
+
+test "making a substitutable value reusable keeps it whole at any size" {
+    const allocator = std.testing.allocator;
+    var program = emptyLiftedProgramForTest(allocator);
+    defer program.deinit();
+
+    var pass = try Pass.init(allocator, &program);
+    defer pass.deinit();
+    var cloner = Cloner.initForRewrite(&pass);
+    defer cloner.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const u8_ty = try program.types.add(.{ .primitive = .u8 });
+    const union_ty = try program.types.add(.{ .tag_union = Type.Span.empty() });
+    const foo = try program.names.internTagLabel("Foo");
+    const read = try program.addExpr(.{ .ty = u8_ty, .data = .{ .local = try program.addLocal(@fromBackingInt(1), u8_ty) } });
+
+    // A chain of reads past both the substitution expansion limit and the
+    // reuse work budget, like a long interpolation's iterator. Every part of
+    // it is already reusable, so making it reusable binds nothing and
+    // returns the value itself instead of copying or materializing it.
+    var reads: Value = .{ .expr = read };
+    for (0..3 * Cloner.make_reusable_work_budget) |_| {
+        const payload = try arena.allocator().alloc(Value, 1);
+        payload[0] = reads;
+        reads = try tagValue(&program, allocator, union_ty, foo, payload);
+    }
+    try std.testing.expect(!try cloner.valueCanSubstitute(reads));
+
+    const chain = try cloner.newChain();
+    const reusable = (try cloner.runClone(try cloner.makeReusableTask(reads, chain))).get(.value);
+    try std.testing.expect(chain.isEmpty());
+    try std.testing.expectEqual(reads.tag.payloads.ptr, reusable.tag.payloads.ptr);
 }
 
 test "value substitution bounds the expansion of shared sub-values" {

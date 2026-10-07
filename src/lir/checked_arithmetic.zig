@@ -5,12 +5,6 @@ const layout = @import("layout");
 
 const LIR = @import("LIR.zig");
 
-/// Runtime failure category for a checked arithmetic operation.
-pub const ErrorKind = enum {
-    overflow,
-    zero_denominator,
-};
-
 /// The mathematical operation represented by one integer-arithmetic family.
 pub const Operation = enum {
     add,

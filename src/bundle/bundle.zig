@@ -1,4 +1,4 @@
-//! Bundle and unbundle a roc package and everything it requires, including host object files if the
+//! Bundle a roc package and everything it requires, including host object files if the
 //! package is a platform, and any files imported via `import` with `Str` or `List(U8)`.
 //!
 //! Future work:
@@ -18,15 +18,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const base58 = @import("base58");
 const streaming_writer = @import("streaming_writer.zig");
-const streaming_reader = @import("streaming_reader.zig");
-const format = @import("unbundle").format;
+const unbundle = @import("unbundle");
+const format = unbundle.format;
 const c = @import("zstd");
 
 // Constants for magic numbers
 const SIZE_STORAGE_BYTES: usize = 16; // Extra bytes for storing allocation size; use 16 to preserve alignment.
 /// Alignment for zstd custom allocations. Must match SIZE_STORAGE_BYTES (16 bytes).
 const ZSTD_ALLOC_ALIGNMENT: std.mem.Alignment = .@"16";
-const TAR_PATH_MAX_LENGTH: usize = 255; // Maximum path length for tar compatibility
 /// Size of the buffer used for streaming operations (in bytes)
 pub const STREAM_BUFFER_SIZE = format.STREAM_BUFFER_SIZE;
 const TAR_EXTENSION = format.TAR_EXTENSION;
@@ -67,7 +66,6 @@ pub fn freeForZstd(context_ptr: ?*anyopaque, address: ?*anyopaque) callconv(.c) 
 
 /// Errors that can occur during the bundle operation.
 pub const BundleError = error{
-    FilePathTooLong,
     FileNotFound,
     AccessDenied,
     IsDir,
@@ -83,27 +81,8 @@ pub const BundleError = error{
     InvalidPath,
 } || std.mem.Allocator.Error;
 
-/// Errors that can occur during the unbundle operation.
-pub const UnbundleError = error{
-    DecompressionFailed,
-    InvalidTarHeader,
-    UnexpectedEndOfStream,
-    ReadFailed,
-    FileCreateFailed,
-    DirectoryCreateFailed,
-    FileWriteFailed,
-    HashMismatch,
-    InvalidFilename,
-    FileTooLarge,
-    InvalidPath,
-    NoDataExtracted,
-} || std.mem.Allocator.Error;
-
-/// Context for error reporting during bundle/unbundle operations
-pub const ErrorContext = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
+/// Where `bundle` reports the archive path that failed validation.
+pub const ErrorContext = unbundle.ErrorContext;
 
 /// A file to read from `base_dir` and the distinct portable path to store in
 /// the archive.
@@ -121,10 +100,10 @@ pub const Result = struct {
 /// Bundle files into a compressed tar archive.
 ///
 /// The entry iterator supplies a source path for `Dir.openFile` and a separate
-/// archive path. Archive paths must be relative, must not contain `..`
-/// components, and are limited to 255 bytes for tar compatibility. On Windows,
-/// archive paths are converted to forward slashes. Paths must be encoded as
-/// WTF-8 on Windows and UTF-8 elsewhere.
+/// archive path. Archive paths must satisfy `unbundle.pathHasUnbundleErr`, the
+/// rules extraction enforces. On Windows, archive paths are converted to
+/// forward slashes. Paths must be encoded as WTF-8 on Windows and UTF-8
+/// elsewhere.
 ///
 /// Compression level should be between 1 (fastest) and 22 (best compression).
 /// Level 3 is a good default for speed/size tradeoff.
@@ -159,36 +138,26 @@ pub fn bundle(
 
     // Process files one at a time
     while (try entry_iter.next()) |entry| {
-        // Standardize archive names on forward slashes. Valid Unix source
-        // paths can contain backslashes, but archive names remain portable.
+        // Archive names use forward slashes only. Where a backslash is a path
+        // separator (Windows) it is rewritten to one; elsewhere the validator
+        // below refuses it.
         var normalized_tar_path: ?[]u8 = null;
         defer if (normalized_tar_path) |path| allocator.free(path);
-        const has_backslash = std.mem.find(u8, entry.archive_path, "\\") != null;
-        const tar_path = if (builtin.target.os.tag == .windows and has_backslash) blk: {
+        const tar_path = if (builtin.target.os.tag == .windows and std.mem.findScalar(u8, entry.archive_path, '\\') != null) blk: {
             const path = try allocator.dupe(u8, entry.archive_path);
             std.mem.replaceScalar(u8, path, '\\', '/');
             normalized_tar_path = path;
             break :blk path;
-        } else if (!has_backslash) entry.archive_path else {
-            if (error_context) |ctx| {
-                ctx.path = entry.archive_path;
-                ctx.reason = .contained_backslash_on_unix;
-            }
-            return error.InvalidPath;
-        };
+        } else entry.archive_path;
 
-        if (pathHasBundleErr(tar_path)) |validation_error| {
-            if (error_context) |ctx| {
-                // Keep the caller-owned path rather than the temporary
-                // forward-slash copy used on Windows.
-                ctx.path = entry.archive_path;
-                ctx.reason = validation_error.reason;
-            }
+        // The writer's path rules are the reader's validator itself, with
+        // nothing stricter layered on top: a path is written exactly when
+        // extraction accepts it.
+        if (unbundle.pathHasUnbundleErr(tar_path)) |validation_error| {
+            // Report the caller-owned path rather than the temporary
+            // forward-slash copy used on Windows.
+            if (error_context) |ctx| ctx.* = .{ .path = entry.archive_path, .reason = validation_error.reason };
             return error.InvalidPath;
-        }
-
-        if (tar_path.len > TAR_PATH_MAX_LENGTH) {
-            return error.FilePathTooLong;
         }
 
         const file = base_dir.openFile(io, entry.source_path, .{}) catch |err| switch (err) {
@@ -269,508 +238,4 @@ pub fn bundle(
     // Create filename with .tar.zst extension
     const filename = try std.fmt.allocPrint(allocator.*, "{s}{s}", .{ base58_hash, TAR_EXTENSION });
     return .{ .filename = filename, .uncompressed_size = uncompressed_size };
-}
-
-/// Validate a base58-encoded hash string and return the decoded hash.
-/// Returns null if the hash is invalid.
-pub fn validateBase58Hash(base58_hash: []const u8) Allocator.Error!?[32]u8 {
-    if (base58_hash.len > base58.base58_hash_bytes) {
-        return null;
-    }
-
-    return base58.decode(base58_hash) catch return null;
-}
-
-/// Characters that are reserved/illegal in file paths on various operating systems.
-/// We disallow all of these to ensure cross-platform compatibility and security.
-const RESERVED_PATH_CHARS = [_]u8{
-    0, // NUL (disallowed on all systems)
-    ':', // Drive separator on Windows, used in Mac OS classic
-    '*', // Wildcard on Windows
-    '?', // Wildcard on Windows
-    '"', // Quote character on Windows
-    '<', // Redirection on Windows
-    '>', // Redirection on Windows
-    '|', // Pipe on Windows
-};
-
-/// Windows reserved filenames (case-insensitive)
-const WINDOWS_RESERVED_NAMES = [_][]const u8{
-    "CON",  "PRN",  "AUX",  "NUL",
-    "COM1", "COM2", "COM3", "COM4",
-    "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3",
-    "LPT4", "LPT5", "LPT6", "LPT7",
-    "LPT8", "LPT9",
-};
-
-/// Specific reason why a path validation failed
-pub const PathValidationReason = union(enum) {
-    empty_path,
-    path_too_long,
-    windows_reserved_char: u8,
-    absolute_path,
-    path_traversal,
-    current_directory_reference,
-    windows_reserved_name,
-    contained_backslash_on_unix,
-    component_ends_with_space,
-    component_ends_with_period,
-};
-
-/// Error type for path validation failures
-pub const PathValidationError = struct {
-    path: []const u8,
-    reason: PathValidationReason,
-};
-
-/// Validates a path for bundling, checking for cross-platform compatibility issues
-///
-/// We only do these validations on bundle, not on unbundle.
-/// Note that the path ALREADY should have all backslashes converted
-/// to forward slashes.
-///
-/// The reason we do this validation is to prevent Windows users
-/// from encountering unpleasant surprises when they try to
-/// unbundle paths that bundled just fine on a non-Windows OS but.
-/// which are invalid on Windows.
-///
-/// We don't do the validation on unbundle because it's costly and
-/// there's no security concern; if the OS doesn't accept the path,
-/// it will give an error.
-pub fn pathHasBundleErr(path: []const u8) ?PathValidationError {
-    std.debug.assert(std.mem.find(u8, path, "\\") == null);
-
-    // Start by doing the validation checks we'd do on unbundle.
-    // If unbundling would fail, then bundling should too!
-    if (pathHasUnbundleErr(path)) |err| {
-        return err;
-    }
-
-    // Check for reserved characters
-    for (path) |byte| {
-        inline for (RESERVED_PATH_CHARS) |reserved| {
-            if (byte == reserved) {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .{ .windows_reserved_char = reserved },
-                };
-            }
-        }
-    }
-
-    // Check each path component for Windows reserved names and trailing spaces/periods
-    var component_iter = std.mem.tokenizeScalar(u8, path, '/');
-
-    while (component_iter.next()) |component| {
-        // Check for Windows reserved names (case-insensitive)
-        for (WINDOWS_RESERVED_NAMES) |reserved| {
-            // Check base name without extension
-            const dot_pos = std.mem.findScalar(u8, component, '.');
-            const base_name = if (dot_pos) |pos| component[0..pos] else component;
-
-            if (base_name.len == reserved.len) {
-                var matches = true;
-                for (base_name, reserved) |a, b| {
-                    if (std.ascii.toUpper(a) != b) {
-                        matches = false;
-                        break;
-                    }
-                }
-                if (matches) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .windows_reserved_name,
-                    };
-                }
-            }
-        }
-
-        // Reject components ending with space or period (Windows restriction)
-        if (component.len > 0) {
-            const last_char = component[component.len - 1];
-            if (last_char == ' ') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_space,
-                };
-            } else if (last_char == '.') {
-                return PathValidationError{
-                    .path = path,
-                    .reason = .component_ends_with_period,
-                };
-            }
-        }
-    }
-
-    return null;
-}
-
-/// Validate a file path to prevent directory traversal attacks and other security issues.
-/// Returns null if the path is valid, or a PathValidationError describing the problem.
-pub fn pathHasUnbundleErr(path: []const u8) ?PathValidationError {
-    // Reject empty paths
-    if (path.len == 0) {
-        return PathValidationError{
-            .path = path,
-            .reason = .empty_path,
-        };
-    }
-
-    // Reject paths that are too long for tar format
-    if (path.len > TAR_PATH_MAX_LENGTH) {
-        return PathValidationError{
-            .path = path,
-            .reason = .path_too_long,
-        };
-    }
-
-    // Reject paths considered absolute on any OS we support
-    if (std.fs.path.isAbsolutePosix(path) or std.fs.path.isAbsoluteWindows(path)) {
-        return PathValidationError{
-            .path = path,
-            .reason = .absolute_path,
-        };
-    }
-
-    // Check for ".." and "." path components
-    var idx: usize = 0;
-    var component_start: usize = 0;
-
-    while (idx <= path.len) {
-        // Check if we're at a separator or the end
-        const at_separator = idx < path.len and (path[idx] == '/' or path[idx] == '\\');
-        const at_end = idx == path.len;
-
-        if (at_separator or at_end) {
-            if (idx > component_start) {
-                const component = path[component_start..idx];
-
-                // Check for "." component
-                if (std.mem.eql(u8, component, ".")) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .current_directory_reference,
-                    };
-                }
-
-                // Check for ".." component
-                if (std.mem.eql(u8, component, "..")) {
-                    return PathValidationError{
-                        .path = path,
-                        .reason = .path_traversal,
-                    };
-                }
-            }
-
-            if (at_separator) {
-                component_start = idx + 1;
-            }
-        }
-
-        if (!at_end) {
-            idx += 1;
-        } else {
-            break;
-        }
-    }
-
-    return null;
-}
-
-/// Errors that can occur while extracting bundled files.
-pub const ExtractError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Reader.Error || std.Io.Writer.Error || error{
-    NoDataExtracted,
-    UnexpectedEndOfStream,
-};
-
-/// Writer interface for extracting files during unbundle.
-pub const ExtractWriter = struct {
-    ptr: *anyopaque,
-    makeDirFn: *const fn (ptr: *anyopaque, path: []const u8) ExtractError!void,
-    streamFileFn: *const fn (ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void,
-
-    pub fn makeDir(self: ExtractWriter, path: []const u8) ExtractError!void {
-        return self.makeDirFn(self.ptr, path);
-    }
-
-    pub fn streamFile(self: ExtractWriter, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void {
-        return self.streamFileFn(self.ptr, path, reader, size);
-    }
-};
-
-const TarEntryReader = struct {
-    iterator: *std.tar.Iterator,
-    remaining: u64,
-    interface: std.Io.Reader,
-
-    fn init(iterator: *std.tar.Iterator, remaining: u64) TarEntryReader {
-        var result: TarEntryReader = .{
-            .iterator = iterator,
-            .remaining = remaining,
-            .interface = undefined,
-        };
-        result.interface = .{
-            .vtable = &.{
-                .stream = stream,
-            },
-            .buffer = &.{}, // No buffer needed, we delegate to iterator.reader
-            .seek = 0,
-            .end = 0,
-        };
-        return result;
-    }
-
-    fn stream(r: *std.Io.Reader, w: *std.Io.Writer, limit: std.Io.Limit) std.Io.Reader.StreamError!usize {
-        const self: *TarEntryReader = @alignCast(@fieldParentPtr("interface", r));
-
-        if (self.remaining == 0) {
-            return std.Io.Reader.StreamError.EndOfStream;
-        }
-
-        const dest = limit.slice(try w.writableSliceGreedy(1));
-        const max_bytes = std.math.cast(usize, self.remaining) orelse std.math.maxInt(usize);
-        const read_limit = @min(dest.len, max_bytes);
-        const slice = dest[0..read_limit];
-
-        const bytes_read = self.iterator.reader.readSliceShort(slice) catch |err| switch (err) {
-            error.ReadFailed => return std.Io.Reader.StreamError.ReadFailed,
-        };
-
-        if (bytes_read == 0) return std.Io.Reader.StreamError.EndOfStream;
-
-        self.remaining -= bytes_read;
-        self.iterator.unread_file_bytes = self.remaining;
-        w.advance(bytes_read);
-        return bytes_read;
-    }
-};
-
-/// Directory-based extract writer
-pub const DirExtractWriter = struct {
-    dir: std.Io.Dir,
-    io: std.Io,
-
-    pub fn init(dir: std.Io.Dir, io: std.Io) DirExtractWriter {
-        return .{ .dir = dir, .io = io };
-    }
-
-    pub fn extractWriter(self: *DirExtractWriter) ExtractWriter {
-        return .{
-            .ptr = self,
-            .makeDirFn = makeDir,
-            .streamFileFn = streamFile,
-        };
-    }
-
-    fn makeDir(ptr: *anyopaque, path: []const u8) ExtractError!void {
-        const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
-        try self.dir.createDirPath(self.io, path);
-    }
-
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) ExtractError!void {
-        const self = @as(*DirExtractWriter, @ptrCast(@alignCast(ptr)));
-
-        // Create parent directories if needed
-        if (std.fs.path.dirname(path)) |dir_name| {
-            try self.dir.createDirPath(self.io, dir_name);
-        }
-
-        const file = try self.dir.createFile(self.io, path, .{});
-        defer file.close(self.io);
-
-        // Stream from reader to file
-        // Note: std.tar has a known issue where it may not provide all bytes for large files
-        // due to internal buffering limitations. We handle this gracefully by reading what's
-        // available rather than treating it as an error.
-        // See: https://github.com/ziglang/zig/issues/[TODO: file issue and add number]
-        var file_writer_buffer: [STREAM_BUFFER_SIZE]u8 = undefined;
-        var file_writer = file.writer(self.io, &file_writer_buffer);
-        var total_written: usize = 0;
-
-        while (total_written < size) {
-            const bytes_read = reader.stream(&file_writer.interface, std.Io.Limit.limited(size - total_written)) catch |err| switch (err) {
-                error.EndOfStream => break,
-                error.ReadFailed, error.WriteFailed => return err,
-            };
-
-            if (bytes_read == 0) break;
-            total_written += bytes_read;
-        }
-
-        try file_writer.interface.flush();
-
-        // Verify we got a reasonable amount of data
-        if (total_written == 0 and size > 0) {
-            return error.NoDataExtracted;
-        }
-    }
-};
-
-/// Unbundle files from a compressed tar archive stream.
-///
-/// This is the core streaming unbundle logic that can be used by both file-based
-/// unbundling and network-based downloading.
-/// If an InvalidPath error is returned, error_context will contain details about the invalid path.
-pub fn unbundleStream(
-    input_reader: *std.Io.Reader,
-    extract_writer: ExtractWriter,
-    allocator: *std.mem.Allocator,
-    expected_hash: *const [32]u8,
-    error_context: ?*ErrorContext,
-) UnbundleError!void {
-    // Create decompressing hash reader that chains: input → verify hash → decompress
-    var decompress_reader = streaming_reader.DecompressingHashReader.init(
-        allocator,
-        input_reader,
-        expected_hash.*,
-        allocForZstd,
-        freeForZstd,
-    ) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-    };
-    defer decompress_reader.deinit();
-
-    // Use std.tar to parse the archive; allocate MAX_LENGTH + 1 for null terminator
-    var file_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
-    var link_name_buffer: [TAR_PATH_MAX_LENGTH + 1]u8 = undefined;
-
-    var tar_iter = std.tar.Iterator.init(&decompress_reader.interface, .{
-        .file_name_buffer = &file_name_buffer,
-        .link_name_buffer = &link_name_buffer,
-    });
-
-    // Process each file in the archive - streaming directly from decompression
-    while (true) {
-        const file = tar_iter.next() catch |err| switch (err) {
-            error.InvalidCharacter,
-            error.OutOfMemory,
-            error.Overflow,
-            error.PaxInvalidAttributeEnd,
-            error.PaxNullInKeyword,
-            error.PaxNullInValue,
-            error.PaxSizeAttrOverflow,
-            error.ReadFailed,
-            error.StreamTooLong,
-            error.TarHeader,
-            error.TarHeaderChksum,
-            error.TarHeadersTooBig,
-            error.TarInsufficientBuffer,
-            error.TarNumericValueNegative,
-            error.TarNumericValueTooBig,
-            error.TarUnsupportedHeader,
-            error.UnexpectedEndOfStream,
-            => return error.InvalidTarHeader,
-            error.EndOfStream => break,
-            // Any other error means the tar archive is corrupted or malformed.
-            // We don't try to recover because partial extraction could leave
-            // the system in an inconsistent state.
-        };
-
-        if (file == null) break;
-        const tar_file = file.?;
-
-        // Validate path to prevent directory traversal and other security issues
-        if (pathHasUnbundleErr(tar_file.name)) |validation_error| {
-            if (error_context) |ctx| {
-                ctx.path = validation_error.path;
-                ctx.reason = validation_error.reason;
-            }
-            return error.InvalidPath;
-        }
-
-        switch (tar_file.kind) {
-            .file => {
-                const tar_file_size = std.math.cast(usize, tar_file.size) orelse return error.FileTooLarge;
-
-                var tar_file_reader = TarEntryReader.init(&tar_iter, tar_file.size);
-
-                extract_writer.streamFile(tar_file.name, &tar_file_reader.interface, tar_file_size) catch |err| {
-                    switch (err) {
-                        error.AccessDenied,
-                        error.AntivirusInterference,
-                        error.BadPathName,
-                        error.BrokenPipe,
-                        error.Canceled,
-                        error.DeviceBusy,
-                        error.DiskQuota,
-                        error.EndOfStream,
-                        error.FileBusy,
-                        error.FileLocksUnsupported,
-                        error.FileNotFound,
-                        error.FileTooBig,
-                        error.InputOutput,
-                        error.IsDir,
-                        error.LinkQuotaExceeded,
-                        error.LockViolation,
-                        error.NameTooLong,
-                        error.NetworkNotFound,
-                        error.NoDataExtracted,
-                        error.NoDevice,
-                        error.NoSpaceLeft,
-                        error.NotDir,
-                        error.NotOpenForWriting,
-                        error.OutOfMemory,
-                        error.PathAlreadyExists,
-                        error.PermissionDenied,
-                        error.PipeBusy,
-                        error.ProcessFdQuotaExceeded,
-                        error.ReadOnlyFileSystem,
-                        error.Streaming,
-                        error.SymLinkLoop,
-                        error.SystemFdQuotaExceeded,
-                        error.SystemResources,
-                        error.Unexpected,
-                        error.WouldBlock,
-                        error.WriteFailed,
-                        => return error.FileWriteFailed,
-                        error.UnexpectedEndOfStream => return error.UnexpectedEndOfStream,
-                        error.ReadFailed => return error.ReadFailed,
-                    }
-                };
-            },
-            .directory => {
-                extract_writer.makeDir(tar_file.name) catch {
-                    return error.DirectoryCreateFailed;
-                };
-            },
-            .sym_link => {
-                // Skip other file types (symlinks, etc.)
-                // std.tar automatically handles skipping the content for us
-            },
-        }
-    }
-
-    // Ensure all data was read and hash was verified
-    decompress_reader.verifyComplete() catch |err| {
-        switch (err) {
-            error.HashMismatch => return error.HashMismatch,
-        }
-    };
-}
-
-/// Unbundle files from a compressed tar archive.
-///
-/// Extracts files to the provided directory, creating subdirectories as needed.
-/// The filename parameter should be the base58-encoded blake3 hash + .tar.zst extension.
-/// If an InvalidPath error is returned, error_context will contain details about the invalid path.
-pub fn unbundle(
-    input_reader: anytype,
-    extract_dir: std.Io.Dir,
-    io: std.Io,
-    allocator: *std.mem.Allocator,
-    filename: []const u8,
-    error_context: ?*ErrorContext,
-) UnbundleError!void {
-    // Extract expected hash from filename
-    if (!std.mem.endsWith(u8, filename, TAR_EXTENSION)) {
-        return error.InvalidFilename;
-    }
-    const base58_hash = filename[0 .. filename.len - TAR_EXTENSION.len]; // Remove .tar.zst
-    const expected_hash = (try validateBase58Hash(base58_hash)) orelse {
-        return error.InvalidFilename;
-    };
-
-    var dir_writer = DirExtractWriter.init(extract_dir, io);
-    return unbundleStream(input_reader, dir_writer.extractWriter(), allocator, &expected_hash, error_context);
 }
