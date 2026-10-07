@@ -11,6 +11,106 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const unbundle = @import("unbundle.zig");
 const base58 = @import("base58");
+const test_support = @import("test_support.zig");
+
+test "bundle links - symlink followed by a file creates only a regular file" {
+    const bytes = try test_support.archive(testing.allocator, &.{
+        .{ .name = "a", .kind = .symlink, .data = "x" },
+        .{ .name = "a", .data = "regular file" },
+    });
+    defer testing.allocator.free(bytes);
+    const hash = test_support.hash(bytes);
+    var reader = std.Io.Reader.fixed(bytes);
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.io, testing.allocator);
+    defer writer.deinit();
+
+    _ = try unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, null, .{});
+
+    var iter = tmp.dir.iterate();
+    const entry = (try iter.next(testing.io)).?;
+    try testing.expectEqualStrings("a", entry.name);
+    try testing.expectEqual(std.Io.File.Kind.file, entry.kind);
+    try testing.expect(try iter.next(testing.io) == null);
+    const content = try tmp.dir.readFileAlloc(testing.io, "a", testing.allocator, .limited(1024));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("regular file", content);
+}
+
+test "bundle links - escaping symlink targets fail without writing outside extraction" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "x", .data = "outside sentinel" });
+    try tmp.dir.createDir(testing.io, "extract", .default_dir);
+    var extract = try tmp.dir.openDir(testing.io, "extract", .{ .iterate = true });
+    defer extract.close(testing.io);
+
+    const cases = [_]struct { target: []const u8, reason: unbundle.PathValidationReason }{
+        .{ .target = "../x", .reason = .path_traversal },
+        .{ .target = "/etc", .reason = .absolute_path },
+        .{ .target = "./x", .reason = .current_directory_reference },
+    };
+    for (cases) |case| {
+        const bytes = try test_support.archive(testing.allocator, &.{
+            .{ .name = "a", .kind = .symlink, .data = case.target },
+            .{ .name = "a", .data = "overwrite" },
+        });
+        defer testing.allocator.free(bytes);
+        const hash = test_support.hash(bytes);
+        var reader = std.Io.Reader.fixed(bytes);
+        var writer = unbundle.DirExtractWriter.init(extract, testing.io, testing.allocator);
+        defer writer.deinit();
+        var context: unbundle.ErrorContext = undefined;
+        try testing.expectError(error.InvalidPath, unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, &context, .{}));
+        try testing.expectEqual(case.reason, context.reason);
+        const sentinel = try tmp.dir.readFileAlloc(testing.io, "x", testing.allocator, .limited(1024));
+        defer testing.allocator.free(sentinel);
+        try testing.expectEqualStrings("outside sentinel", sentinel);
+        var iter = extract.iterate();
+        try testing.expect(try iter.next(testing.io) == null);
+    }
+}
+
+test "bundle links - hard links are rejected before a link is created" {
+    const bytes = try test_support.archive(testing.allocator, &.{
+        .{ .name = "target", .data = "original" },
+        .{ .name = "a", .kind = .hard_link, .data = "target" },
+        .{ .name = "after", .data = "must not be extracted" },
+    });
+    defer testing.allocator.free(bytes);
+
+    // The helper wraps tar bytes in a single raw Zstandard block. Pin the
+    // underlying rejection too, so a malformed checksum cannot pass this test.
+    var tar_reader = std.Io.Reader.fixed(bytes[12..]);
+    var name_buffer: [1024]u8 = undefined;
+    var link_buffer: [1024]u8 = undefined;
+    var iterator = std.tar.Iterator.init(&tar_reader, .{
+        .file_name_buffer = &name_buffer,
+        .link_name_buffer = &link_buffer,
+    });
+    const target = (try iterator.next()).?;
+    try testing.expectEqualStrings("target", target.name);
+    try testing.expectEqual(std.tar.FileKind.file, target.kind);
+    try testing.expectError(error.TarUnsupportedHeader, iterator.next());
+
+    const hash = test_support.hash(bytes);
+    var reader = std.Io.Reader.fixed(bytes);
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var writer = unbundle.DirExtractWriter.init(tmp.dir, testing.io, testing.allocator);
+    defer writer.deinit();
+
+    try testing.expectError(error.InvalidTarHeader, unbundle.unbundleStream(testing.allocator, &reader, writer.extractWriter(), &hash, null, .{}));
+    var iter = tmp.dir.iterate();
+    const entry = (try iter.next(testing.io)).?;
+    try testing.expectEqualStrings("target", entry.name);
+    try testing.expectEqual(std.Io.File.Kind.file, entry.kind);
+    try testing.expect(try iter.next(testing.io) == null);
+    const content = try tmp.dir.readFileAlloc(testing.io, "target", testing.allocator, .limited(1024));
+    defer testing.allocator.free(content);
+    try testing.expectEqualStrings("original", content);
+}
 
 test "pathHasUnbundleErr - various invalid paths" {
     // Test path traversal

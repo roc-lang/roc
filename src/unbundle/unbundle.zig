@@ -757,7 +757,9 @@ pub fn unbundleStream(
                     }
                 }
 
-                // TODO: Add symlink support to ExtractWriter interface
+                // TODO: Add symlink support to ExtractWriter interface. Before
+                // creating any link, confine its resolved target to the extraction
+                // root, including resolution through links created earlier.
                 data_extracted = true;
             },
         }
