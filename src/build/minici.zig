@@ -363,14 +363,15 @@ fn requireSha256Hardware() void {
 
 fn aarch64HasSha2() bool {
     if (builtin.cpu.arch != .aarch64) return false;
-    return switch (target.classifyOs(builtin.os.tag)) {
+    // Zig 0.17 declares `std.elf.AT` per OS, so only Linux may name HWCAP.
+    if (builtin.os.tag == .linux) {
         // HWCAP_SHA2 is bit 6 of AT_HWCAP on aarch64 Linux.
-        .linux => (std.os.linux.getauxval(std.elf.AT.HWCAP) & (1 << 6)) != 0,
-        // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
-        // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
-        // trust the build target, which also requires `sha2`.
-        .macos, .windows, .freebsd, .openbsd, .netbsd, .other => true,
-    };
+        return (std.os.linux.getauxval(std.elf.AT.HWCAP) & (1 << 6)) != 0;
+    }
+    // Every Apple Silicon CPU has the crypto extension, and Zig's macOS
+    // aarch64 baseline (apple_m1) already assumes it. Other aarch64 hosts
+    // trust the build target, which also requires `sha2`.
+    return true;
 }
 
 fn parseMiniArgs(allocator: std.mem.Allocator, args: []const []const u8) !ParsedArgs {
