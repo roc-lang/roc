@@ -55,10 +55,7 @@ const imports = symbols.runtime_set ++ .{
 // These standard C memory/math operations are also emitted as libcalls by
 // Zig's backends. They belong to the platform C ABI, unlike __clear_cache and
 // compiler-rt arithmetic helpers. IO itself uses direct syscalls on Linux.
-const c_imports = [_][]const u8{
-    "memcpy", "memmove", "memset", "strlen", "sqrt", "sqrtf", "ceil", "ceilf", "floor", "floorf",
-    "fmod",   "fmodf",   "trunc",  "truncf",
-};
+const c_imports = symbols.c_memory_set ++ symbols.c_math_set;
 // ELF's GOT anchor is supplied by the linker, not by a platform host.
 // The freestanding shim has no TLS startup and must not import a TLS resolver.
 const linux_imports = c_imports ++ .{"_GLOBAL_OFFSET_TABLE_"};

@@ -8,7 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const protocol = @import("../protocol.zig");
 const semantic_tokens = @import("../semantic_tokens.zig");
-const line_info = @import("../line_info.zig");
+const position = @import("../position.zig");
 
 /// Returns the semantic tokens handler for the LSP.
 pub fn handler(comptime ServerType: type) type {
@@ -36,7 +36,7 @@ pub fn handler(comptime ServerType: type) type {
             };
 
             // Build line info for position conversion
-            var info = try line_info.LineInfo.init(self.allocator, doc.text);
+            const info = try position.LineOffsets.init(self.allocator, doc.text);
             defer info.deinit();
 
             const checked_module = try self.syntax_checker.getCheckedModuleForDocument(params.textDocument.uri, doc.text);

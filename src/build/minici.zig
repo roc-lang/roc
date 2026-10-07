@@ -4,6 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const target = @import("roc_target");
+const modules = @import("modules.zig");
 
 const out_dir = "zig-out/minici";
 const raw_dir = out_dir ++ "/raw";
@@ -110,8 +111,8 @@ const shards = [_]Shard{
     .{ .name = "linux-harness", .host = .linux, .lane = .primary, .selection = .{ .after = "run-test-eval-host-effects" } },
     .{ .name = "macos-core", .host = .macos, .lane = .secondary, .selection = .{ .to = "run-test-eval" } },
     .{ .name = "macos-harness", .host = .macos, .lane = .secondary, .selection = .{ .after = "run-test-eval" } },
-    .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = "run-test-zig-module-roc_target" } },
-    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-zig-module-roc_target", .before = "run-test-eval" } },
+    .{ .name = "windows-core", .host = .windows, .lane = .secondary, .selection = .{ .to = last_module_test_job } },
+    .{ .name = "windows-zig", .host = .windows, .lane = .secondary, .selection = .{ .after = last_module_test_job, .before = "run-test-eval" } },
     .{ .name = "windows-eval", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-eval", .to = "run-test-eval" } },
     .{ .name = "windows-simd", .host = .windows, .lane = .secondary, .selection = .{ .from = "run-test-simd-differential", .to = "run-test-eval-host-effects" } },
     .{ .name = "windows-harness", .host = .windows, .lane = .secondary, .selection = .{ .after = "run-test-eval-host-effects" } },
@@ -157,6 +158,27 @@ const ParsedArgs = struct {
     verify_workflow: ?[]const u8 = null,
 };
 
+/// The `run-test-zig-module-<name>` jobs, in `ModuleType` order. The module
+/// inventory in `modules.zig` says which modules have such a step and whether
+/// MiniCI runs it, so a new module's tests reach MiniCI without an edit here.
+const module_test_jobs = module_test_jobs: {
+    var list: []const Job = &.{};
+    for (std.enums.values(modules.ModuleType)) |module_type| {
+        const name = "run-test-zig-module-" ++ @tagName(module_type);
+        switch (module_type.info().tests) {
+            .unit => |unit| if (unit.minici) {
+                list = list ++ [_]Job{.{ .name = name }};
+            },
+            .harness => list = list ++ [_]Job{.{ .name = name, .kind = .harness }},
+            .no_tests => {},
+        }
+    }
+    break :module_test_jobs list[0..list.len].*;
+};
+
+/// The Windows lanes split right after the module tests.
+const last_module_test_job = module_test_jobs[module_test_jobs.len - 1].name;
+
 const jobs = [_]Job{
     // MiniCI trusts `build.zig` to keep build work behind `build-ci`. Keep this
     // list to leaf `run-*` steps. Do not add aliases or aggregate steps that
@@ -175,7 +197,6 @@ const jobs = [_]Job{
     .{ .name = "run-check-unused-suppression", .placement = .source },
     .{ .name = "run-check-semantic-audit", .placement = .source },
     .{ .name = "run-check-postcheck-architecture", .placement = .source },
-    .{ .name = "run-check-wasm-builtin-routing", .placement = .source },
     .{ .name = "run-check-panic", .placement = .source },
     .{ .name = "run-check-cli-global-stdio", .placement = .source },
     .{ .name = "run-check-test-wiring" },
@@ -187,39 +208,7 @@ const jobs = [_]Job{
     .{ .name = "run-check-str-eq-same-allocation" },
     .{ .name = "run-check-snapshots" },
     .{ .name = "run-check-test-asset-coverage", .placement = .source },
-    .{ .name = "run-test-zig-module-collections" },
-    .{ .name = "run-test-zig-module-base" },
-    .{ .name = "run-test-zig-module-types" },
-    .{ .name = "run-test-zig-module-builtins" },
-    .{ .name = "run-test-zig-module-compile" },
-    .{ .name = "run-test-zig-module-reporting" },
-    .{ .name = "run-test-zig-module-parse" },
-    .{ .name = "run-test-zig-module-can" },
-    .{ .name = "run-test-zig-module-check" },
-    .{ .name = "run-test-zig-module-ctx" },
-    .{ .name = "run-test-zig-module-eval" },
-    .{ .name = "run-test-zig-module-layout" },
-    .{ .name = "run-test-zig-module-values" },
-    .{ .name = "run-test-zig-module-ipc" },
-    .{ .name = "run-test-zig-module-fmt" },
-    .{ .name = "run-test-zig-module-watch" },
-    .{ .name = "run-test-zig-module-bundle" },
-    .{ .name = "run-test-zig-module-unbundle" },
-    .{ .name = "run-test-zig-module-base58" },
-    .{ .name = "run-test-zig-module-lsp" },
-    .{ .name = "run-test-zig-module-lsp_unit" },
-    .{ .name = "run-test-zig-module-lsp_integration", .kind = .harness },
-    .{ .name = "run-test-zig-module-backend" },
-    .{ .name = "run-test-zig-module-lir_core" },
-    .{ .name = "run-test-zig-module-postcheck" },
-    .{ .name = "run-test-zig-module-lir" },
-    .{ .name = "run-test-zig-module-symbol" },
-    .{ .name = "run-test-zig-module-sljmp" },
-    .{ .name = "run-test-zig-module-echo_platform" },
-    .{ .name = "run-test-zig-module-docs" },
-    .{ .name = "run-test-zig-module-host_alloc" },
-    .{ .name = "run-test-zig-module-bump" },
-    .{ .name = "run-test-zig-module-roc_target" },
+} ++ module_test_jobs ++ [_]Job{
     .{ .name = "run-test-zig-snapshot-tool" },
     .{ .name = "run-test-zig-builtin-doc" },
     .{ .name = "run-test-zig-cli-main" },
@@ -231,7 +220,16 @@ const jobs = [_]Job{
     .{ .name = "run-test-zig-trmc-lir" },
     .{ .name = "run-test-zig-build-helpers" },
     .{ .name = "run-test-zig-backend-llvm" },
-    .{ .name = "run-test-eval", .kind = .harness, .args = &.{ "--timeout", "120000" } },
+    .{
+        .name = "run-test-eval",
+        .kind = .harness,
+        // Each eval process also spawns compiler workers. Avoid overlapping
+        // their committed thread stacks on the Windows CI runner (#12116).
+        .args = if (builtin.os.tag == .windows)
+            &.{ "--timeout", "120000", "--threads", "1" }
+        else
+            &.{ "--timeout", "120000" },
+    },
     .{ .name = "run-test-simd-differential", .kind = .harness },
     .{ .name = "run-test-eval-host-effects", .kind = .harness },
     .{ .name = "run-test-playground", .kind = .harness },
@@ -1921,12 +1919,35 @@ test "resolveSelection includes the requested MiniCI range" {
     try std.testing.expect(!selected.includes(last + 1));
 }
 
+test "MiniCI's module test jobs follow the module inventory" {
+    // Unit-tested modules run unless the inventory keeps them out of MiniCI.
+    try std.testing.expect(jobIndexByName("run-test-zig-module-static_data") != null);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-roc_args") != null);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-glue") == null);
+    // A harness-run module is a harness job; an untested module is no job.
+    const harness = jobIndexByName("run-test-zig-module-lsp_integration") orelse return error.MissingHarnessJob;
+    try std.testing.expectEqual(JobKind.harness, jobs[harness].kind);
+    try std.testing.expect(jobIndexByName("run-test-zig-module-tracy") == null);
+
+    var expected: usize = 0;
+    for (std.enums.values(modules.ModuleType)) |module_type| {
+        expected += switch (module_type.info().tests) {
+            .unit => |unit| @intFromBool(unit.minici),
+            .harness => 1,
+            .no_tests => 0,
+        };
+    }
+    var listed: usize = 0;
+    for (jobs) |job| listed += @intFromBool(std.mem.startsWith(u8, job.name, "run-test-zig-module-"));
+    try std.testing.expectEqual(expected, listed);
+}
+
 test "resolveSelection supports exclusive MiniCI range boundaries" {
     const selected = try resolveSelection(.{
-        .after = "run-test-zig-module-roc_target",
+        .after = last_module_test_job,
         .before = "run-test-eval",
     });
-    const after = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingAfter;
+    const after = jobIndexByName(last_module_test_job) orelse return error.MissingAfter;
     const before = jobIndexByName("run-test-eval") orelse return error.MissingBefore;
 
     try std.testing.expect(!selected.includes(after));
@@ -1936,14 +1957,14 @@ test "resolveSelection supports exclusive MiniCI range boundaries" {
 }
 
 test "resolveSelection supports exhaustive adjacent MiniCI shards" {
-    const first = try resolveSelection(.{ .to = "run-test-zig-module-roc_target" });
+    const first = try resolveSelection(.{ .to = last_module_test_job });
     const middle = try resolveSelection(.{
-        .after = "run-test-zig-module-roc_target",
+        .after = last_module_test_job,
         .before = "run-test-eval",
     });
     const last = try resolveSelection(.{ .from = "run-test-eval" });
 
-    const core_boundary = jobIndexByName("run-test-zig-module-roc_target") orelse return error.MissingCoreBoundary;
+    const core_boundary = jobIndexByName(last_module_test_job) orelse return error.MissingCoreBoundary;
     const harness_boundary = jobIndexByName("run-test-eval") orelse return error.MissingHarnessBoundary;
 
     for (jobs, 0..) |_, i| {

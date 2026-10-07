@@ -123,7 +123,10 @@ f = |value| {
 								(e-literal (string "ok"))))))
 				(s-let
 					(p-assign (ident "_second"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-local
+							(p-assign (ident "value")))
+						(e-typed-int (value "1") (type "U64"))))
 				(e-empty_record)))
 		(annotation
 			(ty-fn (effectful false)

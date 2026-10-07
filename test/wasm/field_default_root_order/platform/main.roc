@@ -5,7 +5,7 @@ platform "field-default-root-order"
     provides { "roc_main": main_for_host! }
     hosted {}
     targets: {
-        inputs_dir: "../../platform/targets/",
+        inputs_dir: "targets/",
         wasm32: {
             inputs: ["host.wasm", app],
             import_memory,

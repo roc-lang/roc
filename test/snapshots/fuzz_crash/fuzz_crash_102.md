@@ -62,15 +62,18 @@ main! = |G| \\
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-applied-tag))
+			(e-runtime-error (tag "undeclared_type")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "[G] -> Error")))
+		(patt (type "[G] -> _ret")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "[G] -> Error"))))
+		(expr (type "[G] -> _ret"))))
 ~~~

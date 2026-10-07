@@ -376,7 +376,10 @@ validateAuth = |creds| HttpAuth.validate(creds)
 					(ty-malformed)))))
 	(d-let
 		(p-assign (ident "formatOutput"))
-		(e-runtime-error (tag "erroneous_value_expr"))
+		(e-lambda
+			(args
+				(p-assign (ident "text")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-lookup (name "Str") (builtin))

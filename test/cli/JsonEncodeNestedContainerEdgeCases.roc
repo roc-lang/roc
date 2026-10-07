@@ -55,8 +55,8 @@ expect {
 	explicit_empty_payload : Try([Active, Paused], [InvalidJson(Str)])
 	explicit_empty_payload = Json.parse("{\"Active\":{}}")
 
-	missing_payload_is_invalid = missing_payload == Err(Json.invalid_json)
-	missing_trailing_payload_is_invalid = missing_trailing_payload == Err(Json.invalid_json)
+	missing_payload_is_invalid = missing_payload == Err(Json.invalid_json({}))
+	missing_trailing_payload_is_invalid = missing_trailing_payload == Err(Json.invalid_json({}))
 	explicit_empty_payload_is_valid = explicit_empty_payload == Ok(Active)
 
 	missing_payload_is_invalid and missing_trailing_payload_is_invalid and explicit_empty_payload_is_valid

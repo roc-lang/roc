@@ -4,6 +4,7 @@
 //! initializer procedures using target-width symbolic memory.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const collections = @import("collections");
 
 const builtins = @import("builtins");
@@ -226,7 +227,7 @@ const StaticInitializerMachine = struct {
             if (target_layout.tag == .box_of_zst) return result;
             if (@import("builtin").mode == .Debug) {
                 const source_layout = self.layoutValue(source.layout_idx);
-                std.debug.panic(
+                invariant(
                     "static data invariant violated: static initializer explicit reinterpret changed target byte size from layout {d} ({s}, {d} bytes) to layout {d} ({s}, {d} bytes)",
                     .{
                         @intFromEnum(source.layout_idx),
@@ -318,7 +319,7 @@ const StaticInitializerMachine = struct {
                         {
                             if (try self.readyStatic(dependency) == null) return dependency;
                         },
-                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .null_ptr, .proc_ref => {},
+                        .i64_literal, .i128_literal, .f64_literal, .f32_literal, .dec_literal, .str_literal, .bytes_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .proc_ref => {},
                     }
                     break :blk assign.next;
                 },
@@ -329,10 +330,7 @@ const StaticInitializerMachine = struct {
                 .assign_struct => |assign| assign.next,
                 .assign_tag => |assign| assign.next,
                 .set_local => |assign| assign.next,
-                .incref => |arc| arc.next,
-                .decref => |arc| arc.next,
-                .decref_if_initialized => |arc| arc.next,
-                .free => |arc| arc.next,
+                inline .incref, .decref, .decref_if_initialized, .free => |arc| arc.next,
                 .ret,
                 .init_uninitialized,
                 .assign_call,
@@ -345,6 +343,8 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -466,10 +466,7 @@ const StaticInitializerMachine = struct {
                     setLocal(locals, assign.target, try self.cloneValueAs(source, target_layout));
                     current = assign.next;
                 },
-                .incref => |arc| current = arc.next,
-                .decref => |arc| current = arc.next,
-                .decref_if_initialized => |arc| current = arc.next,
-                .free => |arc| current = arc.next,
+                inline .incref, .decref, .decref_if_initialized, .free => |arc| current = arc.next,
                 .ret => |ret| {
                     const value = local(locals, ret.value);
                     if (value.layout_idx != proc.ret_layout) {
@@ -488,6 +485,8 @@ const StaticInitializerMachine = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -509,7 +508,7 @@ const StaticInitializerMachine = struct {
                 .join,
                 .jump,
                 .crash,
-                => std.debug.panic("static data invariant violated: {s} in initializer {d} is not construction LIR", .{
+                => invariant("static data invariant violated: {s} in initializer {d} is not construction LIR", .{
                     @tagName(self.store().getCFStmt(current)),
                     @intFromEnum(proc_id),
                 }),
@@ -525,8 +524,7 @@ const StaticInitializerMachine = struct {
     ) MaterializationError!*SymbolicValue {
         return switch (op) {
             .local => |source| try self.cloneValueAs(local(locals, source), target_layout),
-            .list_reinterpret => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
-            .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
+            inline .list_reinterpret, .nominal => |source| try self.cloneValueAs(local(locals, source.backing_ref), target_layout),
             .discriminant,
             .field,
             .tag_payload,
@@ -553,7 +551,6 @@ const StaticInitializerMachine = struct {
             .boxy_dynamic_num_literal,
             .boxy_dynamic_frac_literal,
             => staticDataInvariant("descriptor-dependent Boxy literal reached target static initializer"),
-            .null_ptr => {},
             .proc_ref => |proc| try value.relocations.append(self.allocator(), .{
                 .offset = 0,
                 .target = .{ .procedure = proc },
@@ -1007,7 +1004,6 @@ const StaticInitializerMachine = struct {
                     .kind = .function_pointer,
                 });
             },
-            .interpreter_context_drop => staticDataInvariant("interpreter erased callable reached target static initializer"),
             .boxy_capture => staticDataInvariant("descriptor-dependent Boxy capture drop reached target static initializer"),
         }
         if (assign.capture) |capture_local| {
@@ -1814,7 +1810,7 @@ fn alignForwardU32(value: u32, alignment: u32) u32 {
 
 fn staticDataInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        std.debug.panic("static data invariant violated: {s}", .{message});
+        invariant("static data invariant violated: {s}", .{message});
     }
     unreachable;
 }

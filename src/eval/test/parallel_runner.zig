@@ -1287,7 +1287,7 @@ fn runAllocationTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
         const dur = timer.read();
 
@@ -1378,7 +1378,13 @@ fn runInspectTest(
     specialization_strategy: base.SpecializationStrategy,
     timeout_ms: u64,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy);
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
+    // Only the wasm backend reads the 32-bit lowering.
+    const wasm_lowering: helpers.WasmLowering = if (skips[2] or !WASM_BACKEND_IMPLEMENTED) .skip else .lower;
+    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy, wasm_lowering);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1388,10 +1394,6 @@ fn runInspectTest(
     };
 
     const display_expected = expected.display();
-    const skips = if (comptime coverage_mode)
-        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
-    else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1421,7 +1423,7 @@ fn runInspectTest(
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1660,7 +1662,7 @@ fn runCrashTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1743,6 +1745,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .roc_version_mismatch,
         .deprecated_number_suffix,
         .trailing_try_suffix,
+        .redundant_return,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,

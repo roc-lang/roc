@@ -58,7 +58,7 @@ NO CHANGE
 		(e-runtime-error (tag "self_referential_definition")))
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_use"))))
+		(e-runtime-error (tag "erroneous_value_expr"))))
 ~~~
 # TYPES
 ~~~clojure
