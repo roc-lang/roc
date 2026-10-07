@@ -37,6 +37,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("Parser coverage is enabled only on Linux ARM64. Current platform: {s}\n", .{@tagName(builtin.os.tag)});
         return;
     }
+    if (std.mem.eql(u8, args[1], "wasm-size-budget")) return checkWasmSize(ctx);
     if (std.mem.eql(u8, args[1], "tests-summary")) return testSummary(ctx);
     if (std.mem.eql(u8, args[1], "check-builtin-bake-reproducible")) return checkBakes(ctx);
     return error.UnknownCommand;
@@ -1457,5 +1458,24 @@ fn testSummary(ctx: Context) !void {
         std.debug.print("No tests ran (all tests filtered out).\n", .{});
     } else {
         std.debug.print("All {d} tests passed.\n", .{passed});
+    }
+}
+
+/// Arguments: <wasm file> <budget bytes> <budget constant name in build.zig>.
+fn checkWasmSize(ctx: Context) !void {
+    if (ctx.args.len != 3) return error.InvalidArguments;
+    const path = ctx.args[0];
+    const budget = try std.fmt.parseInt(u64, ctx.args[1], 10);
+    const budget_name = ctx.args[2];
+    const size = (try std.Io.Dir.cwd().statFile(ctx.io, path, .{})).size;
+    const name = std.fs.path.basename(path);
+    const permille = size * 1000 / budget;
+    if (size > budget) {
+        return fail("{s} is {d} bytes, {d} bytes over the {d} byte budget ({s} in build.zig)", .{ name, size, size - budget, budget, budget_name });
+    }
+    std.debug.print("{s}: {d} bytes, {d}.{d}% of the {d} byte budget ({d} bytes left)\n", .{ name, size, permille / 10, permille % 10, budget, budget - size });
+    if (permille >= 900) {
+        const prefix = if (ctx.environ_map.get("GITHUB_ACTIONS") != null) "::warning::" else "warning: ";
+        std.debug.print("{s}{s} is within 10% of its size budget ({s} in build.zig)\n", .{ prefix, name, budget_name });
     }
 }

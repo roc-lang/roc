@@ -793,43 +793,11 @@ const echo_wasm_size_budget: u64 = 26_214_400;
 
 /// Fails when a wasm module exceeds its size budget, and warns from 90% of it.
 const CheckWasmSizeStep = struct {
-    step: Step,
-    wasm: std.Build.LazyPath,
-    budget: u64,
-    budget_name: []const u8,
-
-    fn create(b: *std.Build, compile: *Step.Compile, budget: u64, budget_name: []const u8) *CheckWasmSizeStep {
-        const self = b.allocator.create(CheckWasmSizeStep) catch @panic("OOM");
-        self.* = .{
-            .step = Step.init(.{
-                .id = .custom,
-                .name = b.fmt("check {s} size", .{compile.name}),
-                .owner = b,
-                .makeFn = make,
-            }),
-            .wasm = compile.getEmittedBin(),
-            .budget = budget,
-            .budget_name = budget_name,
-        };
-        self.step.dependOn(&compile.step);
-        return self;
-    }
-
-    fn make(step: *Step, _: Step.MakeOptions) !void {
-        const self: *CheckWasmSizeStep = @fieldParentPtr("step", step);
-        const b = step.owner;
-        const path = self.wasm.getPath2(b, step);
-        const size = (try std.Io.Dir.cwd().statFile(b.graph.io, path, .{})).size;
-        const name = std.fs.path.basename(path);
-        const permille = size * 1000 / self.budget;
-        if (size > self.budget) {
-            return step.fail("{s} is {d} bytes, {d} bytes over the {d} byte budget ({s} in build.zig)", .{ name, size, size - self.budget, self.budget, self.budget_name });
-        }
-        std.debug.print("{s}: {d} bytes, {d}.{d}% of the {d} byte budget ({d} bytes left)\n", .{ name, size, permille / 10, permille % 10, self.budget, self.budget - size });
-        if (permille >= 900) {
-            const prefix = if (b.graph.environ_map.get("GITHUB_ACTIONS") != null) "::warning::" else "warning: ";
-            std.debug.print("{s}{s} is within 10% of its size budget ({s} in build.zig)\n", .{ prefix, name, self.budget_name });
-        }
+    fn create(b: *std.Build, compile: *Step.Compile, budget: u64, budget_name: []const u8) *Step.Run {
+        const run = buildChecksRun(b, "wasm-size-budget");
+        run.addFileArg(compile.getEmittedBin());
+        run.addArgs(&.{ b.fmt("{d}", .{budget}), budget_name });
+        return run;
     }
 };
 
