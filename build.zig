@@ -5986,10 +5986,10 @@ fn addMachineCodeShimLib(
         const private_rt = b.addWriteFiles();
         const root = private_rt.addCopyFile(b.path("src/machine_code_shim/compiler_rt.zig"), "compiler_rt.zig");
         for ([_][]const u8{
-            "int.zig",                 "udivmod.zig",             "arm.zig",
-            "udivmodsi4_test.zig",     "udivmoddi4_test.zig",     "udivmodti4_test.zig",
-            "divti3_test.zig",         "modti3_test.zig",         "float_from_int.zig",
-            "int_from_float.zig",      "float_from_int_test.zig", "int_from_float_test.zig",
+            "int.zig",             "udivmod.zig",             "arm.zig",
+            "udivmodsi4_test.zig", "udivmoddi4_test.zig",     "udivmodti4_test.zig",
+            "divti3_test.zig",     "modti3_test.zig",         "float_from_int.zig",
+            "int_from_float.zig",  "float_from_int_test.zig", "int_from_float_test.zig",
         }) |file| {
             _ = private_rt.addCopyFile(std.Build.LazyPath.zig_lib.path(b, b.pathJoin(&.{ "compiler_rt", file })), b.pathJoin(&.{ "compiler_rt", file }));
         }
@@ -7029,7 +7029,11 @@ fn llvmPaths(b: *std.Build, target: ResolvedTarget, source: DependencySource) ?L
                 std.process.exit(1);
             };
             const name = b.fmt("roc_deps_{s}", .{triple});
-            const deps = b.lazyDependency(name, .{}) orelse return null;
+            // The bundle is required, so use the exiting form: when it still has to be
+            // fetched, the build marks it needed and exits for the fetch and rerun. A null
+            // return would let the script end early and Zig 0.17 would then reject any
+            // `-D` option declared after this point as invalid.
+            const deps = b.dependency(name, .{});
             return .{ .include = deps.path("include"), .lib = deps.path("lib") };
         },
     }
