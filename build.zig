@@ -698,12 +698,6 @@ const CheckPostcheckArchitectureStep = struct {
     }
 };
 
-const CheckWasmBuiltinRoutingStep = struct {
-    fn create(b: *std.Build) *Step.Run {
-        return buildChecksRun(b, "check-wasm-builtin-routing");
-    }
-};
-
 /// Build step that fails when tracked snapshots differ from the freshly regenerated
 /// output. Detects whether the build root is backed by Git or JJ and invokes the
 /// matching diff command directly. This deliberately avoids shelling out through

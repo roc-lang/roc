@@ -763,6 +763,7 @@ fn buildGluePlugin(
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
+        codegen.unoptimized = opt == .dev;
         defer codegen.deinit();
 
         break :generate codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {

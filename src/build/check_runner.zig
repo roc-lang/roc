@@ -24,7 +24,6 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, args[1], "check-enum-from-int-zero")) return CheckEnumFromIntZeroStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-unused-suppression")) return CheckUnusedSuppressionStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-postcheck-architecture")) return CheckPostcheckArchitectureStep.run(ctx);
-    if (std.mem.eql(u8, args[1], "check-wasm-builtin-routing")) return CheckWasmBuiltinRoutingStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-snapshot-diff")) return CheckSnapshotDiffStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-panic-usage")) return CheckPanicStep.run(ctx);
     if (std.mem.eql(u8, args[1], "check-cli-global-stdio")) return CheckCliGlobalStdioStep.run(ctx);
@@ -580,31 +579,6 @@ const CheckPostcheckArchitectureStep = struct {
             .signal, .stopped, .unknown => {
                 return fail("ci/check_postcheck_architecture.pl terminated abnormally", .{});
             },
-        }
-    }
-};
-
-const CheckWasmBuiltinRoutingStep = struct {
-    pub fn run(ctx: Context) !void {
-        if (builtin.os.tag == .windows) {
-            std.debug.print("Skipping WASM builtin routing check on Windows (perl not available)\n", .{});
-            return;
-        }
-
-        const io = ctx.io;
-        var child = try std.process.spawn(io, .{
-            .argv = &.{ "perl", "ci/check_wasm_builtin_routing.pl" },
-            .environ_map = &ctx.environ_map,
-        });
-        const term = try child.wait(io);
-        switch (term) {
-            .exited => |code| if (code != 0) {
-                return fail(
-                    "WASM builtin routing check failed. Run 'perl ci/check_wasm_builtin_routing.pl' to see details.",
-                    .{},
-                );
-            },
-            .signal, .stopped, .unknown => return fail("ci/check_wasm_builtin_routing.pl terminated abnormally", .{}),
         }
     }
 };

@@ -397,6 +397,11 @@ pub const MonoLlvmCodeGen = struct {
     /// one subprogram per proc, and per-statement line locations from the
     /// LIR store's source-location tables.
     emit_debug_info: bool = false,
+    /// True when the module is compiled without LLVM optimization. LLVM 22's
+    /// x86 backend drops the stack-passed arguments of a `musttail` call at
+    /// that level, so frame-replacing calls are marked `tail` instead;
+    /// `tailcc` still guarantees they are tail calls.
+    unoptimized: bool = false,
     /// Emit local variable declarations for source-level debugger inspection.
     emit_local_debug_info: bool = false,
     /// Build-only default-platform Linux executables link a small runtime
@@ -4808,7 +4813,8 @@ pub const MonoLlvmCodeGen = struct {
             try call_args.append(self.allocator, self.current_tail_scratch orelse
                 llvmInvariantFmt("frame-replacing call into a tail group from outside it", .{}));
         }
-        const result = wip.call(.musttail, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
+        const call_kind: LlvmBuilder.Function.Instruction.Call.Kind = if (self.unoptimized) .tail else .musttail;
+        const result = wip.call(call_kind, self.fastCallConv(), attrs_wip.finish(builder) catch return error.OutOfMemory, fast.typeOf(builder), fast.toValue(builder), call_args.items, "") catch return error.OutOfMemory;
         if (sig.lowered.ret == .registers) {
             _ = wip.ret(result) catch return error.OutOfMemory;
         } else {

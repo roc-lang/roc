@@ -199,11 +199,14 @@ const SetupZigPins = struct {
 
 /// The `<major>_<minor>` of the `pkgs.zig_<major>_<minor>` package a Nix flake selects.
 fn flakeZigPin(text: []const u8) ?ZigPin {
-    const prefix = "pkgs.zig_";
-    const start = (std.mem.find(u8, text, prefix) orelse return null) + prefix.len;
-    var end = start;
-    while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '_')) end += 1;
-    return .{ .offset = start, .version = text[start..end] };
+    // A flake may instead build Zig from a local `zig-<major>.<minor>.nix` derivation.
+    for ([_][]const u8{ "pkgs.zig_", "./zig-" }) |prefix| {
+        const start = (std.mem.find(u8, text, prefix) orelse continue) + prefix.len;
+        var end = start;
+        while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '_' or text[end] == '.')) end += 1;
+        return .{ .offset = start, .version = std.mem.trimEnd(u8, text[start..end], ".") };
+    }
+    return null;
 }
 
 /// Whether nixpkgs' `<major>_<minor>` spelling names the major and minor of `version`.
@@ -211,7 +214,7 @@ fn isMajorMinorOf(pin: []const u8, version: []const u8) bool {
     var parts = std.mem.splitScalar(u8, version, '.');
     const major = parts.next() orelse return false;
     const minor = parts.next() orelse return false;
-    const pin_major, const pin_minor = cut(pin, "_") orelse return false;
+    const pin_major, const pin_minor = cut(pin, "_") orelse cut(pin, ".") orelse return false;
     return std.mem.eql(u8, pin_major, major) and std.mem.eql(u8, pin_minor, minor);
 }
 
