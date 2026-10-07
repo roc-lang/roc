@@ -715,10 +715,7 @@ fn recordDestructuredValueNames(
             .tag => |p| {
                 for (self.store.patternSlice(p.args)) |arg| try pending.append(self.gpa, arg);
             },
-            .list => |p| {
-                for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
-            },
-            .tuple => |p| {
+            inline .list, .tuple => |p| {
                 for (self.store.patternSlice(p.patterns)) |item| try pending.append(self.gpa, item);
             },
             // A `var` binder is rejected outside a block, where names are not
@@ -2366,14 +2363,6 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
-/// Run the token parser kernel with a pattern goal and return the completed pattern.
-pub fn runPattern(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    return try self.runPatternRoot(alternatives);
-}
-
 fn finishAsPattern(self: *Parser, pattern: AST.Pattern.Idx) std.mem.Allocator.Error!AST.Pattern.Idx {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -3345,14 +3334,6 @@ fn runStatementRoot(self: *Parser, statement_type: StatementType) std.mem.Alloca
     return try self.runExprStatementKernel(.statement, 0, statement_type, undefined, null, .alternatives_forbidden, undefined);
 }
 
-fn runAssociatedBlockRoot(self: *Parser, start: Token.Idx, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runExprStatementKernel(.associated_block, 0, .in_associated_block, start, owner_type_path, .alternatives_forbidden, undefined);
-}
-
-fn runPatternRoot(self: *Parser, alternatives: Alternatives) std.mem.Allocator.Error!AST.Pattern.Idx {
-    return try self.runExprStatementKernel(.pattern, 0, undefined, undefined, null, alternatives, undefined);
-}
-
 fn runTypeAnnoRoot(self: *Parser, looking_for_args: TyFnArgs) std.mem.Allocator.Error!AST.TypeAnno.Idx {
     return try self.runExprStatementKernel(.type_anno, 0, undefined, undefined, null, .alternatives_forbidden, looking_for_args);
 }
@@ -3480,9 +3461,7 @@ fn runExprStatementKernel(
     var last_pattern: ?AST.Pattern.Idx = null;
     var statement_type = switch (root) {
         .statement, .associated_block => root_statement_type,
-        .expr => StatementType.in_body,
-        .pattern => StatementType.in_body,
-        .type_anno => StatementType.in_body,
+        .expr, .pattern, .type_anno => StatementType.in_body,
     };
     var last_statement: ?AST.Statement.Idx = null;
     const associated_blocks = &expr_scratch.associated_blocks;
@@ -7357,17 +7336,6 @@ fn recordTypeDependencyFromQualifiedTokens(
     try self.scratch_idents.append(final_ident);
 
     try self.decl_index.addTypeDependencySegments(self.scratch_idents.sliceFromStart(top));
-}
-
-/// Parse a block that contains only statements, no ending expression.
-/// This is used for nominal type associated items like `Foo := [A, B].{ x = 5 }`
-/// {
-///     <stmt1>
-///     ...
-///     <stmtN>
-/// }
-pub fn runStatementOnlyBlock(self: *Parser, start: u32, owner_type_path: ?DeclIndex.TypePathIdx) std.mem.Allocator.Error!AST.Associated {
-    return try self.runAssociatedBlockRoot(start, owner_type_path);
 }
 
 fn finishRecordExpr(

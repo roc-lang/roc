@@ -157,7 +157,7 @@ fn hasIntLiteral(result: *const lir.Program.Result, value: i128) bool {
         switch (stmt.assign_literal.value) {
             .i64_literal => |literal| if (literal.value == value) return true,
             .i128_literal => |literal| if (literal.value == value) return true,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return false;

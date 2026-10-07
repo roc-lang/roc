@@ -8,6 +8,7 @@
 //! the structural passes without reconstructing source-level intent.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
 const body_clone = @import("body_clone.zig");
@@ -229,10 +230,10 @@ fn reachableIncomingEdgeCounts(store: *LirStore, body: LIR.CFStmtId, allocator: 
     defer walk.deinit();
     while (try walk.next()) |stmt_id| {
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = counts.get(successor) orelse 0;
-            if (count == std.math.maxInt(u32)) @panic("LIR statement incoming-edge count overflowed");
+            if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR statement incoming-edge count overflowed"});
             try counts.put(successor, count + 1);
         }
     }
@@ -267,10 +268,10 @@ fn collectMovedBody(
     while (try walk.next()) |stmt_id| {
         try nodes.append(allocator, stmt_id);
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
             const count = internal_incoming.get(successor) orelse 0;
-            if (count == std.math.maxInt(u32)) @panic("LIR subtree incoming-edge count overflowed");
+            if (count == std.math.maxInt(u32)) invariant("{s}", .{"LIR subtree incoming-edge count overflowed"});
             try internal_incoming.put(successor, count + 1);
         }
     }
@@ -282,14 +283,14 @@ fn collectMovedBody(
     for (nodes.items) |stmt_id| {
         const expected = (internal_incoming.get(stmt_id) orelse 0) + @intFromBool(stmt_id == root);
         const incoming = proc_incoming_edges.get(stmt_id) orelse 0;
-        if (incoming < expected) @panic("LIR subtree has more internal edges than its procedure graph");
+        if (incoming < expected) invariant("{s}", .{"LIR subtree has more internal edges than its procedure graph"});
         if (incoming > expected) try shared_work.append(allocator, stmt_id);
     }
     while (shared_work.pop()) |stmt_id| {
         if (shared_stmts.contains(stmt_id)) continue;
         try shared_stmts.put(stmt_id, {});
         successors.clearRetainingCapacity();
-        try body_clone.appendSuccessorsWithAllocator(store, &successors, stmt_id, allocator);
+        try body_clone.appendSuccessors(store, &successors, stmt_id, allocator);
         try shared_work.appendSlice(allocator, successors.items);
     }
 

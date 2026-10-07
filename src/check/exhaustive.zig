@@ -40,126 +40,74 @@ const problem = @import("problem.zig");
 const Ident = base.Ident;
 const Region = base.Region;
 const StringLiteral = base.StringLiteral;
-const TypeStore = types.Store;
+const TypeView = @import("type_view.zig");
+const TypeStore = TypeView;
+// Every Var below the public integration boundary is in
+// TypeView's analysis namespace, including Pattern, Union, assumptions and
+// traversal keys. Only exportBlockers converts back to mutable source roots.
 const Var = types.Var;
+const InhabitednessMemo = @import("inhabitedness_memo.zig").Memo;
+
+fn resolveType(store: *TypeStore, var_: Var) error{OutOfMemory}!TypeView.Resolved {
+    return store.resolveVar(var_);
+}
+
+fn resolveRoot(store: *TypeStore, var_: Var) Var {
+    return store.root(var_);
+}
+
+/// Analysis-owned unknowns must never reach mutable solver operations.
+fn exportBlockers(store: *TypeStore, blockers: *std.ArrayList(Var)) void {
+    var count: usize = 0;
+    for (blockers.items) |view| {
+        if (store.sourceVar(view)) |source| {
+            blockers.items[count] = source;
+            count += 1;
+        }
+    }
+    blockers.shrinkRetainingCapacity(count);
+}
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic(message, args);
+        base.invariant(message, args);
     }
     unreachable;
 }
 
-/// Builtin type identifiers needed for special-casing in exhaustiveness checking.
-/// These types have special backing representations that would incorrectly appear uninhabited.
-/// Memo of declaration openings performed during one exhaustiveness entry
-/// point: one instantiated backing per (declaration, resolved arg roots).
-/// Without it, walkers that follow a recursive nominal's backing would open a
-/// FRESH copy at every level (each containing a new recursive application),
-/// so their seen-sets never converge.
+/// Frozen analysis state scoped to one exhaustiveness entry point.
+/// Views own declaration substitutions and complete-query memoization without
+/// appending mutable solver variables or outliving returned constraints.
 pub const NominalOpenCache = struct {
-    entries: std.ArrayListUnmanaged(Entry) = .empty,
-    /// Resolved argument roots of every entry, contiguous per entry.
-    args: std.ArrayListUnmanaged(Var) = .empty,
-    /// Entry index per (declaration, resolved argument roots), hashed and
-    /// compared through `entries` and `args`. The walkers never unify, so a
-    /// root resolved when its entry was recorded is still that argument's
-    /// root for the rest of the entry point.
-    index: std.HashMapUnmanaged(u32, void, EntryContext, std.hash_map.default_max_load_percentage) = .empty,
     allocator: std.mem.Allocator,
+    /// Complete queries only; shares the opening cache's mutation-free lifetime.
+    inhabitedness: InhabitednessMemo = .{},
+    views: ?TypeView = null,
 
-    const Entry = struct {
-        decl: types.NominalDecl.Idx,
-        args_start: u32,
-        args_len: u32,
-        opened: Var,
-    };
-
-    /// One opening request: a declaration and its resolved argument roots.
-    const Key = struct {
-        decl: types.NominalDecl.Idx,
-        args: []const Var,
-    };
-
-    fn hashKey(key: Key) u64 {
-        var hasher = std.hash.Wyhash.init(0);
-        std.hash.autoHash(&hasher, key.decl);
-        for (key.args) |arg| std.hash.autoHash(&hasher, arg);
-        return hasher.final();
-    }
-
-    fn entryKey(self: *const NominalOpenCache, entry_index: u32) Key {
-        const entry = self.entries.items[entry_index];
-        return .{
-            .decl = entry.decl,
-            .args = self.args.items[entry.args_start..][0..entry.args_len],
-        };
-    }
-
-    fn keysEql(lhs: Key, rhs: Key) bool {
-        if (lhs.decl != rhs.decl) return false;
-        if (lhs.args.len != rhs.args.len) return false;
-        for (lhs.args, rhs.args) |lhs_arg, rhs_arg| {
-            if (lhs_arg != rhs_arg) return false;
-        }
-        return true;
-    }
-
-    const EntryContext = struct {
-        cache: *const NominalOpenCache,
-
-        pub fn hash(self: EntryContext, entry_index: u32) u64 {
-            return hashKey(self.cache.entryKey(entry_index));
-        }
-
-        pub fn eql(self: EntryContext, lhs: u32, rhs: u32) bool {
-            return keysEql(self.cache.entryKey(lhs), self.cache.entryKey(rhs));
-        }
-    };
-
-    const KeyContext = struct {
-        cache: *const NominalOpenCache,
-
-        pub fn hash(_: KeyContext, key: Key) u64 {
-            return hashKey(key);
-        }
-
-        pub fn eql(self: KeyContext, key: Key, entry_index: u32) bool {
-            return keysEql(key, self.cache.entryKey(entry_index));
-        }
-    };
-
-    /// An empty cache; owns nothing until an opening is recorded.
+    /// Own nothing until analysis starts.
     pub fn init(allocator: std.mem.Allocator) NominalOpenCache {
         return .{ .allocator = allocator };
     }
 
-    /// Free the cache's entry and argument lists and its index.
+    /// Release views and complete-query answers together.
     pub fn deinit(self: *NominalOpenCache) void {
-        self.index.deinit(self.allocator);
-        self.entries.deinit(self.allocator);
-        self.args.deinit(self.allocator);
+        if (self.views) |*views| views.deinit();
+        self.inhabitedness.deinit(self.allocator);
     }
 
-    /// The recorded opening for a declaration applied to these resolved
-    /// argument roots, if one exists.
-    fn lookup(self: *const NominalOpenCache, key: Key) ?Var {
-        const entry_index = self.index.getKeyAdapted(key, KeyContext{ .cache = self }) orelse return null;
-        return self.entries.items[entry_index].opened;
+    /// One namespace for the complete mutation-free analysis.
+    fn reader(self: *NominalOpenCache, source: *types.Store) *TypeStore {
+        if (self.views == null) self.views = TypeView.init(self.allocator, source);
+        std.debug.assert(self.views.?.source == source);
+        return &self.views.?;
     }
 
-    /// Record an opening whose resolved argument roots already occupy
-    /// `args[args_start..]`.
-    fn record(self: *NominalOpenCache, decl: types.NominalDecl.Idx, args_start: u32, opened: Var) std.mem.Allocator.Error!void {
-        const entry_index: u32 = @intCast(self.entries.items.len);
-        try self.entries.append(self.allocator, .{
-            .decl = decl,
-            .args_start = args_start,
-            .args_len = @intCast(self.args.items.len - args_start),
-            .opened = opened,
-        });
-        errdefer _ = self.entries.pop();
-        try self.index.putNoClobberContext(self.allocator, entry_index, {}, EntryContext{ .cache = self });
+    /// End the frozen phase before the caller applies returned constraints.
+    fn finishRead(self: *NominalOpenCache) void {
+        if (self.views) |*views| views.deinit();
+        self.views = null;
+        self.inhabitedness.deinit(self.allocator);
+        self.inhabitedness = .{};
     }
 };
 
@@ -312,6 +260,26 @@ pub const Pattern = union(enum) {
         /// Patterns for list elements
         elements: []const Pattern,
     };
+
+    /// Diagnostics outlive the reader and need names/shapes, not view IDs.
+    fn detachAnalysisTypes(self: *Pattern, allocator: std.mem.Allocator) Allocator.Error!void {
+        var pending: std.ArrayList(*Pattern) = .empty;
+        defer pending.deinit(allocator);
+        try pending.append(allocator, self);
+        while (pending.pop()) |pattern| {
+            switch (pattern.*) {
+                .anything => pattern.* = .{ .anything = null },
+                .literal => {},
+                .ctor => |*ctor| {
+                    if (ctor.union_info.render_as == .record) {
+                        ctor.union_info.render_as.record.types = &.{};
+                    }
+                    for (@constCast(ctor.args)) |*arg| try pending.append(allocator, arg);
+                },
+                .list => |list| for (@constCast(list.elements)) |*elem| try pending.append(allocator, elem),
+            }
+        }
+    }
 
     /// Check if this pattern can ever match a value (is inhabited).
     /// A pattern is uninhabited if it matches a type with no possible values,
@@ -973,54 +941,14 @@ const UnionResult = union(enum) {
 /// The explicit declaration-backed opening operation (issue #9983) for
 /// exhaustiveness analysis: instantiate the nominal application's backing
 /// template with its actual args substituted for the declaration's formals.
-/// The instantiated copy is analysis-only scratch in the type store (the
-/// checker backfills regions for it after each exhaustiveness entry point).
+/// Scoped views keep declaration substitution out of the serializable store.
 /// Returns null only for invalid declarations whose error was already reported.
 fn openNominalBacking(
     type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
+    _: BuiltinIdents,
     nominal: types.NominalType,
 ) error{OutOfMemory}!?Var {
-    const decl_idx = type_store.lookupNominalDecl(nominal) orelse
-        exhaustiveInvariant("exhaustiveness nominal opening referenced a missing declaration", .{});
-    const decl = type_store.getNominalDecl(decl_idx);
-    if (!decl.isValid()) return null;
-
-    const args = type_store.sliceNominalArgs(nominal);
-    const cache = builtin_idents.open_cache;
-
-    // One opening per (declaration, resolved arg roots) per entry point, so
-    // recursive backings converge onto a fixed graph the walkers' seen-sets
-    // can terminate on. The resolved roots are staged at the end of the
-    // cache's argument list so a hit costs no separate allocation.
-    const args_start: u32 = @intCast(cache.args.items.len);
-    for (args) |arg| {
-        try cache.args.append(cache.allocator, type_store.resolveVar(arg).var_);
-    }
-    const key: NominalOpenCache.Key = .{
-        .decl = decl_idx,
-        .args = cache.args.items[args_start..],
-    };
-    if (cache.lookup(key)) |opened| {
-        cache.args.shrinkRetainingCapacity(args_start);
-        return opened;
-    }
-
-    var var_map = collections.DenseMap(Var, Var).init(type_store.gpa);
-    defer var_map.deinit();
-    const opened = try types.instantiate.instantiateNominalBacking(
-        type_store,
-        builtin_idents.idents,
-        &var_map,
-        decl,
-        args,
-        .outermost,
-        .instantiation,
-    );
-
-    try cache.record(decl_idx, args_start, opened);
-
-    return opened;
+    return type_store.openNominalBacking(nominal);
 }
 
 fn getUnionFromType(
@@ -1029,7 +957,7 @@ fn getUnionFromType(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!UnionResult {
-    const resolved = type_store.resolveVar(type_var);
+    const resolved = try resolveType(type_store, type_var);
     const content = resolved.desc.content;
 
     // Try to unwrap as a tag union
@@ -1115,7 +1043,7 @@ fn buildUnionFromTagUnion(
         }
 
         // Resolve the extension variable
-        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_resolved = try resolveType(type_store, current_ext);
         const ext_var = ext_resolved.var_;
 
         // Cycle detection: have we seen this variable before?
@@ -1232,33 +1160,6 @@ const GatheredTag = struct {
 //
 // Based on the algorithm from the Rust implementation in crates/compiler/types/src/subs.rs.
 
-/// Work item for the work-list based inhabitedness algorithm.
-/// This enables purely iterative checking without recursion, preventing
-/// stack overflow on deeply nested types.
-const WorkItem = union(enum) {
-    /// Check if this type is inhabited, push result onto results stack
-    check_type: Var,
-
-    /// Pop N results, AND them together, push combined result.
-    /// All must be true for result to be true.
-    /// count=0 pushes true (empty AND is vacuously true).
-    and_combine: u32,
-
-    /// Pop N results, OR them together, push combined result.
-    /// Any must be true for result to be true.
-    /// count=0 pushes false (empty OR has no witnesses).
-    or_combine: u32,
-
-    /// Pop result; if false and extension is open (flex/rigid), push true; else push original.
-    /// The Var is the extension variable to check.
-    check_open_extension: Var,
-
-    /// Leave a nominal declaration after checking its instantiated backing.
-    /// This makes non-regular recursive applications converge even when each
-    /// application has fresh type argument roots.
-    leave_nominal: types.NominalDecl.Idx,
-};
-
 /// Check if a type is inhabited (has at least one possible value).
 ///
 /// A type is uninhabited if:
@@ -1274,189 +1175,359 @@ const WorkItem = union(enum) {
 /// - It's a function type
 /// - It has at least one constructor with all inhabited arguments
 ///
-/// This implementation uses a work-list algorithm to avoid stack overflow on
-/// deeply nested types. See docs/exhaustiveness/004_worklist_inhabitedness_algorithm.md
-fn varIsKnownEmpty(type_store: *TypeStore, known_empty_vars: []const Var, type_var: Var) bool {
-    const resolved_var = type_store.resolveVar(type_var).var_;
-    for (known_empty_vars) |known_empty_var| {
-        const resolved_known_empty = type_store.resolveVar(known_empty_var).var_;
-        if (@intFromEnum(resolved_var) == @intFromEnum(resolved_known_empty)) return true;
-    }
-    return false;
-}
-
 fn isTypeInhabitedWithKnownEmpty(
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
     type_var: Var,
     known_empty_vars: []const Var,
 ) error{OutOfMemory}!bool {
-    // Use a seen set to detect cycles in recursive types
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
+    const cache = builtin_idents.open_cache;
+    var assumptions = try InhabitednessMemo.assumptions(cache.allocator, type_store, known_empty_vars);
+    defer assumptions.deinit(cache.allocator);
+    const key: InhabitednessMemo.Key = .{
+        .root = resolveRoot(type_store, type_var),
+        .known_empty = assumptions.items,
+    };
+    if (cache.inhabitedness.get(key)) |answer| return answer;
+    const answer = try computeTypeInhabitedWithKnownEmpty(type_store, builtin_idents, type_var, known_empty_vars);
+    try cache.inhabitedness.put(cache.allocator, key, answer);
+    return answer;
+}
 
-    var active_nominals: std.AutoHashMapUnmanaged(types.NominalDecl.Idx, void) = .empty;
-    defer active_nominals.deinit(type_store.gpa);
+const InhabitedMode = enum { general, payload, known_absent };
 
-    const gpa = type_store.gpa;
+/// Record extensions contribute fields through records and aliases only.
+/// An unresolved or non-record tail is not itself a required payload.
+const RecordRowStep = struct {
+    fields: ?types.RecordField.SafeMultiList.Range = null,
+    next: ?Var = null,
+};
 
-    // Work-list of items to process (LIFO order)
-    var work_list: std.ArrayList(WorkItem) = .empty;
-    defer work_list.deinit(gpa);
+fn recordRowStep(type_store: *TypeStore, content: types.Content) RecordRowStep {
+    return switch (content) {
+        .alias => |alias| .{ .next = type_store.getAliasBackingVar(alias) },
+        .structure => |flat| if (flat == .record)
+            .{ .fields = flat.record.fields, .next = flat.record.ext }
+        else
+            .{},
+        .flex, .rigid, .field_presence, .err => .{},
+    };
+}
 
-    // Stack of boolean results from completed checks
-    var results: std.ArrayList(bool) = .empty;
-    defer results.deinit(gpa);
+/// Greatest fixed point of a finite monotone Boolean graph. Each effective
+/// type is expanded once; false facts propagate across each edge at most once.
+/// Payload recursion is coinductive. Row-extension cycles are only row lookup
+/// cycles and are flattened separately, never interpreted as value witnesses.
+const InhabitedGraph = struct {
+    gpa: Allocator,
+    store: *TypeStore,
+    idents: BuiltinIdents,
+    mode: InhabitedMode,
+    nodes: std.ArrayList(Node) = .empty,
+    roots: std.AutoHashMapUnmanaged(Var, usize) = .empty,
+    rows: std.AutoHashMapUnmanaged(RowKey, RowEntry) = .empty,
+    known_empty: std.AutoHashMapUnmanaged(Var, void) = .empty,
+    pending: std.ArrayList(struct { root: Var, index: usize }) = .empty,
+    false_nodes: std.ArrayList(usize) = .empty,
+    stats: if (builtin.is_test) Stats else void = if (builtin.is_test) .{} else {},
 
-    var record_field_vars: std.ArrayList(Var) = .empty;
-    defer record_field_vars.deinit(gpa);
+    const Stats = struct { expanded: usize = 0, rows: usize = 0, edges: usize = 0, propagated: usize = 0 };
+    const RowKey = struct { root: Var, role: enum { union_row, union_shape, record_row } };
+    const RowEntry = struct { index: usize, position: ?usize };
+    const RowItem = struct {
+        key: RowKey,
+        index: usize,
+        tags: ?types.Tag.SafeMultiList.Range = null,
+        fields: ?types.RecordField.SafeMultiList.Range = null,
+        open: bool = false,
+        witness: bool = false,
+    };
+    const Node = struct {
+        kind: enum { all, any } = .all,
+        value: bool = true,
+        /// An unconditional construction proof, never the solver's initial true.
+        proven_true: bool = false,
+        remaining: usize = 0,
+        parents: std.ArrayList(usize) = .empty,
+    };
 
-    // Start with the initial type
-    try work_list.append(gpa, .{ .check_type = type_var });
+    fn deinit(self: *InhabitedGraph) void {
+        for (self.nodes.items) |*entry| entry.parents.deinit(self.gpa);
+        self.nodes.deinit(self.gpa);
+        self.roots.deinit(self.gpa);
+        self.rows.deinit(self.gpa);
+        self.known_empty.deinit(self.gpa);
+        self.pending.deinit(self.gpa);
+        self.false_nodes.deinit(self.gpa);
+    }
 
-    while (work_list.pop()) |item| {
-        switch (item) {
-            .check_type => |var_to_check| {
-                const resolved = type_store.resolveVar(var_to_check);
-                const resolved_var = resolved.var_;
-                const content = resolved.desc.content;
+    fn node(self: *InhabitedGraph) Allocator.Error!usize {
+        const index = self.nodes.items.len;
+        try self.nodes.append(self.gpa, .{});
+        return index;
+    }
 
-                if (varIsKnownEmpty(type_store, known_empty_vars, resolved_var)) {
-                    try results.append(gpa, false);
-                    continue;
-                }
+    fn typeNode(self: *InhabitedGraph, var_: Var) Allocator.Error!usize {
+        const root = resolveRoot(self.store, var_);
+        if (self.roots.get(root)) |index| return index;
+        const index = try self.node();
+        try self.roots.put(self.gpa, root, index);
+        try self.pending.append(self.gpa, .{ .root = root, .index = index });
+        return index;
+    }
 
-                // Cycle detection: if we've seen this resolved variable before,
-                // treat it as inhabited. Cycles in recursive types are considered
-                // inhabited (if we got here, there must be a non-recursive path).
-                const gop = try seen.getOrPut(gpa, resolved_var);
-                if (gop.found_existing) {
-                    try results.append(gpa, true);
-                    continue;
-                }
+    fn edge(self: *InhabitedGraph, parent: usize, child: usize) Allocator.Error!void {
+        try self.nodes.items[child].parents.append(self.gpa, parent);
+        self.nodes.items[parent].remaining += 1;
+        if (comptime builtin.is_test) self.stats.edges += 1;
+    }
 
+    fn typeEdge(self: *InhabitedGraph, parent: usize, child: Var) Allocator.Error!void {
+        const index = try self.typeNode(child);
+        try self.edge(parent, index);
+    }
+
+    fn markFalse(self: *InhabitedGraph, index: usize) Allocator.Error!void {
+        if (!self.nodes.items[index].value) return;
+        try self.false_nodes.append(self.gpa, index);
+        self.nodes.items[index].value = false;
+    }
+
+    fn flexInhabited(self: *const InhabitedGraph, flex: types.Flex) bool {
+        return switch (self.mode) {
+            .general => true,
+            .payload => !isUnresolvedUnboundFlex(flex),
+            .known_absent => false,
+        };
+    }
+
+    fn rigidInhabited(self: *const InhabitedGraph, rigid: types.Rigid) bool {
+        return switch (self.mode) {
+            .general => true,
+            .payload => !isUnresolvedUnboundRigid(rigid),
+            .known_absent => !rigid.name.attributes.ignored,
+        };
+    }
+
+    fn finishUnion(self: *InhabitedGraph, index: usize, open: bool) Allocator.Error!void {
+        if (open) {
+            const witness = try self.node();
+            try self.edge(index, witness);
+        }
+        if (self.nodes.items[index].remaining == 0) try self.markFalse(index);
+    }
+
+    /// Row/shape lookup has one successor per node. Contract its functional
+    /// graph's SCCs before adding payload dependencies: row cycles alone are
+    /// not coinductive witnesses, while explicit recursive payloads are.
+    fn rowNode(self: *InhabitedGraph, initial: RowKey) Allocator.Error!usize {
+        var path: std.ArrayList(RowItem) = .empty;
+        defer path.deinit(self.gpa);
+        const conjunction = initial.role == .record_row;
+        var key = initial;
+        var tail: ?usize = null;
+        var cycle_start: ?usize = null;
+        while (true) {
+            key.root = resolveRoot(self.store, key.root);
+            if (self.rows.get(key)) |existing| {
+                tail = existing.index;
+                cycle_start = existing.position;
+                break;
+            }
+            const index = try self.node();
+            try self.rows.put(self.gpa, key, .{ .index = index, .position = path.items.len });
+            var item: RowItem = .{ .key = key, .index = index };
+            if (comptime builtin.is_test) self.stats.rows += 1;
+            if (self.known_empty.contains(key.root)) {
+                if (conjunction) try self.markFalse(index);
+                try path.append(self.gpa, item);
+                break;
+            }
+            var next: ?RowKey = null;
+            const content = (try resolveType(self.store, key.root)).desc.content;
+            if (conjunction) {
+                const row = recordRowStep(self.store, content);
+                item.fields = row.fields;
+                if (row.next) |root| next = .{ .root = root, .role = .record_row };
+            } else if (key.role == .union_shape) {
                 switch (content) {
-                    // Flex and rigid variables are unconstrained - assume
-                    // inhabited. A presence fact is atomic and never a value
-                    // type reached here; treat it as inhabited for safety.
-                    .flex, .rigid, .field_presence => try results.append(gpa, true),
-
-                    // Error types are treated as inhabited (we don't want to cascade errors)
-                    .err => try results.append(gpa, true),
-
-                    // Aliases - check the backing type
-                    .alias => |alias| {
-                        if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
-                            try results.append(gpa, true);
-                            continue;
-                        }
-                        const backing_var = type_store.getAliasBackingVar(alias);
-                        try work_list.append(gpa, .{ .check_type = backing_var });
+                    .alias => |alias| next = .{ .root = self.store.getAliasBackingVar(alias), .role = .union_shape },
+                    .structure => |flat| switch (flat) {
+                        .tag_union => next = .{ .root = key.root, .role = .union_row },
+                        .nominal_type => |nominal| if (try openNominalBacking(self.store, self.idents, nominal)) |backing| {
+                            next = .{ .root = backing, .role = .union_shape };
+                        },
+                        .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
                     },
-
-                    .structure => |flat_type| switch (flat_type) {
-                        // Empty tag union is uninhabited
-                        .empty_tag_union => try results.append(gpa, false),
-
-                        // Empty record is inhabited (the unit type)
-                        .empty_record => try results.append(gpa, true),
-
-                        // Tag unions: need OR semantics across tags, AND semantics within each tag's args
-                        .tag_union => |tag_union| {
-                            try pushTagUnionWork(gpa, type_store, &work_list, tag_union);
-                        },
-
-                        // Nominal types - check for builtin primitives which have special backing.
-                        .nominal_type => |nominal| {
-                            // Check if this is a builtin number type (Builtin.Num.*)
-                            // These have [] as backing type but are inhabited primitives.
-                            if (builtin_idents.isBuiltinNumericType(nominal)) {
-                                try results.append(gpa, true);
-                            } else {
-                                const decl_idx = type_store.lookupNominalDecl(nominal) orelse
-                                    exhaustiveInvariant("inhabitedness referenced a missing nominal declaration", .{});
-                                const active = try active_nominals.getOrPut(gpa, decl_idx);
-                                if (active.found_existing) {
-                                    // Match the variable-cycle rule above: a recursive
-                                    // path is treated as inhabited.
-                                    try results.append(gpa, true);
-                                } else if (try openNominalBacking(type_store, builtin_idents, nominal)) |backing_var| {
-                                    try work_list.append(gpa, .{ .leave_nominal = decl_idx });
-                                    try work_list.append(gpa, .{ .check_type = backing_var });
-                                } else {
-                                    _ = active_nominals.remove(decl_idx);
-                                    // Unresolvable/invalid declaration: treat as inhabited
-                                    try results.append(gpa, true);
-                                }
-                            }
-                        },
-
-                        // Records - all fields must be inhabited (AND semantics)
-                        .record => |record| {
-                            const presences = type_store.getRecordFieldsSlice(record.fields).items(.presence);
-                            try pushRecordAndWork(gpa, type_store, &work_list, &record_field_vars, presences);
-                        },
-
-                        // Tuples - all elements must be inhabited (AND semantics)
-                        .tuple => |tuple| {
-                            const elem_vars = type_store.sliceVars(tuple.elems);
-                            try pushAndWork(gpa, &work_list, elem_vars);
-                        },
-
-                        // Functions are always inhabited (they're values)
-                        .fn_pure, .fn_effectful, .fn_unbound => try results.append(gpa, true),
-                    },
+                    .flex, .rigid, .field_presence, .err => {},
                 }
-            },
-
-            .and_combine => |count| {
-                // Pop N results, AND them together
-                // Empty AND is vacuously true
-                var combined: bool = true;
-                for (0..count) |_| {
-                    if (!(results.pop() orelse true)) {
-                        combined = false;
+            } else {
+                switch (content) {
+                    .alias => |alias| next = .{ .root = self.store.getAliasBackingVar(alias), .role = .union_row },
+                    .structure => |flat| if (flat == .tag_union) {
+                        item.tags = flat.tag_union.tags;
+                        next = .{ .root = flat.tag_union.ext, .role = .union_row };
+                    },
+                    .flex => |flex| item.open = self.mode != .known_absent and self.flexInhabited(flex),
+                    .rigid => |rigid| item.open = self.mode != .known_absent and self.rigidInhabited(rigid),
+                    .field_presence, .err => {},
+                }
+            }
+            // Scan the entire local disjunction before scheduling any payload:
+            // a nullary constructor is independent of every other alternative.
+            // The exact row assumption above takes precedence over this proof.
+            if (item.tags) |tags| {
+                for (self.store.getTagsSlice(tags).items(.args)) |args| {
+                    if (self.store.sliceVars(args).len == 0) {
+                        item.witness = true;
+                        break;
                     }
                 }
-                try results.append(gpa, combined);
-            },
+            }
+            item.witness = item.witness or item.open;
+            try path.append(self.gpa, item);
+            if (item.witness) break;
+            key = next orelse break;
+        }
+        if (path.items.len == 0) return tail.?;
+        const component: ?usize = if (cycle_start != null) try self.node() else null;
+        if (component) |index| self.nodes.items[index].kind = if (conjunction) .all else .any;
+        // Suffix proofs can eliminate prefix alternatives, including shared
+        // completed rows. A row-only SCC without such a proof stays explicit.
+        var position = path.items.len;
+        while (position > 0) {
+            position -= 1;
+            const item = path.items[position];
+            const in_cycle = if (cycle_start) |start| position >= start else false;
+            const target = if (in_cycle) component.? else item.index;
+            const successor: ?usize = if (position + 1 < path.items.len)
+                path.items[position + 1].index
+            else
+                tail;
+            if (!conjunction and !in_cycle and
+                (item.witness or (if (successor) |index| self.nodes.items[index].proven_true else false)))
+            {
+                self.nodes.items[target].proven_true = true;
+                self.rows.getPtr(item.key).?.position = null;
+                continue;
+            }
+            if (in_cycle) {
+                try self.edge(item.index, target);
+            } else {
+                self.nodes.items[target].kind = if (conjunction) .all else .any;
+                if (position + 1 < path.items.len) {
+                    try self.edge(target, path.items[position + 1].index);
+                } else if (tail) |index| {
+                    try self.edge(target, index);
+                }
+            }
+            if (item.tags) |tags| {
+                for (self.store.getTagsSlice(tags).items(.args)) |args| {
+                    const group = try self.node();
+                    try self.edge(target, group);
+                    for (self.store.sliceVars(args)) |arg| try self.typeEdge(group, arg);
+                }
+            }
+            if (item.fields) |fields| {
+                for (self.store.getRecordFieldsSlice(fields).items(.presence)) |presence| {
+                    if (try fieldIsAlwaysPresent(self.store, presence)) try self.typeEdge(target, presence.typeVar());
+                }
+            }
+            if (!conjunction and !in_cycle) try self.finishUnion(target, item.open);
+            self.rows.getPtr(item.key).?.position = null;
+        }
+        if (!conjunction) {
+            if (component) |index| try self.finishUnion(index, false);
+        }
+        return path.items[0].index;
+    }
 
-            .or_combine => |count| {
-                // Pop N results, OR them together
-                // Empty OR has no witnesses (false)
-                var combined: bool = false;
-                for (0..count) |_| {
-                    if (results.pop() orelse false) {
-                        combined = true;
+    fn expand(self: *InhabitedGraph, root: Var, index: usize) Allocator.Error!void {
+        if (comptime builtin.is_test) self.stats.expanded += 1;
+        if (self.known_empty.contains(root)) return self.markFalse(index);
+        const content = (try resolveType(self.store, root)).desc.content;
+        switch (content) {
+            .flex => |flex| if (!self.flexInhabited(flex)) {
+                try self.markFalse(index);
+            },
+            .rigid => |rigid| if (!self.rigidInhabited(rigid)) {
+                try self.markFalse(index);
+            },
+            .field_presence, .err => {},
+            .alias => |alias| if (!self.idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
+                try self.typeEdge(index, self.store.getAliasBackingVar(alias));
+            },
+            .structure => |flat| switch (flat) {
+                .empty_tag_union => try self.markFalse(index),
+                .empty_record, .fn_pure, .fn_effectful, .fn_unbound => {},
+                .tuple => |tuple| for (self.store.sliceVars(tuple.elems)) |elem| {
+                    try self.typeEdge(index, elem);
+                },
+                .record => {
+                    const row = try self.rowNode(.{ .root = root, .role = .record_row });
+                    try self.edge(index, row);
+                },
+                .tag_union => {
+                    const row = try self.rowNode(.{ .root = root, .role = .union_row });
+                    try self.edge(index, row);
+                },
+                .nominal_type => |nominal| if (!self.idents.isBuiltinNumericType(nominal)) {
+                    if (self.mode == .known_absent) {
+                        const row = try self.rowNode(.{ .root = root, .role = .union_shape });
+                        try self.edge(index, row);
+                    } else if (try openNominalBacking(self.store, self.idents, nominal)) |backing| {
+                        try self.typeEdge(index, backing);
                     }
-                }
-                try results.append(gpa, combined);
-            },
-
-            .check_open_extension => |ext_var| {
-                // Pop the current result; if false and extension is open, the union is still inhabited
-                const current = results.pop() orelse false;
-                if (current) {
-                    // Already inhabited, no need to check extension
-                    try results.append(gpa, true);
-                } else if (varIsKnownEmpty(type_store, known_empty_vars, ext_var)) {
-                    try results.append(gpa, false);
-                } else {
-                    // Check if extension is open (flex/rigid)
-                    const is_open = try isExtensionOpen(type_store, ext_var);
-                    try results.append(gpa, is_open);
-                }
-            },
-
-            .leave_nominal => |decl_idx| {
-                const removed = active_nominals.remove(decl_idx);
-                std.debug.assert(removed);
+                },
             },
         }
     }
 
-    // Final result should be on top of the results stack
-    return if (results.items.len > 0) results.items[0] else true;
+    fn solve(self: *InhabitedGraph, root: Var, assumptions: []const Var) Allocator.Error!bool {
+        std.debug.assert(self.nodes.items.len == 0);
+        for (assumptions) |var_| try self.known_empty.put(self.gpa, resolveRoot(self.store, var_), {});
+        const result = try self.typeNode(root);
+        while (self.pending.pop()) |next| try self.expand(next.root, next.index);
+        try self.settle();
+        return self.nodes.items[result].value;
+    }
+
+    /// Pure Boolean propagation; type-reader and mode policies belong solely
+    /// to construction. No provisional traversal answer enters this phase.
+    fn settle(self: *InhabitedGraph) Allocator.Error!void {
+        while (self.false_nodes.pop()) |child| {
+            for (self.nodes.items[child].parents.items) |parent| {
+                if (comptime builtin.is_test) self.stats.propagated += 1;
+                const state = &self.nodes.items[parent];
+                if (!state.value) continue;
+                if (state.kind == .all) {
+                    try self.markFalse(parent);
+                } else {
+                    state.remaining -= 1;
+                    if (state.remaining == 0) try self.markFalse(parent);
+                }
+            }
+        }
+    }
+};
+
+fn solveInhabitedGraph(store: *TypeStore, idents: BuiltinIdents, root: Var, mode: InhabitedMode, assumptions: []const Var) Allocator.Error!bool {
+    var arena = base.SingleThreadArena.init(store.gpa);
+    defer arena.deinit();
+    // Only the final Boolean escapes. Explicit graph cleanup also supports
+    // allocation-debug mode, where this scratch arena becomes pass-through.
+    var graph: InhabitedGraph = .{ .gpa = arena.allocator(), .store = store, .idents = idents, .mode = mode };
+    defer graph.deinit();
+    return graph.solve(root, assumptions);
+}
+
+fn computeTypeInhabitedWithKnownEmpty(
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    type_var: Var,
+    known_empty_vars: []const Var,
+) error{OutOfMemory}!bool {
+    return solveInhabitedGraph(type_store, builtin_idents, type_var, .general, known_empty_vars);
 }
 
 fn isUnresolvedUnboundFlex(flex: types.Flex) bool {
@@ -1475,6 +1546,8 @@ fn appendUniqueVar(gpa: std.mem.Allocator, out: *std.ArrayList(Var), var_: Var) 
     try out.append(gpa, resolved_var);
 }
 
+const PayloadSeen = std.AutoHashMapUnmanaged(Var, void);
+
 /// Check constructor payload inhabitedness.
 ///
 /// This differs from general type inhabitedness only for unresolved unbound
@@ -1486,143 +1559,7 @@ pub fn isCtorPayloadTypeInhabited(
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-    return isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, type_var, &seen);
-}
-
-fn isCtorPayloadTypeInhabitedHelp(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    const resolved = type_store.resolveVar(type_var);
-    const content = resolved.desc.content;
-
-    switch (content) {
-        .flex => |flex| return !isUnresolvedUnboundFlex(flex),
-        .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-        .field_presence, .err => return true,
-        .alias, .structure => {},
-    }
-
-    const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
-    if (gop.found_existing) return true;
-
-    return switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
-        .alias => |alias| blk: {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) {
-                break :blk true;
-            }
-            break :blk try isCtorPayloadTypeInhabitedHelp(
-                type_store,
-                builtin_idents,
-                type_store.getAliasBackingVar(alias),
-                seen,
-            );
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => false,
-            .empty_record => true,
-            .tag_union => |tag_union| try isCtorPayloadTagUnionInhabited(
-                type_store,
-                builtin_idents,
-                tag_union,
-                seen,
-            ),
-            .nominal_type => |nominal| blk: {
-                if (builtin_idents.isBuiltinNumericType(nominal)) {
-                    break :blk true;
-                }
-                const backing_var = (try openNominalBacking(type_store, builtin_idents, nominal)) orelse break :blk true;
-                break :blk try isCtorPayloadTypeInhabitedHelp(
-                    type_store,
-                    builtin_idents,
-                    backing_var,
-                    seen,
-                );
-            },
-            .record => |record| blk: {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, field_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                for (0..tuple.elems.count) |offset| {
-                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
-                    if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, elem_var, seen)) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => true,
-        },
-    };
-}
-
-fn isCtorPayloadTagUnionInhabited(
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    initial_tag_union: types.TagUnion,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(type_store.gpa);
-
-    var current_tags = initial_tag_union.tags;
-    var current_ext = initial_tag_union.ext;
-
-    while (true) {
-        for (0..current_tags.count) |tag_offset| {
-            const args_range = type_store.getTagAt(current_tags, @intCast(tag_offset)).args;
-            var all_args_inhabited = true;
-            for (0..args_range.count) |arg_offset| {
-                const arg_var = type_store.getVarAt(args_range, @intCast(arg_offset));
-                if (!try isCtorPayloadTypeInhabitedHelp(type_store, builtin_idents, arg_var, seen)) {
-                    all_args_inhabited = false;
-                    break;
-                }
-            }
-            if (all_args_inhabited) return true;
-        }
-
-        const ext_resolved = type_store.resolveVar(current_ext);
-        const gop = try seen_exts.getOrPut(type_store.gpa, ext_resolved.var_);
-        if (gop.found_existing) return false;
-
-        switch (ext_resolved.desc.content) {
-            .flex => |flex| return !isUnresolvedUnboundFlex(flex),
-            .rigid => |rigid| return !isUnresolvedUnboundRigid(rigid),
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |ext_tag_union| {
-                    current_tags = ext_tag_union.tags;
-                    current_ext = ext_tag_union.ext;
-                },
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .alias => |alias| {
-                current_ext = type_store.getAliasBackingVar(alias);
-            },
-            .field_presence, .err => return false,
-        }
-    }
+    return solveInhabitedGraph(type_store, builtin_idents, type_var, .payload, &.{});
 }
 
 /// Collects unresolved unbound type variables that make a constructor payload uninhabited.
@@ -1644,7 +1581,7 @@ fn collectCtorPayloadBlockersHelp(
     out: *std.ArrayList(Var),
     seen: *std.AutoHashMapUnmanaged(Var, void),
 ) error{OutOfMemory}!void {
-    const resolved = type_store.resolveVar(type_var);
+    const resolved = try resolveType(type_store, type_var);
     const content = resolved.desc.content;
 
     switch (content) {
@@ -1699,16 +1636,7 @@ fn collectCtorPayloadBlockersHelp(
                     seen,
                 );
             },
-            .record => |record| {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isCtorPayloadTypeInhabited(type_store, builtin_idents, field_var)) {
-                        try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
+            .record => try collectRecordPayloadBlockers(.payload, type_store.gpa, type_store, builtin_idents, resolved.var_, out, seen),
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -1719,6 +1647,40 @@ fn collectCtorPayloadBlockersHelp(
             },
             .fn_pure, .fn_effectful, .fn_unbound => {},
         },
+    }
+}
+
+fn collectRecordPayloadBlockers(
+    comptime mode: InhabitedMode,
+    allocator: Allocator,
+    type_store: *TypeStore,
+    builtin_idents: BuiltinIdents,
+    initial_row: Var,
+    out: *std.ArrayList(Var),
+    seen: *PayloadSeen,
+) Allocator.Error!void {
+    var seen_rows: PayloadSeen = .empty;
+    defer seen_rows.deinit(type_store.gpa);
+    var current = initial_row;
+    while (true) {
+        const resolved = try resolveType(type_store, current);
+        const gop = try seen_rows.getOrPut(type_store.gpa, resolved.var_);
+        if (gop.found_existing) return;
+        const row = recordRowStep(type_store, resolved.desc.content);
+        if (row.fields) |fields| {
+            for (0..fields.count) |offset| {
+                const presence = type_store.getRecordFieldAt(fields, @intCast(offset)).presence;
+                if (!try fieldIsAlwaysPresent(type_store, presence)) continue;
+                const field_var = presence.typeVar();
+                if (try solveInhabitedGraph(type_store, builtin_idents, field_var, mode, &.{})) continue;
+                switch (mode) {
+                    .payload => try collectCtorPayloadBlockersHelp(type_store, builtin_idents, field_var, out, seen),
+                    .known_absent => try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen),
+                    .general => unreachable,
+                }
+            }
+        }
+        current = row.next orelse return;
     }
 }
 
@@ -1756,7 +1718,7 @@ fn collectCtorPayloadTagUnionBlockers(
             }
         }
 
-        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_resolved = try resolveType(type_store, current_ext);
         const gop = try seen_exts.getOrPut(type_store.gpa, ext_resolved.var_);
         if (gop.found_existing) return;
 
@@ -1797,119 +1759,12 @@ fn collectCtorPayloadTagUnionBlockers(
 }
 
 fn isKnownAbsentCtorPayloadTypeInhabited(
-    allocator: Allocator,
+    _: Allocator,
     type_store: *TypeStore,
     builtin_idents: BuiltinIdents,
     type_var: Var,
 ) error{OutOfMemory}!bool {
-    var seen: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen.deinit(type_store.gpa);
-
-    return isKnownAbsentCtorPayloadTypeInhabitedHelp(allocator, type_store, builtin_idents, type_var, &seen);
-}
-
-fn isKnownAbsentCtorPayloadTypeInhabitedHelp(
-    allocator: Allocator,
-    type_store: *TypeStore,
-    builtin_idents: BuiltinIdents,
-    type_var: Var,
-    seen: *std.AutoHashMapUnmanaged(Var, void),
-) error{OutOfMemory}!bool {
-    const resolved = type_store.resolveVar(type_var);
-    const content = resolved.desc.content;
-
-    switch (content) {
-        .flex => return false,
-        .rigid => |rigid| return !rigid.name.attributes.ignored,
-        .field_presence, .err => return true,
-        .alias, .structure => {},
-    }
-
-    const gop = try seen.getOrPut(type_store.gpa, resolved.var_);
-    if (gop.found_existing) return true;
-
-    return switch (content) {
-        .flex, .rigid, .err, .field_presence => unreachable,
-        .alias => |alias| blk: {
-            if (builtin_idents.isBuiltinNumericIdent(alias.ident.ident_idx)) break :blk true;
-            break :blk try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                allocator,
-                type_store,
-                builtin_idents,
-                type_store.getAliasBackingVar(alias),
-                seen,
-            );
-        },
-        .structure => |flat_type| switch (flat_type) {
-            .empty_tag_union => false,
-            .empty_record => true,
-            .tag_union, .nominal_type => blk: {
-                if (flat_type == .nominal_type and builtin_idents.isBuiltinNumericType(flat_type.nominal_type)) {
-                    break :blk true;
-                }
-
-                const union_result = try getUnionFromType(allocator, type_store, builtin_idents, type_var);
-                const union_info = switch (union_result) {
-                    .success => |union_info| union_info,
-                    .not_a_union => break :blk false,
-                };
-
-                for (union_info.alternatives) |alt| {
-                    const arg_types = try getCtorArgTypes(type_store, builtin_idents, type_var, alt.tag_id);
-                    var all_args_inhabited = true;
-                    for (0..arg_types.len()) |offset| {
-                        const arg_var = arg_types.get(type_store, offset);
-                        if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                            allocator,
-                            type_store,
-                            builtin_idents,
-                            arg_var,
-                            seen,
-                        )) {
-                            all_args_inhabited = false;
-                            break;
-                        }
-                    }
-                    if (all_args_inhabited) break :blk true;
-                }
-
-                break :blk false;
-            },
-            .record => |record| blk: {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                        allocator,
-                        type_store,
-                        builtin_idents,
-                        field_var,
-                        seen,
-                    )) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .tuple => |tuple| blk: {
-                for (0..tuple.elems.count) |offset| {
-                    const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
-                    if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                        allocator,
-                        type_store,
-                        builtin_idents,
-                        elem_var,
-                        seen,
-                    )) {
-                        break :blk false;
-                    }
-                }
-                break :blk true;
-            },
-            .fn_pure, .fn_effectful, .fn_unbound => true,
-        },
-    };
+    return solveInhabitedGraph(type_store, builtin_idents, type_var, .known_absent, &.{});
 }
 
 fn collectKnownAbsentCtorPayloadBlockers(
@@ -1933,7 +1788,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     out: *std.ArrayList(Var),
     seen: *std.AutoHashMapUnmanaged(Var, void),
 ) error{OutOfMemory}!void {
-    const resolved = type_store.resolveVar(type_var);
+    const resolved = try resolveType(type_store, type_var);
     const content = resolved.desc.content;
 
     switch (content) {
@@ -1985,13 +1840,8 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                     var all_args_inhabited = true;
                     for (0..arg_types.len()) |offset| {
                         const arg_var = arg_types.get(type_store, offset);
-                        if (!try isKnownAbsentCtorPayloadTypeInhabitedHelp(
-                            allocator,
-                            type_store,
-                            builtin_idents,
-                            arg_var,
-                            seen,
-                        )) {
+                        const inhabited = try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, arg_var);
+                        if (!inhabited) {
                             all_args_inhabited = false;
                             break;
                         }
@@ -2019,16 +1869,7 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
                     }
                 }
             },
-            .record => |record| {
-                for (0..record.fields.count) |offset| {
-                    const field_presence = type_store.getRecordFieldAt(record.fields, @intCast(offset)).presence;
-                    if (!fieldIsAlwaysPresent(type_store, field_presence)) continue;
-                    const field_var = field_presence.typeVar();
-                    if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, field_var)) {
-                        try collectKnownAbsentCtorPayloadBlockersHelp(allocator, type_store, builtin_idents, field_var, out, seen);
-                    }
-                }
-            },
+            .record => try collectRecordPayloadBlockers(.known_absent, allocator, type_store, builtin_idents, resolved.var_, out, seen),
             .tuple => |tuple| {
                 for (0..tuple.elems.count) |offset| {
                     const elem_var = type_store.getVarAt(tuple.elems, @intCast(offset));
@@ -2042,32 +1883,15 @@ fn collectKnownAbsentCtorPayloadBlockersHelp(
     }
 }
 
-/// Push work items for AND semantics: all types must be inhabited.
-/// Pushes AndCombine(N) followed by CheckType for each var.
-fn pushAndWork(gpa: std.mem.Allocator, work_list: *std.ArrayList(WorkItem), vars: []const Var) Allocator.Error!void {
-    const count: u32 = @intCast(vars.len);
-    if (count == 0) {
-        // Empty AND is true - push result directly
-        try work_list.append(gpa, .{ .and_combine = 0 });
-    } else {
-        // Push combine instruction first (will be processed last due to LIFO)
-        try work_list.append(gpa, .{ .and_combine = count });
-        // Push all type checks (will be processed first)
-        for (vars) |v| {
-            try work_list.append(gpa, .{ .check_type = v });
-        }
-    }
-}
-
 /// An optional field may be absent, so the record is inhabited no matter what
 /// that field's payload type is: only fields that are always present join the
 /// AND. A defaulted field is always present (its default is materialized at
 /// every omission site), and a presence that has not resolved to a concrete
 /// kind is treated as present so inhabitedness stays conservative.
-fn fieldIsAlwaysPresent(type_store: *TypeStore, presence: types.RecordField.Presence) bool {
+fn fieldIsAlwaysPresent(type_store: *TypeStore, presence: types.RecordField.Presence) error{OutOfMemory}!bool {
     return switch (presence.decode()) {
         .required => true,
-        .unknown => |unknown| switch (type_store.resolveVar(unknown.presence).desc.content) {
+        .unknown => |unknown| switch ((try resolveType(type_store, unknown.presence)).desc.content) {
             .field_presence => |kind| switch (kind) {
                 .optional => false,
                 .required, .defaulted => true,
@@ -2075,172 +1899,6 @@ fn fieldIsAlwaysPresent(type_store: *TypeStore, presence: types.RecordField.Pres
             .flex, .rigid, .alias, .structure, .err => true,
         },
     };
-}
-
-fn pushRecordAndWork(
-    gpa: std.mem.Allocator,
-    type_store: *TypeStore,
-    work_list: *std.ArrayList(WorkItem),
-    field_vars: *std.ArrayList(Var),
-    presences: []const types.RecordField.Presence,
-) Allocator.Error!void {
-    field_vars.clearRetainingCapacity();
-    try field_vars.ensureTotalCapacity(gpa, presences.len);
-    for (presences) |presence| {
-        if (!fieldIsAlwaysPresent(type_store, presence)) continue;
-        field_vars.appendAssumeCapacity(presence.typeVar());
-    }
-    try pushAndWork(gpa, work_list, field_vars.items);
-}
-
-/// Push work items for a tag union: OR semantics across tags, AND within each tag's args.
-/// Also handles extension chain following.
-fn pushTagUnionWork(gpa: std.mem.Allocator, type_store: *TypeStore, work_list: *std.ArrayList(WorkItem), initial_tag_union: types.TagUnion) Allocator.Error!void {
-    // First, collect all tags by following the extension chain
-    var all_tag_args: std.ArrayList(Var.SafeList.Range) = .empty;
-    defer all_tag_args.deinit(gpa);
-
-    var final_ext = initial_tag_union.ext;
-
-    // Track seen extension variables to detect cycles
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(gpa);
-
-    var current_tags = initial_tag_union.tags;
-    var current_ext = initial_tag_union.ext;
-
-    // Follow extension chain to collect all tags
-    while (true) {
-        const tags_slice = type_store.getTagsSlice(current_tags);
-        const tag_args = tags_slice.items(.args);
-
-        // Add all tags at this level
-        for (tag_args) |args_range| {
-            try all_tag_args.append(gpa, args_range);
-        }
-
-        // Check the extension
-        const ext_resolved = type_store.resolveVar(current_ext);
-        const ext_var = ext_resolved.var_;
-        final_ext = current_ext;
-
-        // Cycle detection for extension chain
-        const gop = try seen_exts.getOrPut(gpa, ext_var);
-        if (gop.found_existing) {
-            // Cycle detected - treat as closed to be safe
-            break;
-        }
-
-        const ext_content = ext_resolved.desc.content;
-
-        switch (ext_content) {
-            .flex, .rigid => {
-                // Open extension - we'll handle this in check_open_extension
-                break;
-            },
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |ext_tu| {
-                    // Continue following extension chain
-                    current_tags = ext_tu.tags;
-                    current_ext = ext_tu.ext;
-                },
-                .empty_tag_union => {
-                    // Closed union - no more tags
-                    break;
-                },
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => break,
-            },
-            .alias => |alias| {
-                // Follow alias
-                current_ext = type_store.getAliasBackingVar(alias);
-            },
-            .field_presence, .err => break,
-        }
-    }
-
-    const num_tags: u32 = @intCast(all_tag_args.items.len);
-
-    if (num_tags == 0) {
-        // No tags - result depends only on whether extension is open
-        // Push false, then check_open_extension records true when the extension is open
-        try work_list.append(gpa, .{ .check_open_extension = final_ext });
-        try work_list.append(gpa, .{ .or_combine = 0 }); // Empty OR = false
-    } else {
-        // Push items in reverse order (LIFO):
-        // 1. check_open_extension (processed last)
-        // 2. or_combine (processed after all tags)
-        // 3. For each tag: and_combine + check_type for each arg (processed first)
-        try work_list.append(gpa, .{ .check_open_extension = final_ext });
-        try work_list.append(gpa, .{ .or_combine = num_tags });
-
-        // Push work for each tag (AND semantics for args within each tag)
-        for (all_tag_args.items) |args_range| {
-            const arg_vars = type_store.sliceVars(args_range);
-            const arg_count: u32 = @intCast(arg_vars.len);
-
-            // Each tag contributes one result (AND of its args)
-            try work_list.append(gpa, .{ .and_combine = arg_count });
-            for (arg_vars) |arg_var| {
-                try work_list.append(gpa, .{ .check_type = arg_var });
-            }
-        }
-    }
-}
-
-/// Check if an extension variable represents an open extension (flex or rigid).
-/// Uses cycle detection to safely traverse extension chains.
-fn isExtensionOpen(type_store: *TypeStore, ext_var: Var) error{OutOfMemory}!bool {
-    const gpa = type_store.gpa;
-
-    // Track seen extension variables to detect cycles
-    var seen_exts: std.AutoHashMapUnmanaged(Var, void) = .empty;
-    defer seen_exts.deinit(gpa);
-
-    // Follow the extension chain to find the actual extension type
-    var current_ext = ext_var;
-
-    while (true) {
-        const ext_resolved = type_store.resolveVar(current_ext);
-        const resolved_var = ext_resolved.var_;
-
-        // Cycle detection: have we seen this variable before?
-        const gop = try seen_exts.getOrPut(gpa, resolved_var);
-        if (gop.found_existing) {
-            // Cycle detected - treat as closed to be safe
-            return false;
-        }
-
-        const ext_content = ext_resolved.desc.content;
-
-        switch (ext_content) {
-            .flex, .rigid => return true,
-            .structure => |flat_type| switch (flat_type) {
-                .tag_union => |ext_tu| {
-                    current_ext = ext_tu.ext;
-                },
-                .empty_tag_union => return false,
-                .record,
-                .tuple,
-                .nominal_type,
-                .fn_pure,
-                .fn_effectful,
-                .fn_unbound,
-                .empty_record,
-                => return false,
-            },
-            .alias => |alias| {
-                current_ext = type_store.getAliasBackingVar(alias);
-            },
-            .field_presence, .err => return false,
-        }
-    }
 }
 
 fn areAllCtorArgTypesInhabitedWithKnownEmpty(
@@ -2412,12 +2070,17 @@ fn identSetContains(idents: []const Ident.Idx, ident: Ident.Idx) bool {
 /// as the blocker for `Err(e)` rather than the backing type parameter.
 pub fn collectAbsentCtorPayloadBlockersForConstructedTags(
     allocator: std.mem.Allocator,
-    type_store: *TypeStore,
+    source_store: *types.Store,
     builtin_idents: BuiltinIdents,
     target_var: Var,
     constructed_tags: []const Ident.Idx,
     out: *std.ArrayList(Var),
 ) error{OutOfMemory}!void {
+    const type_store = builtin_idents.open_cache.reader(source_store);
+    defer builtin_idents.open_cache.finishRead();
+    var scoped_blockers: std.ArrayList(Var) = .empty;
+    defer scoped_blockers.deinit(type_store.gpa);
+    const analysis_out = &scoped_blockers;
     const union_result = try getUnionFromType(allocator, type_store, builtin_idents, target_var);
     const union_info = switch (union_result) {
         .success => |union_info| union_info,
@@ -2432,9 +2095,13 @@ pub fn collectAbsentCtorPayloadBlockersForConstructedTags(
         for (0..arg_types.len()) |offset| {
             const arg_type = arg_types.get(type_store, offset);
             if (!try isKnownAbsentCtorPayloadTypeInhabited(allocator, type_store, builtin_idents, arg_type)) {
-                try collectKnownAbsentCtorPayloadBlockers(allocator, type_store, builtin_idents, arg_type, out);
+                try collectKnownAbsentCtorPayloadBlockers(allocator, type_store, builtin_idents, arg_type, analysis_out);
             }
         }
+    }
+    exportBlockers(type_store, &scoped_blockers);
+    for (scoped_blockers.items) |source_var| {
+        try appendUniqueVar(source_store.gpa, out, source_var);
     }
 }
 
@@ -2474,7 +2141,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
     // Aliases and nominal backings are followed in a loop.
     var current = type_var;
     while (true) {
-        const resolved = type_store.resolveVar(current);
+        const resolved = try resolveType(type_store, current);
         const content = resolved.desc.content;
 
         if (content.unwrapTagUnion()) |tag_union| {
@@ -2497,7 +2164,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 
                 // Move to the extension
                 current_offset += current_tags.count;
-                const ext_resolved = type_store.resolveVar(current_ext);
+                const ext_resolved = try resolveType(type_store, current_ext);
                 const ext_var = ext_resolved.var_;
 
                 // Cycle detection: have we seen this variable before?
@@ -2579,7 +2246,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
 fn getListElemType(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_var: Var) PatternResolveError!Var {
     var current = type_var;
     while (true) {
-        const content = type_store.resolveVar(current).desc.content;
+        const content = (try resolveType(type_store, current)).desc.content;
         if (content.unwrapNominalType()) |nominal| {
             if (!builtin_idents.isBuiltinListType(nominal)) return error.TypeError;
             const args = type_store.sliceNominalArgs(nominal);
@@ -3165,12 +2832,12 @@ fn collectFlexExtVars(
     type_var: Var,
     out: *std.ArrayList(Var),
 ) std.mem.Allocator.Error!void {
-    const resolved = type_store.resolveVar(type_var);
+    const resolved = try resolveType(type_store, type_var);
     const tag_union = resolved.desc.content.unwrapTagUnion() orelse return;
 
     var current_ext = tag_union.ext;
     while (true) {
-        const ext_resolved = type_store.resolveVar(current_ext);
+        const ext_resolved = try resolveType(type_store, current_ext);
         switch (ext_resolved.desc.content) {
             .flex => {
                 try out.append(allocator, ext_resolved.var_);
@@ -4247,7 +3914,8 @@ pub const CheckResult = struct {
     arena: base.SingleThreadArena,
     /// Whether the match is exhaustive
     is_exhaustive: bool,
-    /// Missing patterns if not exhaustive (for error messages)
+    /// Diagnostic-only missing patterns. Analysis type
+    /// metadata is detached before the reader ends; only formatting is valid.
     missing_patterns: []const Pattern,
     /// Indices of redundant branches (covered by previous patterns)
     redundant_indices: []const u32,
@@ -4283,7 +3951,7 @@ pub const CheckResult = struct {
 /// skipping exhaustiveness error reporting for that match expression.
 pub fn checkMatch(
     allocator: std.mem.Allocator,
-    type_store: *TypeStore,
+    source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
     builtin_idents: BuiltinIdents,
@@ -4293,6 +3961,8 @@ pub fn checkMatch(
     known_empty_payload_vars: []const Var,
     scrutinee_constructors_known: bool,
 ) PatternResolveError!CheckResult {
+    const type_store = builtin_idents.open_cache.reader(source_store);
+    defer builtin_idents.open_cache.finishRead();
     // Every allocation, results included, lives in one arena that the result
     // owns.
     var arena = base.SingleThreadArena.init(allocator);
@@ -4322,7 +3992,7 @@ pub fn checkMatch(
     // Patterns are resolved as needed when type information is required
     var payload_vars_to_close: std.ArrayList(Var) = .empty;
     for (known_empty_payload_vars) |payload_var| {
-        try appendUniqueVar(arena_alloc, &payload_vars_to_close, type_store.resolveVar(payload_var).var_);
+        try appendUniqueVar(arena_alloc, &payload_vars_to_close, resolveRoot(type_store, payload_var));
     }
 
     const redundancy = try checkRedundancySketched(
@@ -4369,6 +4039,9 @@ pub fn checkMatch(
         }
     }
 
+    exportBlockers(type_store, &filtered_close);
+    exportBlockers(type_store, &payload_vars_to_close);
+    for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
         .arena = arena,
         .is_exhaustive = missing.len == 0,
@@ -4388,7 +4061,7 @@ pub fn checkMatch(
 /// corresponding to the destructure pattern.
 pub fn checkDestructure(
     allocator: std.mem.Allocator,
-    type_store: *TypeStore,
+    source_store: *types.Store,
     module_env: *const Can.ModuleEnv,
     node_store: *const NodeStore,
     builtin_idents: BuiltinIdents,
@@ -4397,6 +4070,8 @@ pub fn checkDestructure(
     known_empty_payload_vars: []const Var,
     scrutinee_constructors_known: bool,
 ) PatternResolveError!CheckResult {
+    const type_store = builtin_idents.open_cache.reader(source_store);
+    defer builtin_idents.open_cache.finishRead();
     var arena = base.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_alloc = arena.allocator();
@@ -4424,7 +4099,7 @@ pub fn checkDestructure(
 
     var payload_vars_to_close: std.ArrayList(Var) = .empty;
     for (known_empty_payload_vars) |payload_var| {
-        try appendUniqueVar(arena_alloc, &payload_vars_to_close, type_store.resolveVar(payload_var).var_);
+        try appendUniqueVar(arena_alloc, &payload_vars_to_close, resolveRoot(type_store, payload_var));
     }
 
     const redundancy = try checkRedundancySketched(
@@ -4466,6 +4141,9 @@ pub fn checkDestructure(
         }
     }
 
+    exportBlockers(type_store, &filtered_close);
+    exportBlockers(type_store, &payload_vars_to_close);
+    for (@constCast(missing)) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
     return .{
         .arena = arena,
         .is_exhaustive = missing.len == 0,
@@ -4692,30 +4370,702 @@ fn formatPatternNode(
     }
 }
 
-test "record inhabitedness retains its field-var scratch buffer" {
-    var counting = std.testing.FailingAllocator.init(std.testing.allocator, .{});
-    const gpa = counting.allocator();
-    const presences = [_]types.RecordField.Presence{
-        .required(@enumFromInt(1)),
-        .required(@enumFromInt(2)),
+fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error || error{TestExpectedEqual})!void {
+    var idents = try Ident.Store.initCapacity(std.testing.allocator, 1);
+    defer idents.deinit(std.testing.allocator);
+    const name = try idents.insert(std.testing.allocator, try Ident.from_bytes("field"));
+    const vars = [_]Var{@enumFromInt(1)};
+    var arena = base.SingleThreadArena.init(gpa);
+    var transferred = false;
+    defer if (!transferred) arena.deinit();
+    const arena_alloc = arena.allocator();
+    const args = try arena_alloc.dupe(Pattern, &.{.{ .anything = vars[0] }});
+    const alternatives = [_]CtorInfo{.{ .name = .{ .tag = name }, .tag_id = .only, .arity = 1 }};
+    const missing = try arena_alloc.dupe(Pattern, &.{.{ .ctor = .{
+        .union_info = .{
+            .alternatives = try arena_alloc.dupe(CtorInfo, &alternatives),
+            .render_as = .{ .record = .{ .names = try arena_alloc.dupe(Ident.Idx, &.{name}), .types = try arena_alloc.dupe(Var, &vars) } },
+        },
+        .tag_id = .only,
+        .args = args,
+    } }});
+    for (missing) |*pattern| try pattern.detachAnalysisTypes(arena_alloc);
+    var result: CheckResult = .{
+        .arena = undefined,
+        .is_exhaustive = false,
+        .missing_patterns = missing,
+        .redundant_indices = try arena_alloc.dupe(u32, &.{1}),
+        .redundant_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
+        .unmatchable_indices = try arena_alloc.dupe(u32, &.{2}),
+        .unmatchable_regions = try arena_alloc.dupe(Region, &.{Region.zero()}),
+        .ext_vars_to_close = try arena_alloc.dupe(Var, &vars),
+        .payload_vars_to_close = try arena_alloc.dupe(Var, &vars),
     };
-    var work_list: std.ArrayList(WorkItem) = .empty;
-    defer work_list.deinit(gpa);
-    var scratch: std.ArrayList(Var) = .empty;
-    defer scratch.deinit(gpa);
+    result.arena = arena;
+    transferred = true;
+    defer result.deinit();
+    try std.testing.expectEqual(@as(?Var, null), result.missing_patterns[0].ctor.args[0].anything);
+    try std.testing.expectEqual(@as(usize, 0), result.missing_patterns[0].ctor.union_info.render_as.record.types.len);
+}
 
-    // Built on the testing allocator so it stays out of `counting`'s tallies.
-    var type_store = try TypeStore.initCapacity(std.testing.allocator, 4, 0);
-    defer type_store.deinit();
+test "nominal views result ownership cleans up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, resultAllocationFailureCase, .{});
+}
 
-    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
-    try std.testing.expect(scratch.capacity >= presences.len);
+fn inhabitedGraphAllocationCase(gpa: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    try inhabitedGraphDiamondCase(gpa, 12, false);
+}
 
-    work_list.clearRetainingCapacity();
-    const allocations = counting.allocations;
-    const resizes = counting.resize_index;
-    try pushRecordAndWork(gpa, &type_store, &work_list, &scratch, &presences);
+fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive_first: bool) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 300, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
 
-    try std.testing.expectEqual(allocations, counting.allocations);
-    try std.testing.expectEqual(resizes, counting.resize_index);
+    var inhabited: [129]Var = undefined;
+    var empty: [129]Var = undefined;
+    var recursive: [129]Var = undefined;
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    inhabited[0] = try store.fresh();
+    empty[0] = try store.fresh();
+    recursive[0] = try store.fresh();
+    try store.setVarContent(recursive[0], .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{recursive[0]}) }}),
+        .ext = closed,
+    } } });
+    var base_tags = [_]types.Tag{
+        .{ .name = sentinel, .args = try store.appendVars(&.{}) },
+        .{ .name = try idents.insert(gpa, try Ident.from_bytes("Again")), .args = try store.appendVars(&.{inhabited[0]}) },
+    };
+    if (recursive_first) std.mem.reverse(types.Tag, &base_tags);
+    try store.setVarContent(inhabited[0], .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&base_tags),
+        .ext = closed,
+    } } });
+    try store.setVarContent(empty[0], .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ closed, empty[0] }) } } });
+    for (1..depth + 1) |level| {
+        inhabited[level] = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ inhabited[level - 1], inhabited[level - 1] }),
+        } } });
+        empty[level] = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ empty[level - 1], empty[level - 1] }),
+        } } });
+        recursive[level] = try store.freshFromContent(.{ .structure = .{ .tuple = .{
+            .elems = try store.appendVars(&.{ recursive[level - 1], recursive[level - 1] }),
+        } } });
+    }
+    const reader = cache.reader(&store);
+    // Baseline union descriptions belong to the caller's scratch allocator.
+    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    defer query_arena.deinit();
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        defer graph.deinit();
+        try std.testing.expect(try graph.solve(inhabited[depth], &.{}));
+        try std.testing.expectEqual(depth + 1, graph.stats.expanded);
+        try std.testing.expectEqual(@as(usize, 1), graph.stats.rows);
+        try std.testing.expectEqual(depth + 2, graph.nodes.items.len);
+        try std.testing.expectEqual(2 * depth + 1, graph.stats.edges);
+        try std.testing.expectEqual(@as(usize, 0), graph.stats.propagated);
+
+        var empty_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        defer empty_graph.deinit();
+        try std.testing.expect(!try empty_graph.solve(empty[depth], &.{}));
+        try std.testing.expectEqual(depth + 2, empty_graph.stats.expanded);
+        try std.testing.expectEqual(depth + 2, empty_graph.nodes.items.len);
+        try std.testing.expectEqual(2 * depth + 2, empty_graph.stats.edges);
+        try std.testing.expectEqual(empty_graph.stats.edges, empty_graph.stats.propagated);
+        // No finite witness: the coinductive SCC must remain true, and repeated
+        // DAG children must still build only one node per exact type identity.
+        var recursive_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        defer recursive_graph.deinit();
+        try std.testing.expect(try recursive_graph.solve(recursive[depth], &.{}));
+        try std.testing.expectEqual(depth + 1, recursive_graph.stats.expanded);
+        try std.testing.expectEqual(@as(usize, 2), recursive_graph.stats.rows);
+        try std.testing.expectEqual(depth + 4, recursive_graph.nodes.items.len);
+        try std.testing.expectEqual(2 * depth + 4, recursive_graph.stats.edges);
+        try std.testing.expectEqual(@as(usize, 1), recursive_graph.stats.propagated);
+        for ([_]Var{ inhabited[depth], empty[depth] }, [_]bool{ true, false }) |root, expected| {
+            const answer = switch (mode) {
+                .general => try isTypeInhabitedWithKnownEmpty(reader, test_idents, root, &.{}),
+                .payload => try isCtorPayloadTypeInhabited(reader, test_idents, root),
+                .known_absent => try isKnownAbsentCtorPayloadTypeInhabited(query_arena.allocator(), reader, test_idents, root),
+            };
+            try std.testing.expectEqual(expected, answer);
+        }
+    }
+}
+
+/// The module every type in these type-store fixtures is declared in. The
+/// fixtures have no module environment; the type store only compares module
+/// identities, so any one identity serves.
+const fixture_module: base.ModuleIdentity.Idx = @enumFromInt(1);
+
+test "nominal views all inhabitedness modes solve recursive diamonds in graph-linear work" {
+    try inhabitedGraphDiamondCase(std.testing.allocator, 128, false);
+    try inhabitedGraphDiamondCase(std.testing.allocator, 128, true);
+}
+
+fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 32, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 3);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const other = try idents.insert(gpa, try Ident.from_bytes("Other"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const recursive = try store.fresh();
+    try store.setVarContent(recursive, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ recursive, closed }) } } });
+    var tags = [_]types.Tag{
+        .{ .name = sentinel, .args = try store.appendVars(&.{}) },
+        .{ .name = other, .args = try store.appendVars(&.{recursive}) },
+        .{ .name = other, .args = try store.appendVars(&.{closed}) },
+    };
+    var witnesses: [2]Var = undefined;
+    for (&witnesses) |*root| {
+        root.* = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+            .tags = try store.appendTags(&tags),
+            .ext = recursive,
+        } } });
+        std.mem.reverse(types.Tag, &tags);
+    }
+    const alias = try store.freshFromContent(.{ .alias = .{
+        .ident = .{ .ident_idx = other },
+        .vars = .{ .nonempty = try store.appendVars(&.{witnesses[0]}) },
+        .source_arg_count = 0,
+        .origin_module = fixture_module,
+    } });
+    const prefix = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = other, .args = try store.appendVars(&.{recursive}) }}),
+        .ext = alias,
+    } } });
+    const local = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{tags[0]}),
+        .ext = alias,
+    } } });
+    const open_tail = try store.freshFromContent(.{ .rigid = types.Rigid.init(other) });
+    const open_union = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{tags[2]}),
+        .ext = open_tail,
+    } } });
+    const reader = cache.reader(&store);
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        for (witnesses) |root| {
+            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expect(try graph.solve(root, &.{recursive}));
+            try std.testing.expectEqual(@as(usize, 1), graph.stats.expanded);
+            try std.testing.expectEqual(@as(usize, 1), graph.stats.rows);
+            try std.testing.expectEqual(@as(usize, 1), graph.stats.edges);
+            try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, root, mode, &.{root}));
+        }
+        var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        defer graph.deinit();
+        try std.testing.expect(try graph.solve(prefix, &.{recursive}));
+        try std.testing.expectEqual(@as(usize, 1), graph.stats.expanded);
+        try std.testing.expectEqual(@as(usize, 3), graph.stats.rows);
+        try std.testing.expectEqual(@as(usize, 1), graph.stats.edges);
+        try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, prefix, mode, &.{alias}));
+        try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, alias, mode, &.{alias}));
+        try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, alias, mode, &.{witnesses[0]}));
+        // A known-empty tail cannot remove the independent local constructor.
+        try std.testing.expect(try solveInhabitedGraph(reader, test_idents, local, mode, &.{alias}));
+        var open_graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+        defer open_graph.deinit();
+        try std.testing.expectEqual(mode != .known_absent, try open_graph.solve(open_union, &.{}));
+        if (mode != .known_absent) try std.testing.expectEqual(@as(usize, 1), open_graph.stats.expanded);
+        try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, open_union, mode, &.{open_tail}));
+    }
+}
+
+test "nominal views unconditional union witnesses prune alternatives under exact assumptions" {
+    try inhabitedWitnessCase(std.testing.allocator);
+}
+
+test "nominal views unconditional union witnesses clean up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedWitnessCase, .{});
+}
+
+test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 32, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 4);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const ignored_name = try idents.insert(gpa, try Ident.from_bytes("_others"));
+    const named = try idents.insert(gpa, try Ident.from_bytes("a"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const unit = try store.freshFromContent(.{ .structure = .empty_record });
+    const function = try store.freshFromContent(.{ .structure = .{ .fn_pure = .{
+        .args = try store.appendVars(&.{}),
+        .ret = unit,
+    } } });
+    const constraints = try store.appendStaticDispatchConstraints(&.{
+        .{ .fn_name = sentinel, .fn_var = function, .origin = .method_call },
+    });
+    const flex = try store.fresh();
+    const constrained_flex = try store.freshFromContent(.{ .flex = .{ .name = null, .constraints = constraints } });
+    const ignored = try store.freshFromContent(.{ .rigid = types.Rigid.init(ignored_name) });
+    const constrained_ignored = try store.freshFromContent(.{ .rigid = .{ .name = ignored_name, .constraints = constraints } });
+    const rigid = try store.freshFromContent(.{ .rigid = types.Rigid.init(named) });
+    const open_named = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = rigid } } });
+    const payload_cycle = try store.fresh();
+    try store.setVarContent(payload_cycle, .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{payload_cycle}) }}),
+        .ext = closed,
+    } } });
+    const row_cycle = try store.fresh();
+    try store.setVarContent(row_cycle, .{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = row_cycle } } });
+    const false_row = try store.fresh();
+    try store.setVarContent(false_row, .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{closed}) }}),
+        .ext = false_row,
+    } } });
+    const true_row = try store.fresh();
+    try store.setVarContent(true_row, .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{}) }}),
+        .ext = true_row,
+    } } });
+    const mixed_cycle = try store.fresh();
+    try store.setVarContent(mixed_cycle, .{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{mixed_cycle}) }}),
+        .ext = mixed_cycle,
+    } } });
+    const alias = try store.freshFromContent(.{ .alias = .{
+        .ident = .{ .ident_idx = named },
+        .vars = .{ .nonempty = try store.appendVars(&.{rigid}) },
+        .source_arg_count = 0,
+        .origin_module = fixture_module,
+    } });
+    const aliased_row = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = alias } } });
+    const record_name = try idents.insert(gpa, try Ident.from_bytes("RecordWrapper"));
+    const source = types.NominalType.Source.init(try types.SourceDecl.fromStatementChecked(0), false, false);
+    const no_args = try store.appendVars(&.{});
+    _ = try store.registerNominalDecl(.{
+        .ident = .{ .ident_idx = record_name },
+        .origin_module = fixture_module,
+        .source = source,
+        .formals = no_args,
+        .backing = unit,
+        .flags = .{ .valid = true },
+    });
+    const record_nominal = try store.freshFromContent(.{ .structure = .{ .nominal_type = .{
+        .ident = .{ .ident_idx = record_name },
+        .origin_module = fixture_module,
+        .source = source,
+        .args = no_args,
+    } } });
+    const reader = cache.reader(&store);
+    const cases = [_]struct { root: Var, expected: [3]bool }{
+        .{ .root = flex, .expected = .{ true, false, false } },
+        .{ .root = constrained_flex, .expected = .{ true, true, false } },
+        .{ .root = ignored, .expected = .{ true, false, false } },
+        .{ .root = constrained_ignored, .expected = .{ true, true, false } },
+        .{ .root = rigid, .expected = .{ true, true, true } },
+        .{ .root = open_named, .expected = .{ true, true, false } },
+        .{ .root = payload_cycle, .expected = .{ true, true, true } },
+        .{ .root = row_cycle, .expected = .{ false, false, false } },
+        .{ .root = false_row, .expected = .{ false, false, false } },
+        .{ .root = true_row, .expected = .{ true, true, true } },
+        .{ .root = mixed_cycle, .expected = .{ true, true, true } },
+        .{ .root = aliased_row, .expected = .{ true, true, false } },
+        .{ .root = record_nominal, .expected = .{ true, true, false } },
+    };
+    for (cases) |case| {
+        for ([_]InhabitedMode{ .general, .payload, .known_absent }, case.expected) |mode, expected| {
+            var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expectEqual(expected, try graph.solve(case.root, &.{}));
+            try std.testing.expectEqual(@as(usize, graph.roots.count()), graph.stats.expanded);
+            try std.testing.expect(graph.stats.propagated <= graph.stats.edges);
+        }
+    }
+    try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, flex, .general, &.{flex}));
+    try std.testing.expect(try solveInhabitedGraph(reader, test_idents, flex, .general, &.{}));
+    try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, aliased_row, .general, &.{alias}));
+    try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, aliased_row, .general, &.{rigid}));
+    try std.testing.expect(try solveInhabitedGraph(reader, test_idents, aliased_row, .general, &.{flex}));
+}
+
+test "nominal views shared row tails expand once in either traversal order" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 160, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+    const closed = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    var tails: [129]Var = undefined;
+    tails[0] = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{.{ .name = sentinel, .args = try store.appendVars(&.{}) }}),
+        .ext = closed,
+    } } });
+    for (1..tails.len) |index| {
+        tails[index] = try store.freshFromContent(.{ .structure = .{ .tag_union = .{ .tags = .empty(), .ext = tails[index - 1] } } });
+    }
+    const forward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&tails) } } });
+    std.mem.reverse(Var, &tails);
+    const backward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&tails) } } });
+    const reader = cache.reader(&store);
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        for ([_]Var{ forward, backward }) |root| {
+            var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expect(try graph.solve(root, &.{}));
+            try std.testing.expectEqual(@as(usize, 130), graph.stats.expanded);
+            try std.testing.expectEqual(@as(usize, 129), graph.stats.rows);
+            try std.testing.expectEqual(@as(usize, 259), graph.nodes.items.len);
+            try std.testing.expectEqual(@as(usize, 258), graph.stats.edges);
+            try std.testing.expectEqual(@as(usize, 0), graph.stats.propagated);
+        }
+    }
+}
+
+test "nominal views inhabitedness graph cleans up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedGraphAllocationCase, .{});
+}
+
+/// Constructed Store regressions, not a claim that source checking preserves
+/// these particular row shapes. Keep reader allocations outside graph failures.
+fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 32, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 2);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const field = try idents.insert(gpa, try Ident.from_bytes("impossible"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |item| {
+        if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+    const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const unit = try store.freshFromContent(.{ .structure = .empty_record });
+    const flex = try store.fresh();
+    const required = try store.appendRecordFields(&.{.{ .name = field, .presence = .required(empty) }});
+    const optional_kind = try store.freshFromContent(.{ .field_presence = .optional });
+    const optional = try store.appendRecordFields(&.{.{ .name = field, .presence = .unknown(optional_kind, empty) }});
+    const impossible = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = unit } } });
+    const absent = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = flex } } });
+    const alias = try store.freshFromContent(.{ .alias = .{
+        .ident = .{ .ident_idx = field },
+        .vars = .{ .nonempty = try store.appendVars(&.{impossible}) },
+        .source_arg_count = 0,
+        .origin_module = fixture_module,
+    } });
+    const cycle_a = try store.fresh();
+    const cycle_b = try store.fresh();
+    try store.setVarContent(cycle_a, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = cycle_b } } });
+    try store.setVarContent(cycle_b, .{ .alias = .{
+        .ident = .{ .ident_idx = field },
+        .vars = .{ .nonempty = try store.appendVars(&.{cycle_a}) },
+        .source_arg_count = 0,
+        .origin_module = fixture_module,
+    } });
+    const false_cycle = try store.fresh();
+    const false_cycle_tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = false_cycle } } });
+    try store.setVarContent(false_cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = false_cycle_tail } } });
+    const recursive = try store.fresh();
+    try store.setVarContent(recursive, .{ .structure = .{ .record = .{
+        .fields = try store.appendRecordFields(&.{.{ .name = field, .presence = .required(recursive) }}),
+        .ext = recursive,
+    } } });
+    var wrappers: [7]Var = undefined;
+    for ([_]Var{ impossible, alias, absent, flex, cycle_a, false_cycle, recursive }, &wrappers) |tail, *wrapper| {
+        wrapper.* = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
+    }
+    var tails: std.ArrayList(Var) = .empty;
+    defer tails.deinit(gpa);
+    try tails.append(gpa, impossible);
+    for (0..depth) |_| {
+        try tails.append(gpa, try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tails.items[tails.items.len - 1] } } }));
+    }
+    const forward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(tails.items) } } });
+    std.mem.reverse(Var, tails.items);
+    const backward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(tails.items) } } });
+    const reader = cache.reader(&store);
+    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    defer query_arena.deinit();
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        for (wrappers, [_]bool{ false, false, true, true, true, false, true }) |root, expected| {
+            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expectEqual(expected, try graph.solve(root, &.{}));
+            try std.testing.expect(graph.stats.propagated <= graph.stats.edges);
+            const answer = switch (mode) {
+                .general => try isTypeInhabitedWithKnownEmpty(reader, test_idents, root, &.{}),
+                .payload => try isCtorPayloadTypeInhabited(reader, test_idents, root),
+                .known_absent => try isKnownAbsentCtorPayloadTypeInhabited(query_arena.allocator(), reader, test_idents, root),
+            };
+            // Zero direct fields do not erase the instantiated record tail.
+            try std.testing.expectEqual(expected, answer);
+        }
+        for ([_]Var{ forward, backward }) |root| {
+            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expect(!try graph.solve(root, &.{}));
+            try std.testing.expectEqual(depth + 3, graph.stats.expanded);
+            try std.testing.expectEqual(depth + 2, graph.stats.rows);
+            try std.testing.expectEqual(3 * depth + 4, graph.stats.edges);
+            try std.testing.expect(graph.stats.propagated <= graph.stats.edges);
+        }
+        // Assumptions apply to row and alias identities, not only payloads.
+        for ([_]Var{ flex, cycle_a, cycle_b }, [_]Var{ wrappers[3], wrappers[4], wrappers[4] }) |assumption, root| {
+            var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
+            defer graph.deinit();
+            try std.testing.expect(!try graph.solve(root, &.{assumption}));
+        }
+    }
+}
+
+test "nominal views record rows preserve mode policies and graph-linear sharing" {
+    try inhabitedRecordRowsCase(std.testing.allocator, 128);
+}
+
+test "nominal views record rows clean up every graph allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
+}
+
+fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 8, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    const field = try idents.insert(gpa, try Ident.from_bytes("required"));
+    const optional_name = try idents.insert(gpa, try Ident.from_bytes("optional"));
+    const missing = try idents.insert(gpa, try Ident.from_bytes("Missing"));
+    const present = try idents.insert(gpa, try Ident.from_bytes("Present"));
+    var cache = NominalOpenCache.init(analysis_allocator);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |item| {
+        if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+
+    const blocker = try store.fresh();
+    const open_tail = try store.fresh();
+    const optional_payload = try store.fresh();
+    const optional_kind = try store.freshFromContent(.{ .field_presence = .optional });
+    const required = try store.appendRecordFields(&.{.{ .name = field, .presence = .required(blocker) }});
+    const optional = try store.appendRecordFields(&.{.{ .name = optional_name, .presence = .unknown(optional_kind, optional_payload) }});
+    var tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = open_tail } } });
+    for (0..depth) |_| {
+        tail = try store.freshFromContent(.{ .alias = .{
+            .ident = .{ .ident_idx = field },
+            .vars = .{ .nonempty = try store.appendVars(&.{tail}) },
+            .source_arg_count = 0,
+            .origin_module = fixture_module,
+        } });
+        tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
+    }
+    const root = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = tail } } });
+    const sibling = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = .empty(), .ext = tail } } });
+    const shared = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ root, sibling }) } } });
+    const cycle = try store.fresh();
+    const cycle_tail = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = required, .ext = cycle } } });
+    try store.setVarContent(cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = cycle_tail } } });
+    const empty_cycle = try store.fresh();
+    try store.setVarContent(empty_cycle, .{ .structure = .{ .record = .{ .fields = .empty(), .ext = empty_cycle } } });
+    const open_record = try store.freshFromContent(.{ .structure = .{ .record = .{ .fields = optional, .ext = open_tail } } });
+    const empty_union = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const target = try store.freshFromContent(.{ .structure = .{ .tag_union = .{
+        .tags = try store.appendTags(&.{
+            .{ .name = missing, .args = try store.appendVars(&.{root}) },
+            .{ .name = present, .args = .empty() },
+        }),
+        .ext = empty_union,
+    } } });
+    var query_arena = std.heap.ArenaAllocator.init(analysis_allocator);
+    defer query_arena.deinit();
+    const reader = cache.reader(&store);
+    for ([_]Var{ root, shared, cycle }) |payload| {
+        try std.testing.expect(try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, &.{}));
+        for ([_]InhabitedMode{ .payload, .known_absent }) |mode| {
+            try std.testing.expect(!try solveInhabitedGraph(reader, test_idents, payload, mode, &.{}));
+            var blockers: std.ArrayList(Var) = .empty;
+            defer blockers.deinit(analysis_allocator);
+            switch (mode) {
+                .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
+                .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
+                .general => unreachable,
+            }
+            try std.testing.expectEqualSlices(Var, &.{blocker}, blockers.items);
+            try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(reader, test_idents, payload, blockers.items));
+        }
+    }
+    for ([_]Var{ open_record, empty_cycle }) |payload| {
+        for ([_]InhabitedMode{ .payload, .known_absent }) |mode| {
+            try std.testing.expect(try solveInhabitedGraph(reader, test_idents, payload, mode, &.{}));
+            var blockers: std.ArrayList(Var) = .empty;
+            defer blockers.deinit(analysis_allocator);
+            switch (mode) {
+                .payload => try collectCtorPayloadBlockers(reader, test_idents, payload, &blockers),
+                .known_absent => try collectKnownAbsentCtorPayloadBlockers(query_arena.allocator(), reader, test_idents, payload, &blockers),
+                .general => unreachable,
+            }
+            // Neither optional fields nor an unresolved record tail is a blocker.
+            try std.testing.expectEqual(@as(usize, 0), blockers.items.len);
+        }
+    }
+
+    var exported: std.ArrayList(Var) = .empty;
+    defer exported.deinit(gpa);
+    try collectAbsentCtorPayloadBlockersForConstructedTags(query_arena.allocator(), &store, test_idents, target, &.{present}, &exported);
+    try std.testing.expectEqualSlices(Var, &.{blocker}, exported.items);
+}
+
+test "record tail blockers follow aliased required fields and preserve row policies" {
+    try recordTailBlockersCase(std.testing.allocator, 64);
+}
+
+test "record tail blockers clean up every allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, recordTailBlockersCase, .{@as(usize, 2)});
+}
+
+test "nominal views record tail emptiness removes impossible source constructor" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var env = try TestEnv.init("RecordTail",
+        \\module [f]
+        \\
+        \\Wrapper(r) := { marker: {}, ..r }
+        \\f : [A(Wrapper({ impossible: [] })), B] -> U8
+        \\f = |value| match value { B => 0 }
+    );
+    defer env.deinit();
+    // The instantiated record tail makes the A constructor impossible.
+    try std.testing.expectEqual(@as(usize, 0), try env.typeProblemCount());
+}
+
+test "nominal views inhabitedness graph publishes final recursive answers" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 8, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NotNumeric"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+    const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const a = try store.fresh();
+    const b = try store.fresh();
+    try store.setVarContent(a, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ b, empty }) } } });
+    try store.setVarContent(b, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{a}) } } });
+    const reader = cache.reader(&store);
+    for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
+        var graph: InhabitedGraph = .{ .gpa = gpa, .store = reader, .idents = test_idents, .mode = mode };
+        defer graph.deinit();
+        try std.testing.expect(!try graph.solve(a, &.{}));
+        try std.testing.expect(!graph.nodes.items[graph.roots.get(b).?].value);
+    }
+}
+
+test "inhabitedness memo caches complete roots not recursive assumptions" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 16, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NumericSentinel"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+
+    const empty = try store.freshFromContent(.{ .structure = .empty_tag_union });
+    const a = try store.fresh();
+    const b = try store.fresh();
+    try store.setVarContent(a, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ b, empty }) } } });
+    try store.setVarContent(b, .{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{a}) } } });
+    const before = store.len();
+    // While checking A, B sees the provisional recursive A=true. That does
+    // not authorize caching B=true: querying B independently reaches empty.
+    for ([_]Var{ a, b, a, b }) |root| {
+        try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(cache.reader(&store), test_idents, root, &.{}));
+    }
+    try std.testing.expectEqual(before, store.len());
+    try std.testing.expectEqual(@as(u32, 2), cache.inhabitedness.answers.count());
+}
+
+test "inhabitedness memo preserves shared DAG queries and assumption isolation" {
+    const gpa = std.testing.allocator;
+    var store = try types.Store.initCapacity(gpa, 16, 0);
+    defer store.deinit();
+    var idents = try Ident.Store.initCapacity(gpa, 1);
+    defer idents.deinit(gpa);
+    const sentinel = try idents.insert(gpa, try Ident.from_bytes("NumericSentinel"));
+    var cache = NominalOpenCache.init(gpa);
+    defer cache.deinit();
+    var test_idents: BuiltinIdents = undefined;
+    inline for (std.meta.fields(BuiltinIdents)) |field| {
+        if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
+    }
+    test_idents.idents = &idents;
+    test_idents.open_cache = &cache;
+
+    const leaf = try store.fresh();
+    const left = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{leaf}) } } });
+    const right = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{leaf}) } } });
+    const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&.{ left, right }) } } });
+    const before = store.len();
+    for (0..2) |_| {
+        try std.testing.expect(try isTypeInhabitedWithKnownEmpty(cache.reader(&store), test_idents, root, &.{}));
+        try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(cache.reader(&store), test_idents, root, &.{leaf}));
+        try std.testing.expect(!try isTypeInhabitedWithKnownEmpty(cache.reader(&store), test_idents, root, &.{ leaf, leaf }));
+    }
+    try std.testing.expectEqual(before, store.len());
+    try std.testing.expectEqual(@as(u32, 2), cache.inhabitedness.answers.count());
 }

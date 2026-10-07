@@ -286,6 +286,7 @@ pub const Tag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_redundant_return,
     diag_control_flow_in_expect,
     diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
@@ -1186,7 +1187,10 @@ pub const Payload = extern union {
     pub const Malformed = extern struct {
         diagnostic: u32,
         source_node_plus_one: u32 = 0,
-        _padding: [8]u8 = .{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        /// The expressions a retired expression or statement evaluates, in
+        /// order, before it crashes (`CIR.Expr.e_runtime_error.evaluated`).
+        evaluated_start: u32 = 0,
+        evaluated_len: u32 = 0,
     };
 
     /// where_alias: a where alias applied to a type variable in a where clause

@@ -1,11 +1,12 @@
 # repro for https://github.com/roc-lang/roc/issues/11993
 #
-# `roc check` on this program must succeed without crashing. The bug: a method
-# of a nominal type declared in a function body, bound through a local alias to
-# a local function that captures a local of the body, was not recognized as
-# that local function, so a call of it on a constant was selected as a
-# compile-time root and lowering the root violated a postcheck invariant and
-# crashed the compiler.
+# `roc check` on this program must report the method's capture without
+# crashing. The bug: a method of a nominal type declared in a function body,
+# bound through a local alias to a local function that captures a local of the
+# body, was not recognized as that local function, so a call of it on a
+# constant was selected as a compile-time root and lowering the root violated a
+# postcheck invariant and crashed the compiler. Methods never capture, so the
+# method is rejected at `alias`.
 
 app [main!] {}
 

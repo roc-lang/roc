@@ -331,7 +331,7 @@ fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
     if (tag == .e_dec_small) return receiver.e_dec_small.value.numerator < 0;
     if (tag == .e_num_from_numeral or tag == .e_typed_num_from_numeral) {
         const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
-            std.debug.panic("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
+            base.invariant("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
         };
         return literal.isNegative();
     }
@@ -406,7 +406,7 @@ fn fieldAccessPathReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool 
             // so iteratively peel them before classifying surface precedence.
             .e_nominal => |nominal| current_idx = nominal.backing_expr,
             .e_nominal_external => |nominal| current_idx = nominal.backing_expr,
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
 
             .e_str_segment,
             .e_str,
@@ -890,7 +890,7 @@ fn emitExprFrame(
         },
         .e_nominal => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
         .e_nominal_external => |nominal| try frames.append(allocator, .{ .expr = nominal.backing_expr }),
-        .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
+        .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached Roc source emission", .{}),
         .e_lookup_required => try self.write("<required>"),
         .e_for => |for_expr| {
             try frames.append(allocator, .{ .expr = for_expr.body });
@@ -1000,7 +1000,7 @@ fn emitPatternFrame(
         .runtime_error => try self.write("<pattern_error>"),
         .nominal => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
         .nominal_external => |nom| try frames.append(allocator, .{ .pattern = nom.backing_pattern }),
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached Roc source emission", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached Roc source emission", .{}),
         .small_dec_literal => |dec| try self.emitSmallDec(dec.value),
         .dec_literal => |dec| try self.emitScaledDec(dec.value.num, false),
         .frac_f32_literal => |frac| {
@@ -1107,10 +1107,10 @@ const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
 fn emitRecordedNumeral(self: *Self, node_idx: CIR.Node.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
     const literal = self.module_env.numeralLiteralForNode(node_idx) orelse {
-        std.debug.panic("missing recorded numeral for node {}", .{@intFromEnum(node_idx)});
+        base.invariant("missing recorded numeral for node {}", .{@intFromEnum(node_idx)});
     };
     if (!literal.isMaterialized()) {
-        std.debug.panic("cannot emit an unmaterialized numeral for node {}", .{@intFromEnum(node_idx)});
+        base.invariant("cannot emit an unmaterialized numeral for node {}", .{@intFromEnum(node_idx)});
     }
 
     if (literal.isNegative()) {
@@ -1129,7 +1129,7 @@ fn emitRecordedNumeral(self: *Self, node_idx: CIR.Node.Idx, maybe_type_name: ?ba
         defer self.allocator.free(after_digits);
 
         const after_count = std.math.cast(usize, literal.after_decimal_digit_count) orelse {
-            std.debug.panic("recorded numeral decimal digit count exceeded host usize", .{});
+            base.invariant("recorded numeral decimal digit count exceeded host usize", .{});
         };
         if (after_count <= after_digits.len) {
             try self.write(after_digits);

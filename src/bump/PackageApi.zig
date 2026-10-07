@@ -488,26 +488,6 @@ pub fn itemCanonicalString(self: *const PackageApi, gpa: std.mem.Allocator, item
     return try out.toOwnedSlice();
 }
 
-/// Write the full API as an S-expression, one line per item. Requires
-/// `normalize` to have run. Used for golden tests and debugging.
-pub fn writeSExpr(self: *const PackageApi, gpa: std.mem.Allocator, writer: *std.Io.Writer) WriteError!void {
-    try writer.writeAll("(package-api");
-    for (self.modules.items) |module| {
-        try writer.writeAll("\n  (module \"");
-        try writeEscaped(writer, module.name);
-        try writer.writeAll("\"");
-        for (module.items.items) |item| {
-            try writer.writeAll("\n    (item \"");
-            try writeEscaped(writer, item.path);
-            try writer.writeAll("\" ");
-            try self.writeItemSExpr(gpa, item, writer);
-            try writer.writeAll(")");
-        }
-        try writer.writeAll(")");
-    }
-    try writer.writeAll(")\n");
-}
-
 /// Render a human-readable signature for one item, for diff output. Variables
 /// render as their source name when available, else `a`, `b`, ... by index.
 pub fn renderItemSignature(self: *const PackageApi, gpa: std.mem.Allocator, item: Item, writer: *std.Io.Writer) WriteError!void {

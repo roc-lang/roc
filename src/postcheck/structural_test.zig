@@ -1162,16 +1162,24 @@ test "Monotype inspect-only unresolved values defer until final graph sealing" {
         "fn typeIsProvenUninhabited(self: *BodyContext",
         "fn checkedPatternIsProvenUninhabited(",
     );
-    try expectContains(durable_inhabitation, "self.draft.uninhabited_type_cache.get(ty)");
+    try expectContains(durable_inhabitation, "self.graph.typeProvenUninhabited(ty,");
     try expectNotContains(durable_inhabitation, "activeNodeFromType");
-    const durable_scan = sourceSliceBetween(
-        lower_source,
-        "const TypeUninhabitedScan = struct {",
-        "const ImpossibilityProofScan = struct {",
+    const graph_source = @embedFile("monotype/solve.zig");
+    const durable_answers = sourceSliceBetween(
+        graph_source,
+        "pub fn typeProvenUninhabited(self: *InstGraph",
+        "pub fn acquireArena(self: *InstGraph",
     );
-    try expectContains(durable_scan, "const types_ = self.body.typeStore()");
+    try expectContains(durable_answers, "if (answers.get(ty)) |cached| return cached;");
+    const durable_scan = sourceSliceBetween(
+        graph_source,
+        "const TypeUninhabitedScan = struct {",
+        "pub const GraphTypeFinals = struct {",
+    );
+    try expectContains(durable_scan, "const types = self.graph.types;");
     try expectContains(durable_scan, "self.visiting.fetchRemove(ty)");
     try expectNotContains(durable_scan, "activeNodeFromType");
+    try expectNotContains(durable_scan, "self.graph.content(");
     const inspect_call = sourceSliceBetween(
         lower_source,
         "fn inspectCall(self: *BodyContext",

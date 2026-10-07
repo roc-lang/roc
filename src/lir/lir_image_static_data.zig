@@ -2,6 +2,7 @@
 const std = @import("std");
 const core = @import("lir_core");
 const layout = @import("layout");
+const serde_validation = @import("collections").serde_validation;
 const Program = core.Program;
 const missing = std.math.maxInt(u32);
 
@@ -18,6 +19,9 @@ pub fn Schema(comptime Image: type) type {
             alignment: u32,
             is_global: u8,
             is_exported: u8,
+            /// The bytes alignment adds after `is_exported`, declared so that
+            /// every byte of a row is defined.
+            _padding: [2]u8 = [_]u8{0} ** 2,
         };
         pub const Relocation = extern struct {
             name: ArrayRef,
@@ -29,14 +33,30 @@ pub fn Schema(comptime Image: type) type {
             rc_layout: u32,
             rc_op: u32,
             function_pointer: u8,
+            /// The bytes alignment adds after `function_pointer`, declared so
+            /// that every byte of a row is defined.
+            _padding: [3]u8 = [_]u8{0} ** 3,
         };
 
+        comptime {
+            // `copy` authors these rows field by field into image storage, so
+            // their bytes are a function of the frozen graph under either
+            // `Image.ByteContract` only while every byte belongs to a field.
+            serde_validation.assertFullyDefined(Export, "StaticDataImage.Export");
+            serde_validation.assertFullyDefined(Relocation, "StaticDataImage.Relocation");
+        }
+
+        /// Copy a frozen graph into image storage. Every byte this writes is a
+        /// function of `exports` alone: the rows declare all of their bytes and
+        /// the names and value bytes are plain byte arrays, so the copy
+        /// satisfies `Image.ByteContract.persisted` at no cost to a mapped
+        /// image.
         pub fn copy(allocator: std.mem.Allocator, base: [*]align(1) const u8, capacity: usize, exports: []const Program.StaticDataExport) Image.CopyError!ArrayRef {
             const rows = try allocator.alloc(Export, exports.len);
             for (exports, rows) |item, *row| {
                 const relocations = try allocator.alloc(Relocation, item.relocations.len);
                 for (item.relocations, relocations) |reloc, *out| out.* = .{
-                    .name = try Image.copyArrayRef(allocator, base, capacity, reloc.target_symbol_name),
+                    .name = try Image.copyArrayRef(allocator, base, capacity, .persisted, reloc.target_symbol_name),
                     .offset = reloc.offset,
                     .addend = reloc.addend,
                     .data_symbol = switch (reloc.target) {
@@ -50,8 +70,8 @@ pub fn Schema(comptime Image: type) type {
                     .function_pointer = @intFromBool(reloc.kind == .function_pointer),
                 };
                 row.* = .{
-                    .name = try Image.copyArrayRef(allocator, base, capacity, item.symbol_name),
-                    .bytes = try Image.copyArrayRef(allocator, base, capacity, item.bytes),
+                    .name = try Image.copyArrayRef(allocator, base, capacity, .persisted, item.symbol_name),
+                    .bytes = try Image.copyArrayRef(allocator, base, capacity, .persisted, item.bytes),
                     .relocations = try Image.arrayRef(base, capacity, relocations),
                     .value_id = if (item.value_id) |id| @intFromEnum(id) else missing,
                     .symbol_offset = item.symbol_offset,

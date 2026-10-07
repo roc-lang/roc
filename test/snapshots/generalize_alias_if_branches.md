@@ -21,17 +21,13 @@ TYPE MISMATCH - generalize_alias_if_branches.md:5:27:5:30
 		(title "Type Mismatch")
 		(region (start 5 27) (end 5 30))
 		(headline
-			(reflow "This string literal is being used where a non-string type is needed."))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
 		(document
 			(source-region (file "generalize_alias_if_branches.md") (start 5 27) (end 5 30) (annotation error) (line-text "main = (picked(1), picked(\"a\"))"))
 			(line-break)
-			(reflow "The type was determined to be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

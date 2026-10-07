@@ -82,7 +82,7 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
         }
 
         // Check for ## doc comment
-        if (base.doc_comment.startsWithHashHash(source[pos..])) {
+        if (base.doc_comment.isDocCommentLine(source[pos..])) {
             if (lines.items.len == 0) {
                 first_line_byte = @intCast(line_start);
             }
@@ -127,75 +127,16 @@ pub fn extractModuleDocComment(gpa: Allocator, source: []const u8, line_index: L
     };
 }
 
-/// Extract the doc comment immediately preceding a definition at the given byte offset.
-///
-/// Scans backwards from `def_start_offset` to find consecutive `##` lines.
-/// Returns null if no doc comment is found.
+/// Extract the doc comment block for the definition at the given byte offset,
+/// as `base.doc_comment.gatherBlockBefore` defines it. Returns null if the
+/// definition has none.
 pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u32, line_index: LineIndex) Allocator.Error!?DocCommentExtract {
-    if (def_start_offset == 0 or def_start_offset > source.len) return null;
-
-    var lines = std.ArrayList([]const u8).empty;
-    defer lines.deinit(gpa);
-
-    var first_line_byte: u32 = 0;
-
-    var pos: usize = def_start_offset;
-
-    // Skip backwards over whitespace to find the end of the previous line
-    while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t' or source[pos - 1] == '\r')) {
-        pos -= 1;
-    }
-    // Skip the newline
-    if (pos > 0 and source[pos - 1] == '\n') {
-        pos -= 1;
-    }
-
-    // Now scan backwards collecting ## lines
-    while (pos > 0) {
-        // Find the start of the current line
-        var line_start = pos;
-        while (line_start > 0 and source[line_start - 1] != '\n') {
-            line_start -= 1;
-        }
-
-        // Check if this line is a ## doc comment
-        const line = source[line_start..pos];
-        const trimmed = trimLeft(line);
-
-        if (base.doc_comment.startsWithHashHash(trimmed)) {
-            // Track the earliest doc-comment line we've seen so far. Since we
-            // scan bottom-up and lines are added in reverse, the most recent
-            // assignment to this is the topmost ## line of the block.
-            first_line_byte = @intCast(line_start);
-            // It's a doc comment line
-            const content = base.doc_comment.stripPrefix(trimmed);
-            try lines.append(gpa, content);
-        } else if (trimmed.len == 0) {
-            // Empty/whitespace line—stop looking if we already have doc lines
-            if (lines.items.len > 0) break;
-            // Skip empty lines between def and potential doc comment
-        } else {
-            // Non-comment content—stop
-            break;
-        }
-
-        // Move to previous line
-        if (line_start == 0) break;
-        pos = line_start - 1;
-        // Skip the newline we backed over
-        while (pos > 0 and source[pos - 1] == '\r') {
-            pos -= 1;
-        }
-    }
-
-    if (lines.items.len == 0) return null;
-
-    // Reverse the lines (we collected them bottom-up)
-    std.mem.reverse([]const u8, lines.items);
+    const block = (try base.doc_comment.gatherBlockBefore(gpa, source, def_start_offset)) orelse return null;
+    defer block.deinit(gpa);
 
     return .{
-        .text = try joinLines(gpa, lines.items),
-        .start_line = line_index.lineOf(first_line_byte),
+        .text = try joinLines(gpa, block.lines),
+        .start_line = line_index.lineOf(block.start),
     };
 }
 
@@ -616,9 +557,7 @@ fn projectionRootName(module_env: *const ModuleEnv, projection: PublicTypeProjec
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: CIR.Statement.Idx) ?[]const u8 {
     const statement = module_env.store.getStatement(statement_idx);
     const header_idx = switch (statement) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,
@@ -895,7 +834,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
 
     // Process each child—move it under its proper parent
     for (builtin_children) |child| {
-        try reparentDottedChild(gpa, entries_list, child);
+        try reparentDottedChildInto(gpa, entries_list, child);
     }
 
     // Free the Builtin entry's children array (entries were moved out)
@@ -959,65 +898,7 @@ fn reparentBuiltinChildren(gpa: Allocator, entries_list: *std.ArrayList(DocModel
     }
 }
 
-/// Recursively re-parent a child with a dotted name into the correct position in entries_list.
-fn reparentDottedChild(
-    gpa: Allocator,
-    entries_list: *std.ArrayList(DocModel.DocEntry),
-    child: DocModel.DocEntry,
-) Allocator.Error!void {
-    const dot_idx = std.mem.findScalar(u8, child.name, '.') orelse {
-        try entries_list.append(gpa, child);
-        return;
-    };
-
-    const parent_name = child.name[0..dot_idx];
-    const remainder = child.name[dot_idx + 1 ..];
-
-    var parent: ?*DocModel.DocEntry = null;
-    for (entries_list.items) |*entry| {
-        if (std.mem.eql(u8, entry.name, parent_name)) {
-            parent = entry;
-            break;
-        }
-    }
-
-    if (parent == null) {
-        const group_name = try gpa.dupe(u8, parent_name);
-        errdefer gpa.free(group_name);
-        const empty = try gpa.alloc(DocModel.DocEntry, 0);
-        errdefer gpa.free(empty);
-
-        try entries_list.append(gpa, DocModel.DocEntry{
-            .name = group_name,
-            .kind = .nominal,
-            .type_signature = null,
-            .doc_comment = null,
-            .children = empty,
-        });
-        parent = &entries_list.items[entries_list.items.len - 1];
-    }
-
-    const p = parent.?;
-
-    var new_child = child;
-    const short_name = try gpa.dupe(u8, remainder);
-    gpa.free(child.name);
-    new_child.name = short_name;
-
-    if (std.mem.findScalar(u8, remainder, '.')) |_| {
-        var children_list = std.ArrayList(DocModel.DocEntry).empty;
-        for (p.children) |c| {
-            try children_list.append(gpa, c);
-        }
-        gpa.free(p.children);
-        try reparentDottedChildInto(gpa, &children_list, new_child);
-        p.children = try children_list.toOwnedSlice(gpa);
-    } else {
-        try appendChildEntry(gpa, p, new_child);
-    }
-}
-
-/// Like reparentDottedChild but operates on a children ArrayList (for nested levels).
+/// Recursively re-parent a child with a dotted name into the correct position in children_list.
 fn reparentDottedChildInto(
     gpa: Allocator,
     children_list: *std.ArrayList(DocModel.DocEntry),
@@ -1122,7 +1003,7 @@ fn defEntryName(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?[]const u8 
         .underscore,
         .runtime_error,
         => null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     };
 }
 
@@ -1266,7 +1147,7 @@ fn extractDefEntry(
         .underscore,
         .runtime_error,
         => return null,
-        .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+        .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
     }
 }
 
@@ -3166,14 +3047,6 @@ fn moveEntryForReparenting(
     return moved;
 }
 
-fn trimLeft(s: []const u8) []const u8 {
-    var i: usize = 0;
-    while (i < s.len and (s[i] == ' ' or s[i] == '\t')) {
-        i += 1;
-    }
-    return s[i..];
-}
-
 /// Reference implementation of the old byteOffsetToLine for test comparison.
 fn oldByteOffsetToLine(source: []const u8, offset: u32) u32 {
     var line: u32 = 1;
@@ -3196,9 +3069,33 @@ fn expectLineIndexMatches(source: []const u8) Allocator.Error!void {
         const expected = oldByteOffsetToLine(source, offset);
         const actual = index.lineOf(offset);
         if (expected != actual) {
-            std.debug.panic("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
+            base.invariant("lineOf({d}): expected {d}, got {d}", .{ offset, expected, actual });
         }
     }
+}
+
+test "extractDocComment: agrees with hover about section headers" {
+    const gpa = std.testing.allocator;
+    const source = "## a\n### b\n## c\nfoo = 42";
+    const index = try LineIndex.build(gpa, source);
+    defer index.deinit(gpa);
+
+    const doc = (try extractDocComment(gpa, source, @intCast(std.mem.find(u8, source, "foo").?), index)).?;
+    defer gpa.free(doc.text);
+    try std.testing.expectEqualStrings("c", doc.text);
+    try std.testing.expectEqual(@as(u32, 3), doc.start_line);
+}
+
+test "extractModuleDocComment: a section header is not module documentation" {
+    const gpa = std.testing.allocator;
+    const index = try LineIndex.build(gpa, "");
+    defer index.deinit(gpa);
+
+    try std.testing.expect(try extractModuleDocComment(gpa, "### Helpers\nfoo = 42", index) == null);
+
+    const doc = (try extractModuleDocComment(gpa, "## About\n### Helpers\nfoo = 42", index)).?;
+    defer gpa.free(doc.text);
+    try std.testing.expectEqualStrings("About", doc.text);
 }
 
 test "LineIndex: empty source" {

@@ -9,6 +9,7 @@
 //! Each target variant is specialized at comptime with the correct calling convention.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const Allocator = std.mem.Allocator;
 const RocTarget = @import("roc_target").RocTarget;
 const Registers = @import("Registers.zig");
@@ -48,46 +49,15 @@ pub fn Emit(comptime target: RocTarget) type {
             pub const RETURN_REGS = [_]Registers.GeneralReg{ .X0, .X1 };
 
             pub const SHADOW_SPACE: u8 = 0; // AAPCS64 has no shadow space
-            pub const RETURN_BY_PTR_THRESHOLD: usize = 16;
-            pub const PASS_BY_PTR_THRESHOLD: usize = std.math.maxInt(usize); // AAPCS64: no pass-by-pointer
 
             pub const SCRATCH_REG = Registers.GeneralReg.X9;
             pub const BASE_PTR = Registers.GeneralReg.FP;
             pub const STACK_PTR = Registers.GeneralReg.ZRSP;
             pub const STACK_ALIGNMENT: u32 = 16;
 
-            /// Check if a struct of the given size can be passed by value.
-            /// AAPCS64: structs up to 16 bytes can be passed in registers.
-            pub fn canPassStructByValue(size: usize) bool {
-                return size <= 16;
-            }
-
             /// Align a stack size to the platform's required alignment.
             pub fn alignStackSize(size: u32) u32 {
                 return (size + STACK_ALIGNMENT - 1) & ~(STACK_ALIGNMENT - 1);
-            }
-
-            /// Check if return type needs to use pointer (implicit first arg)
-            pub fn needsReturnByPointer(return_size: usize) bool {
-                return return_size > RETURN_BY_PTR_THRESHOLD;
-            }
-
-            /// Check if a struct argument needs to be passed by pointer.
-            /// AAPCS64: never uses pass-by-pointer.
-            pub fn needsPassByPointer(arg_size: usize) bool {
-                return arg_size > PASS_BY_PTR_THRESHOLD;
-            }
-
-            /// Returns true if i128 values must be passed by pointer
-            /// AAPCS64: i128 passed in register pair, not by pointer
-            pub fn passI128ByPointer() bool {
-                return false;
-            }
-
-            /// Returns true if i128 return values use hidden pointer arg
-            /// AAPCS64: i128 returned in register pair
-            pub fn returnI128ByPointer() bool {
-                return false;
             }
         };
 
@@ -106,11 +76,6 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn deinit(self: *Self) void {
             self.buf.deinit(self.allocator);
             self.relocs.deinit(self.allocator);
-        }
-
-        /// Get the current code offset
-        pub fn codeOffset(self: *const Self) u64 {
-            return @intCast(self.buf.items.len);
         }
 
         /// Emit a 32-bit instruction (little-endian)
@@ -180,22 +145,6 @@ pub fn Emit(comptime target: RocTarget) type {
             const hw: u2 = @truncate(shift >> 4);
             const inst: u32 = (@as(u32, sf) << 31) |
                 (0b11100101 << 23) |
-                (@as(u32, hw) << 21) |
-                (@as(u32, imm) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// MOVN - Move with NOT (load inverted immediate)
-        /// Sets dst = ~(imm16 << shift), useful for loading negative values
-        pub fn movn(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: u16, shift: u6) Allocator.Error!void {
-            // MOVN <Xd>, #<imm16>, LSL #<shift>
-            // 31 30 29 28 27 26 25 24 23 22 21 20               5 4    0
-            // sf  0  0  1  0  0  1  0  1  hw[1:0]  imm16[15:0]  Rd[4:0]
-            const sf = width.sf();
-            const hw: u2 = @truncate(shift >> 4);
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00100101 << 23) |
                 (@as(u32, hw) << 21) |
                 (@as(u32, imm) << 5) |
                 dst.enc();
@@ -316,19 +265,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b0101011 << 24) | // ADD with S bit (bit 29)
                 (0b00 << 22) |
                 (0 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// ADC reg, reg, reg (add with carry)
-        pub fn adcRegRegReg(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg) Allocator.Error!void {
-            // ADC <Xd>, <Xn>, <Xm>
-            const sf = width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0011010000 << 21) |
                 (@as(u32, src2.enc()) << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src1.enc()) << 5) |
@@ -775,29 +711,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// UDF (permanently undefined instruction - generates exception)
-        pub fn udf(self: *Self, imm16: u16) Allocator.Error!void {
-            // UDF #imm16
-            // 0000 0000 0000 0000 imm16
-            const inst: u32 = @as(u32, imm16);
-            try self.emit32(inst);
-        }
-
-        /// ADR Xd, #imm—compute PC-relative address
-        /// offset_bytes is a byte offset from the ADR instruction, range ±1 MB.
-        pub fn adr(self: *Self, rd: GeneralReg, offset_bytes: i21) Allocator.Error!void {
-            // ADR: 0 immlo[1:0] 10000 immhi[18:0] Rd[4:0]
-            const imm: u21 = @bitCast(offset_bytes);
-            const immlo: u2 = @truncate(imm);
-            const immhi: u19 = @truncate(imm >> 2);
-            const inst: u32 = (0 << 31) |
-                (@as(u32, immlo) << 29) |
-                (0b10000 << 24) |
-                (@as(u32, immhi) << 5) |
-                @as(u32, rd.enc());
-            try self.emit32(inst);
-        }
-
         pub fn adrp(self: *Self, rd: GeneralReg) Allocator.Error!void {
             const inst: u32 = 0x90000000 | @as(u32, rd.enc());
             try self.emit32(inst);
@@ -946,34 +859,6 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// CBZ (compare and branch if zero)
-        pub fn cbz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
-            // CBZ <Xt>, <label>
-            // sf 011010 0 imm19 Rt
-            const sf = width.sf();
-            const offset_words = @divExact(offset_bytes, 4);
-            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0110100 << 24) |
-                (@as(u32, imm19) << 5) |
-                reg.enc();
-            try self.emit32(inst);
-        }
-
-        /// CBNZ (compare and branch if non-zero)
-        pub fn cbnz(self: *Self, width: RegisterWidth, reg: GeneralReg, offset_bytes: i32) Allocator.Error!void {
-            // CBNZ <Xt>, <label>
-            // sf 011010 1 imm19 Rt
-            const sf = width.sf();
-            const offset_words = @divExact(offset_bytes, 4);
-            const imm19: u19 = @bitCast(@as(i19, @truncate(offset_words)));
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b0110101 << 24) |
-                (@as(u32, imm19) << 5) |
-                reg.enc();
-            try self.emit32(inst);
-        }
-
         /// CSEL (conditional select)
         pub fn csel(self: *Self, width: RegisterWidth, dst: GeneralReg, src1: GeneralReg, src2: GeneralReg, cond: Condition) Allocator.Error!void {
             // CSEL <Xd>, <Xn>, <Xm>, <cond>
@@ -1023,7 +908,7 @@ pub fn Emit(comptime target: RocTarget) type {
             if (base != .IP0 and preserved != .IP0) return .IP0;
             if (base != .IP1 and preserved != .IP1) return .IP1;
 
-            std.debug.panic(
+            invariant(
                 "aarch64 memory emitter needs an address scratch register, but base {s} and preserved register {s} occupy both IP0 and IP1",
                 .{ base.name64(), preserved.?.name64() },
             );
@@ -1579,16 +1464,7 @@ pub fn Emit(comptime target: RocTarget) type {
         pub fn fmovRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FMOV <Sd>, <Sn> or FMOV <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 00 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b00 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b00, dst, src);
         }
 
         /// MOV Vd.16B, Vn.16B (alias of ORR Vd.16B, Vn.16B, Vn.16B).
@@ -1719,116 +1595,83 @@ pub fn Emit(comptime target: RocTarget) type {
             try self.emit32(inst);
         }
 
-        /// FADD (floating-point add)
-        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
-            // FADD <Sd>, <Sn>, <Sm> or FADD <Dd>, <Dn>, <Dm>
-            // 0 0 0 11110 ftype 1 Rm 0010 10 Rn Rd
+        /// Emit a scalar floating-point data-processing instruction with two sources:
+        /// 0 0 0 11110 ftype 1 Rm opcode 10 Rn Rd
+        fn emitFloatBinary(self: *Self, ftype: FloatType, opcode: u4, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             const inst: u32 = (0b000 << 29) |
                 (0b11110 << 24) |
                 (@as(u32, @intFromEnum(ftype)) << 22) |
                 (0b1 << 21) |
                 (@as(u32, src2.enc()) << 16) |
-                (0b0010 << 12) |
+                (@as(u32, opcode) << 12) |
                 (0b10 << 10) |
                 (@as(u32, src1.enc()) << 5) |
                 dst.enc();
             try self.emit32(inst);
+        }
+
+        /// Emit a scalar floating-point data-processing instruction with one source:
+        /// 0 0 0 11110 ftype 1 0000 opcode 10000 Rn Rd
+        fn emitFloatUnary(self: *Self, ftype: FloatType, opcode: u2, dst: FloatReg, src: FloatReg) Allocator.Error!void {
+            const inst: u32 = (0b000 << 29) |
+                (0b11110 << 24) |
+                (@as(u32, @intFromEnum(ftype)) << 22) |
+                (0b1 << 21) |
+                (0b0000 << 17) |
+                (@as(u32, opcode) << 15) |
+                (0b10000 << 10) |
+                (@as(u32, src.enc()) << 5) |
+                dst.enc();
+            try self.emit32(inst);
+        }
+
+        /// FADD (floating-point add)
+        pub fn faddRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
+            // FADD <Sd>, <Sn>, <Sm> or FADD <Dd>, <Dn>, <Dm>
+            // 0 0 0 11110 ftype 1 Rm 0010 10 Rn Rd
+            try self.emitFloatBinary(ftype, 0b0010, dst, src1, src2);
         }
 
         /// FSUB (floating-point subtract)
         pub fn fsubRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FSUB <Sd>, <Sn>, <Sm> or FSUB <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0011 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0011 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0011, dst, src1, src2);
         }
 
         /// FMUL (floating-point multiply)
         pub fn fmulRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FMUL <Sd>, <Sn>, <Sm> or FMUL <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0000 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0000 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0000, dst, src1, src2);
         }
 
         /// FDIV (floating-point divide)
         pub fn fdivRegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src1: FloatReg, src2: FloatReg) Allocator.Error!void {
             // FDIV <Sd>, <Sn>, <Sm> or FDIV <Dd>, <Dn>, <Dm>
             // 0 0 0 11110 ftype 1 Rm 0001 10 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (@as(u32, src2.enc()) << 16) |
-                (0b0001 << 12) |
-                (0b10 << 10) |
-                (@as(u32, src1.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatBinary(ftype, 0b0001, dst, src1, src2);
         }
 
         /// FSQRT (floating-point square root)
         pub fn fsqrtRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FSQRT <Sd>, <Sn> or FSQRT <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 11 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b11 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b11, dst, src);
         }
 
         /// FNEG (floating-point negate)
         pub fn fnegRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FNEG <Sd>, <Sn> or FNEG <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 10 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b10 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b10, dst, src);
         }
 
         /// FABS (floating-point absolute value)
         pub fn fabsRegReg(self: *Self, ftype: FloatType, dst: FloatReg, src: FloatReg) Allocator.Error!void {
             // FABS <Sd>, <Sn> or FABS <Dd>, <Dn>
             // 0 0 0 11110 ftype 1 0000 01 10000 Rn Rd
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b0000 << 17) |
-                (0b01 << 15) |
-                (0b10000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
+            try self.emitFloatUnary(ftype, 0b01, dst, src);
         }
 
         /// FCMP (floating-point compare)
@@ -1844,22 +1687,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b1000 << 10) |
                 (@as(u32, lhs.enc()) << 5) |
                 (0b00000 << 0);
-            try self.emit32(inst);
-        }
-
-        /// FCMP with zero
-        pub fn fcmpRegZero(self: *Self, ftype: FloatType, reg: FloatReg) Allocator.Error!void {
-            // FCMP <Sn>, #0.0 or FCMP <Dn>, #0.0
-            // 0 0 0 11110 ftype 1 00000 00 1000 Rn 0 1 000
-            const inst: u32 = (0b000 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b00000 << 16) |
-                (0b00 << 14) |
-                (0b1000 << 10) |
-                (@as(u32, reg.enc()) << 5) |
-                (0b01000 << 0);
             try self.emit32(inst);
         }
 
@@ -1892,41 +1719,6 @@ pub fn Emit(comptime target: RocTarget) type {
                 (0b1 << 21) |
                 (0b00 << 19) |
                 (0b011 << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// FCVTZS (float to signed integer with truncation toward zero)
-        pub fn fcvtzsGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
-            // FCVTZS <Wd>, <Sn> or FCVTZS <Xd>, <Dn> etc.
-            const sf = dst_width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b11 << 19) |
-                (0b000 << 16) |
-                (0b000000 << 10) |
-                (@as(u32, src.enc()) << 5) |
-                dst.enc();
-            try self.emit32(inst);
-        }
-
-        /// FCVTZU (float to unsigned integer with truncation toward zero)
-        pub fn fcvtzuGenFromFloat(self: *Self, ftype: FloatType, dst: GeneralReg, src: FloatReg, dst_width: RegisterWidth) Allocator.Error!void {
-            // FCVTZU <Wd>, <Sn> or FCVTZU <Xd>, <Dn> etc.
-            // Same as FCVTZS but opcode = 001 instead of 000
-            const sf = dst_width.sf();
-            const inst: u32 = (@as(u32, sf) << 31) |
-                (0b00 << 29) |
-                (0b11110 << 24) |
-                (@as(u32, @intFromEnum(ftype)) << 22) |
-                (0b1 << 21) |
-                (0b11 << 19) |
-                (0b001 << 16) |
                 (0b000000 << 10) |
                 (@as(u32, src.enc()) << 5) |
                 dst.enc();
@@ -2237,38 +2029,6 @@ test "CC constants identical across all aarch64 targets" {
     try std.testing.expectEqual(@as(u8, 0), LinuxEmit.CC.SHADOW_SPACE);
     try std.testing.expectEqual(@as(u8, 0), WinEmit.CC.SHADOW_SPACE);
     try std.testing.expectEqual(@as(u8, 0), MacEmit.CC.SHADOW_SPACE);
-
-    // Return by pointer threshold is 16 bytes for all
-    try std.testing.expectEqual(@as(usize, 16), LinuxEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 16), WinEmit.CC.RETURN_BY_PTR_THRESHOLD);
-    try std.testing.expectEqual(@as(usize, 16), MacEmit.CC.RETURN_BY_PTR_THRESHOLD);
-}
-
-test "CC.canPassStructByValue identical across aarch64 targets" {
-    // AAPCS64: structs up to 16 bytes can be passed by value
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(1));
-    try std.testing.expect(LinuxEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!LinuxEmit.CC.canPassStructByValue(17));
-
-    try std.testing.expect(WinEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!WinEmit.CC.canPassStructByValue(17));
-
-    try std.testing.expect(MacEmit.CC.canPassStructByValue(16));
-    try std.testing.expect(!MacEmit.CC.canPassStructByValue(17));
-}
-
-test "CC.passI128ByPointer is false for all aarch64 targets" {
-    // AAPCS64: i128 passed in register pair, not by pointer
-    try std.testing.expect(!LinuxEmit.CC.passI128ByPointer());
-    try std.testing.expect(!WinEmit.CC.passI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.passI128ByPointer());
-}
-
-test "CC.returnI128ByPointer is false for all aarch64 targets" {
-    // AAPCS64: i128 returned in register pair
-    try std.testing.expect(!LinuxEmit.CC.returnI128ByPointer());
-    try std.testing.expect(!WinEmit.CC.returnI128ByPointer());
-    try std.testing.expect(!MacEmit.CC.returnI128ByPointer());
 }
 
 /// What the PC-relative address sequence actually computes at run time, given
