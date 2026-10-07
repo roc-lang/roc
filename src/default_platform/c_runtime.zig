@@ -22,6 +22,11 @@ const c = switch (builtin.os.tag) {
         extern fn free(ptr: ?*anyopaque) void;
         extern fn exit(code: i32) noreturn;
         extern fn _write(fd: i32, buf: [*]const u8, len: u32) i32;
+        extern fn _setmode(fd: i32, mode: i32) i32;
+
+        /// `_setmode` flag that writes bytes as given, with no `\n` to
+        /// `\r\n` translation.
+        const O_BINARY: i32 = 0x8000;
 
         fn write(fd: i32, buf: [*]const u8, len: usize) isize {
             const chunk_len: u32 = @intCast(@min(len, 0x7fff_ffff));
@@ -142,7 +147,15 @@ fn windowsArgs() ?RocList {
     return roc_args.fromWindowsArgv(@intCast(@max(argc, 0)), argv, &rocAlloc);
 }
 
-fn runtimeInit() callconv(.c) void {}
+/// The CRT opens stdout and stderr in text mode, which turns every `\n` a
+/// program writes into `\r\n`. A Roc program's output is exactly the bytes it
+/// writes, so both are switched to binary mode before any Roc code runs.
+fn runtimeInit() callconv(.c) void {
+    if (comptime builtin.os.tag == .windows) {
+        _ = c._setmode(1, c.O_BINARY);
+        _ = c._setmode(2, c.O_BINARY);
+    }
+}
 
 fn defaultExit(code: u8) callconv(.c) noreturn {
     if (code == 0 and inline_expect_failed) c.exit(1);
