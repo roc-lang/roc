@@ -9336,7 +9336,7 @@ test "issue 12106: removed return comments remain stable in expression contexts"
     for (cases) |source| {
         const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
         defer std.testing.allocator.free(formatted);
-        try std.testing.expect(std.mem.indexOf(u8, formatted, "# between") != null);
-        try std.testing.expect(std.mem.indexOf(u8, formatted, "return") == null);
+        try std.testing.expect(std.mem.find(u8, formatted, "# between") != null);
+        try std.testing.expect(std.mem.find(u8, formatted, "return") == null);
     }
 }
