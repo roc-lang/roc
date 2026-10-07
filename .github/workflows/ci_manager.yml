@@ -336,11 +336,18 @@ jobs:
       # Streaming tar into zstd also avoids writing an uncompressed tar the size
       # of `.zig-cache` next to it. zstd is preinstalled on all three runner
       # images.
+      #
+      # Windows runners' tar cannot recreate symlinks on extraction, and the
+      # build cache holds some (a versioned shared library such as the glibc
+      # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
+      # so there the artifact stores each link's target file instead.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          dereference=()
+          if [ "$RUNNER_OS" = "Windows" ]; then dereference=(--dereference); fi
+          tar "${dereference[@]}" -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
 
       # Packing is the disk high-water mark of this job. Report free space and
       # the packed size here, where the peak actually is.
