@@ -29,11 +29,10 @@ const shallower_depth = 500;
 /// state, so its ownership facts cost the square of its depth.
 const loop_depth = 300;
 
-/// Each level of a custom-parser chain is its own record type, so it compiles
-/// a complete derived record parser. Compilation is linear in the depth, but
-/// that per-level cost makes the full depth far slower than every other case;
-/// this depth still exceeds any per-level recursion the stack could hold.
-const codec_chain_depth = 1000;
+/// Each level of a custom-parser chain asks for the parser of a record holding
+/// the next level, and keying each level's checked types walks every level
+/// inside it, so the chain's compilation costs the square of its depth.
+const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
     return text ** count;
