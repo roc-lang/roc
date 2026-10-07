@@ -39,6 +39,7 @@ pub fn writeProc(
     if (proc.tail_transform != .none) {
         try writer.print(" transform={s}", .{@tagName(proc.tail_transform)});
     }
+    if (proc.tail_group) |group| try writer.print(" tail_group={d}", .{@intFromEnum(group)});
     try writer.writeAll("\n");
 
     if (proc.body) |body| {
@@ -98,8 +99,7 @@ const Printer = struct {
                 .assign_literal => |s| {
                     try self.writeTarget(s.target, indent, writer);
                     switch (s.value) {
-                        .i64_literal => |l| try writer.print("literal {d}", .{l.value}),
-                        .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
+                        inline .i64_literal, .i128_literal => |l| try writer.print("literal {d}", .{l.value}),
                         .f64_literal => |f| try writer.print("literal f64 {d}", .{f}),
                         .f32_literal => |f| try writer.print("literal f32 {d}", .{f}),
                         .dec_literal => |d| try writer.print("literal dec {d}", .{d}),
@@ -108,7 +108,6 @@ const Printer = struct {
                         .boxy_dynamic_frac_literal => |l| try writer.print("literal boxy_dynamic_frac {d}", .{l.dec_bits}),
                         .static_data => |id| try writer.print("literal static_data s{d}", .{@intFromEnum(id)}),
                         .bytes_literal => try writer.writeAll("literal bytes"),
-                        .null_ptr => try writer.writeAll("literal null_ptr"),
                         .proc_ref => |p| try writer.print("literal proc_ref p{d}", .{@intFromEnum(p)}),
                     }
                     if (s.fresh_alternative) |proc| try writer.print(" fresh=p{d}", .{@intFromEnum(proc)});
@@ -131,6 +130,16 @@ const Printer = struct {
                     }
                     if (s.out_desc) |out_desc| try writer.print(" out_desc=l{d}", .{@intFromEnum(out_desc)});
                     if (s.is_cold) try writer.writeAll(" cold");
+                    if (s.replaces_frame) try writer.writeAll(" replaces_frame");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
+                    }
                     try writer.writeByte('\n');
                     current = s.next;
                 },
@@ -147,6 +156,16 @@ const Printer = struct {
                     if (s.reuse_closure) try writer.writeAll(" reuse_closure");
                     if (s.reuse_source) |reuse_source| {
                         try writer.print(" reuse_source=l{d}", .{@intFromEnum(reuse_source)});
+                    }
+                    if (s.deferred) try writer.writeAll(" deferred");
+                    if (s.drive != .none) try writer.print(" drive={s}", .{@tagName(s.drive)});
+                    if (s.returns_pending) |pending| {
+                        try writer.writeAll(" returns_pending");
+                        if (pending.result_desc) |result_desc| {
+                            try writer.writeAll("=");
+                            try writeBoxyDescRef(result_desc, writer);
+                        }
+                        if (pending.keeps_own_desc) try writer.writeAll("=own");
                     }
                     try writer.writeByte('\n');
                     current = s.next;
@@ -279,6 +298,20 @@ const Printer = struct {
                     try writer.print("boxy_inspect source=l{d} desc=", .{@intFromEnum(s.source)});
                     try writeBoxyDescRef(s.source_desc, writer);
                     try writer.print(" mode={s}\n", .{@tagName(s.source_mode)});
+                    current = s.next;
+                },
+                .assign_boxy_eq => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_eq lhs=l{d} rhs=l{d} desc=", .{ @intFromEnum(s.lhs), @intFromEnum(s.rhs) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
+                    current = s.next;
+                },
+                .assign_boxy_hash => |s| {
+                    try self.writeTarget(s.target, indent, writer);
+                    try writer.print("boxy_hash value=l{d} hasher=l{d} desc=", .{ @intFromEnum(s.value), @intFromEnum(s.hasher) });
+                    try writeBoxyDescRef(s.desc, writer);
+                    try writer.writeAll("\n");
                     current = s.next;
                 },
                 .assign_boxy_tag => |s| {

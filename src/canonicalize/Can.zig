@@ -1162,7 +1162,7 @@ fn resolveExternalTypeBinding(
     } };
     // The compiler's baked Builtin module takes no part in deferred import
     // resolution, so its bindings are installed with their declarations.
-    if (external.is_compiler_builtin) std.debug.panic("compiler invariant violated: compiler builtin type binding has no declaration", .{});
+    if (external.is_compiler_builtin) base.invariant("compiler invariant violated: compiler builtin type binding has no declaration", .{});
     return .{ .deferred = externalTypeBindingRef(external, import_idx, item_name, kind, region) };
 }
 
@@ -1219,7 +1219,7 @@ fn deferredTypeAnnoLookup(
     name: Ident.Idx,
     region: Region,
 ) std.mem.Allocator.Error!TypeAnno.Idx {
-    const module_idx = ref.import_idx orelse std.debug.panic(
+    const module_idx = ref.import_idx orelse base.invariant(
         "compiler invariant violated: a deferred type reference names a module import",
         .{},
     );
@@ -1457,7 +1457,7 @@ fn registerMethodForDispatchOwner(
             // The associated-value duplicate check owns this source error.
             .declaration_owner => {
                 if (builtin.mode == .Debug) {
-                    std.debug.panic("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
+                    base.invariant("canonicalization invariant violated: duplicate declaration-owned method registration", .{});
                 }
                 unreachable;
             },
@@ -1696,7 +1696,7 @@ pub fn setupAutoImportedBuiltinTypes(
         const type_ident = try env.insertIdent(base.Ident.for_text(type_name_text));
         if (self.builtin_auto_imported_types.get(type_ident)) |type_entry| {
             const stmt_idx = type_entry.statement_idx orelse
-                std.debug.panic("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
+                base.invariant("compiler invariant violated: auto-imported builtin type {s} has no declaration", .{type_name_text});
             const target_node_idx = type_entry.env.getExposedNodeIndexByStatementIdx(stmt_idx);
 
             // Compiler-owned builtin seed data is installed before any source
@@ -2046,9 +2046,7 @@ fn parserTypeDeclStatement(
 
 fn parserTypeDeclStateStatement(state: ParserTypeDeclState) ?Statement.Idx {
     return switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => null,
     };
 }
@@ -3046,10 +3044,7 @@ fn handleTypeBindingDecision(
                 try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
             }
         },
-        .rejected_current_conflict => |existing| {
-            try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
-        },
-        .redeclared_current => |existing| {
+        inline .rejected_current_conflict, .redeclared_current => |existing| {
             try self.pushTypeRedeclarationForBinding(existing, name_ident, region);
         },
     }
@@ -3307,9 +3302,7 @@ fn ensureParserTypeDeclBinding(
     const region = self.parserDeclRegion(decl);
 
     const stmt_idx = if (self.parser_type_decl_states.get(ast_stmt_idx)) |state| switch (state) {
-        .prepared => |stmt_idx| stmt_idx,
-        .registered => |stmt_idx| stmt_idx,
-        .redeclared => |stmt_idx| stmt_idx,
+        inline .prepared, .registered, .redeclared => |stmt_idx| stmt_idx,
         .rejected => return null,
     } else blk: {
         const type_path = decl.type_path;
@@ -3979,7 +3972,7 @@ fn localAssociatedContext(
 ) BlockStatementContext {
     return block_context orelse {
         if (builtin.mode == .Debug) {
-            std.debug.panic("local associated value invariant violated: missing enclosing block context", .{});
+            base.invariant("local associated value invariant violated: missing enclosing block context", .{});
         }
         unreachable;
     };
@@ -5957,12 +5950,12 @@ const TypeAnnoIdent = struct {
 };
 
 fn collectBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, false);
 }
 
 /// Walk `pattern_idx` and append every `assign`/`as` binder it introduces to
 /// `target`, recursing through tuple/record/list/tag/nominal/str-interp shapes.
-fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx) Allocator.Error!void {
+fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern_idx: Pattern.Idx, comptime skip_existing: bool) Allocator.Error!void {
     var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
     const stack_allocator = stack_allocator_state.get();
     var pending: std.ArrayList(Pattern.Idx) = .empty;
@@ -5973,7 +5966,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
         const pattern = self.env.store.getPattern(current_idx);
         switch (pattern) {
             .assign, .var_assign => {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
             },
             .record_destructure => |destructure| {
                 const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
@@ -5982,9 +5975,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     i -= 1;
                     const destruct = self.env.store.getRecordDestruct(destructs[i]);
                     const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
+                        inline .Required, .SubPattern, .Rest => |idx| idx,
                     };
                     try pending.append(stack_allocator, sub_pattern_idx);
                 }
@@ -6006,7 +5997,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                 }
             },
             .as => |as_pat| {
-                try target.append(current_idx);
+                if (!skip_existing or !target.contains(current_idx)) try target.append(current_idx);
                 try pending.append(stack_allocator, as_pat.pattern);
             },
             .list => |list| {
@@ -6022,14 +6013,8 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
                     try pending.append(stack_allocator, elems[i]);
                 }
             },
-            .nominal => |nom| {
+            inline .nominal, .nominal_external, .deferred_import_ref => |nom| {
                 try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
             },
             .str_interpolation => |str| {
                 var i: u32 = str.steps.span.len;
@@ -6068,7 +6053,7 @@ fn collectBoundVarsInto(self: *Self, target: *base.Scratch(Pattern.Idx), pattern
 /// therefore not self-referential, so it is excluded from the set.
 fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_targets_start: u32) Allocator.Error!DataSpan {
     const start = self.scratch_defining_bound_vars.top();
-    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx);
+    try self.collectBoundVarsInto(&self.scratch_defining_bound_vars, pattern_idx, false);
 
     const reassign_targets = self.scratch_reassign_targets.sliceFromStart(reassign_targets_start);
     if (reassign_targets.len > 0) {
@@ -6111,100 +6096,7 @@ fn isDefiningBoundVar(self: *Self, pattern_idx: Pattern.Idx) bool {
 }
 
 fn collectReassignBoundVarsToScratch(self: *Self, pattern_idx: Pattern.Idx) Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.env.gpa);
-    const stack_allocator = stack_allocator_state.get();
-    var pending: std.ArrayList(Pattern.Idx) = .empty;
-    defer pending.deinit(stack_allocator);
-
-    try pending.append(stack_allocator, pattern_idx);
-    while (pending.pop()) |current_idx| {
-        const pattern = self.env.store.getPattern(current_idx);
-        switch (pattern) {
-            .assign, .var_assign => {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-            },
-            .record_destructure => |destructure| {
-                const destructs = self.env.store.sliceRecordDestructs(destructure.destructs);
-                var i = destructs.len;
-                while (i > 0) {
-                    i -= 1;
-                    const destruct = self.env.store.getRecordDestruct(destructs[i]);
-                    const sub_pattern_idx = switch (destruct.kind) {
-                        .Required => |idx| idx,
-                        .SubPattern => |idx| idx,
-                        .Rest => |idx| idx,
-                    };
-                    try pending.append(stack_allocator, sub_pattern_idx);
-                }
-            },
-            .tuple => |tuple| {
-                const elems = self.env.store.slicePatterns(tuple.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .applied_tag => |tag| {
-                const args = self.env.store.slicePatterns(tag.args);
-                var i = args.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, args[i]);
-                }
-            },
-            .as => |as_pat| {
-                if (!self.scratch_bound_vars.contains(current_idx)) {
-                    try self.scratch_bound_vars.append(current_idx);
-                }
-                try pending.append(stack_allocator, as_pat.pattern);
-            },
-            .list => |list| {
-                if (list.rest_info) |rest| {
-                    if (rest.pattern) |rest_pat_idx| {
-                        try pending.append(stack_allocator, rest_pat_idx);
-                    }
-                }
-                const elems = self.env.store.slicePatterns(list.patterns);
-                var i = elems.len;
-                while (i > 0) {
-                    i -= 1;
-                    try pending.append(stack_allocator, elems[i]);
-                }
-            },
-            .nominal => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .nominal_external => |nom| {
-                try pending.append(stack_allocator, nom.backing_pattern);
-            },
-            .deferred_import_ref => |deferred| {
-                try pending.append(stack_allocator, deferred.backing_pattern);
-            },
-            .str_interpolation => |str| {
-                var i: u32 = str.steps.span.len;
-                while (i > 0) {
-                    i -= 1;
-                    const step = self.env.store.getStrPatternStep(str.steps, i);
-                    if (step.capture) |capture| {
-                        try pending.append(stack_allocator, capture);
-                    }
-                }
-            },
-            .num_literal,
-            .num_from_numeral_literal,
-            .small_dec_literal,
-            .dec_literal,
-            .frac_f32_literal,
-            .frac_f64_literal,
-            .str_literal,
-            .underscore,
-            .runtime_error,
-            => {},
-        }
-    }
+    try self.collectBoundVarsInto(&self.scratch_bound_vars, pattern_idx, true);
 }
 
 fn boundPatternIdent(self: *Self, pattern_idx: Pattern.Idx) ?base.Ident.Idx {
@@ -6754,28 +6646,6 @@ fn processRequiresEntries(self: *Self, requires_entries: AST.RequiresEntry.Span)
     }
 }
 
-/// Map a type identifier to the builtin numeric kind it names, if any. Mirrors
-/// the type checker's resolution so the canonicalized suffix target it reads
-/// back is consistent. Compares against the module's cached numeric idents
-/// (both the bare `U8` form and the fully-qualified `Builtin.Num.U8` form).
-fn builtinNumKindFromTypeIdent(self: *const Self, type_ident: Ident.Idx) ?CIR.NumKind {
-    const ids = self.env.idents;
-    if (type_ident.eql(ids.u8) or type_ident.eql(ids.u8_type)) return .u8;
-    if (type_ident.eql(ids.i8) or type_ident.eql(ids.i8_type)) return .i8;
-    if (type_ident.eql(ids.u16) or type_ident.eql(ids.u16_type)) return .u16;
-    if (type_ident.eql(ids.i16) or type_ident.eql(ids.i16_type)) return .i16;
-    if (type_ident.eql(ids.u32) or type_ident.eql(ids.u32_type)) return .u32;
-    if (type_ident.eql(ids.i32) or type_ident.eql(ids.i32_type)) return .i32;
-    if (type_ident.eql(ids.u64) or type_ident.eql(ids.u64_type)) return .u64;
-    if (type_ident.eql(ids.i64) or type_ident.eql(ids.i64_type)) return .i64;
-    if (type_ident.eql(ids.u128) or type_ident.eql(ids.u128_type)) return .u128;
-    if (type_ident.eql(ids.i128) or type_ident.eql(ids.i128_type)) return .i128;
-    if (type_ident.eql(ids.f32) or type_ident.eql(ids.f32_type)) return .f32;
-    if (type_ident.eql(ids.f64) or type_ident.eql(ids.f64_type)) return .f64;
-    if (type_ident.eql(ids.dec) or type_ident.eql(ids.dec_type)) return .dec;
-    return null;
-}
-
 fn externalTypeBindingIsCompilerBuiltin(self: *const Self, external: Scope.ExternalTypeBinding) bool {
     const import_idx = external.import_idx orelse return false;
     return self.importIsCompilerBuiltin(import_idx);
@@ -6826,7 +6696,7 @@ fn resolveLiteralTypeSuffix(
                 .external => |external| blk: {
                     if (self.importIsCompilerBuiltin(external.import_idx)) {
                         const type_name = self.parse_ir.tokens.resolveIdentifier(path.final_token) orelse unreachable;
-                        if (self.builtinNumKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
+                        if (self.env.idents.numKindFromTypeIdent(type_name)) |num_kind| break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                     break :blk .{ .resolved = .{ .external = .{
                         .import_idx = external.import_idx,
@@ -6865,7 +6735,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
         .region = region,
     } } };
     const binding_location = (try self.scopeLookupOrPrepareTypeBinding(type_ident)) orelse {
-        const num_kind = self.builtinNumKindFromTypeIdent(type_ident) orelse return undeclared;
+        const num_kind = self.env.idents.numKindFromTypeIdent(type_ident) orelse return undeclared;
         return .{ .resolved = .{ .name = type_ident, .target = .{ .resolved = .{ .builtin = num_kind } } } };
     };
     const target: LiteralSuffixTarget = switch (binding_location.binding.*) {
@@ -6873,7 +6743,7 @@ fn resolveUnqualifiedLiteralTypeSuffix(
         .external_nominal => |external| blk: {
             if (external.import_idx) |import_idx| {
                 if (self.importIsCompilerBuiltin(import_idx)) {
-                    if (self.builtinNumKindFromTypeIdent(external.original_ident) orelse self.builtinNumKindFromTypeIdent(type_ident)) |num_kind| {
+                    if (self.env.idents.numKindFromTypeIdent(external.original_ident) orelse self.env.idents.numKindFromTypeIdent(type_ident)) |num_kind| {
                         break :blk .{ .resolved = .{ .builtin = num_kind } };
                     }
                 }
@@ -9024,10 +8894,10 @@ fn canonicalizeUnqualifiedIdentExpr(
 fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget {
     if (self.builtin_auto_imported_types.get(self.env.idents.@"try")) |try_info| {
         const try_stmt_idx = try_info.statement_idx orelse {
-            @panic("Builtin Try had no statement during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no statement during try suffix canonicalization"});
         };
         const target_node_idx = try_info.env.getExposedNodeIndexByStatementIdx(try_stmt_idx) orelse {
-            @panic("Builtin Try had no target node during try suffix canonicalization");
+            base.invariant("{s}", .{"Builtin Try had no target node during try suffix canonicalization"});
         };
         return TryNominalTarget{ .external = .{
             .import_idx = try self.getOrCreateCompilerBuiltinAutoImport(),
@@ -9036,25 +8906,25 @@ fn resolveTryNominalTarget(self: *Self) std.mem.Allocator.Error!TryNominalTarget
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.@"try")) orelse {
-        @panic("Try type binding was absent during try suffix canonicalization");
+        base.invariant("{s}", .{"Try type binding was absent during try suffix canonicalization"});
     };
 
     return switch (binding_location.binding.*) {
         .local_nominal, .associated_nominal => |stmt| TryNominalTarget{ .local = stmt },
-        .local_where_alias => @panic("Try type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Try type binding resolved to a where alias"}),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Try type binding had no import during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no import during try suffix canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Try type binding had no target node during try suffix canonicalization");
+                base.invariant("{s}", .{"Try type binding had no target node during try suffix canonicalization"});
             };
             break :blk TryNominalTarget{ .external = .{
                 .import_idx = import_idx,
                 .target_node_idx = target_node_idx,
             } };
         },
-        .local_alias => @panic("Try type binding was not a nominal type during try suffix canonicalization"),
+        .local_alias => base.invariant("{s}", .{"Try type binding was not a nominal type during try suffix canonicalization"}),
     };
 }
 
@@ -9757,13 +9627,9 @@ const DefiniteInitAnalyzer = struct {
                 if (sc.skipped) |box| self.destroyState(box);
                 if (sc.rhs_state) |box| self.destroyState(box);
             },
-            .if_ => |*if_| {
+            inline .if_, .match => |*if_| {
                 if (if_.branch_state) |box| self.destroyState(box);
                 self.deinitStates(&if_.normal);
-            },
-            .match => |*match| {
-                if (match.branch_state) |box| self.destroyState(box);
-                self.deinitStates(&match.normal);
             },
             .expr, .stmt, .forward, .seq, .record, .block => {},
         }
@@ -13707,7 +13573,7 @@ fn runExprKernel(
                 const if_expr_idx = try self.env.addExpr(Expr{ .e_if = .{
                     .branches = branches_span,
                     .final_else = final_else,
-                    .warn_unused_branches = false,
+                    .origin = if (op == .@"and") .short_circuit_and else .short_circuit_or,
                 } }, state.region);
 
                 const if_free_vars = self.scratch_free_vars.spanFrom(state.free_vars_start);
@@ -14325,7 +14191,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = can_else.idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 
@@ -14372,7 +14238,7 @@ fn runExprKernel(
                 .e_if = .{
                     .branches = branches_span,
                     .final_else = empty_record_idx,
-                    .warn_unused_branches = true,
+                    .origin = .source,
                 },
             }, state.region);
 
@@ -14769,10 +14635,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
 
     if (self.builtin_auto_imported_types.get(self.env.idents.bool)) |bool_info| {
         const bool_stmt_idx = bool_info.statement_idx orelse {
-            @panic("Builtin Bool had no statement during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no statement during boolean operator canonicalization"});
         };
         const target_node_idx = bool_info.env.getExposedNodeIndexByStatementIdx(bool_stmt_idx) orelse {
-            @panic("Builtin Bool had no target node during boolean operator canonicalization");
+            base.invariant("{s}", .{"Builtin Bool had no target node during boolean operator canonicalization"});
         };
         const builtin_ident = try self.env.insertIdent(base.Ident.for_text("Builtin"));
         const import_idx = try self.env.imports.getOrPutWithIdent(
@@ -14792,10 +14658,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
     }
 
     const binding_location = (try self.scopeLookupTypeBinding(self.env.idents.bool)) orelse {
-        @panic("Bool type binding was absent during boolean operator canonicalization");
+        base.invariant("{s}", .{"Bool type binding was absent during boolean operator canonicalization"});
     };
     return switch (binding_location.binding.*) {
-        .local_where_alias => @panic("Bool type binding resolved to a where alias"),
+        .local_where_alias => base.invariant("{s}", .{"Bool type binding resolved to a where alias"}),
         .local_nominal, .associated_nominal => |stmt| try self.env.addExpr(CIR.Expr{
             .e_nominal = .{
                 .nominal_type_decl = stmt,
@@ -14805,10 +14671,10 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
         }, region),
         .external_nominal => |external| blk: {
             const import_idx = external.import_idx orelse {
-                @panic("Bool type binding had no import during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no import during boolean operator canonicalization"});
             };
             const target_node_idx = external.target_node_idx orelse {
-                @panic("Bool type binding had no target node during boolean operator canonicalization");
+                base.invariant("{s}", .{"Bool type binding had no target node during boolean operator canonicalization"});
             };
             break :blk try self.env.addExpr(CIR.Expr{
                 .e_nominal_external = .{
@@ -14819,7 +14685,7 @@ fn addBoolTagExpr(self: *Self, tag_name: Ident.Idx, region: Region) std.mem.Allo
                 },
             }, region);
         },
-        .local_alias => @panic("Bool type binding was not a nominal type during boolean operator canonicalization"),
+        .local_alias => base.invariant("{s}", .{"Bool type binding was not a nominal type during boolean operator canonicalization"}),
     };
 }
 
@@ -16769,16 +16635,9 @@ const PatternKernelWork = struct {
 
     fn deinit(self: *PatternKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.tag_next.deinit(allocator);
-        self.tag_after_arg.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.list_next.deinit(allocator);
-        self.list_after_elem.deinit(allocator);
-        self.as_after_inner.deinit(allocator);
+        inline for (@typeInfo(PatternKernelLabel).@"enum".fields) |label| {
+            if (@hasField(PatternKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *PatternKernelWork, allocator: std.mem.Allocator, item: PatternKernelParseWork) std.mem.Allocator.Error!void {
@@ -17576,122 +17435,9 @@ const ExprKernelWork = struct {
     fn deinit(self: *ExprKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
         self.targets.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.associated_enter.deinit(allocator);
-        self.associated_next.deinit(allocator);
-        self.associated_exit.deinit(allocator);
-        self.finish_associated_decl_body.deinit(allocator);
-        self.finish_associated_expect.deinit(allocator);
-        self.block_next.deinit(allocator);
-        self.finish_block.deinit(allocator);
-        self.finish_block_expr_stmt.deinit(allocator);
-        self.finish_block_final_expr.deinit(allocator);
-        self.finish_block_dbg_stmt.deinit(allocator);
-        self.finish_block_crash_stmt.deinit(allocator);
-        self.finish_block_expect_stmt.deinit(allocator);
-        self.finish_block_return_stmt.deinit(allocator);
-        self.finish_block_var_stmt.deinit(allocator);
-        self.finish_block_reassign_stmt.deinit(allocator);
-        self.finish_block_decl_stmt.deinit(allocator);
-        self.block_while_after_cond.deinit(allocator);
-        self.finish_block_while_stmt.deinit(allocator);
-        self.block_for_after_list.deinit(allocator);
-        self.finish_block_for_stmt.deinit(allocator);
-        self.finish_string.deinit(allocator);
-        self.finish_list.deinit(allocator);
-        self.finish_tuple.deinit(allocator);
-        self.finish_dbg.deinit(allocator);
-        self.finish_crash.deinit(allocator);
-        self.finish_return.deinit(allocator);
-        self.finish_tuple_access.deinit(allocator);
-        self.finish_unary.deinit(allocator);
-        self.finish_suffix_single_question.deinit(allocator);
-        self.finish_bin_op.deinit(allocator);
-        self.finish_single_question_binop.deinit(allocator);
-        self.finish_method_call.deinit(allocator);
-        self.arrow_ident_callee.deinit(allocator);
-        self.finish_arrow_apply.deinit(allocator);
-        self.finish_arrow_tag_apply.deinit(allocator);
-        self.finish_arrow_call.deinit(allocator);
-        self.finish_arrow_tag_single.deinit(allocator);
-        self.finish_field_access.deinit(allocator);
-        self.finish_apply.deinit(allocator);
-        self.finish_tag.deinit(allocator);
-        self.finish_type_dispatch_apply.deinit(allocator);
-        self.finish_record.deinit(allocator);
-        self.finish_lambda.deinit(allocator);
-        self.finish_if_then_else.deinit(allocator);
-        self.finish_if_without_else.deinit(allocator);
-        self.finish_nominal_record.deinit(allocator);
-        self.finish_nominal_apply.deinit(allocator);
-        self.finish_record_builder.deinit(allocator);
-        self.for_after_list.deinit(allocator);
-        self.finish_for_expr.deinit(allocator);
-        self.match_after_cond.deinit(allocator);
-        self.match_next.deinit(allocator);
-        self.match_after_guard.deinit(allocator);
-        self.match_after_body.deinit(allocator);
-    }
-
-    fn clearRetainingCapacity(self: *ExprKernelWork) void {
-        self.labels.clearRetainingCapacity();
-        self.targets.clearRetainingCapacity();
-        self.current_target = .return_value;
-        self.parse.clearRetainingCapacity();
-        self.associated_enter.clearRetainingCapacity();
-        self.associated_next.clearRetainingCapacity();
-        self.associated_exit.clearRetainingCapacity();
-        self.finish_associated_decl_body.clearRetainingCapacity();
-        self.finish_associated_expect.clearRetainingCapacity();
-        self.block_next.clearRetainingCapacity();
-        self.finish_block.clearRetainingCapacity();
-        self.finish_block_expr_stmt.clearRetainingCapacity();
-        self.finish_block_final_expr.clearRetainingCapacity();
-        self.finish_block_dbg_stmt.clearRetainingCapacity();
-        self.finish_block_crash_stmt.clearRetainingCapacity();
-        self.finish_block_expect_stmt.clearRetainingCapacity();
-        self.finish_block_return_stmt.clearRetainingCapacity();
-        self.finish_block_var_stmt.clearRetainingCapacity();
-        self.finish_block_reassign_stmt.clearRetainingCapacity();
-        self.finish_block_decl_stmt.clearRetainingCapacity();
-        self.block_while_after_cond.clearRetainingCapacity();
-        self.finish_block_while_stmt.clearRetainingCapacity();
-        self.block_for_after_list.clearRetainingCapacity();
-        self.finish_block_for_stmt.clearRetainingCapacity();
-        self.finish_string.clearRetainingCapacity();
-        self.finish_list.clearRetainingCapacity();
-        self.finish_tuple.clearRetainingCapacity();
-        self.finish_dbg.clearRetainingCapacity();
-        self.finish_crash.clearRetainingCapacity();
-        self.finish_return.clearRetainingCapacity();
-        self.finish_tuple_access.clearRetainingCapacity();
-        self.finish_unary.clearRetainingCapacity();
-        self.finish_suffix_single_question.clearRetainingCapacity();
-        self.finish_bin_op.clearRetainingCapacity();
-        self.finish_single_question_binop.clearRetainingCapacity();
-        self.finish_method_call.clearRetainingCapacity();
-        self.arrow_ident_callee.clearRetainingCapacity();
-        self.finish_arrow_apply.clearRetainingCapacity();
-        self.finish_arrow_tag_apply.clearRetainingCapacity();
-        self.finish_arrow_call.clearRetainingCapacity();
-        self.finish_arrow_tag_single.clearRetainingCapacity();
-        self.finish_field_access.clearRetainingCapacity();
-        self.finish_apply.clearRetainingCapacity();
-        self.finish_tag.clearRetainingCapacity();
-        self.finish_type_dispatch_apply.clearRetainingCapacity();
-        self.finish_record.clearRetainingCapacity();
-        self.finish_lambda.clearRetainingCapacity();
-        self.finish_if_then_else.clearRetainingCapacity();
-        self.finish_if_without_else.clearRetainingCapacity();
-        self.finish_nominal_record.clearRetainingCapacity();
-        self.finish_nominal_apply.clearRetainingCapacity();
-        self.finish_record_builder.clearRetainingCapacity();
-        self.for_after_list.clearRetainingCapacity();
-        self.finish_for_expr.clearRetainingCapacity();
-        self.match_after_cond.clearRetainingCapacity();
-        self.match_next.clearRetainingCapacity();
-        self.match_after_guard.clearRetainingCapacity();
-        self.match_after_body.clearRetainingCapacity();
+        inline for (@typeInfo(ExprKernelLabel).@"enum".fields) |label| {
+            if (@hasField(ExprKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushLabel(self: *ExprKernelWork, allocator: std.mem.Allocator, label: ExprKernelLabel, target: ExprResultTarget) std.mem.Allocator.Error!void {
@@ -19451,24 +19197,9 @@ const TypeAnnoKernelWork = struct {
 
     fn deinit(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator) void {
         self.labels.deinit(allocator);
-        self.parse.deinit(allocator);
-        self.parens_after_inner.deinit(allocator);
-        self.apply_args_next.deinit(allocator);
-        self.apply_args_after.deinit(allocator);
-        self.tuple_next.deinit(allocator);
-        self.tuple_after_elem.deinit(allocator);
-        self.record_next.deinit(allocator);
-        self.record_after_field.deinit(allocator);
-        self.record_after_named_ext.deinit(allocator);
-        self.tag_union_tags_next.deinit(allocator);
-        self.tag_union_tag_after.deinit(allocator);
-        self.tag_union_after_named_ext.deinit(allocator);
-        self.tag_parse.deinit(allocator);
-        self.tag_args_next.deinit(allocator);
-        self.tag_args_after.deinit(allocator);
-        self.func_args_next.deinit(allocator);
-        self.func_args_after.deinit(allocator);
-        self.func_after_ret.deinit(allocator);
+        inline for (@typeInfo(TypeAnnoKernelLabel).@"enum".fields) |label| {
+            if (@hasField(TypeAnnoKernelWork, label.name)) @field(self, label.name).deinit(allocator);
+        }
     }
 
     inline fn pushParse(self: *TypeAnnoKernelWork, allocator: std.mem.Allocator, item: TypeAnnoKernelParseWork) std.mem.Allocator.Error!void {
@@ -21662,7 +21393,7 @@ pub fn introduceType(
         .s_type_anno,
         .s_type_var_alias,
         .s_runtime_error,
-        => std.debug.panic("introduceType requires a type declaration statement", .{}),
+        => base.invariant("introduceType requires a type declaration statement", .{}),
     };
 
     const decision = try Scope.introduceTypeBinding(
@@ -22624,7 +22355,7 @@ fn getExternalTypeBase(self: *Self, type_ident: Ident.Idx) std.mem.Allocator.Err
     }
     // This should not happen for builtin types like Str/Try—if it does,
     // it indicates a missing type binding in the scope or module_envs.
-    @panic("getExternalTypeBase: type not found in scope or auto-imports");
+    base.invariant("{s}", .{"getExternalTypeBase: type not found in scope or auto-imports"});
 }
 
 const MainFunctionStatus = enum { valid, invalid, not_found };
@@ -22717,7 +22448,7 @@ fn exposeTopLevelTypesForExplicitRoots(self: *Self) std.mem.Allocator.Error!void
         const stmt_id: AST.Statement.Idx = @enumFromInt(decl.statement);
         const stmt_idx = self.parserTypeDeclStatement(stmt_id) orelse {
             if (builtin.mode == .Debug) {
-                std.debug.panic("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
+                base.invariant("explicit-root invariant violated: missing canonical statement for AST type decl {d}", .{@intFromEnum(stmt_id)});
             }
             unreachable;
         };

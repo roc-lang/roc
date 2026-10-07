@@ -84,15 +84,19 @@ NO CHANGE
 				(p-assign (ident "#interp_0"))
 				(e-lookup-local
 					(p-assign (ident "x"))))
-			(e-runtime-error (tag "erroneous_value_expr")))))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-literal (string "value: "))
+				(e-lookup-local
+					(p-assign (ident "#interp_0")))
+				(e-literal (string ""))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "U8"))
-		(patt (type "Error")))
+		(patt (type "Str")))
 	(expressions
 		(expr (type "U8"))
-		(expr (type "Error"))))
+		(expr (type "Str"))))
 ~~~

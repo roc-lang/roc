@@ -127,7 +127,7 @@ compute = {
 		(p-assign (ident "compute"))
 		(e-block
 			(s-runtime-error (tag "erroneous_value_expr"))
-			(e-runtime-error (tag "erroneous_value_use")))
+			(e-runtime-error (tag "erroneous_value_expr")))
 		(annotation
 			(ty-lookup (name "U64") (builtin)))))
 ~~~

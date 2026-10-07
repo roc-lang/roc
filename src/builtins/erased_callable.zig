@@ -206,21 +206,9 @@ pub fn payloadPtr(data_ptr: [*]u8) *Payload {
     return @ptrCast(@alignCast(data_ptr));
 }
 
-/// Return the payload header for a nullable data pointer, or null.
-pub fn maybePayloadPtr(data_ptr: ?[*]u8) ?*Payload {
-    const ptr = data_ptr orelse return null;
-    return payloadPtr(ptr);
-}
-
 /// Return the fixed inline capture pointer for a boxed-erased-callable payload.
 pub fn capturePtr(data_ptr: [*]u8) [*]u8 {
     return data_ptr + capture_offset;
-}
-
-/// Return the fixed inline capture pointer for a nullable payload, or null.
-pub fn maybeCapturePtr(data_ptr: ?[*]u8) ?[*]u8 {
-    const ptr = data_ptr orelse return null;
-    return capturePtr(ptr);
 }
 
 /// Interpret a shim-execution erased-callable capture pointer as the hot-reload

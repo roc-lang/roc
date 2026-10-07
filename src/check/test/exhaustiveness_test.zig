@@ -489,22 +489,6 @@ test "unmatchable - Err pattern first on empty error type is unreachable" {
     try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
-test "exhaustive - ignored error type means only Ok needed" {
-    const source =
-        \\x : Try(I64, _err)
-        \\x = Ok(42)
-        \\
-        \\result : I64
-        \\result = match x {
-        \\    Ok(n) => n
-        \\}
-    ;
-    var test_env = try TestEnv.init("Test", source);
-    defer test_env.deinit();
-
-    try test_env.assertLastDefType("I64");
-}
-
 test "exhaustive - inferred wildcard error type means only Ok needed" {
     const source =
         \\x : Try(I64, _)
@@ -534,9 +518,9 @@ test "exhaustive - direct Try.Ok match only needs Ok" {
     try test_env.assertLastDefType("Str");
 }
 
-test "unmatchable - Err pattern first on ignored error type is unreachable" {
+test "unmatchable - Err pattern first on inferred wildcard error type is unreachable" {
     const source =
-        \\x : Try(I64, _err)
+        \\x : Try(I64, _)
         \\x = Ok(42)
         \\
         \\result = match x {
@@ -550,9 +534,9 @@ test "unmatchable - Err pattern first on ignored error type is unreachable" {
     try test_env.assertFirstTypeError("Unmatchable Pattern");
 }
 
-test "exhaustive - structural tag with ignored payload is not required" {
+test "exhaustive - structural tag with inferred wildcard payload is not required" {
     const source =
-        \\x : [Something, Other(_payload)]
+        \\x : [Something, Other(_)]
         \\x = Something
         \\
         \\result : I64
@@ -568,7 +552,7 @@ test "exhaustive - structural tag with ignored payload is not required" {
 
 test "non-exhaustive - structural tag with ordinary payload is required" {
     const source =
-        \\x : [Something, Other(payload)]
+        \\x : [Something, Other(U8)]
         \\x = Something
         \\
         \\result = match x {
@@ -581,11 +565,11 @@ test "non-exhaustive - structural tag with ordinary payload is required" {
     try test_env.assertOneTypeError("Non Exhaustive Match");
 }
 
-test "destructure - Ok on ignored error type is exhaustive" {
+test "destructure - Ok on inferred wildcard error type is exhaustive" {
     const source =
         \\result : Str
         \\result = {
-        \\    x : Try(Str, _err)
+        \\    x : Try(Str, _)
         \\    x = Ok("blah")
         \\
         \\    Ok(foo) = x

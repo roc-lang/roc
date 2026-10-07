@@ -879,7 +879,7 @@ fn expectIntLiteralPresent(result: *const lir.Program.Result, value: i128) Hoist
         switch (stmt.assign_literal.value) {
             .i128_literal => |literal| if (literal.value == value) return,
             .i64_literal => |literal| if (literal.value == value) return,
-            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .null_ptr, .proc_ref => {},
+            .f64_literal, .f32_literal, .dec_literal, .str_literal, .boxy_dynamic_num_literal, .boxy_dynamic_frac_literal, .static_data, .bytes_literal, .proc_ref => {},
         }
     }
     return error.StaticDataLiteralNotFound;
@@ -2365,7 +2365,7 @@ fn expectPatternExtractionSyntheticRegions(
         const extraction = switch (body) {
             .expr => continue,
             .pattern_extraction => |payload| payload,
-            .pattern_validation, .pattern_error => continue,
+            .pattern_validation, .pattern_error, .valueless_binding => continue,
         };
         extraction_count += 1;
 
@@ -2658,7 +2658,6 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
                 .boxy_dynamic_frac_literal,
                 .str_literal,
                 .bytes_literal,
-                .null_ptr,
                 .proc_ref,
                 => {},
             },
@@ -2675,6 +2674,8 @@ fn expectStaticDataLiteralPresent(result: *const lir.Program.Result) HoistedCons
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,

@@ -659,14 +659,6 @@ pub const Program = struct {
         self.names.deinit();
     }
 
-    pub fn constFnEvidence(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidence)) []const check.ConstStore.ConstFnEvidence {
-        return self.const_fn_evidence.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
-    pub fn constFnEvidenceFrames(self: *const Program, span: Mono.Span(check.ConstStore.ConstFnEvidenceFrame)) []const check.ConstStore.ConstFnEvidenceFrame {
-        return self.const_fn_evidence_frames.unsafeRawItemsForView()[span.start..][0..span.len];
-    }
-
     pub fn addComptimeValueRoot(self: *Program, root: Common.ComptimeValueRoot) std.mem.Allocator.Error!Common.ComptimeValueRootId {
         const id: Common.ComptimeValueRootId = @enumFromInt(@as(u32, @intCast(self.comptime_value_roots.len())));
         try self.comptime_value_roots.append(self.allocator, root);
@@ -687,36 +679,12 @@ pub const Program = struct {
         try self.proc_debug_names.put(symbol, name);
     }
 
-    pub fn procDebugName(self: *const Program, symbol: Common.Symbol) ?names.ExportNameId {
-        return self.proc_debug_names.get(symbol);
-    }
-
     pub fn addExpr(self: *Program, expr: Expr) std.mem.Allocator.Error!ExprId {
         const id: ExprId = @enumFromInt(@as(u32, @intCast(self.exprs.len())));
         try self.exprs.append(self.allocator, expr);
         try self.expr_locs.append(self.allocator, self.current_loc);
         try self.expr_regions.append(self.allocator, self.current_region);
         return id;
-    }
-
-    /// Source location of an expression.
-    pub fn exprLoc(self: *const Program, id: ExprId) base.SourceLoc {
-        return self.expr_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of an expression.
-    pub fn exprRegion(self: *const Program, id: ExprId) base.Region {
-        return self.expr_regions.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Source location of a statement.
-    pub fn stmtLoc(self: *const Program, id: StmtId) base.SourceLoc {
-        return self.stmt_locs.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
-    /// Checked source region of a statement.
-    pub fn stmtRegion(self: *const Program, id: StmtId) base.Region {
-        return self.stmt_regions.unsafeRawItemsForView()[@intFromEnum(id)];
     }
 
     pub fn addPat(self: *Program, pat: Pat) std.mem.Allocator.Error!PatId {
@@ -754,10 +722,6 @@ pub const Program = struct {
         return id;
     }
 
-    pub fn comptimeSite(self: *const Program, id: ComptimeSiteId) ComptimeSite {
-        return self.comptime_sites.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
     pub fn addLocal(self: *Program, symbol: Common.Symbol, ty: Type.TypeId) std.mem.Allocator.Error!LocalId {
         return try self.addLocalWithBinder(symbol, ty, null);
     }
@@ -782,11 +746,6 @@ pub const Program = struct {
         slot.* = try self.allocator.dupe(u8, name);
     }
 
-    /// Source-level name of a local; empty for compiler-generated temporaries.
-    pub fn localName(self: *const Program, id: LocalId) []const u8 {
-        return self.local_names.unsafeRawItemsForView()[@intFromEnum(id)];
-    }
-
     pub fn addExprSpan(self: *Program, ids: []const ExprId) std.mem.Allocator.Error!Span(ExprId) {
         return try Common.appendSpan(ExprId, &self.expr_ids, self.allocator, ids);
     }
@@ -805,10 +764,6 @@ pub const Program = struct {
 
     pub fn addFieldExprSpan(self: *Program, values: []const FieldExpr) std.mem.Allocator.Error!Span(FieldExpr) {
         return try Common.appendSpan(FieldExpr, &self.field_exprs, self.allocator, values);
-    }
-
-    pub fn addFieldAccessSegmentSpan(self: *Program, values: []const FieldAccessSegment) std.mem.Allocator.Error!Span(FieldAccessSegment) {
-        return try Common.appendNonemptySpan(FieldAccessSegment, &self.field_access_segments, self.allocator, values, "field access segment span must be nonempty");
     }
 
     pub fn addRecordDestructSpan(self: *Program, values: []const RecordDestruct) std.mem.Allocator.Error!Span(RecordDestruct) {
@@ -851,11 +806,6 @@ pub const Program = struct {
         return self.field_access_segments.borrowSpan(span_.start, span_.len);
     }
 
-    pub fn fieldAccessSegmentAt(self: *const Program, span_: Span(FieldAccessSegment), index: usize) FieldAccessSegment {
-        if (index >= span_.len) Common.invariant("field access segment index was outside span");
-        return self.field_access_segments.get(span_.start + index);
-    }
-
     pub fn recordDestructSpan(self: *const Program, span_: Span(RecordDestruct)) ProgramSpanBorrow(RecordDestruct, "record_destructs") {
         return self.record_destructs.borrowSpan(span_.start, span_.len);
     }
@@ -876,28 +826,8 @@ pub const Program = struct {
         return self.fns.len();
     }
 
-    pub fn localCount(self: *const Program) usize {
-        return self.locals.len();
-    }
-
-    pub fn comptimeSiteCount(self: *const Program) usize {
-        return self.comptime_sites.len();
-    }
-
     pub fn rootCount(self: *const Program) usize {
         return self.roots.len();
-    }
-
-    pub fn layoutRequestCount(self: *const Program) usize {
-        return self.layout_requests.len();
-    }
-
-    pub fn runtimeSchemaRequestCount(self: *const Program) usize {
-        return self.runtime_schema_requests.len();
-    }
-
-    pub fn sourceFiles(self: *const Program) []const base.SourceFileEntry {
-        return self.source_files.unsafeRawItemsForView();
     }
 
     pub fn fnsView(self: *const Program) []const Fn {
@@ -906,10 +836,6 @@ pub const Program = struct {
 
     pub fn rootsView(self: *const Program) []const Root {
         return self.roots.unsafeRawItemsForView();
-    }
-
-    pub fn literalRootsView(self: *const Program) []const LiteralRoot {
-        return self.literal_roots.unsafeRawItemsForView();
     }
 
     pub fn layoutRequestsView(self: *const Program) []const LayoutRequest {

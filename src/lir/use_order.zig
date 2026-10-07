@@ -519,6 +519,8 @@ pub const UseOrder = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -922,6 +924,8 @@ pub const UseOrder = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -952,11 +956,7 @@ pub const UseOrder = struct {
                 note(ctx, @intFromEnum(node.initialized_branch));
                 note(ctx, @intFromEnum(node.uninitialized_branch));
             },
-            .str_match => |node| {
-                note(ctx, @intFromEnum(node.on_match));
-                note(ctx, @intFromEnum(node.on_miss));
-            },
-            .boxy_tag_match => |node| {
+            inline .str_match, .boxy_tag_match => |node| {
                 note(ctx, @intFromEnum(node.on_match));
                 note(ctx, @intFromEnum(node.on_miss));
             },
@@ -1040,6 +1040,8 @@ pub fn appendStructuralSuccessors(
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,

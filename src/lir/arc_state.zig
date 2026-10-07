@@ -55,6 +55,10 @@ pub var iterator_node_visits: WorkCounter = .{};
 /// Debug-only count of non-shared, nonempty nodes examined by structural difference.
 pub var difference_node_visits: WorkCounter = .{};
 
+/// Debug-only count of non-shared node pairs examined by structural meet,
+/// join, and equality.
+pub var structural_node_visits: WorkCounter = .{};
+
 /// A bounded-depth radix tree whose absent entries have one caller-declared
 /// value. Copying a snapshot shares its root; changing one entry allocates
 /// only the nodes on that entry's path. Depth grows only as needed and is
@@ -446,6 +450,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         ) Allocator.Error!?*const anyopaque {
             if (lhs == rhs) return lhs;
             if (lhs == null or rhs == null) return null;
+            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
 
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
@@ -492,6 +497,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         ) Allocator.Error!?*const anyopaque {
             if (lhs == rhs or rhs == null) return lhs;
             if (lhs == null) return rhs;
+            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
 
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
@@ -525,6 +531,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         fn eqlNode(lhs: ?*const anyopaque, rhs: ?*const anyopaque, depth: usize) bool {
             if (lhs == rhs) return true;
             if (lhs == null or rhs == null) return false;
+            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const rhs_leaf: *const Leaf = @ptrCast(@alignCast(rhs.?));

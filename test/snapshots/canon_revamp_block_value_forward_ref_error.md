@@ -81,8 +81,7 @@ x = {
 	(d-let
 		(p-assign (ident "x"))
 		(e-block
-			(s-expr
-				(e-runtime-error (tag "erroneous_value_expr")))
+			(s-runtime-error (tag "erroneous_value_expr"))
 			(s-let
 				(p-assign (ident "y"))
 				(e-num (value "5")))

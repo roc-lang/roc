@@ -7,7 +7,7 @@ type=snippet
 ~~~roc
 convert_me : a -> b
 	where [a.convert : a -> b]
-convert_me = ...
+convert_me = |_| ...
 ~~~
 # EXPECTED
 NIL
@@ -17,7 +17,7 @@ NIL
 ~~~zig
 LowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,
 KwWhere,OpenSquare,LowerIdent,NoSpaceDotLowerIdent,OpColon,LowerIdent,OpArrow,LowerIdent,CloseSquare,
-LowerIdent,OpAssign,TripleDot,
+LowerIdent,OpAssign,OpBar,Underscore,OpBar,TripleDot,
 EndOfFile,
 ~~~
 # PARSE
@@ -36,7 +36,10 @@ EndOfFile,
 						(ty-var (raw "b"))))))
 		(s-decl
 			(p-ident (raw "convert_me"))
-			(e-ellipsis))))
+			(e-lambda
+				(args
+					(p-underscore))
+				(e-ellipsis)))))
 ~~~
 # FORMATTED
 ~~~roc
@@ -47,7 +50,10 @@ NO CHANGE
 (can-ir
 	(d-let
 		(p-assign (ident "convert_me"))
-		(e-not-implemented)
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-not-implemented))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

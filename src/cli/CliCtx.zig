@@ -337,15 +337,7 @@ pub const CliCtx = struct {
     pub fn addProblem(self: *Self, problem: CliProblem) Allocator.Error!void {
         try self.problems.append(self.gpa, problem);
 
-        // Update exit code based on severity
-        const sev = problem.severity();
-        switch (sev) {
-            .fatal => self.exit_code = 1,
-            .runtime_error => if (self.exit_code == 0) {
-                self.exit_code = 1;
-            },
-            .warning => {},
-        }
+        if (problem.severity().isError()) self.exit_code = 1;
     }
 
     /// Add a problem, ignoring allocation failures (for use in error paths)
@@ -373,13 +365,7 @@ pub const CliCtx = struct {
 
     /// Check if any errors (not just warnings) have been recorded
     pub fn hasErrors(self: *const Self) bool {
-        for (self.problems.items) |problem| {
-            const sev = problem.severity();
-            if (sev == .fatal or sev == .runtime_error) {
-                return true;
-            }
-        }
-        return false;
+        return self.errorCount() > 0;
     }
 
     /// Get the number of problems
@@ -391,23 +377,14 @@ pub const CliCtx = struct {
     pub fn errorCount(self: *const Self) usize {
         var count: usize = 0;
         for (self.problems.items) |problem| {
-            const sev = problem.severity();
-            if (sev == .fatal or sev == .runtime_error) {
-                count += 1;
-            }
+            count += @intFromBool(problem.severity().isError());
         }
         return count;
     }
 
     /// Get the number of warnings
     pub fn warningCount(self: *const Self) usize {
-        var count: usize = 0;
-        for (self.problems.items) |problem| {
-            if (problem.severity() == .warning) {
-                count += 1;
-            }
-        }
-        return count;
+        return self.problemCount() - self.errorCount();
     }
 
     /// Render all problems to a writer
@@ -419,12 +396,6 @@ pub const CliCtx = struct {
             defer report.deinit();
             try reporting.renderReportToTerminal(&report, writer, reporting.ColorUtils.getPaletteForConfig(config), config);
         }
-    }
-
-    /// Render all problems and return whether there were any errors
-    pub fn renderAndCheck(self: *Self, writer: anytype) (Allocator.Error || error{WriteFailed})!bool {
-        try self.renderProblemsTo(writer);
-        return self.hasErrors();
     }
 
     /// Clear all problems
@@ -440,25 +411,6 @@ pub const CliCtx = struct {
 };
 
 // Helper Functions
-
-/// Create a context, add a single problem, render it, and return the exit code.
-/// Convenience function for simple error cases.
-pub fn reportSingleProblem(
-    allocator: Allocator,
-    io: *Io,
-    command: Command,
-    problem: CliProblem,
-) u8 {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var ctx = CliCtx.init(allocator, arena.allocator(), io, command);
-    defer ctx.deinit();
-
-    ctx.addProblemIgnoreError(problem);
-    ctx.renderProblemsTo(io.stderr()) catch {};
-
-    return ctx.exitCode();
-}
 
 /// Render a single problem without adding it to the context's accumulated
 /// problem list.

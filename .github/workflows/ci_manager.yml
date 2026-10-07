@@ -336,11 +336,20 @@ jobs:
       # Streaming tar into zstd also avoids writing an uncompressed tar the size
       # of `.zig-cache` next to it. zstd is preinstalled on all three runner
       # images.
+      #
+      # Windows runners' tar cannot recreate symlinks on extraction, and the
+      # build cache holds some (a versioned shared library such as the glibc
+      # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
+      # so there the artifact stores each link's target file instead.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tar --dereference -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          else
+            tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          fi
 
       # Packing is the disk high-water mark of this job. Report free space and
       # the packed size here, where the peak actually is.
@@ -590,6 +599,32 @@ jobs:
             Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
+      - name: Collect macOS compiler crash reports
+        if: failure() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+
+          output = Path("zig-out/minici/crash-reports")
+          output.mkdir(parents=True, exist_ok=True)
+          programs = ("roc", "eval-test-runner", "lambda-mono-differential-runner")
+          roots = (Path.home() / "Library/Logs/DiagnosticReports",
+                   Path("/Library/Logs/DiagnosticReports"))
+          for index, root in enumerate(roots):
+              if not root.is_dir():
+                  continue
+              for report in root.rglob("*"):
+                  if report.is_file() and any(report.name.startswith(name + "-") or
+                                              report.name.startswith(name + "_")
+                                              for name in programs):
+                      shutil.copy2(report, output / (str(index) + "-" + report.name))
+                      print("Collected " + str(report))
+          PYTHON
+
       - name: Upload MiniCI report and logs
         if: failure()
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
@@ -625,7 +660,8 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    timeout-minutes: 120
+    # Two evaluator workers use less memory and need a longer job budget.
+    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
     env: *minici_shard_env
     strategy:
       fail-fast: false

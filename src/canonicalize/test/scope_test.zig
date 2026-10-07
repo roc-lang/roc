@@ -13,7 +13,6 @@ const Ident = base.Ident;
 const Region = base.Region;
 const Pattern = CIR.Pattern;
 const Statement = CIR.Statement;
-const TypeAnno = CIR.TypeAnno;
 const CoreCtx = @import("ctx").CoreCtx;
 
 /// Context helper for Scope tests
@@ -183,35 +182,6 @@ test "top level var error" {
     const result = ctx.self.scopeIntroduceInternal(gpa, .ident, var_ident, pattern, true);
 
     try std.testing.expectEqual(Scope.IntroduceResult{ .top_level_var_error = {} }, result);
-}
-
-test "type variables are tracked separately from value identifiers" {
-    const gpa = std.testing.allocator;
-
-    var ctx = try ScopeTestContext.init(gpa);
-    defer ctx.deinit();
-
-    // Create identifiers for 'a' - one for value, one for type
-    const a_ident = try ctx.module_env.insertIdent(Ident.for_text("a"));
-    const pattern = try addBindingPattern(&ctx, a_ident, false);
-    const type_anno: TypeAnno.Idx = @enumFromInt(1);
-
-    // Introduce 'a' as a value identifier
-    const value_result = ctx.self.scopeIntroduceInternal(gpa, .ident, a_ident, pattern, true);
-    try std.testing.expectEqual(Scope.IntroduceResult{ .success = {} }, value_result);
-
-    // Introduce 'a' as a type variable - should succeed because they're in separate namespaces
-    const current_scope = &ctx.self.scopes.items[ctx.self.scopes.items.len - 1];
-    const type_result = current_scope.introduceTypeVar(gpa, a_ident, type_anno, null);
-    try std.testing.expectEqual(Scope.TypeVarIntroduceResult{ .success = {} }, type_result);
-
-    // Lookup 'a' as value should find the pattern
-    const value_lookup = ctx.self.scopeLookup(.ident, a_ident);
-    try std.testing.expectEqual(Scope.LookupResult{ .found = pattern }, value_lookup);
-
-    // Lookup 'a' as type variable should find the type annotation
-    const type_lookup = current_scope.lookupTypeVar(a_ident);
-    try std.testing.expectEqual(Scope.TypeVarLookupResult{ .found = type_anno }, type_lookup);
 }
 
 test "var reassignment within same function" {

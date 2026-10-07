@@ -232,6 +232,7 @@ call into a self-tail call.
 Compilers can optimize tail calls in various ways. Here are some that Roc's compiler performs:
 
 - If a self-recursive function only ever calls itself using tail calls, the entire function will be optimized into a `while` loop behind the scenes, and all the recursive calls will be eliminated. This optimization makes the function run faster, and makes it impossible for the function to stack overflow (although it can now loop forever), and otherwise will not affect observable program behavior.
+- If a tail call is to a different function that can call back into the current one (see [Mutually Recursive Functions](#mutually-recursive-functions)), the function being called takes over the current function's stack space instead of using more. This is guaranteed rather than best-effort, and it includes calling a function value in tail position, so a cycle of functions which only ever call each other using tail calls can't overflow the stack either. One visible consequence is that a function which has made a tail call like this is no longer on the stack, so it won't show up in a stack trace taken later in the cycle.
 
 #### Modulo Cons
 
@@ -270,3 +271,14 @@ accumulator in order to get this benefit.
 _Mutually recursive_ functions are functions that call each another. If one function calls
 another, and that function calls the first one, then the first function did end up calling
 itself (so, recursing)—just with the other function being involved in the middle.
+
+```roc
+is_even : U64 -> Bool
+is_even = |n| if n == 0 True else is_odd(n - 1)
+
+is_odd : U64 -> Bool
+is_odd = |n| if n == 0 False else is_even(n - 1)
+```
+
+Both of the recursive calls here are [tail calls](#tail-calls), so `is_even(1_000_000)` goes back and
+forth between the two functions a million times without overflowing the stack.
