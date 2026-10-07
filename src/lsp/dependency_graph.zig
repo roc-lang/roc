@@ -172,16 +172,6 @@ pub const DependencyGraph = struct {
         return null;
     }
 
-    /// Check if a module's exports have changed by comparing hashes.
-    /// Returns true if exports changed, meaning dependents need rebuilding.
-    pub fn hasExportsChanged(self: *const DependencyGraph, path: []const u8, new_hash: [32]u8) bool {
-        if (self.getExportsHash(path)) |old_hash| {
-            return !std.mem.eql(u8, &old_hash, &new_hash);
-        }
-        // No previous hash means it's new or changed
-        return true;
-    }
-
     /// Build the dependency graph from a Coordinator PackageState after a successful build.
     /// This extracts module relationships from the compiler's internal state.
     pub fn buildFromPackageState(self: *DependencyGraph, pkg: *compile.coordinator.PackageState) Allocator.Error!void {
@@ -208,49 +198,6 @@ pub const DependencyGraph = struct {
                 }
             }
         }
-    }
-
-    /// Get all modules that would be affected if the given module changes.
-    /// Returns a list of paths that need to be rebuilt (transitively).
-    pub fn getStaleModules(self: *const DependencyGraph, changed_path: []const u8) Allocator.Error![]const []const u8 {
-        var stale: std.ArrayList([]const u8) = .empty;
-        errdefer stale.deinit(self.allocator);
-
-        var visited = std.StringHashMap(void).init(self.allocator);
-        defer visited.deinit();
-
-        // Use a worklist for BFS traversal of dependents
-        var worklist: std.ArrayList([]const u8) = .empty;
-        defer worklist.deinit(self.allocator);
-
-        try worklist.append(self.allocator, changed_path);
-        try visited.put(changed_path, {});
-
-        while (worklist.items.len > 0) {
-            const current_path = worklist.pop().?;
-            try stale.append(self.allocator, current_path);
-
-            // Add all dependents to the worklist
-            if (self.modules.get(current_path)) |node| {
-                for (node.dependents.items) |dep_path| {
-                    if (!visited.contains(dep_path)) {
-                        try visited.put(dep_path, {});
-                        try worklist.append(self.allocator, dep_path);
-                    }
-                }
-            }
-        }
-
-        return stale.toOwnedSlice(self.allocator);
-    }
-
-    /// Check if a module's content has changed by comparing hashes.
-    pub fn hasContentChanged(self: *const DependencyGraph, path: []const u8, new_hash: [32]u8) bool {
-        if (self.getContentHash(path)) |old_hash| {
-            return !std.mem.eql(u8, &old_hash, &new_hash);
-        }
-        // No previous hash means it's new or changed
-        return true;
     }
 
     /// Compute a Blake3 hash of the given content.
@@ -329,97 +276,6 @@ test "DependencyGraph basic operations" {
     const retrieved_hash = graph.getContentHash("/path/to/A.roc");
     try std.testing.expect(retrieved_hash != null);
     try std.testing.expectEqualSlices(u8, &hash, &retrieved_hash.?);
-
-    // Check stale modules when B changes
-    const stale = try graph.getStaleModules("/path/to/B.roc");
-    defer allocator.free(stale);
-
-    // Both B and A should be stale (A depends on B)
-    try std.testing.expectEqual(@as(usize, 2), stale.len);
-}
-
-test "getStaleModules returns transitive dependents" {
-    // Test dependency chain: A -> B -> C (A imports B, B imports C)
-    // When C changes, all three should be stale
-    const allocator = std.testing.allocator;
-
-    var graph = DependencyGraph.init(allocator);
-    defer graph.deinit();
-
-    const node_a = try graph.getOrCreateModule("/path/to/A.roc", "A");
-    const node_b = try graph.getOrCreateModule("/path/to/B.roc", "B");
-    const node_c = try graph.getOrCreateModule("/path/to/C.roc", "C");
-
-    // A imports B
-    try node_a.addImport(allocator, "/path/to/B.roc");
-    try node_b.addDependent(allocator, "/path/to/A.roc");
-
-    // B imports C
-    try node_b.addImport(allocator, "/path/to/C.roc");
-    try node_c.addDependent(allocator, "/path/to/B.roc");
-
-    // When C changes, A, B, and C should all be stale
-    const stale = try graph.getStaleModules("/path/to/C.roc");
-    defer allocator.free(stale);
-
-    try std.testing.expectEqual(@as(usize, 3), stale.len);
-}
-
-test "getStaleModules handles diamond dependency" {
-    // Diamond: A imports B and C, both B and C import D
-    //     A
-    //    / \
-    //   B   C
-    //    \ /
-    //     D
-    // When D changes, all four should be stale (each only once)
-    const allocator = std.testing.allocator;
-
-    var graph = DependencyGraph.init(allocator);
-    defer graph.deinit();
-
-    const node_a = try graph.getOrCreateModule("/path/to/A.roc", "A");
-    const node_b = try graph.getOrCreateModule("/path/to/B.roc", "B");
-    const node_c = try graph.getOrCreateModule("/path/to/C.roc", "C");
-    const node_d = try graph.getOrCreateModule("/path/to/D.roc", "D");
-
-    // A imports B and C
-    try node_a.addImport(allocator, "/path/to/B.roc");
-    try node_a.addImport(allocator, "/path/to/C.roc");
-    try node_b.addDependent(allocator, "/path/to/A.roc");
-    try node_c.addDependent(allocator, "/path/to/A.roc");
-
-    // B and C both import D
-    try node_b.addImport(allocator, "/path/to/D.roc");
-    try node_c.addImport(allocator, "/path/to/D.roc");
-    try node_d.addDependent(allocator, "/path/to/B.roc");
-    try node_d.addDependent(allocator, "/path/to/C.roc");
-
-    // When D changes, all should be stale
-    const stale = try graph.getStaleModules("/path/to/D.roc");
-    defer allocator.free(stale);
-
-    // Should be exactly 4 modules (no duplicates)
-    try std.testing.expectEqual(@as(usize, 4), stale.len);
-}
-
-test "getStaleModules returns only changed module when no dependents" {
-    const allocator = std.testing.allocator;
-
-    var graph = DependencyGraph.init(allocator);
-    defer graph.deinit();
-
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
-    _ = try graph.getOrCreateModule("/path/to/B.roc", "B");
-
-    // No dependencies between A and B
-
-    const stale = try graph.getStaleModules("/path/to/A.roc");
-    defer allocator.free(stale);
-
-    // Only A should be stale
-    try std.testing.expectEqual(@as(usize, 1), stale.len);
-    try std.testing.expectEqualStrings("/path/to/A.roc", stale[0]);
 }
 
 test "clearRelationships preserves content and exports hashes" {
@@ -461,54 +317,6 @@ test "clearRelationships preserves content and exports hashes" {
     // But imports should be cleared
     const node_a_after = graph.modules.getPtr("/path/to/A.roc").?;
     try std.testing.expectEqual(@as(usize, 0), node_a_after.imports.items.len);
-}
-
-test "hasContentChanged detects changes" {
-    const allocator = std.testing.allocator;
-
-    var graph = DependencyGraph.init(allocator);
-    defer graph.deinit();
-
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
-
-    const hash1 = DependencyGraph.computeContentHash("version 1");
-    const hash2 = DependencyGraph.computeContentHash("version 2");
-
-    // Initially no hash set, should report changed
-    try std.testing.expect(graph.hasContentChanged("/path/to/A.roc", hash1));
-
-    // Set hash
-    try graph.setContentHash("/path/to/A.roc", hash1);
-
-    // Same hash should not be changed
-    try std.testing.expect(!graph.hasContentChanged("/path/to/A.roc", hash1));
-
-    // Different hash should be changed
-    try std.testing.expect(graph.hasContentChanged("/path/to/A.roc", hash2));
-}
-
-test "hasExportsChanged detects changes" {
-    const allocator = std.testing.allocator;
-
-    var graph = DependencyGraph.init(allocator);
-    defer graph.deinit();
-
-    _ = try graph.getOrCreateModule("/path/to/A.roc", "A");
-
-    const hash1 = DependencyGraph.computeContentHash("exports v1");
-    const hash2 = DependencyGraph.computeContentHash("exports v2");
-
-    // Initially no hash set, should report changed
-    try std.testing.expect(graph.hasExportsChanged("/path/to/A.roc", hash1));
-
-    // Set hash
-    graph.setExportsHash("/path/to/A.roc", hash1);
-
-    // Same hash should not be changed
-    try std.testing.expect(!graph.hasExportsChanged("/path/to/A.roc", hash1));
-
-    // Different hash should be changed
-    try std.testing.expect(graph.hasExportsChanged("/path/to/A.roc", hash2));
 }
 
 test "computeContentHash produces consistent results" {

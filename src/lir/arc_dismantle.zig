@@ -19,6 +19,7 @@
 //! Aggregates".
 
 const std = @import("std");
+const base = @import("base");
 const collections = @import("collections");
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -352,7 +353,7 @@ pub const Dismantles = struct {
 };
 
 fn dismantleInvariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic(message, .{});
+    if (@import("builtin").mode == .Debug) base.invariant(message, .{});
     unreachable;
 }
 
@@ -935,6 +936,8 @@ const FutureFields = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -962,7 +965,7 @@ const FutureFields = struct {
                 .comptime_exhaustiveness_failed,
                 => {
                     successors.clearRetainingCapacity();
-                    try body_clone.appendSuccessors(@constCast(store), &successors, cursor);
+                    try body_clone.appendSuccessors(store, &successors, cursor, gpa);
                     for (successors.items) |next| try self.edge(gpa, index, next, ~@as(u64, 0));
                 },
             }
@@ -1037,6 +1040,8 @@ fn fieldObservedAfter(
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -1062,7 +1067,7 @@ fn fieldObservedAfter(
             .expect_err,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            => try body_clone.appendSuccessors(@constCast(store), &work, cursor),
+            => try body_clone.appendSuccessors(store, &work, cursor, gpa),
         }
     }
     return false;
@@ -1094,7 +1099,7 @@ fn collectProcJoinBodies(
                 entry.value_ptr.* = stmt.join.body;
             }
         }
-        try body_clone.appendSuccessorsWithAllocator(store, stack, stmt_id, gpa);
+        try body_clone.appendSuccessors(store, stack, stmt_id, gpa);
     }
 }
 
@@ -1465,7 +1470,7 @@ const StatementDominance = struct {
         defer successors.deinit(store.allocator);
         for (0..store.cfStmtCount()) |index| {
             successors.clearRetainingCapacity();
-            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))));
+            try body_clone.appendSuccessors(store, &successors, @enumFromInt(@as(u32, @intCast(index))), store.allocator);
             for (successors.items) |next| try edges.append(gpa, .{ .from = @intCast(index), .to = @intFromEnum(next) });
         }
         for (0..store.procSpecCount()) |index| {
@@ -1703,7 +1708,7 @@ pub fn compute(
         const index = @intFromEnum(stmt_id);
         if (reachable.isSet(index)) continue;
         reachable.set(index);
-        try body_clone.appendSuccessors(@constCast(store), &reach_work, stmt_id);
+        try body_clone.appendSuccessors(store, &reach_work, stmt_id, gpa);
     }
 
     const join_init_counts = try gpa.alloc(u32, store.localCount());
@@ -1742,9 +1747,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const local = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local, .discriminant, .list_reinterpret, .nominal => unreachable,
                 };
                 if (!projectionOwnsAllRc(store, layouts, local, assign.target, projection)) continue;
@@ -1902,11 +1905,7 @@ pub fn compute(
                         if (!try analysis.notePayloadView(stmt.target, op)) try analysis.useWhole(current, op.source);
                         try analysis.noteDef(stmt.target, current);
                     },
-                    .list_reinterpret => |op| {
-                        try analysis.useWhole(current, op.backing_ref);
-                        analysis.disqualify(stmt.target);
-                    },
-                    .nominal => |op| {
+                    inline .list_reinterpret, .nominal => |op| {
                         try analysis.useWhole(current, op.backing_ref);
                         analysis.disqualify(stmt.target);
                     },
@@ -1976,26 +1975,22 @@ pub fn compute(
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_reuse_box => |stmt| {
+            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_unbox => |stmt| {
-                try analysis.useWhole(current, stmt.source);
+            .assign_boxy_eq => |stmt| {
+                try analysis.useWhole(current, stmt.lhs);
+                try analysis.useWhole(current, stmt.rhs);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            .assign_boxy_adapt => |stmt| {
-                try analysis.useWhole(current, stmt.source);
-                try analysis.noteDef(stmt.target, current);
-                analysis.disqualify(stmt.target);
-                try stack.append(gpa, stmt.next);
-            },
-            .assign_boxy_inspect => |stmt| {
-                try analysis.useWhole(current, stmt.source);
+            .assign_boxy_hash => |stmt| {
+                try analysis.useWhole(current, stmt.value);
+                try analysis.useWhole(current, stmt.hasher);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2085,25 +2080,16 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error => {},
-            .comptime_exhaustiveness_failed => {},
+            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
-            .incref => |stmt| {
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .decref => |stmt| {
+            inline .incref, .decref, .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
             .decref_if_initialized => |stmt| {
                 try analysis.useWhole(current, stmt.cond);
-                try analysis.useWhole(current, stmt.value);
-                try stack.append(gpa, stmt.next);
-            },
-            .free => |stmt| {
                 try analysis.useWhole(current, stmt.value);
                 try stack.append(gpa, stmt.next);
             },
@@ -2155,14 +2141,12 @@ pub fn compute(
                 try stack.append(gpa, stmt.on_match);
                 try stack.append(gpa, stmt.on_miss);
             },
-            .loop_continue, .loop_break => {},
             .join => |stmt| {
                 // Join parameters are excluded by the gate; the condition
                 // locals are scalar presence words.
                 try stack.append(gpa, stmt.body);
                 try stack.append(gpa, stmt.remainder);
             },
-            .jump => {},
             .ret => |stmt| try analysis.useWholeAt(stmt.value, current),
             .crash => |stmt| if (stmt.msg.localId()) |message| try analysis.useWholeAt(message, current),
         }
@@ -2246,7 +2230,7 @@ pub fn compute(
             } else if (owner.* != @as(u32, @intCast(proc_index))) {
                 owner.* = ambiguous_proc;
             }
-            try body_clone.appendSuccessorsWithAllocator(store, &join_scan_stack, stmt_id, gpa);
+            try body_clone.appendSuccessors(store, &join_scan_stack, stmt_id, gpa);
         }
     }
     var future_fields = FutureFields.init(gpa);
@@ -2361,6 +2345,8 @@ pub fn compute(
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2597,7 +2583,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2648,7 +2634,7 @@ pub fn compute(
                         try flow_frames.append(gpa, .{ .cursor = stmt.initialized_branch, .state = state });
                         cursor = stmt.uninitialized_branch;
                     },
-                    .str_match => |stmt| {
+                    inline .str_match, .boxy_tag_match => |stmt| {
                         try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
@@ -2657,10 +2643,6 @@ pub fn compute(
                         for (0..GuardedList.borrowLen(arms)) |i| {
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
-                        cursor = stmt.on_miss;
-                    },
-                    .boxy_tag_match => |stmt| {
-                        try flow_frames.append(gpa, .{ .cursor = stmt.on_match, .state = state });
                         cursor = stmt.on_miss;
                     },
                     .loop_continue, .loop_break => {
@@ -2884,9 +2866,7 @@ pub fn compute(
             .field, .tag_payload, .tag_payload_struct => blk: {
                 const projection = encodeProjection(assign.op).?;
                 const projection_source = switch (assign.op) {
-                    .field => |op| op.source,
-                    .tag_payload => |op| op.source,
-                    .tag_payload_struct => |op| op.source,
+                    inline .field, .tag_payload, .tag_payload_struct => |op| op.source,
                     .local,
                     .discriminant,
                     .list_reinterpret,

@@ -1,17 +1,14 @@
-//! Character-level rules for recognizing and stripping Roc doc comment lines.
+//! What a Roc doc comment is, and how the block documenting a definition is
+//! gathered from source text.
 //!
-//! In Roc, doc comments use the `##` prefix. A `###` prefix is a section-header
-//! comment, which some consumers treat as a doc comment and others do not, so
-//! this module exposes both a strict predicate (`isDocCommentLine`, which
-//! excludes `###`) and a permissive one (`startsWithHashHash`, which does not).
-//! Content extraction (`stripPrefix`) is shared by all consumers.
+//! A doc comment line starts with `##`. A line starting with `###` is a
+//! section-header comment: it documents nothing and is never part of a doc
+//! block. Hover, completion and generated documentation all read doc comments
+//! through this module, so they cannot disagree about what a definition's
+//! documentation is.
 
 const std = @import("std");
-
-/// Returns true if `trimmed` starts with `##`. Does NOT exclude `###`.
-pub fn startsWithHashHash(trimmed: []const u8) bool {
-    return trimmed.len >= 2 and trimmed[0] == '#' and trimmed[1] == '#';
-}
+const Allocator = std.mem.Allocator;
 
 /// Returns true if `trimmed` is a doc comment line: starts with `##` but not `###`.
 pub fn isDocCommentLine(trimmed: []const u8) bool {
@@ -36,14 +33,131 @@ pub fn stripPrefix(line: []const u8) []const u8 {
     return line[start..];
 }
 
-test "startsWithHashHash: various cases" {
-    try std.testing.expect(startsWithHashHash("## doc"));
-    try std.testing.expect(startsWithHashHash("##"));
-    try std.testing.expect(startsWithHashHash("##doc"));
-    try std.testing.expect(startsWithHashHash("### header"));
-    try std.testing.expect(!startsWithHashHash("# comment"));
-    try std.testing.expect(!startsWithHashHash("#"));
-    try std.testing.expect(!startsWithHashHash(""));
+/// The doc comment block documenting one definition.
+pub const Block = struct {
+    /// Byte offset at which the block's first line starts.
+    start: u32,
+    /// The content of each doc line from top to bottom, without its `##`
+    /// prefix. Every line is a slice of the source the block was gathered from.
+    lines: [][]const u8,
+
+    /// Free the line list. The lines themselves belong to the source.
+    pub fn deinit(self: Block, gpa: Allocator) void {
+        gpa.free(self.lines);
+    }
+};
+
+/// Gather the doc comment block for the definition starting at
+/// `def_start_offset`, or null when it has none.
+///
+/// The block is the unbroken run of doc comment lines directly above the
+/// definition's line:
+///
+/// - Blank lines between the definition and the block are skipped.
+/// - A blank line above a doc line ends the block, so an earlier `##`
+///   paragraph separated from it by a blank line is not part of it.
+/// - Any other line ends the block: code, a `#` comment, and a `###` section
+///   header alike. A `###` line is never documentation, so it neither joins
+///   the block nor is skipped over to reach doc lines above it.
+///
+/// Only whitespace may precede the definition on its own line; a definition
+/// that starts partway through a line of code has no doc block.
+pub fn gatherBlockBefore(gpa: Allocator, source: []const u8, def_start_offset: u32) Allocator.Error!?Block {
+    if (def_start_offset == 0 or def_start_offset > source.len) return null;
+
+    var lines = std.ArrayList([]const u8).empty;
+    defer lines.deinit(gpa);
+
+    var start: u32 = 0;
+    var pos: usize = def_start_offset;
+
+    // Step back over the definition's indentation to the end of the line above.
+    while (pos > 0 and (source[pos - 1] == ' ' or source[pos - 1] == '\t' or source[pos - 1] == '\r')) {
+        pos -= 1;
+    }
+    if (pos > 0 and source[pos - 1] == '\n') {
+        pos -= 1;
+        while (pos > 0 and source[pos - 1] == '\r') {
+            pos -= 1;
+        }
+    }
+
+    while (pos > 0) {
+        var line_start = pos;
+        while (line_start > 0 and source[line_start - 1] != '\n') {
+            line_start -= 1;
+        }
+
+        const trimmed = std.mem.trimStart(u8, source[line_start..pos], " \t");
+        if (isDocCommentLine(trimmed)) {
+            // Lines are visited bottom-up, so the last one recorded is the
+            // block's first line.
+            start = @intCast(line_start);
+            try lines.append(gpa, stripPrefix(trimmed));
+        } else if (trimmed.len == 0) {
+            if (lines.items.len > 0) break;
+        } else {
+            break;
+        }
+
+        if (line_start == 0) break;
+        pos = line_start - 1;
+        while (pos > 0 and source[pos - 1] == '\r') {
+            pos -= 1;
+        }
+    }
+
+    if (lines.items.len == 0) return null;
+
+    std.mem.reverse([]const u8, lines.items);
+    return .{ .start = start, .lines = try lines.toOwnedSlice(gpa) };
+}
+
+fn expectBlock(source: []const u8, def_text: []const u8, expected: ?[]const []const u8) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
+    const gpa = std.testing.allocator;
+    const def_start: u32 = @intCast(std.mem.find(u8, source, def_text).?);
+    const block = try gatherBlockBefore(gpa, source, def_start);
+    defer if (block) |found| found.deinit(gpa);
+
+    const expected_lines = expected orelse return std.testing.expect(block == null);
+    try std.testing.expect(block != null);
+    try std.testing.expectEqual(expected_lines.len, block.?.lines.len);
+    for (expected_lines, block.?.lines) |expected_line, line| {
+        try std.testing.expectEqualStrings(expected_line, line);
+    }
+}
+
+test "gatherBlockBefore: the block is the run of doc lines above the definition" {
+    try expectBlock("## one\n## two\nfoo = 1", "foo", &.{ "one", "two" });
+    try expectBlock("## one\n\n\nfoo = 1", "foo", &.{"one"});
+    try expectBlock("    ## indented\n    foo = 1", "foo", &.{"indented"});
+    try expectBlock("## one\r\n## two\r\nfoo = 1", "foo", &.{ "one", "two" });
+    try expectBlock("##\n##no space\nfoo = 1", "foo", &.{ "", "no space" });
+    try expectBlock("foo = 1", "foo", null);
+    try expectBlock("bar = 2\nfoo = 1", "foo", null);
+}
+
+test "gatherBlockBefore: a section header is not documentation" {
+    // The header ends the block from above, and blocks reading down to it.
+    try expectBlock("## a\n### b\n## c\nfoo = 1", "foo", &.{"c"});
+    try expectBlock("### header\nfoo = 1", "foo", null);
+    try expectBlock("## a\n### header\nfoo = 1", "foo", null);
+}
+
+test "gatherBlockBefore: blank lines, comments and code end the block" {
+    try expectBlock("## earlier\n\n## doc\nfoo = 1", "foo", &.{"doc"});
+    try expectBlock("# note\n## doc\nfoo = 1", "foo", &.{"doc"});
+    try expectBlock("## doc\n# note\nfoo = 1", "foo", null);
+    try expectBlock("## for bar\nbar = 2\nfoo = 1", "foo", null);
+    try expectBlock("## doc\nbar = 2; foo = 1", "foo", null);
+}
+
+test "gatherBlockBefore: reports where the block starts" {
+    const gpa = std.testing.allocator;
+    const source = "x = 0\n\n## one\n## two\nfoo = 1";
+    const block = (try gatherBlockBefore(gpa, source, @intCast(std.mem.find(u8, source, "foo").?))).?;
+    defer block.deinit(gpa);
+    try std.testing.expectEqual(@as(u32, @intCast(std.mem.find(u8, source, "## one").?)), block.start);
 }
 
 test "isDocCommentLine: various cases" {

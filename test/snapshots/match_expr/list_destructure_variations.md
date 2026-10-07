@@ -15,110 +15,9 @@ match list {
 }
 ~~~
 # EXPECTED
-MISSING METHOD - list_destructure_variations.md:4:24:4:38
-MISSING METHOD - list_destructure_variations.md:2:11:2:12
-MISSING METHOD - list_destructure_variations.md:6:31:6:32
-MISSING METHOD - list_destructure_variations.md:7:30:7:35
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 4 24) (end 4 38))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "plus")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "list_destructure_variations.md") (start 4 24) (end 4 38) (annotation error) (line-text "    [first, second] => first + second"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "plus")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[One, Two]")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 2 11) (end 2 12))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "list_destructure_variations.md") (start 2 11) (end 2 12) (annotation error) (line-text "    [] => 0"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[One, Two]")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 6 31) (end 6 32))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "from_numeral")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "list_destructure_variations.md") (start 6 31) (end 6 32) (annotation error) (line-text "    [One, Two, .. as rest] => 3"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "from_numeral")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[One, Two]")
-			(annotation-end)))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 7 30) (end 7 35))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "plus")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
-		(document
-			(source-region (file "list_destructure_variations.md") (start 7 30) (end 7 35) (annotation error) (line-text "    [x, y, z, .. as more] => x + y + z"))
-			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "plus")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[One, Two]")
-			(annotation-end))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -197,7 +96,7 @@ match list {
 						(p-list
 							(patterns))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr"))))
+					(e-num (value "0"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -215,13 +114,11 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 262)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "second")))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "second"))))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -243,7 +140,7 @@ match list {
 							(rest-at (index 2)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr"))))
+					(e-num (value "3"))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -255,9 +152,16 @@ match list {
 							(rest-at (index 3)
 								(p-assign (ident "more"))))))
 				(value
-					(e-runtime-error (tag "erroneous_value_expr")))))))
+					(e-binop (op "add")
+						(e-binop (op "add")
+							(e-lookup-local
+								(p-assign (ident "x")))
+							(e-lookup-local
+								(p-assign (ident "y"))))
+						(e-lookup-local
+							(p-assign (ident "z")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "[One, Two]"))
+(expr (type "Dec"))
 ~~~

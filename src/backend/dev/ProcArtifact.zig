@@ -197,22 +197,6 @@ pub fn compileProcFragment(
     return captureFragment(CG, allocator, codegen, proc_specs, layout_store, string_exports, constant_exports);
 }
 
-/// Emit one helper without recursively emitting its transitive requirements.
-/// Its key is interpreted only in the producer's layout and compilation domain.
-pub fn compileRcHelperFragment(
-    comptime CG: type,
-    allocator: Allocator,
-    codegen: *CG,
-    key: u64,
-    proc_specs: []const lir.LIR.LirProcSpec,
-    layout_store: *const layout.Store,
-    string_exports: []const lir.Program.StaticDataExport,
-    constant_exports: []const lir.Program.StaticDataExport,
-) ExtractError!Fragment {
-    try codegen.emitRcHelperFragment(key);
-    return captureFragment(CG, allocator, codegen, proc_specs, layout_store, string_exports, constant_exports);
-}
-
 fn captureFragment(
     comptime CG: type,
     allocator: Allocator,
@@ -1186,8 +1170,7 @@ pub fn splice(
         switch (artifact.kind) {
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
             .proc => |identity| try codegen.registerSplicedProc(identity, start),
-            .boxy_thunk => {},
-            .entrypoint, .message_pool_run, .branch_island => {},
+            .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
         }
         try placed.putNoClobber(index, start);
         for (artifact.data) |item| try data_out.append(allocator, item);

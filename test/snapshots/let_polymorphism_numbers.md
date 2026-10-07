@@ -239,7 +239,7 @@ main = |_| {
 			(e-num (value "5"))))
 	(d-let
 		(p-assign (ident "float_doubled"))
-		(e-call (constraint-fn-var 348)
+		(e-call (constraint-fn-var 345)
 			(e-lookup-local
 				(p-assign (ident "double")))
 			(e-dec-small (numerator "25") (denominator-power-of-ten "1") (value "2.5"))))
@@ -249,7 +249,7 @@ main = |_| {
 			(args
 				(p-underscore))
 			(e-block
-				(e-dispatch-call (method "plus") (constraint-fn-var 349)
+				(e-dispatch-call (method "plus") (constraint-fn-var 346)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "int_add"))))

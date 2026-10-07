@@ -121,31 +121,6 @@ pub const ValidationResult = union(enum) {
     },
 };
 
-/// Validate that a platform has a targets section
-pub fn validatePlatformHasTargets(
-    ast: anytype,
-    platform_path: []const u8,
-) ValidationResult {
-    const store = &ast.store;
-
-    // Get the file node first, then get the header from it
-    const file = store.getFile();
-    const header = store.getHeader(file.header);
-
-    // Only platform headers should have targets
-    if (header != .platform) return .{ .valid = {} }; // Non-platform headers don't need targets
-    const platform = header.platform;
-
-    // Check if targets section exists
-    if (platform.targets == null) {
-        return .{ .missing_targets_section = .{
-            .platform_path = platform_path,
-        } };
-    }
-
-    return .{ .valid = {} };
-}
-
 /// Validate that files declared in targets section exist on disk
 pub fn validateTargetFilesExist(
     allocator: Allocator,
@@ -232,6 +207,20 @@ fn validateTargetSpec(
     return null;
 }
 
+/// `line_format` once per target, with the target's name as its argument.
+fn perTarget(comptime targets: []const RocTarget, comptime line_format: []const u8) []const u8 {
+    var text: []const u8 = "";
+    for (targets) |target| text = text ++ std.fmt.comptimePrint(line_format, .{@tagName(target)});
+    return text;
+}
+
+/// An example `targets:` section declaring a host object for each of `targets`,
+/// for reports that show a platform author what the section looks like.
+pub fn exampleTargetsSection(comptime targets: []const RocTarget) []const u8 {
+    return "    targets: {\n        inputs_dir: \"targets/\",\n" ++
+        perTarget(targets, "        {s}: {{ inputs: [\"host.o\", app] }},\n") ++ "    }";
+}
+
 /// Create an error report for a validation failure
 pub fn createValidationReport(
     allocator: Allocator,
@@ -246,20 +235,10 @@ pub fn createValidationReport(
             try report.document.addText("In ");
             try report.document.addAnnotated(info.platform_path, .emphasized);
             try report.document.addText(", add a targets section like:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            try report.document.addCodeBlock(
-                \\    targets: {
-                \\        inputs_dir: "targets/",
-                \\        x64linux: { inputs: ["host.o", app] },
-                \\        arm64linux: { inputs: ["host.o", app] },
-                \\        x64mac: { inputs: ["host.o", app] },
-                \\        arm64mac: { inputs: ["host.o", app] },
-                \\    }
-            );
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addCodeBlock(comptime exampleTargetsSection(&.{ .x64linux, .arm64linux, .x64mac, .arm64mac }));
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("The targets section declares:");
             try report.document.addLineBreak();
@@ -280,14 +259,10 @@ pub fn createValidationReport(
 
             try report.document.addText("Create the directory structure:");
             try report.document.addLineBreak();
-            try report.document.addCodeBlock(
-                \\    targets/
-                \\        x64linux/
-                \\            host.o
-                \\        arm64linux/
-                \\            host.o
-                \\        ...
-            );
+            try report.document.addCodeBlock("    targets/\n" ++ comptime perTarget(
+                &.{ .x64linux, .arm64linux },
+                "        {s}/\n            host.o\n",
+            ) ++ "        ...");
             try report.document.addLineBreak();
 
             return report;
@@ -300,8 +275,7 @@ pub fn createValidationReport(
 
             try report.document.addText("Expected file at: ");
             try report.document.addAnnotated(info.expected_full_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Either add the missing file or remove it from the targets section.");
             try report.document.addLineBreak();
@@ -351,8 +325,7 @@ pub fn createValidationReport(
                 try report.document.addLineBreak();
             } else {
                 try report.document.addText("This platform has no targets configured.");
-                try report.document.addLineBreak();
-                try report.document.addLineBreak();
+                try report.document.addLineBreaks(2);
             }
 
             // A baseline target and its default twin are separate entries on
@@ -375,8 +348,7 @@ pub fn createValidationReport(
                     try report.document.addText("so compiling for this machine means compiling for ");
                     try report.document.addAnnotated(@tagName(info.requested_target), .emphasized);
                     try report.document.addText(".");
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                 }
 
                 for (info.supported_targets) |spec| {
@@ -393,8 +365,7 @@ pub fn createValidationReport(
                     try report.document.addAnnotated(@tagName(default_target), .emphasized);
                     try report.document.addLineBreak();
                     try report.document.addText("would reintroduce the instructions this target avoids.");
-                    try report.document.addLineBreak();
-                    try report.document.addLineBreak();
+                    try report.document.addLineBreaks(2);
                     break;
                 }
             }
@@ -414,8 +385,7 @@ pub fn createValidationReport(
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated(info.expected_path, .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Platform authors: build your host for this target and place it at:");
             try report.document.addLineBreak();
@@ -439,15 +409,14 @@ pub fn createValidationReport(
             try report.document.addText("glibc targets require dynamic linking with libc symbols that");
             try report.document.addLineBreak();
             try report.document.addText("are only available on Linux.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Use a statically-linked musl target instead:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
-            try report.document.addAnnotated("x64musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.x64musl), .emphasized);
             try report.document.addText(" or ");
-            try report.document.addAnnotated("arm64musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.arm64musl), .emphasized);
             try report.document.addLineBreak();
 
             return report;
@@ -459,8 +428,7 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "No Platform Found", headline, .runtime_error);
 
             try report.document.addText("Every Roc application needs a platform. Add a platform declaration:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addCodeBlock(
                 \\app [main!] { pf: platform "../path/to/platform/main.roc" }
@@ -476,26 +444,17 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Invalid Target", headline, .runtime_error);
 
             try report.document.addText("Valid targets are:");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64musl, arm64musl    - Linux (static, portable)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64glibc, arm64glibc  - Linux (dynamic, faster)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64mac, arm64mac      - macOS");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64win, arm64win      - Windows (MSVC)");
-            try report.document.addLineBreak();
-            try report.document.addText("  x64mingw, arm64mingw  - Windows (MinGW)");
-            try report.document.addLineBreak();
-            try report.document.addText("  wasm32                - WebAssembly");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            for (RocTarget.roster) |line| {
+                try report.document.addLineBreak();
+                try report.document.addText(line);
+            }
+            try report.document.addLineBreaks(2);
             try report.document.addText("Adding v1 after the architecture (");
-            try report.document.addAnnotated("x64v1musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.x64v1musl), .emphasized);
             try report.document.addText(", ");
-            try report.document.addAnnotated("arm64v1musl", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.arm64v1musl), .emphasized);
             try report.document.addText(", ");
-            try report.document.addAnnotated("wasm32v1", .emphasized);
+            try report.document.addAnnotated(@tagName(RocTarget.wasm32v1), .emphasized);
             try report.document.addText(")");
             try report.document.addLineBreak();
             try report.document.addText("builds for the oldest CPUs of that architecture.");
@@ -527,8 +486,7 @@ pub fn createValidationReport(
             try report.document.addText("This typically occurs when running a test executable");
             try report.document.addLineBreak();
             try report.document.addText("that was built without LLVM support.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("To fix this, rebuild with LLVM enabled.");
             try report.document.addLineBreak();
@@ -545,15 +503,13 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Process Crashed", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Please report this issue at:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Include a small reproduction of the code that causes this crash.");
             try report.document.addLineBreak();
@@ -577,15 +533,13 @@ pub fn createValidationReport(
             var report = try Report.init(allocator, "Process Killed By Signal", headline, .runtime_error);
 
             try report.document.addText("This is likely a bug in the Roc compiler.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Please report this issue at:");
             try report.document.addLineBreak();
             try report.document.addText("  ");
             try report.document.addAnnotated("https://github.com/roc-lang/roc/issues", .emphasized);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Include a small reproduction of the code that causes this crash.");
             try report.document.addLineBreak();
@@ -593,6 +547,16 @@ pub fn createValidationReport(
             return report;
         },
     }
+}
+
+test "example targets section declares a host object per target" {
+    try std.testing.expectEqualStrings(
+        \\    targets: {
+        \\        inputs_dir: "targets/",
+        \\        x64linux: { inputs: ["host.o", app] },
+        \\        arm64mac: { inputs: ["host.o", app] },
+        \\    }
+    , comptime exampleTargetsSection(&.{ .x64linux, .arm64mac }));
 }
 
 test "createValidationReport generates correct report for missing_targets_section" {
@@ -678,184 +642,6 @@ test "validateTargetFilesExist returns valid when no files_dir specified" {
     try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
 }
 
-test "validatePlatformHasTargets detects missing targets section" {
-    const allocator = std.testing.allocator;
-
-    // Platform without targets section
-    const source =
-        \\platform ""
-        \\    requires { main : {} }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host }
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
-
-    if (result != .missing_targets_section) {
-        std.debug.print("Expected missing_targets_section but got {}\n", .{result});
-        return error.UnexpectedResult;
-    }
-    try std.testing.expectEqualStrings("test/platform/main.roc", result.missing_targets_section.platform_path);
-}
-
-test "validatePlatformHasTargets accepts platform with targets section" {
-    const allocator = std.testing.allocator;
-
-    // Platform with targets section
-    const source =
-        \\platform ""
-        \\    requires { main : {} }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host }
-        \\    targets: {
-        \\        x64linux: { inputs: [app] },
-        \\        arm64linux: { inputs: [app] },
-        \\    }
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
-
-    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
-}
-
-test "validatePlatformHasTargets skips non-platform headers" {
-    const allocator = std.testing.allocator;
-
-    // App module (not a platform)
-    const source =
-        \\app [main] { pf: platform "some-platform" }
-        \\
-        \\main = {}
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "app/main.roc");
-
-    // Non-platform headers should return valid (they don't need targets)
-    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
-}
-
-test "validatePlatformHasTargets accepts platform with multiple target types" {
-    const allocator = std.testing.allocator;
-
-    // Platform with mixed output kinds
-    const source =
-        \\platform ""
-        \\    requires { main : {} }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host }
-        \\    targets: {
-        \\        inputs_dir: "targets/",
-        \\        x64linux: { inputs: ["host.o", app] },
-        \\        arm64mac: { inputs: [app] },
-        \\        x64mac: { inputs: ["libhost.a", app], output: Shared },
-        \\    }
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
-
-    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
-}
-
-test "validatePlatformHasTargets accepts hostless platform with empty targets section" {
-    const allocator = std.testing.allocator;
-
-    const source =
-        \\platform ""
-        \\    requires { make_glue : List({}) -> Try(List({}), Str) }
-        \\    exposes []
-        \\    packages {}
-    ++ "\n    provides { \"" ++ @import("builtins").shim_symbols.roc_make_glue ++ "\": make_glue_for_host }\n" ++
-        \\    targets: {}
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
-
-    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
-}
-
-test "validatePlatformHasTargets accepts platform with win_gui target" {
-    const allocator = std.testing.allocator;
-
-    // Platform with win_gui special identifier
-    const source =
-        \\platform ""
-        \\    requires { main : {} }
-        \\    exposes []
-        \\    packages {}
-        \\    provides { "roc_main": main_for_host }
-        \\    targets: {
-        \\        x64win: { inputs: [win_gui] },
-        \\    }
-        \\
-    ;
-
-    const source_copy = try allocator.dupe(u8, source);
-    defer allocator.free(source_copy);
-
-    var env = try base.CommonEnv.init(allocator, source_copy);
-    defer env.deinit(allocator);
-
-    const ast = try parse.file(allocator, &env);
-    defer ast.deinit();
-
-    const result = validatePlatformHasTargets(ast, "test/platform/main.roc");
-
-    try std.testing.expectEqual(ValidationResult{ .valid = {} }, result);
-}
-
 test "TargetsConfig.fromAST extracts targets configuration" {
     const allocator = std.testing.allocator;
 
@@ -884,7 +670,8 @@ test "TargetsConfig.fromAST extracts targets configuration" {
     defer ast.deinit();
 
     // Try to extract targets config from the AST
-    const maybe_config = try TargetsConfig.fromAST(allocator, ast);
+    var path_diagnostic: target_mod.InvalidTargetPathDiagnostic = undefined;
+    const maybe_config = try TargetsConfig.fromAST(allocator, ast, &path_diagnostic);
     try std.testing.expect(maybe_config != null);
 
     const config = maybe_config.?;

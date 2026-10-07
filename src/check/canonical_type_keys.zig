@@ -478,6 +478,9 @@ const SourceAdapter = struct {
     report_duplicate_rows: bool = false,
     /// The first row found repeating a label since the last report was taken.
     duplicate_row: ?Var = null,
+    /// Whether a nominal whose declaration is invalid marks its description
+    /// erroneous; only a traversal that detects errors reads the mark.
+    detect_invalid_nominals: bool = false,
     rank_scratch: base.TextRankCache,
     text_ranks: []const u32 = &.{},
     fields: std.ArrayList(RecordFieldForKey) = .empty,
@@ -519,6 +522,7 @@ const SourceAdapter = struct {
     }
 
     fn ident(self: *SourceAdapter, sink: *type_key_engine.Sink, idx: Ident.Idx) Allocator.Error!void {
+        if (!sink.record_bytes) return;
         try sink.text(self.idents.getText(idx));
     }
 
@@ -632,7 +636,7 @@ const SourceAdapter = struct {
                 for (elems) |elem| try self.child(sink, elem);
             },
             .nominal_type => |nominal| {
-                if (self.store.nominalDeclIsInvalid(nominal)) sink.contains_error = true;
+                if (self.detect_invalid_nominals and self.store.nominalDeclIsInvalid(nominal)) sink.contains_error = true;
                 try tag(sink, .nominal);
                 try self.namedSourceIdentity(sink, nominal.origin_module, nominal.ident.ident_idx, nominal.sourceDeclOptional());
                 try sink.boolean(nominal.isOpaque());
@@ -841,6 +845,7 @@ const SourceAdapter = struct {
     /// in the module component, so the digest never depends on coordinator
     /// naming or build directories.
     fn namedSourceIdentity(self: *SourceAdapter, sink: *type_key_engine.Sink, origin_module: base.ModuleIdentity.Idx, name: Ident.Idx, source_decl: ?u32) Allocator.Error!void {
+        if (!sink.record_bytes) return;
         try sink.text(self.env.moduleIdentityHash(origin_module));
         try sink.boolean(source_decl != null);
         if (source_decl) |decl| {
@@ -1038,6 +1043,7 @@ const Inspector = struct {
     /// traversal's identity numbering.
     fn writeVar(self: *Inspector, var_: Var) Allocator.Error!void {
         self.adapter.report_duplicate_rows = self.report_duplicate_rows;
+        self.adapter.detect_invalid_nominals = self.detect_errors;
         const frames_base = self.frames.items.len;
         errdefer self.frames.items.len = frames_base;
         try self.visit(self.adapter.resolve(@intFromEnum(var_)));
@@ -1091,7 +1097,7 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
 
 fn invariantViolation(comptime message: []const u8) noreturn {
     if (builtin.mode == .Debug) {
-        std.debug.panic(message, .{});
+        base.invariant(message, .{});
     }
     unreachable;
 }
@@ -1123,8 +1129,8 @@ test "concrete keys default open literal flex vars per kind (numeral -> Dec, quo
     _ = try env.insertIdent(Ident.for_text("Builtin"));
     _ = try env.insertIdent(Ident.for_text("Builtin.Num.Dec"));
     _ = try env.insertIdent(Ident.for_text("Builtin.Str"));
-    const from_numeral_ident = try env.insertIdent(Ident.for_text("from_numeral"));
-    const from_quote_ident = try env.insertIdent(Ident.for_text("from_quote"));
+    const from_numeral_ident = try env.insertIdent(Ident.for_text(Ident.FROM_NUMERAL_METHOD_NAME));
+    const from_quote_ident = try env.insertIdent(Ident.for_text(Ident.FROM_QUOTE_METHOD_NAME));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
     defer store.deinit();

@@ -22,39 +22,11 @@ const types = @import("types");
 const base = @import("base");
 const Region = base.Region;
 const pos = @import("position.zig");
+const module_lookup = @import("module_lookup.zig");
 
 fn statementAnnotation(statement: CIR.Statement) ?CIR.Annotation.Idx {
     return switch (statement) {
-        .s_decl => |decl| decl.anno,
-        .s_var => |var_stmt| var_stmt.anno,
-        .s_var_uninitialized => |var_stmt| var_stmt.anno,
-        .s_reassign,
-        .s_crash,
-        .s_dbg,
-        .s_expr,
-        .s_expect,
-        .s_for,
-        .s_while,
-        .s_infinite_loop,
-        .s_breakable_loop,
-        .s_break,
-        .s_return,
-        .s_import,
-        .s_alias_decl,
-        .s_nominal_decl,
-        .s_where_alias_decl,
-        .s_type_anno,
-        .s_type_var_alias,
-        .s_runtime_error,
-        => null,
-    };
-}
-
-fn statementPattern(statement: CIR.Statement) ?CIR.Pattern.Idx {
-    return switch (statement) {
-        .s_decl => |decl| decl.pattern,
-        .s_var => |var_stmt| var_stmt.pattern_idx,
-        .s_var_uninitialized => |var_stmt| var_stmt.pattern_idx,
+        inline .s_decl, .s_var, .s_var_uninitialized => |decl| decl.anno,
         .s_reassign,
         .s_crash,
         .s_dbg,
@@ -318,7 +290,7 @@ const FindTypeContext = struct {
             const type_anno_region = ctx.store.getTypeAnnoRegion(annotation.anno);
             if (ctx.checkAndUpdate(type_anno_region)) {
                 // Get the pattern for this statement to get the type var
-                const pattern_idx = statementPattern(stmt);
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -330,7 +302,7 @@ const FindTypeContext = struct {
             // Also check the annotation identifier region
             const anno_region = ctx.store.getAnnotationRegion(anno);
             if (ctx.checkAndUpdate(anno_region)) {
-                const pattern_idx = statementPattern(stmt);
+                const pattern_idx = module_lookup.getDeclarationPattern(stmt);
                 if (pattern_idx) |pat| {
                     ctx.result = .{
                         .type_var = ModuleEnv.varFrom(pat),
@@ -432,7 +404,7 @@ const CollectDeclarationsContext = struct {
     /// Pre-visit callback for statements, picking up the name written on a
     /// block-level annotation that binds the target pattern.
     fn visitStmtPre(ctx: *CollectDeclarationsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse return .continue_traversal;
         if (@intFromEnum(pattern_idx) != @intFromEnum(ctx.target_pattern)) return .continue_traversal;
 
         const anno_idx = statementAnnotation(stmt) orelse return .continue_traversal;
@@ -767,18 +739,10 @@ const FindTagAtOffsetContext = struct {
             .e_field_access => |fa| {
                 ctx.walkExpr(fa.receiver, null, null);
             },
-            .e_method_call => |mc| {
+            inline .e_method_call, .e_dispatch_call => |mc| {
                 ctx.walkExpr(mc.receiver, null, null);
                 if (ctx.result != null) return;
                 for (ctx.store.sliceExpr(mc.args)) |arg| {
-                    ctx.walkExpr(arg, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_dispatch_call => |dc| {
-                ctx.walkExpr(dc.receiver, null, null);
-                if (ctx.result != null) return;
-                for (ctx.store.sliceExpr(dc.args)) |arg| {
                     ctx.walkExpr(arg, null, null);
                     if (ctx.result != null) return;
                 }
@@ -806,14 +770,8 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(eq.rhs, null, null);
             },
-            .e_type_method_call => |tmc| {
+            inline .e_type_method_call, .e_type_dispatch_call => |tmc| {
                 for (ctx.store.sliceExpr(tmc.args)) |arg| {
-                    ctx.walkExpr(arg, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_type_dispatch_call => |tdc| {
-                for (ctx.store.sliceExpr(tdc.args)) |arg| {
                     ctx.walkExpr(arg, null, null);
                     if (ctx.result != null) return;
                 }
@@ -821,14 +779,8 @@ const FindTagAtOffsetContext = struct {
             .e_tuple_access => |ta| {
                 ctx.walkExpr(ta.tuple, null, null);
             },
-            .e_list => |list| {
+            inline .e_list, .e_tuple => |list| {
                 for (ctx.store.sliceExpr(list.elems)) |elem| {
-                    ctx.walkExpr(elem, null, null);
-                    if (ctx.result != null) return;
-                }
-            },
-            .e_tuple => |tuple| {
-                for (ctx.store.sliceExpr(tuple.elems)) |elem| {
                     ctx.walkExpr(elem, null, null);
                     if (ctx.result != null) return;
                 }
@@ -849,11 +801,8 @@ const FindTagAtOffsetContext = struct {
                     if (ctx.result != null) return;
                 }
             },
-            .e_dbg => |dbg| {
+            inline .e_dbg, .e_expect_err => |dbg| {
                 ctx.walkExpr(dbg.expr, null, null);
-            },
-            .e_expect_err => |expect_err| {
-                ctx.walkExpr(expect_err.expr, null, null);
             },
             .e_expect => |exp| {
                 ctx.walkExpr(exp.body, null, null);
@@ -895,7 +844,7 @@ const FindTagAtOffsetContext = struct {
             .e_break,
             .e_bytes_literal,
             => {},
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -980,7 +929,7 @@ const FindTagAtOffsetContext = struct {
             .underscore,
             .runtime_error,
             => {},
-            .deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
+            .deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference pattern reached a stage that runs after import resolution", .{}),
         }
     }
 
@@ -1009,11 +958,8 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(r.expr, null, null);
             },
-            .s_expr => |e| {
+            inline .s_expr, .s_dbg => |e| {
                 ctx.walkExpr(e.expr, null, null);
-            },
-            .s_dbg => |dbg| {
-                ctx.walkExpr(dbg.expr, null, null);
             },
             .s_expect => |exp| {
                 ctx.walkExpr(exp.body, null, null);
@@ -1028,20 +974,10 @@ const FindTagAtOffsetContext = struct {
                 if (ctx.result != null) return;
                 ctx.walkExpr(for_stmt.body, null, null);
             },
-            .s_while => |w| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |w| {
                 ctx.walkExpr(w.cond, null, null);
                 if (ctx.result != null) return;
                 ctx.walkExpr(w.body, null, null);
-            },
-            .s_infinite_loop => |loop| {
-                ctx.walkExpr(loop.cond, null, null);
-                if (ctx.result != null) return;
-                ctx.walkExpr(loop.body, null, null);
-            },
-            .s_breakable_loop => |loop| {
-                ctx.walkExpr(loop.cond, null, null);
-                if (ctx.result != null) return;
-                ctx.walkExpr(loop.body, null, null);
             },
             .s_crash,
             .s_break,
@@ -1225,7 +1161,7 @@ const CollectBindingsContext = struct {
     oom: ?std.mem.Allocator.Error = null,
 
     fn visitStmtPre(ctx: *CollectBindingsContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse return .continue_traversal;
         ctx.declared.put(ctx.allocator, pattern_idx, {}) catch |err| {
             ctx.oom = err;
             return .stop;
@@ -1506,7 +1442,7 @@ const FindAnnotationNameContext = struct {
     result: ?CIR.Pattern.Idx = null,
 
     fn visitStmtPre(ctx: *FindAnnotationNameContext, _: CIR.Statement.Idx, stmt: CIR.Statement) VisitAction {
-        const pattern_idx = statementPattern(stmt) orelse return .continue_traversal;
+        const pattern_idx = module_lookup.getDeclarationPattern(stmt) orelse return .continue_traversal;
         const anno_idx = statementAnnotation(stmt) orelse return .continue_traversal;
         if (annotationNameContains(ctx.store, anno_idx, ctx.target_offset)) {
             ctx.result = pattern_idx;
@@ -1636,7 +1572,7 @@ pub fn resolveSymbolAtOffset(module_env: *ModuleEnv, offset: u32) ?CIR.Pattern.I
             .e_hosted_lambda,
             .e_run_low_level,
             => null,
-            .e_deferred_import_ref => std.debug.panic("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
+            .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
         },
         .field_access => null,
     };
