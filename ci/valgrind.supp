@@ -83,6 +83,8 @@
 # speculated `testb`/`je` followed by `cmp $1; cmovne`. This does not indicate
 # that Roc used uninitialized program memory, and the older toolchain's branchy
 # code did not trigger it.
+# The entry matches the helper by name, not the one instruction, so it would also
+# hide a genuine uninitialized read added inside `runtimeBackingType` later.
 {
    llvm-speculated-named-backing-presence-read
    Memcheck:Cond
