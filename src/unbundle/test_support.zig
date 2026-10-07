@@ -2,14 +2,19 @@
 
 const std = @import("std");
 
+/// One archive member. A link entry's `data` is its target.
 pub const Entry = struct {
     name: []const u8,
     kind: enum { file, symlink, hard_link } = .file,
     data: []const u8,
 };
 
+/// Everything building an archive can fail with. `std.tar.Writer` does not
+/// export its error set, so its members are listed here.
+pub const ArchiveError = error{ WriteFailed, OctalOverflow, NameTooLong } || std.fmt.BufPrintError || std.mem.Allocator.Error;
+
 /// The caller owns the returned bytes. Link entries use `data` as their target.
-pub fn archive(allocator: std.mem.Allocator, entries: []const Entry) ![]u8 {
+pub fn archive(allocator: std.mem.Allocator, entries: []const Entry) ArchiveError![]u8 {
     var tar: std.Io.Writer.Allocating = .init(allocator);
     defer tar.deinit();
     var writer = std.tar.Writer{ .underlying_writer = &tar.writer };
@@ -48,12 +53,14 @@ pub fn archive(allocator: std.mem.Allocator, entries: []const Entry) ![]u8 {
     return frame;
 }
 
+/// The BLAKE3 digest a bundle's file name encodes.
 pub fn hash(bytes: []const u8) [32]u8 {
     var result: [32]u8 = undefined;
     std.crypto.hash.Blake3.hash(bytes, &result, .{});
     return result;
 }
 
+/// The base58 file name stem for an archive with these bytes.
 pub fn hashName(bytes: []const u8, buffer: *[44]u8) []const u8 {
     return @import("base58").encode(hash(bytes), buffer);
 }
