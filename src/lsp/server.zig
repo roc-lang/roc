@@ -500,7 +500,9 @@ test "debug log refuses existing files and symlinks and has private permissions"
     defer file.close(io);
     try file.writeStreamingAll(io, "original");
     try std.testing.expectError(error.PathAlreadyExists, createPrivateLog(io, path));
-    const stat = try file.stat(io);
+    // The log handle only writes, and Windows grants a write-only handle no
+    // right to read the file's attributes, so the file is examined by path.
+    const stat = try tmp.dir.statFile(io, "log", .{});
     try std.testing.expectEqual(@as(u64, 8), stat.size);
     if (builtin.os.tag != .windows) {
         try std.testing.expectEqual(@as(std.posix.mode_t, 0o600), stat.permissions.toMode() & 0o777);
