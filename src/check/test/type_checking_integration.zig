@@ -9239,6 +9239,85 @@ test "check type - polarity - closed output row cannot be widened by callers" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - closed output row cannot be widened by its own recursive call" {
+    // A recursive call instantiates the annotation's predeclared scheme, whose
+    // result row is open, but the body closes that row by returning its
+    // closed parameter. The call is related to the scheme the body publishes,
+    // exactly like `wider`'s call above (issue #12095).
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by a recursive call after it closes" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| {
+        \\    if a != A { return a }
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by a recursive group member" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else g(a)
+        \\
+        \\g : [A] -> [A]
+        \\g = |a| {
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by an annotated local's recursive call" {
+    const source =
+        \\main = {
+        \\    f : [A] -> [A]
+        \\    f = |a| if a == A a else {
+        \\        _x = [f(a), B]
+        \\        a
+        \\    }
+        \\    f(A)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - open output row may be widened by its own recursive call" {
+    // The body constructs its result, so the row stays open in the published
+    // scheme and the recursive call may widen its own copy.
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A A else {
+        \\    _x = [f(a), B]
+        \\    A
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
+}
+
+test "check type - polarity - closed output row may be used unwidened by its own recursive call" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(a), A]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
+}
+
 test "check type - polarity - annotated input union stays closed" {
     const source =
         \\handle : [Known] -> Str

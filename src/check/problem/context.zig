@@ -104,6 +104,10 @@ pub const Context = union(enum) {
     expect,
     /// recursive definition mismatch
     recursive_def: RecursiveDef,
+    /// A use that instantiated an annotated definition's predeclared scheme
+    /// relies on a type the definition's published scheme does not have
+    /// (design.md "Predeclared Scheme Uses").
+    predeclared_use: PredeclaredUseContext,
 
     /// Context for function call
     pub const FnCallArityContext = struct {
@@ -333,6 +337,15 @@ pub const Context = union(enum) {
 
     pub const RecursiveDef = struct {
         /// The def name
+        def_name: ?Ident.Idx,
+    };
+
+    /// Context for a predeclared-scheme use rejected by the definition's
+    /// published scheme
+    pub const PredeclaredUseContext = struct {
+        /// The use: the reference or the dispatching expression
+        region: base.Region,
+        /// The referenced definition's name, when the use names it
         def_name: ?Ident.Idx,
     };
 };

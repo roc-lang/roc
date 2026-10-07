@@ -271,6 +271,7 @@ const DiagnosticNodeTag = enum {
     diag_infinite_loop_never_exits,
     diag_trailing_try_suffix,
     diag_return_outside_fn,
+    diag_redundant_return,
     diag_control_flow_in_expect,
     diag_var_reassigned_in_expect,
     diag_mutually_recursive_type_aliases,
@@ -743,7 +744,7 @@ pub fn deinit(store: *NodeStore) void {
 /// when adding/removing variants from ModuleEnv unions. Update these when modifying the unions.
 ///
 /// Count of the diagnostic nodes in the ModuleEnv
-pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 92;
+pub const MODULEENV_DIAGNOSTIC_NODE_COUNT = 93;
 /// Count of the expression nodes in the ModuleEnv
 pub const MODULEENV_EXPR_NODE_COUNT = 59;
 /// Count of the statement nodes in the ModuleEnv
@@ -5473,6 +5474,7 @@ pub fn addDiagnosticUnregistered(store: *NodeStore, reason: CIR.Diagnostic) Allo
         .break_outside_loop,
         .infinite_loop_never_exits,
         .trailing_try_suffix,
+        .redundant_return,
         .range_op_chained,
         => |r, tag| {
             node.tag = @field(Node.Tag, "diag_" ++ @tagName(tag));
@@ -5861,6 +5863,7 @@ pub fn getDiagnostic(store: *const NodeStore, diagnostic: CIR.Diagnostic.Idx) CI
         .diag_break_outside_loop,
         .diag_infinite_loop_never_exits,
         .diag_trailing_try_suffix,
+        .diag_redundant_return,
         .diag_range_op_chained,
         => |diag_tag| return @unionInit(CIR.Diagnostic, @tagName(diag_tag)["diag_".len..], .{
             .region = store.getRegionAt(node_idx),

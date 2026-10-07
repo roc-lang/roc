@@ -586,6 +586,14 @@ predeclared_use_fresh_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// annotation yet. Each is recorded against the method's own scheme when that
 /// body generates its annotation (`recordPredeclaredBodySlots`).
 waiting_predeclared_dispatch_uses: std.ArrayListUnmanaged(WaitingPredeclaredDispatchUse) = .empty,
+/// Uses of a predeclared scheme whose binding has not published its own
+/// scheme yet. Each is related to the published scheme by the boundary that
+/// publishes it (`relatePendingPredeclaredUsesOf`); see design.md "Predeclared
+/// Scheme Uses".
+pending_predeclared_use_relations: std.ArrayListUnmanaged(PendingPredeclaredUseRelation) = .empty,
+/// Backing storage for `PendingPredeclaredUseRelation.fresh`. Reclaimed once
+/// no relation is pending.
+predeclared_relation_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// The block-local (`s_decl`) analogue of `predeclared_scheme_vars`, keyed by
 /// pattern and live only while the local def is in flight (entries are
 /// removed when the statement finishes). The value is the def's annotation,
@@ -1613,6 +1621,9 @@ const SchemeRequirementCandidate = struct {
 const BoundaryRoot = struct {
     owner: Var,
     interface: Var,
+    /// The root's annotation, whose predeclared scheme uses this boundary
+    /// relates to the scheme it publishes.
+    annotation: ?CIR.Annotation.Idx = null,
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -2362,6 +2373,7 @@ const WaitingPredeclaredDispatchUse = struct {
     scheme_root: Var,
     record_policy: PredeclaredRecordPolicy,
     fresh: VarRange,
+    site: PredeclaredUseSite,
 };
 
 /// Whether a use of a predeclared scheme whose substitution turns out empty
@@ -2406,6 +2418,32 @@ const PredeclaredSlots = struct {
     /// Whether the predeclared scheme has evidence params, computed at the
     /// first use whose substitution is otherwise empty.
     has_evidence_params: ?bool = null,
+    /// Whether the binding's own scheme is final: the boundary that publishes
+    /// it has related every pending use, and a later use is related at once.
+    published: bool = false,
+};
+
+/// Where one use of a predeclared scheme happened, for relating it to the
+/// binding's published scheme and for reporting and retiring it when the
+/// published scheme rejects it.
+const PredeclaredUseSite = struct {
+    /// The referencing expression, or the dispatching expression; 0 for a
+    /// generated call, which has no expression of its own.
+    node_idx: u32,
+    /// The use's instantiation of the predeclared scheme.
+    use_var: Var,
+    region: Region,
+    def_name: ?Ident.Idx,
+};
+
+/// A use of a predeclared scheme waiting for its binding to publish its own
+/// scheme, in `pending_predeclared_use_relations`.
+const PendingPredeclaredUseRelation = struct {
+    annotation: CIR.Annotation.Idx,
+    site: PredeclaredUseSite,
+    /// This use's copies of the predeclared identity slots, in
+    /// `predeclared_relation_vars`.
+    fresh: VarRange,
 };
 
 const HoistPosition = enum {
@@ -3788,6 +3826,8 @@ pub fn deinit(self: *Self) void {
     self.pending_dispatch_targets.deinit(self.gpa);
     self.pending_predeclared_scheme_uses.deinit(self.gpa);
     self.predeclared_use_fresh_vars.deinit(self.gpa);
+    self.pending_predeclared_use_relations.deinit(self.gpa);
+    self.predeclared_relation_vars.deinit(self.gpa);
     self.waiting_predeclared_dispatch_uses.deinit(self.gpa);
     for (self.type_schemes.items) |*scheme| {
         scheme.indexed_vars.deinit(self.gpa);
@@ -11847,6 +11887,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
+    if (self.pending_predeclared_use_relations.items.len != 0) {
+        base.invariant("type checker invariant violated: a predeclared scheme use was never related to its binding's published scheme", .{});
+    }
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
@@ -11880,6 +11923,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Pruning can mark a destructured name erroneous; its uses are poisoned
     // like those of any other erroneous binding.
     try self.poisonErroneousValueUses();
+    try self.publishDispatchRelationMerges();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
@@ -17411,6 +17455,9 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
             waiting.scheme_root,
             waiting.record_policy,
         );
+        // The body has only just generated its annotation, so its scheme is
+        // published by a boundary still ahead.
+        try self.deferPredeclaredUse(annotation_idx, waiting.fresh.slice(self.predeclared_use_fresh_vars.items), waiting.site);
     }
     self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
     self.reclaimPredeclaredUseFreshVars();
@@ -17555,6 +17602,8 @@ fn recordInFlightPredeclaredSchemeUse(
     slot_data: u32,
     scheme_root: Var,
     policy: PredeclaredRecordPolicy,
+    site: PredeclaredUseSite,
+    env: *Env,
 ) Allocator.Error!void {
     const fresh_start = self.predeclared_use_fresh_vars.items.len;
     defer self.predeclared_use_fresh_vars.shrinkRetainingCapacity(fresh_start);
@@ -17562,6 +17611,188 @@ fn recordInFlightPredeclaredSchemeUse(
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items));
     try self.writePredeclaredSchemeUse(annotation_idx, slot, node_idx, slot_data, scheme_root, policy);
+    try self.relateOrDeferPredeclaredUse(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items), site, env);
+}
+
+/// Relate a use of a predeclared scheme to its binding's own scheme now if
+/// that scheme is published, or keep it for the boundary that publishes it.
+fn relateOrDeferPredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+    env: *Env,
+) Allocator.Error!void {
+    if (self.predeclaredSlotsPtr(annotation_idx).published) {
+        return self.relatePredeclaredUse(annotation_idx, use_copies, site, null, env);
+    }
+    try self.deferPredeclaredUse(annotation_idx, use_copies, site);
+}
+
+/// Keep a use of a predeclared scheme until the boundary that publishes its
+/// binding's own scheme relates it.
+fn deferPredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+) Allocator.Error!void {
+    std.debug.assert(!self.predeclaredSlotsPtr(annotation_idx).published);
+    const start: u32 = @intCast(self.predeclared_relation_vars.items.len);
+    try self.predeclared_relation_vars.appendSlice(self.gpa, use_copies);
+    try self.pending_predeclared_use_relations.append(self.gpa, .{
+        .annotation = annotation_idx,
+        .site = site,
+        .fresh = .{ .start = start, .len = @intCast(use_copies.len) },
+    });
+}
+
+/// Relate every pending use of `annotation_idx` to its binding's own scheme.
+/// `quantified_from` is the rank of the boundary about to generalize that
+/// scheme, or null once it has. Returns whether any use was related.
+fn relatePendingPredeclaredUsesOf(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    quantified_from: ?Rank,
+    env: *Env,
+) Allocator.Error!bool {
+    var related = false;
+    var write: usize = 0;
+    var read: usize = 0;
+    while (read < self.pending_predeclared_use_relations.items.len) : (read += 1) {
+        const pending = self.pending_predeclared_use_relations.items[read];
+        if (pending.annotation != annotation_idx) {
+            self.pending_predeclared_use_relations.items[write] = pending;
+            write += 1;
+            continue;
+        }
+        try self.relatePredeclaredUse(
+            annotation_idx,
+            pending.fresh.slice(self.predeclared_relation_vars.items),
+            pending.site,
+            quantified_from,
+            env,
+        );
+        related = true;
+    }
+    self.pending_predeclared_use_relations.shrinkRetainingCapacity(write);
+    if (write == 0) self.predeclared_relation_vars.clearRetainingCapacity();
+    return related;
+}
+
+/// Relate the pending uses of every predeclared annotation a generalization
+/// boundary's roots own, while the boundary is still open: everything that
+/// boundary will quantify sits at or above its rank.
+fn relateBoundaryPredeclaredUses(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!bool {
+    var related = false;
+    for (roots) |root| {
+        const annotation_idx = root.annotation orelse continue;
+        if (!self.predeclared_slots.contains(annotation_idx)) continue;
+        if (try self.relatePendingPredeclaredUsesOf(annotation_idx, env.rank(), env)) related = true;
+    }
+    return related;
+}
+
+/// Mark the predeclared annotations a finished boundary's roots own as
+/// published, so every later use relates at once.
+fn publishBoundaryPredeclaredSchemes(self: *Self, roots: []const BoundaryRoot) void {
+    for (roots) |root| {
+        const annotation_idx = root.annotation orelse continue;
+        const slots = self.predeclared_slots.getPtr(annotation_idx) orelse continue;
+        slots.published = true;
+    }
+}
+
+/// Relate one use of a predeclared scheme to its binding's own scheme
+/// (design.md "Predeclared Scheme Uses"). Both generations of the annotation
+/// enumerate the same identity slots, but the body may have solved a slot the
+/// use's copy left free: it may close an implicitly opened output row, or join
+/// it with another slot. The use must be an instance of the binding's scheme,
+/// so each body slot the scheme quantifies stands for the use's copy of the
+/// first slot that reaches it, and every other slot's copy must equal that
+/// slot's image. A rejected use is reported and retired; the binding keeps its
+/// own scheme.
+fn relatePredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+    quantified_from: ?Rank,
+    env: *Env,
+) Allocator.Error!void {
+    const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
+        base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
+    const body = body_range.slice(self.predeclared_slot_vars.items);
+    var images = std.AutoHashMap(Var, Var).init(self.gpa);
+    defer images.deinit();
+    for (body, use_copies[0..body.len]) |body_var, use_copy| {
+        const image = (try self.predeclaredSlotImage(body_var, use_copy, quantified_from, &images, site.region, env)) orelse continue;
+        const result = try self.runUnify(use_copy, image, env, .{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
+        if (!result.isAccepted()) {
+            try self.rejectPredeclaredUse(annotation_idx, site);
+            return;
+        }
+    }
+}
+
+/// The type a use's copy of one predeclared slot must have, given what the
+/// body solved that slot to, or null when the copy is free: it is the first
+/// to reach a quantified slot, or the body already rejected the slot.
+fn predeclaredSlotImage(
+    self: *Self,
+    body_var: Var,
+    use_copy: Var,
+    quantified_from: ?Rank,
+    images: *std.AutoHashMap(Var, Var),
+    region: Region,
+    env: *Env,
+) Allocator.Error!?Var {
+    var current = body_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
+            const quantified = resolved.desc.rank == .generalized or
+                (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
+            if (!quantified) return resolved.var_;
+            const entry = try images.getOrPut(resolved.var_);
+            if (entry.found_existing) return entry.value_ptr.*;
+            entry.value_ptr.* = use_copy;
+            return null;
+        }
+        switch (resolved.desc.content) {
+            .err => return null,
+            .structure => |flat| switch (flat) {
+                // A closed row has no variables, so a fresh copy is its
+                // image under every substitution.
+                .empty_tag_union => return try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region),
+                // A row with no tags is its extension.
+                .tag_union => |tag_union| if (tag_union.tags.len() == 0) {
+                    current = tag_union.ext;
+                    continue;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
+            },
+            .alias, .field_presence, .flex, .rigid => {},
+        }
+        // The annotation's rigids cannot be solved, and its implicitly opened
+        // rows are bounded: they may close or join another row, but never
+        // gain a tag.
+        base.invariant("type checker invariant violated: an annotated body solved a predeclared identity slot to structure other than a row", .{});
+    }
+}
+
+/// Report a use of a predeclared scheme that its binding's own scheme
+/// rejects, and retire the use; the binding keeps its scheme.
+fn rejectPredeclaredUse(self: *Self, annotation_idx: CIR.Annotation.Idx, site: PredeclaredUseSite) Allocator.Error!void {
+    _ = try self.appendTypeMismatch(ModuleEnv.varFrom(annotation_idx), site.use_var, .{ .predeclared_use = .{
+        .region = site.region,
+        .def_name = site.def_name,
+    } });
+    if (site.node_idx != 0) {
+        try self.markErroneousValueExpr(@fromBackingInt(site.node_idx));
+    } else {
+        try self.markErroneous(site.use_var);
+    }
 }
 
 /// Record a dispatch edge to an annotated method that selected the method's
@@ -17574,9 +17805,18 @@ fn recordPredeclaredDispatchUse(
     constraint_fn_var: Var,
     scheme_root: Var,
     policy: PredeclaredRecordPolicy,
+    use_var: Var,
+    region: Region,
+    env: *Env,
 ) Allocator.Error!void {
+    const site: PredeclaredUseSite = .{
+        .node_idx = node_idx,
+        .use_var = use_var,
+        .region = region,
+        .def_name = null,
+    };
     if (self.predeclaredSlotsPtr(annotation_idx).body != null) {
-        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy);
+        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
     }
     try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{
         .annotation = annotation_idx,
@@ -17585,6 +17825,7 @@ fn recordPredeclaredDispatchUse(
         .scheme_root = scheme_root,
         .record_policy = policy,
         .fresh = try self.appendPredeclaredUseFreshVars(annotation_idx),
+        .site = site,
     });
 }
 
@@ -18065,6 +18306,7 @@ fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Er
                 state.member_roots[i] = .{
                     .owner = ModuleEnv.varFrom(member_def.expr),
                     .interface = ModuleEnv.varFrom(member_def.expr),
+                    .annotation = member_def.annotation,
                 };
             }
 
@@ -18272,9 +18514,14 @@ fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResu
         },
         .replayed_after_capture => {
             const replayed_after_capture = input.?.replayedAny();
-            if (!state.replayed_before_capture and !replayed_after_capture and
+            // Every use of a root's predeclared scheme relates to the scheme
+            // this boundary publishes. A relation can pin a receiver, so the
+            // boundary runs another round after relating any.
+            const related_predeclared_uses = try self.relateBoundaryPredeclaredUses(state.roots, env);
+            if (!state.replayed_before_capture and !replayed_after_capture and !related_predeclared_uses and
                 self.pending_dispatch_targets.items.len == state.pending_before)
             {
+                self.publishBoundaryPredeclaredSchemes(state.roots);
                 try self.finalizeFunctionEffectsAtBoundary(state.roots);
                 // Invariant D: every remaining deferred dispatch constraint targets a
                 // checked def, an annotated scheme, or a still-flex receiver.
@@ -18874,6 +19121,12 @@ fn replayPredeclaredSchemeUse(
 
     try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
     try self.writePredeclaredSchemeUse(annotation_idx, .value_use, @backingInt(pending.source_expr), 0, scheme_root, .when_needed);
+    try self.relateOrDeferPredeclaredUse(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items), .{
+        .node_idx = @backingInt(pending.source_expr),
+        .use_var = pending.use_var,
+        .region = self.cir.store.getExprRegion(pending.source_expr),
+        .def_name = self.getPatternIdent(self.cir.store.getDef(pending.target_def).pattern),
+    }, env);
 
     for (instantiated_requirements.items) |requirement| {
         try self.registerInstantiatedSchemeRequirement(
@@ -24293,6 +24546,8 @@ const ExprCheckFrame = struct {
     should_generalize: bool,
     rank_pushed: bool,
     hoist_frame: ?HoistFrameGuard,
+    /// The annotation this frame materialized, if any.
+    annotation: ?CIR.Annotation.Idx = null,
     active: bool = true,
 
     fn deinit(self: *ExprCheckFrame) void {
@@ -24398,6 +24653,18 @@ const ExprCheckFrame = struct {
         // Check any accumulated static dispatch constraints
         try checker.checkStaticDispatchConstraints(env, false);
 
+        // A frame that does not generalize publishes its annotation's scheme
+        // as it stands; a group member's scheme is published by its group's
+        // boundary instead.
+        if (!self.should_generalize and !self.suppress_group_member_generalize) {
+            if (self.annotation) |annotation_idx| {
+                if (checker.predeclared_slots.getPtr(annotation_idx)) |slots| {
+                    _ = try checker.relatePendingPredeclaredUsesOf(annotation_idx, null, env);
+                    slots.published = true;
+                }
+            }
+        }
+
         // If this type of expr should be generalized, generalize it!
         if (self.should_generalize) {
             // Bind pending record-destructure binders BEFORE boundary literal
@@ -24418,7 +24685,10 @@ const ExprCheckFrame = struct {
             // obligations (pinned at the group's boundary rank) escape this
             // frame and stay live for the group boundary.
             try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            const roots = [_]BoundaryRoot{.{ .owner = self.expr_var_raw, .interface = self.expr_var, .annotation = self.annotation }};
+            _ = try checker.relateBoundaryPredeclaredUses(&roots, env);
             try self.generalize();
+            checker.publishBoundaryPredeclaredSchemes(&roots);
         }
 
         try self.hoist_frame.?.finish(does_fx);
@@ -24568,6 +24838,7 @@ fn beginExprCheckFrame(
                 try self.boundAnnotationRows(annotation_idx);
             }
             try self.recordPredeclaredBodySlots(annotation_idx);
+            frame.annotation = annotation_idx;
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_backup = try self.expectedTypeBackup(anno_var, env);
             break :blk .{
@@ -24785,7 +25056,11 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
             state.finishing = .{ .frame = frame.*, .does_fx = does_fx };
             frame.active = false;
             const roots = try self.gpa.alloc(BoundaryRoot, 1);
-            roots[0] = .{ .owner = state.finishing.?.frame.expr_var_raw, .interface = state.finishing.?.frame.expr_var };
+            roots[0] = .{
+                .owner = state.finishing.?.frame.expr_var_raw,
+                .interface = state.finishing.?.frame.expr_var,
+                .annotation = state.finishing.?.frame.annotation,
+            };
             return .{ .push = .{ .boundary = .{ .roots = roots, .owns_roots = true } } };
         },
     }
@@ -25227,6 +25502,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 0,
                                 ModuleEnv.varFrom(referenced_def.expr),
                                 .when_needed,
+                                .{
+                                    .node_idx = @backingInt(expr_idx),
+                                    .use_var = expr_var,
+                                    .region = expr_region,
+                                    .def_name = processing_def.def_name,
+                                },
+                                env,
                             );
                             _ = try self.unify(expr_var, instantiated, env);
                             try self.recordRecursiveReference(
@@ -25286,6 +25568,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                     0,
                                     ModuleEnv.varFrom(referenced_def.expr),
                                     .when_needed,
+                                    .{
+                                        .node_idx = @backingInt(expr_idx),
+                                        .use_var = expr_var,
+                                        .region = expr_region,
+                                        .def_name = processing_def.def_name,
+                                    },
+                                    env,
                                 );
                                 _ = try self.unify(expr_var, instantiated, env);
                                 try self.recordRecursiveReference(
@@ -25367,6 +25656,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         0,
                         pat_var,
                         .when_needed,
+                        .{
+                            .node_idx = @backingInt(expr_idx),
+                            .use_var = expr_var,
+                            .region = expr_region,
+                            .def_name = local_def.def_name,
+                        },
+                        env,
                     );
                     _ = try self.unify(expr_var, instantiated, env);
                     try self.recordRecursiveReference(
@@ -41969,6 +42265,9 @@ fn instantiateDispatchTargetMethodVar(
             constraint.fn_var,
             method_type_var,
             .always,
+            method_var,
+            region,
+            env,
         );
     }
 
@@ -48131,6 +48430,98 @@ fn literalTargetIsBuiltinDirect(
     }
 }
 
+/// Publish every static-dispatch relation the unifier folded into a retained
+/// relation and that selected no target of its own, mapped to the first
+/// relation, in fold order, reachable through its folds whose target checking
+/// selected. Solving is settled here. One relation can be folded more than
+/// once, because a deferred copy of a constraint keeps it in another
+/// constraint list; every relation it reaches is unified with it and must
+/// have selected the same method. Such a relation's dispatch shares that
+/// relation's instantiation, and checked publication keys it by these exact
+/// raw vars rather than by union-find roots, which unrelated dispatches can
+/// come to share.
+fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
+    const merges = self.types.static_dispatch_relation_merges.items;
+    if (merges.len == 0) return;
+
+    // Each dropped var's folds, in journal order, as a linked list over
+    // journal indexes.
+    const no_fold = std.math.maxInt(u32);
+    var first_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer first_fold.deinit(self.gpa);
+    var last_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer last_fold.deinit(self.gpa);
+    const next_fold = try self.gpa.alloc(u32, merges.len);
+    defer self.gpa.free(next_fold);
+    try first_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    try last_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    for (merges, 0..) |merge, index| {
+        next_fold[index] = no_fold;
+        const last = last_fold.getOrPutAssumeCapacity(merge.dropped_fn_var);
+        if (last.found_existing) {
+            next_fold[last.value_ptr.*] = @intCast(index);
+        } else {
+            first_fold.putAssumeCapacity(merge.dropped_fn_var, @intCast(index));
+        }
+        last.value_ptr.* = @intCast(index);
+    }
+
+    var stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+
+    try self.cir.dispatch_relation_merges.items.ensureUnusedCapacity(self.gpa, first_fold.count());
+    for (merges, 0..) |merge, index| {
+        const dropped = merge.dropped_fn_var;
+        // Visit each dropped var once, at its first fold.
+        if (first_fold.get(dropped).? != index) continue;
+        // A deferred copy of the folded constraint can still discharge it;
+        // that selection is its own exact instantiation.
+        if (self.dispatch_target_instantiation_by_fn_var.contains(dropped)) continue;
+
+        stack.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        try visited.put(self.gpa, dropped, {});
+        var selected: ?Var = null;
+        var fold = first_fold.get(dropped).?;
+        while (true) {
+            // Push this var's folds in reverse so they pop in journal order.
+            const push_start = stack.items.len;
+            while (fold != no_fold) : (fold = next_fold[fold]) {
+                const retained = merges[fold].retained_fn_var;
+                if ((try visited.getOrPut(self.gpa, retained)).found_existing) continue;
+                try stack.append(self.gpa, retained);
+            }
+            std.mem.reverse(Var, stack.items[push_start..]);
+
+            const current = stack.pop() orelse break;
+            if (self.dispatch_target_instantiation_by_fn_var.get(current)) |raw_index| {
+                if (selected) |first| {
+                    const first_target = self.dispatch_target_instantiations.items[self.dispatch_target_instantiation_by_fn_var.get(first).?];
+                    const target = self.dispatch_target_instantiations.items[raw_index];
+                    if (first_target.target_env != target.target_env or
+                        !std.meta.eql(first_target.target_binding, target.target_binding))
+                    {
+                        base.invariant("a folded static-dispatch relation reached two different selected methods", .{});
+                    }
+                } else {
+                    selected = current;
+                }
+                fold = no_fold;
+                continue;
+            }
+            fold = first_fold.get(current) orelse no_fold;
+        }
+
+        const retained = selected orelse continue;
+        self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
+            .dropped_fn_var = @backingInt(dropped),
+            .retained_fn_var = @backingInt(retained),
+        });
+    }
+}
+
 /// Seal every live literal record with the exact decision checking made. The
 /// method-instantiation table is positive evidence for a concrete custom
 /// target; an identity-bearing target remains a specialization obligation.
@@ -48146,18 +48537,14 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    // Evidence is recorded under each discharged constraint's raw fn_var, but
-    // same-name literal constraints deduplicate when their receivers unify
-    // (e.g. two elements of one list): the callable vars are unified and only
-    // one raw fn_var survives on the merged constraint. Solving is settled
-    // here, so comparing resolved roots recovers every literal's share of that
-    // one discharged edge.
-    var evidence_fn_roots = collections.DenseMap(Var, void).init(self.gpa);
-    defer evidence_fn_roots.deinit();
-    try evidence_fn_roots.ensureTotalCapacity(self.dispatch_target_instantiation_by_fn_var.count());
-    var evidence_key_it = self.dispatch_target_instantiation_by_fn_var.keyIterator();
-    while (evidence_key_it.next()) |evidence_fn_var| {
-        try evidence_fn_roots.put(self.types.resolveVar(evidence_fn_var.*).var_, {});
+    // A literal whose constraint was folded into a same-name relation (e.g.
+    // two elements of one list) shares the target that relation selected.
+    var folded_fn_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer folded_fn_vars.deinit();
+    const merges = self.cir.dispatch_relation_merges.items.items;
+    try folded_fn_vars.ensureTotalCapacity(@intCast(merges.len));
+    for (merges) |merge| {
+        try folded_fn_vars.put(@fromBackingInt(merge.dropped_fn_var), {});
     }
 
     // Finalization only changes resolution fields and retirement happens
@@ -48202,7 +48589,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;
             }
-            if (evidence_fn_roots.contains(self.types.resolveVar(fn_var).var_)) {
+            if (self.dispatch_target_instantiation_by_fn_var.contains(fn_var) or
+                folded_fn_vars.contains(fn_var))
+            {
                 break :resolution .custom_dispatch;
             }
 
@@ -50909,6 +51298,9 @@ fn instantiateGeneratedCodecMethodTarget(
             evidence_var,
             method_type_var,
             .when_needed,
+            method_var,
+            region,
+            env,
         );
     } else if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))

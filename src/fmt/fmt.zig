@@ -792,6 +792,7 @@ const Formatter = struct {
 
     const StatementFrame = struct {
         si: AST.Statement.Idx,
+        return_comments_flushed: bool = false,
         phase: u8 = 0,
         multiline: bool = false,
         /// Indentation restored when the statement completes.
@@ -866,7 +867,7 @@ const Formatter = struct {
             .expr => |e| {
                 if (f.phase != 0) return fmt.finishStatement(f);
                 f.phase = 1;
-                return call(exprFrame(e.expr, .{}));
+                return call(exprFrame(e.expr, .{ .block_is_statement = true }));
             },
             .import => |i| {
                 var flushed = false;
@@ -1228,15 +1229,19 @@ const Formatter = struct {
             },
             .@"return" => |r| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll(kw(.KwReturn));
+                const redundant = fmt.ast.redundant_returns.isSet(@backingInt(f.si));
+                if (!redundant) try fmt.pushAll(kw(.KwReturn));
                 const body_region = fmt.nodeRegion(@backingInt(r.expr));
-                if (multiline and try fmt.flushContinuationComments(body_region.start)) {
+                if (redundant and !f.return_comments_flushed and fmt.hasCommentBefore(body_region.start)) {
+                    _ = try fmt.flushCommentsBefore(body_region.start);
                     try fmt.pushIndent();
-                } else {
+                } else if (!redundant and multiline and try fmt.flushContinuationComments(body_region.start)) {
+                    try fmt.pushIndent();
+                } else if (!redundant) {
                     try fmt.push(' ');
                 }
                 f.phase = 1;
-                return call(exprFrame(r.expr, .{}));
+                return call(exprFrame(r.expr, .{ .block_is_statement = redundant }));
             },
             .@"break" => {
                 try fmt.pushAll(kw(.KwBreak));
@@ -1785,6 +1790,8 @@ const Formatter = struct {
     const ExprFormatContext = struct {
         behavior: ExprFormatBehavior = .normal,
         question_suffix_follows: bool = false,
+        // A bare `{ name }` in statement position is a punned record.
+        block_is_statement: bool = false,
         // Follow only the leading callee/receiver until emitted parentheses
         // establish an ordinary expression context. Arguments start fresh.
         starts_pipe_target: bool = false,
@@ -1952,7 +1959,7 @@ const Formatter = struct {
                     try fmt.flushCommentsBeforeDiscard(item_region.start);
                 }
                 try fmt.ensureNewline();
-                try fmt.pushIndent();
+                if (!fmt.removedReturnHasLeadingComment(f.expr)) try fmt.pushIndent();
             }
             return call(exprFrame(f.expr, .{}));
         }
@@ -2022,9 +2029,84 @@ const Formatter = struct {
         lambda: struct { args_multiline: bool, next: usize },
         conditional: struct { base_indent: u32 },
         match: struct { branch_indent: u32, next: usize },
-        block: struct { next: usize },
+        block: struct { next: usize, group_single_ident: bool },
         nominal_record: struct { parenthesize_mapper: bool },
     };
+
+    fn removedReturnHasLeadingComment(fmt: *Formatter, expr_idx: AST.Expr.Idx) bool {
+        const expr = fmt.ast.store.getExpr(expr_idx);
+        return expr == .@"return" and fmt.ast.redundant_returns.isSet(@backingInt(expr_idx)) and
+            fmt.hasCommentBefore(fmt.nodeRegion(@backingInt(expr.@"return".expr)).start);
+    }
+
+    fn statementEmitsBareIdent(fmt: *Formatter, stmt_idx: AST.Statement.Idx) bool {
+        const stmt = fmt.ast.store.getStatement(stmt_idx);
+        var expr_idx = switch (stmt) {
+            .expr => |expr| expr.expr,
+            .@"return" => |ret| if (fmt.ast.redundant_returns.isSet(@backingInt(stmt_idx))) ret.expr else return false,
+            .decl,
+            .@"var",
+            .crash,
+            .dbg,
+            .expect,
+            .@"for",
+            .@"while",
+            .@"break",
+            .import,
+            .file_import,
+            .type_decl,
+            .type_anno,
+            .malformed,
+            => return false,
+        };
+        while (true) {
+            switch (fmt.ast.store.getExpr(expr_idx)) {
+                .ident => |ident| return ident.qualifiers.span.len == 0 and fmt.ast.tokens.tokenTag(ident.token) == .LowerIdent,
+                .@"return" => |ret| {
+                    if (!fmt.ast.redundant_returns.isSet(@backingInt(expr_idx))) return false;
+                    expr_idx = ret.expr;
+                },
+                .int,
+                .frac,
+                .typed_int,
+                .typed_frac,
+                .single_quote,
+                .string_part,
+                .string,
+                .multiline_string,
+                .typed_string,
+                .typed_multiline_string,
+                .list,
+                .tuple,
+                .record,
+                .tag,
+                .lambda,
+                .apply,
+                .record_updater,
+                .field_access,
+                .method_call,
+                .tuple_access,
+                .arrow_call,
+                .bin_op,
+                .suffix_single_question,
+                .unary_op,
+                .if_then_else,
+                .if_without_else,
+                .match,
+                .dbg,
+                .crash,
+                .record_builder,
+                .nominal_record,
+                .nominal_apply,
+                .ellipsis,
+                .@"break",
+                .block,
+                .for_expr,
+                .malformed,
+                => return false,
+            }
+        }
+    }
 
     fn finishExpr(fmt: *Formatter, f: *ExprFrame) Step {
         fmt.curr_indent = f.indent;
@@ -2916,7 +2998,11 @@ const Formatter = struct {
                             fmt.curr_indent += 1;
                             try fmt.push('{');
                             try fmt.markRedundantOpenRows(statements, .block);
-                            f.locals = .{ .block = .{ .next = 0 } };
+                            f.locals = .{ .block = .{
+                                .next = 0,
+                                .group_single_ident = format_context.block_is_statement and
+                                    statements.len == 1 and fmt.statementEmitsBareIdent(statements[0]),
+                            } };
                             continue :sw 1;
                         } else if (fmt.regionHasInteriorComment(b.region)) {
                             try fmt.push('{');
@@ -2941,9 +3027,17 @@ const Formatter = struct {
                             const statement_region = fmt.nodeRegion(@backingInt(s));
                             _ = try fmt.flushCommentsBeforeWithSpacing(statement_region.start, .{ .after_block_open = state.next == 0 });
                             try fmt.ensureNewline();
+                            const stmt = fmt.ast.store.getStatement(s);
+                            const moved_return_comment = stmt == .@"return" and
+                                fmt.ast.redundant_returns.isSet(@backingInt(s)) and
+                                fmt.hasCommentBefore(fmt.nodeRegion(@backingInt(stmt.@"return".expr)).start);
+                            if (moved_return_comment) {
+                                _ = try fmt.flushCommentsBefore(fmt.nodeRegion(@backingInt(stmt.@"return".expr)).start);
+                            }
                             try fmt.pushIndent();
                             f.phase = 2;
-                            return call(.{ .statement = .{ .si = s } });
+                            if (state.group_single_ident) try fmt.push('(');
+                            return call(.{ .statement = .{ .si = s, .return_comments_flushed = moved_return_comment } });
                         }
                         try fmt.ensureNewline();
                         fmt.curr_indent -= 1;
@@ -2953,6 +3047,7 @@ const Formatter = struct {
                     },
                     2 => {
                         const state = &f.locals.block;
+                        if (state.group_single_ident) try fmt.push(')');
                         if (state.next == statements.len - 1) {
                             const statement_region = fmt.nodeRegion(@backingInt(statements[state.next]));
                             _ = try fmt.flushCommentsBeforeWithSpacing(statement_region.end, .{ .before_block_close = true });
@@ -2995,15 +3090,20 @@ const Formatter = struct {
             },
             .@"return" => |r| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll(kw(.KwReturn));
+                    const redundant = fmt.ast.redundant_returns.isSet(@backingInt(f.ei));
+                    if (!redundant) try fmt.pushAll(kw(.KwReturn));
                     const body_region = fmt.nodeRegion(@backingInt(r.expr));
-                    if (multiline and try fmt.flushContinuationComments(body_region.start)) {
+                    if (redundant and fmt.hasCommentBefore(body_region.start)) {
+                        if (!fmt.has_newline) fmt.curr_indent += 1;
+                        _ = try fmt.flushCommentsBefore(body_region.start);
                         try fmt.pushIndent();
-                    } else {
+                    } else if (!redundant and multiline and try fmt.flushContinuationComments(body_region.start)) {
+                        try fmt.pushIndent();
+                    } else if (!redundant) {
                         try fmt.push(' ');
                     }
                     f.phase = 1;
-                    return call(exprFrame(r.expr, .{}));
+                    return call(exprFrame(r.expr, if (redundant) format_context else .{}));
                 },
                 else => return fmt.finishExpr(f),
             },
@@ -9072,5 +9172,122 @@ test "module formatting reports ParsingFailed when the tokenizer rejects the sou
     };
     for (inputs) |input| {
         try std.testing.expectError(error.ParsingFailed, moduleFmtsStable(std.testing.allocator, input, false));
+    }
+}
+
+test "issue 12106: remove final returns and preserve early returns" {
+    const source =
+        \\sign_label = |n| {
+        \\    if n < 0 {
+        \\        return "negative"
+        \\    }
+        \\    return "non-negative"
+        \\}
+        \\
+        \\fizz_buzz = |n| {
+        \\    if n % 15 == 0 {
+        \\        return "fizzbuzz"
+        \\    } else if n % 3 == 0 {
+        \\        return "fizz"
+        \\    } else if n % 5 == 0 {
+        \\        return "buzz"
+        \\    } else {
+        \\        return n.to_str()
+        \\    }
+        \\}
+    ;
+    const expected =
+        \\sign_label = |n| {
+        \\    if n < 0 {
+        \\        return "negative"
+        \\    }
+        \\    "non-negative"
+        \\}
+        \\
+        \\fizz_buzz = |n| {
+        \\    if n % 15 == 0 {
+        \\        "fizzbuzz"
+        \\    } else if n % 3 == 0 {
+        \\        "fizz"
+        \\    } else if n % 5 == 0 {
+        \\        "buzz"
+        \\    } else {
+        \\        n.to_str()
+        \\    }
+        \\}
+    ;
+    const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(formatted);
+    const normalized_expected = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(normalized_expected);
+    try std.testing.expectEqualStrings(normalized_expected, formatted);
+}
+
+test "issue 12106: return context follows function results" {
+    const cases = [_]struct { source: []const u8, expected: []const u8 }{
+        .{ .source = "f = |x| { return x }", .expected = "f = |x| { x }" },
+        .{ .source = "f = |x| return x", .expected = "f = |x| x" },
+        .{ .source = "f = |x| (return x)", .expected = "f = |x| (x)" },
+        .{ .source = "f = |x| (return x, 2)", .expected = "f = |x| (return x, 2)" },
+        .{ .source = "f = |x| match x { y if y < 0 => { return 1 }, _ => { return 2 } }", .expected = "f = |x| match x { y if y < 0 => { 1 }, _ => { 2 } }" },
+        .{ .source = "f = |x| { { return x } }", .expected = "f = |x| { { (x) } }" },
+        .{ .source = "f = |x| match x { True => return 1, False => { return 2 } }", .expected = "f = |x| match x { True => 1, False => { 2 } }" },
+        .{ .source = "f = |x| { return if x { return 1 } else { return 2 } }", .expected = "f = |x| { if x { 1 } else { 2 } }" },
+        .{ .source = "f = |x| { inner = |y| { return y }\n return inner(x) }", .expected = "f = |x| { inner = |y| { y }\n inner(x) }" },
+        .{ .source = "f = |x| { y = { return x }\n y }", .expected = "f = |x| { y = { return x }\n y }" },
+        .{ .source = "f = |x| [{ return x }]", .expected = "f = |x| [{ return x }]" },
+        .{ .source = "f = |x| { for y in x { return y }\n 0 }", .expected = "f = |x| { for y in x { return y }\n 0 }" },
+        .{ .source = "f = |x| { while x { return 1 }\n 0 }", .expected = "f = |x| { while x { return 1 }\n 0 }" },
+        .{ .source = "f = |x| { if x { return 1 } else { return 2 }\n 3 }", .expected = "f = |x| { if x { return 1 } else { return 2 }\n 3 }" },
+    };
+    for (cases) |case| {
+        const formatted = moduleFmtsStable(std.testing.allocator, case.source, false) catch |err| {
+            std.debug.print("Source: {s}\n", .{case.source});
+            return err;
+        };
+        defer std.testing.allocator.free(formatted);
+        const expected = try moduleFmtsStable(std.testing.allocator, case.expected, false);
+        defer std.testing.allocator.free(expected);
+        std.testing.expectEqualStrings(expected, formatted) catch |err| {
+            std.debug.print("Source: {s}\n", .{case.source});
+            return err;
+        };
+    }
+}
+
+test "issue 12106: preserve comments around removed return keywords" {
+    const source =
+        \\f = |x| {
+        \\    # before
+        \\    return # between
+        \\        x # after
+        \\}
+    ;
+    const expected =
+        \\f = |x| {
+        \\    # before
+        \\    # between
+        \\    x # after
+        \\}
+    ;
+    const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
+    defer std.testing.allocator.free(formatted);
+    const normalized_expected = try moduleFmtsStable(std.testing.allocator, expected, false);
+    defer std.testing.allocator.free(normalized_expected);
+    try std.testing.expectEqualStrings(normalized_expected, formatted);
+}
+
+test "issue 12106: removed return comments remain stable in expression contexts" {
+    const cases = [_][]const u8{
+        "f = |x| return # between\n x",
+        "f = |x| { { return # between\n x } }",
+        "f = |x| if x { return # between\n 1 } else { return 2 }",
+        "f = |x| (return # between\n x)",
+    };
+    for (cases) |source| {
+        const formatted = try moduleFmtsStable(std.testing.allocator, source, false);
+        defer std.testing.allocator.free(formatted);
+        try std.testing.expect(std.mem.find(u8, formatted, "# between") != null);
+        try std.testing.expect(std.mem.find(u8, formatted, "return") == null);
     }
 }

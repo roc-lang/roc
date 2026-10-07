@@ -292,7 +292,9 @@ pub const Constants = struct {
     /// 133: Type descriptor flags mark deferred requirement callables.
     /// 134: Hoisted roots record an unannotated top-level value that always
     ///      crashes as a valueless binding.
-    pub const CACHE_VERSION = 134;
+    /// 135: Canonicalization warns on redundant returns recorded by parsing.
+    /// 136: Folded dispatch relations carry explicit target substitutions.
+    pub const CACHE_VERSION = 136;
 };
 
 /// Configuration for the Roc cache system.

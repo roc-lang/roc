@@ -3899,3 +3899,104 @@ pub fn getRequiresEntry(store: *const NodeStore, idx: AST.RequiresEntry.Idx) AST
         .region = node.region,
     };
 }
+
+/// Record returns whose value flows directly to the enclosing function result.
+/// Only function bodies and their final blocks/conditional branches propagate
+/// this context. Operands, bindings, conditions and loop bodies do not.
+pub fn collectRedundantReturns(store: *const NodeStore) Allocator.Error!std.DynamicBitSetUnmanaged {
+    var returns = try std.DynamicBitSetUnmanaged.initEmpty(store.gpa, store.nodes.len());
+    errdefer returns.deinit(store.gpa);
+    var pending: std.ArrayList(AST.Expr.Idx) = .empty;
+    defer pending.deinit(store.gpa);
+
+    for (store.nodes.items.items(.tag), 0..) |tag, idx| {
+        if (tag == .lambda) {
+            try pending.append(store.gpa, store.getExpr(@fromBackingInt(@intCast(idx))).lambda.body);
+        }
+    }
+    while (pending.pop()) |idx| {
+        switch (store.getExpr(idx)) {
+            .block => |block| {
+                const statements = store.statementSlice(block.statements);
+                if (statements.len == 0) continue;
+                const last = statements[statements.len - 1];
+                switch (store.getStatement(last)) {
+                    .expr => |expr| try pending.append(store.gpa, expr.expr),
+                    .@"return" => |ret| {
+                        returns.set(@backingInt(last));
+                        try pending.append(store.gpa, ret.expr);
+                    },
+                    .decl,
+                    .@"var",
+                    .crash,
+                    .dbg,
+                    .expect,
+                    .@"for",
+                    .@"while",
+                    .@"break",
+                    .import,
+                    .file_import,
+                    .type_decl,
+                    .type_anno,
+                    .malformed,
+                    => {},
+                }
+            },
+            .if_then_else => |cond| {
+                try pending.append(store.gpa, cond.then);
+                try pending.append(store.gpa, cond.@"else");
+            },
+            .tuple => |tuple| {
+                const items = store.exprSlice(tuple.items);
+                if (items.len == 1 and store.getCollectionLayout(idx) == .compact) {
+                    try pending.append(store.gpa, items[0]);
+                }
+            },
+            .match => |match| {
+                for (store.matchBranchSlice(match.branches)) |branch| {
+                    try pending.append(store.gpa, store.getBranch(branch).body);
+                }
+            },
+            .@"return" => |ret| {
+                returns.set(@backingInt(idx));
+                try pending.append(store.gpa, ret.expr);
+            },
+            .int,
+            .frac,
+            .typed_int,
+            .typed_frac,
+            .single_quote,
+            .string_part,
+            .string,
+            .multiline_string,
+            .typed_string,
+            .typed_multiline_string,
+            .list,
+            .record,
+            .tag,
+            .lambda,
+            .apply,
+            .record_updater,
+            .field_access,
+            .method_call,
+            .tuple_access,
+            .arrow_call,
+            .bin_op,
+            .suffix_single_question,
+            .unary_op,
+            .if_without_else,
+            .ident,
+            .dbg,
+            .crash,
+            .record_builder,
+            .nominal_record,
+            .nominal_apply,
+            .ellipsis,
+            .@"break",
+            .for_expr,
+            .malformed,
+            => {},
+        }
+    }
+    return returns;
+}

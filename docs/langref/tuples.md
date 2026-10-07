@@ -1,8 +1,9 @@
 # Tuples
 
-A tuple is an ordered, fixed-size collection of values that can have different types. Tuples are useful when you need to group a small number of values together without defining a named record type.
-
-Tuples are stack-allocated and not reference-counted.
+A _tuple_ is a fixed number of values in a particular order, like `(10, "foo")`. The values
+can have different types. Tuples are useful when you want to group a few values together, and
+giving each one a name (like you would in a [record](records)) would be more trouble than it's
+worth.
 
 ## [Tuple Literals](#tuple-literals) {#tuple-literals}
 
@@ -14,7 +15,7 @@ mixed = ("hello", 42, True)
 nested = ((1, 2), (3, 4))
 ```
 
-Tuples must have at least two elements. A single value in parentheses is just that value (parentheses for grouping), not a tuple:
+Tuples have at least two elements. A single value in parentheses is just that value, not a tuple:
 
 ```roc
 x = (42)  # This is just 42, not a tuple
@@ -47,7 +48,11 @@ nested = ((1, 2), (3, 4))
 value = nested.0.1  # 2 (second element of the first tuple)
 ```
 
-The index must be a literal integer, not a variable or computed value. This allows the compiler to verify at compile time that the index is valid for the tuple's size.
+The index has to be a number written right there in the code, not a variable or anything
+computed. That's because each element of a tuple can have a different type, so the compiler
+needs to know which element you're accessing in order to know what type you get back. (It also
+means there's no such thing as an out-of-bounds tuple access at runtime; using an index that's
+too big is a compile-time error.)
 
 ## [Tuple Types](#tuple-types) {#tuple-types}
 
@@ -111,3 +116,15 @@ group of values is small. Common examples include:
 
 When a tuple grows beyond two or three elements, or when it's not obvious what each position
 means, a record is usually the better choice.
+
+## Performance
+
+A tuple is stored exactly like a [record](records#memory-layout) whose fields are its
+elements. It's stored inline, with no heap allocation and no reference count of its own, and
+accessing an element is a read from a known offset.
+
+As with records, the order of a tuple's elements in memory doesn't have to match the order
+you wrote them in. The compiler sorts them by alignment (keeping elements with the same
+alignment in their original order) to minimize padding. For example, on a 64-bit target,
+`(U8, U64, U8)` takes 16 bytes, not the 24 it would take if its elements were stored in
+order.

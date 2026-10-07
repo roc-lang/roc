@@ -677,6 +677,19 @@ pub const SchemeUsePair = extern struct {
     pub const SafeList = collections.SafeList(@This());
 };
 
+/// A static-dispatch relation that checking folded into a retained same-name
+/// relation, mapped to the relation on its merge chain whose target checking
+/// selected. Its dispatch shares that relation's target instantiation.
+pub const DispatchRelationMerge = extern struct {
+    /// The folded relation's raw constraint function var (`Var`).
+    dropped_fn_var: u32,
+    /// The raw constraint function var of the relation that selected the
+    /// target (`Var`).
+    retained_fn_var: u32,
+
+    pub const SafeList = collections.SafeList(@This());
+};
+
 /// One compiler-generated parser or encoder derivation validated by checking.
 /// The referenced vars remain checker-owned here; checked publication converts
 /// them to stable checked type ids before post-check compilation.
@@ -1016,6 +1029,9 @@ scheme_uses: SchemeUseRecord.SafeList,
 /// Flat pool of (source scheme var → fresh var) pairs backing
 /// `scheme_uses`.
 scheme_use_pairs: SchemeUsePair.SafeList,
+/// Static-dispatch relations folded into a relation whose target checking
+/// selected; consumed at checked-module publication.
+dispatch_relation_merges: DispatchRelationMerge.SafeList,
 /// Exact source bindings that checking generalized into rank-1 type schemes.
 /// Sorted by source node for allocation-free cross-module lookup.
 binding_schemes: BindingScheme.SafeList,
@@ -1447,6 +1463,7 @@ pub fn init(gpa: std.mem.Allocator, source: []const u8) std.mem.Allocator.Error!
         .numeric_suffix_targets = try NumericSuffixTarget.SafeList.initCapacity(gpa, 8),
         .scheme_uses = try SchemeUseRecord.SafeList.initCapacity(gpa, 8),
         .scheme_use_pairs = try SchemeUsePair.SafeList.initCapacity(gpa, 8),
+        .dispatch_relation_merges = try DispatchRelationMerge.SafeList.initCapacity(gpa, 0),
         .binding_schemes = try BindingScheme.SafeList.initCapacity(gpa, 8),
         .binding_scheme_codec_requirements = try BindingSchemeCodecRequirement.SafeList.initCapacity(gpa, 4),
         .generated_codec_derivations = try GeneratedCodecDerivation.SafeList.initCapacity(gpa, 4),
@@ -1482,6 +1499,7 @@ pub fn deinit(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
@@ -1587,6 +1605,7 @@ pub fn deinitCachedModule(self: *Self) void {
     self.numeric_suffix_targets.deinit(self.gpa);
     self.scheme_uses.deinit(self.gpa);
     self.scheme_use_pairs.deinit(self.gpa);
+    self.dispatch_relation_merges.deinit(self.gpa);
     self.binding_schemes.deinit(self.gpa);
     self.binding_scheme_codec_requirements.deinit(self.gpa);
     self.generated_codec_derivations.deinit(self.gpa);
@@ -3503,6 +3522,20 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             break :blk report;
         },
+        .redundant_return => |data| blk: {
+            var report = try Report.init(allocator, "Redundant Return", "", .warning);
+            try report.headline.addReflowingText("This return is unnecessary because its value is already the function's final expression.");
+            const owned_filename = try report.addOwnedString(filename);
+            try report.document.addSourceRegion(
+                self.calcRegionInfo(data.region),
+                .error_highlight,
+                owned_filename,
+                self.getSourceAll(),
+                self.getLineStartsAll(),
+            );
+            try report.document.addReflowingText("Remove `return` or run `roc fmt` to remove it automatically.");
+            break :blk report;
+        },
         .return_outside_fn => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
@@ -3804,6 +3837,7 @@ pub const Serialized = extern struct {
     numeric_suffix_targets: NumericSuffixTarget.SafeList.Serialized,
     scheme_uses: SchemeUseRecord.SafeList.Serialized,
     scheme_use_pairs: SchemeUsePair.SafeList.Serialized,
+    dispatch_relation_merges: DispatchRelationMerge.SafeList.Serialized,
     binding_schemes: BindingScheme.SafeList.Serialized,
     binding_scheme_codec_requirements: BindingSchemeCodecRequirement.SafeList.Serialized,
     generated_codec_derivations: GeneratedCodecDerivation.SafeList.Serialized,
@@ -3926,6 +3960,7 @@ pub const Serialized = extern struct {
         try self.numeric_suffix_targets.serialize(&env.numeric_suffix_targets, allocator, writer);
         try self.scheme_uses.serialize(&env.scheme_uses, allocator, writer);
         try self.scheme_use_pairs.serialize(&env.scheme_use_pairs, allocator, writer);
+        try self.dispatch_relation_merges.serialize(&env.dispatch_relation_merges, allocator, writer);
         try self.binding_schemes.serialize(&env.binding_schemes, allocator, writer);
         try self.binding_scheme_codec_requirements.serialize(&env.binding_scheme_codec_requirements, allocator, writer);
         try self.generated_codec_derivations.serialize(&env.generated_codec_derivations, allocator, writer);
@@ -3999,6 +4034,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
             .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
             .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
+            .dispatch_relation_merges = self.dispatch_relation_merges.deserializeInto(base_addr),
             .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
             .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
             .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
@@ -4078,6 +4114,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),
@@ -4169,6 +4206,7 @@ pub const Serialized = extern struct {
             .numeric_suffix_targets = try self.numeric_suffix_targets.deserializeWithCopy(base_addr, gpa),
             .scheme_uses = try self.scheme_uses.deserializeWithCopy(base_addr, gpa),
             .scheme_use_pairs = try self.scheme_use_pairs.deserializeWithCopy(base_addr, gpa),
+            .dispatch_relation_merges = try self.dispatch_relation_merges.deserializeWithCopy(base_addr, gpa),
             .binding_schemes = try self.binding_schemes.deserializeWithCopy(base_addr, gpa),
             .binding_scheme_codec_requirements = try self.binding_scheme_codec_requirements.deserializeWithCopy(base_addr, gpa),
             .generated_codec_derivations = try self.generated_codec_derivations.deserializeWithCopy(base_addr, gpa),

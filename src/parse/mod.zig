@@ -64,6 +64,7 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
 
     // Heap-allocate AST for unified ownership model
     const ast = try gpa.create(AST);
+    errdefer gpa.destroy(ast);
     ast.* = .{
         .gpa = gpa,
         .env = env,
@@ -78,6 +79,7 @@ fn runTokenDispatch(gpa: Allocator, env: *CommonEnv, parserCall: *const fn (*Par
         .parse_diagnostics = parser.diagnostics,
     };
 
+    ast.redundant_returns = try ast.store.collectRedundantReturns();
     return ast;
 }
 

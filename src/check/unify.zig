@@ -3742,6 +3742,10 @@ const Unifier = struct {
         for (self.scratch.only_in_a_static_dispatch_constraints.items.items[retained_group_start..]) |*existing| {
             if (!sameDeclarativeOriginClass(existing.origin, constraint.origin)) continue;
             existing.* = mergeStaticDispatchConstraintMetadata(constraint, existing.*);
+            try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
+                .dropped_fn_var = constraint.fn_var,
+                .retained_fn_var = existing.fn_var,
+            });
             return;
         }
         _ = try self.scratch.only_in_a_static_dispatch_constraints.append(
@@ -3959,6 +3963,18 @@ const Unifier = struct {
                     _ = try scratch.in_both_static_dispatch_constraints.append(scratch.gpa, .{
                         .a = representative,
                         .b = b_constraints[b_indices[b_index]],
+                    });
+                }
+                for (a_indices[a_non_method_end..a_group_end]) |constraint_index| {
+                    try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
+                        .dropped_fn_var = a_constraints[constraint_index].fn_var,
+                        .retained_fn_var = representative.fn_var,
+                    });
+                }
+                for (b_indices[b_non_method_end..b_group_end]) |constraint_index| {
+                    try self.types_store.static_dispatch_relation_merges.append(self.types_store.gpa, .{
+                        .dropped_fn_var = b_constraints[constraint_index].fn_var,
+                        .retained_fn_var = representative.fn_var,
                     });
                 }
             } else {
