@@ -343,6 +343,7 @@ pub fn createRuntimeFromSidecarView(
         .tag_variants = view.tables.tag_variants,
         .tag_payload_descs = view.tables.tag_payload_descs,
         .field_names = view.tables.field_names,
+        .recursive_box_slots = view.tables.recursive_box_slots,
         .adapt_steps = view.tables.adapt_steps,
         .payload_steps = view.tables.payload_steps,
         .method_slots = view.tables.method_slots,

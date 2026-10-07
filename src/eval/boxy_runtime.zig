@@ -286,6 +286,7 @@ pub const BoxyTables = struct {
     tag_variants: []const LirProgram.BoxyTagVariant = &.{},
     tag_payload_descs: []const LirProgram.BoxyTagPayloadDesc = &.{},
     field_names: []const LIR.BoxyNameId = &.{},
+    recursive_box_slots: []const u32 = &.{},
     adapt_steps: []const LirProgram.BoxyAdaptStep = &.{},
     payload_steps: []const LirProgram.BoxyPayloadStep = &.{},
     method_slots: []const LirProgram.BoxyMethodSlot = &.{},
@@ -306,6 +307,7 @@ pub const BoxyTables = struct {
             self.tag_variants.len != 0 or
             self.tag_payload_descs.len != 0 or
             self.field_names.len != 0 or
+            self.recursive_box_slots.len != 0 or
             self.adapt_steps.len != 0 or
             self.payload_steps.len != 0 or
             self.method_slots.len != 0 or
@@ -339,6 +341,7 @@ pub const BoxyTables = struct {
             .tag_variants = result.boxy_tag_variants.items,
             .tag_payload_descs = result.boxy_tag_payload_descs.items,
             .field_names = result.boxy_field_names.items,
+            .recursive_box_slots = result.boxy_recursive_box_slots.items,
             .adapt_steps = result.boxy_adapt_steps.items,
             .payload_steps = result.boxy_payload_steps.items,
             .method_slots = result.boxy_method_slots.items,
@@ -362,6 +365,7 @@ pub const BoxyTables = struct {
             .tag_variants = view.boxy_tag_variants,
             .tag_payload_descs = view.boxy_tag_payload_descs,
             .field_names = view.boxy_field_names,
+            .recursive_box_slots = view.boxy_recursive_box_slots,
             .adapt_steps = view.boxy_adapt_steps,
             .payload_steps = view.boxy_payload_steps,
             .method_slots = view.boxy_method_slots,
@@ -1871,6 +1875,7 @@ pub const BoxyRuntime = struct {
         // Field names are immutable static-pool data; runtime copies keep the
         // static span.
         target.field_names = source.field_names;
+        target.recursive_box_slots = source.recursive_box_slots;
         target.inspect_opaque = source.inspect_opaque;
 
         return .{ .runtime = runtime_id };
@@ -1953,6 +1958,7 @@ pub const BoxyRuntime = struct {
             self.runtime_boxy_tag_payload_descs.items[start + index] = .{
                 .payload_index = payload_desc.payload_index,
                 .desc = desc_ref,
+                .recursive_box = payload_desc.recursive_box,
             };
         }
         return makeRuntimeBoxySpan(start, source_descs.len);
@@ -5922,12 +5928,70 @@ pub const BoxyRuntime = struct {
             if (struct_idx) |idx| {
                 const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, field_index);
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, field_index);
-                try self.appendLayoutInspect(hooks, out, value.offset(field_offset), field_layout, field_desc);
+                try self.appendSlotInspect(hooks, out, value.offset(field_offset), field_layout, field_desc, self.boxyRecursiveBoxSlot(desc, field_index));
             } else {
                 try self.appendLayoutInspect(hooks, out, Value.zst, .zst, field_desc);
             }
         }
         try out.appendSlice(self.eval_arena, if (named) " }" else ")");
+    }
+
+    /// Render one record field, tuple element, or tag payload. A recursion
+    /// point its parent's descriptor marks is stored behind its recursive
+    /// type's box, which is storage and not a `Box`: the value is the
+    /// payload, described payload-direct by `desc`.
+    fn appendSlotInspect(
+        self: *const BoxyRuntime,
+        hooks: anytype,
+        out: *std.ArrayList(u8),
+        value: Value,
+        slot_layout: layout_mod.Idx,
+        desc: *const LirProgram.BoxyTypeDesc,
+        recursive_box: bool,
+    ) Error!void {
+        if (!recursive_box) return try self.appendLayoutInspect(hooks, out, value, slot_layout, desc);
+        const slot_layout_val = self.layout_store.getLayout(slot_layout);
+        switch (slot_layout_val.tag) {
+            .box => if (self.readBoxedDataPointer(value)) |data_ptr| {
+                try self.appendLayoutInspect(hooks, out, .{ .ptr = data_ptr }, slot_layout_val.getIdx(), desc);
+            } else {
+                try self.appendLayoutInspect(hooks, out, Value.zst, .zst, desc);
+            },
+            .box_of_zst => try self.appendLayoutInspect(hooks, out, Value.zst, .zst, desc),
+            .scalar, .zst, .erased_box, .list, .list_of_zst, .struct_, .tag_union, .closure, .erased_callable, .ptr => return self.invariantFailedError(
+                "LIR/interpreter invariant violated: recursive box inspect slot had layout {d} ({s})",
+                .{ @intFromEnum(slot_layout), @tagName(slot_layout_val.tag) },
+            ),
+        }
+    }
+
+    /// The recursion points a descriptor's `recursive_box_slots` names.
+    pub fn requireBoxyRecursiveBoxSlots(self: *const BoxyRuntime, span: LIR.BoxySpan) []const u32 {
+        const start: usize = span.start;
+        const end = start + span.len;
+        if (end > self.boxy_tables.recursive_box_slots.len) {
+            self.invariantFailed(
+                "LIR/interpreter invariant violated: boxy recursive box slot span [{d}, {d}) exceeded table length {d}",
+                .{ start, end, self.boxy_tables.recursive_box_slots.len },
+            );
+        }
+        return self.boxy_tables.recursive_box_slots[start..end];
+    }
+
+    /// Whether nested position `index` of `desc` is a recursion point.
+    fn boxyRecursiveBoxSlot(self: *const BoxyRuntime, desc: *const LirProgram.BoxyTypeDesc, index: u32) bool {
+        for (self.requireBoxyRecursiveBoxSlots(desc.recursive_box_slots)) |slot| {
+            if (slot == index) return true;
+        }
+        return false;
+    }
+
+    /// Whether payload `payload_index` of `variant` is a recursion point.
+    fn boxyPayloadIsRecursiveBox(self: *const BoxyRuntime, variant: LirProgram.BoxyTagVariant, payload_index: u32) bool {
+        for (self.requireBoxyTagPayloadDescs(variant.payload_descs)) |payload| {
+            if (payload.payload_index == payload_index) return payload.recursive_box;
+        }
+        return false;
     }
 
     fn appendZstTagInspect(
@@ -5954,7 +6018,7 @@ pub const BoxyRuntime = struct {
         if (variant.payload_count == 0) return;
         try out.append(self.eval_arena, '(');
         if (variant.payload_count == 1) {
-            try self.appendLayoutInspect(hooks, out, payload_value, payload_layout, try self.requireBoxyPayloadDesc(hooks, variant, 0));
+            try self.appendSlotInspect(hooks, out, payload_value, payload_layout, try self.requireBoxyPayloadDesc(hooks, variant, 0), self.boxyPayloadIsRecursiveBox(variant, 0));
             try out.append(self.eval_arena, ')');
             return;
         }
@@ -5974,7 +6038,7 @@ pub const BoxyRuntime = struct {
             if (struct_idx) |idx| {
                 const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(idx, payload_index);
                 const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(idx, payload_index);
-                try self.appendLayoutInspect(hooks, out, payload_value.offset(field_offset), field_layout, field_desc);
+                try self.appendSlotInspect(hooks, out, payload_value.offset(field_offset), field_layout, field_desc, self.boxyPayloadIsRecursiveBox(variant, payload_index));
             } else {
                 try self.appendLayoutInspect(hooks, out, Value.zst, .zst, field_desc);
             }

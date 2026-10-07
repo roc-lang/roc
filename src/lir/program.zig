@@ -301,6 +301,8 @@ pub const BoxyTagVariant = struct {
 pub const BoxyTagPayloadDesc = struct {
     payload_index: u32,
     desc: BoxyDescRef,
+    /// The payload is a recursion point (see `BoxyTypeDesc.recursive_box_slots`).
+    recursive_box: bool = false,
 };
 
 /// Purpose of one explicit boxy representation adapter.
@@ -394,6 +396,11 @@ pub const BoxyTypeDesc = struct {
     /// Record field names in payload field order, one per field. Empty for
     /// non-record payloads (including tuples, which print positionally).
     field_names: BoxySpan = .{},
+    /// The `nested_descs` positions of a record or tuple that are recursion
+    /// points: stored behind the box their recursive type's layout puts there,
+    /// and described payload-direct like the payload of a `Box`. Inspection
+    /// renders the payload, not a `Box` (design.md "Recursive Box Slots").
+    recursive_box_slots: BoxySpan = .{},
     /// Present-variant discriminant when these bytes use the canonical
     /// optional-field slot convention. This is compiler-produced semantic
     /// data, not a runtime inference from tags or layouts.
@@ -668,6 +675,7 @@ pub const Result = struct {
     boxy_tag_variants: std.ArrayList(BoxyTagVariant),
     boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc),
     boxy_field_names: std.ArrayList(LIR.BoxyNameId),
+    boxy_recursive_box_slots: std.ArrayList(u32),
     boxy_adapt_steps: std.ArrayList(BoxyAdaptStep),
     boxy_payload_steps: std.ArrayList(BoxyPayloadStep),
     boxy_method_slots: std.ArrayList(BoxyMethodSlot),
@@ -715,6 +723,7 @@ pub const Result = struct {
             .boxy_tag_variants = .empty,
             .boxy_tag_payload_descs = .empty,
             .boxy_field_names = .empty,
+            .boxy_recursive_box_slots = .empty,
             .boxy_adapt_steps = .empty,
             .boxy_payload_steps = .empty,
             .boxy_method_slots = .empty,
@@ -765,6 +774,7 @@ pub const Result = struct {
         self.boxy_payload_steps.deinit(allocator);
         self.boxy_adapt_steps.deinit(allocator);
         self.boxy_field_names.deinit(allocator);
+        self.boxy_recursive_box_slots.deinit(allocator);
         self.boxy_tag_payload_descs.deinit(allocator);
         self.boxy_tag_variants.deinit(allocator);
         self.boxy_dict_refs.deinit(allocator);

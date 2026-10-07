@@ -133,6 +133,10 @@ pub const Matcher = struct {
         const right_names = self.runtime.requireBoxyFieldNames(b.field_names);
         if (left_names.len != right_names.len) return false;
         for (left_names, right_names) |left, right| if (left != right) return false;
+        const left_slots = self.runtime.requireBoxyRecursiveBoxSlots(a.recursive_box_slots);
+        const right_slots = self.runtime.requireBoxyRecursiveBoxSlots(b.recursive_box_slots);
+        if (left_slots.len != right_slots.len) return false;
+        for (left_slots, right_slots) |left, right| if (left != right) return false;
         if (!try self.payload(a.copy_plan, b.copy_plan) or !try self.payload(a.drop_plan, b.drop_plan)) return false;
         if (a.tag_variants.len != b.tag_variants.len) return false;
         for (self.runtime.requireBoxyTagVariants(a.tag_variants), self.runtime.requireBoxyTagVariants(b.tag_variants)) |left, right| {
@@ -141,7 +145,7 @@ pub const Matcher = struct {
             }
             if (left.payload_descs.len != right.payload_descs.len) return false;
             for (self.runtime.requireBoxyTagPayloadDescs(left.payload_descs), self.runtime.requireBoxyTagPayloadDescs(right.payload_descs)) |lp, rp| {
-                if (lp.payload_index != rp.payload_index) return false;
+                if (lp.payload_index != rp.payload_index or lp.recursive_box != rp.recursive_box) return false;
                 try self.pushDescriptor(lp.desc, rp.desc);
             }
         }

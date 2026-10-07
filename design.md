@@ -15845,6 +15845,25 @@ tag-union layout of its source. When that field is the boxed storage of a
 recursive position, the read targets the stored box and unboxes it to the
 payload's own layout, mirroring construction, which boxes it.
 
+A Boxy record or tuple construction converts each field into the record's
+committed layout the same way: a field whose committed storage is the box of
+a recursion point is converted into its representation's layout and then
+boxed into that storage, and a conversion from such a record unboxes the field
+it reads (`beginRecordFieldsBoundary`).
+
+**Recursive Box Slots.** A slot's descriptor (a record field, tuple item, or
+tag payload) describes a value stored in a box payload-direct, whether the
+box is a source-language `Box` or the box a recursive type's committed layout
+puts at a recursion point. Memory operations treat both alike, but inspection
+renders a `Box` and must not render a recursion point as one. The parent
+descriptor therefore marks its recursion points explicitly:
+`BoxyTypeDesc.recursive_box_slots` lists a record's or tuple's
+`nested_descs` positions that are recursion points, and
+`BoxyTagPayloadDesc.recursive_box` marks a tag payload. A slot is a recursion
+point when its committed storage is a concrete box while its value's own type
+is not `Box` (`slotIsRecursiveBox`). Inspection reads a marked slot through
+its box and renders the payload; every other boxed slot is a `Box`.
+
 Boxy box/unbox/adapt operations are explicit LIR statements or explicit helper
 calls selected by the lowerer:
 

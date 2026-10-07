@@ -2379,6 +2379,7 @@ const ProcedureBuilder = struct {
                     .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
                     .shape = self.descriptorShapeForRep(frame.rep),
                     .nested_descs = frame.nested_descs,
+                    .recursive_box_slots = try self.recursiveBoxSlotsForDesc(frame.rep, .static),
                     .tag_variants = frame.tag_variants,
                     .tag_ext_desc = frame.tag_ext_desc,
                     .field_names = frame.field_names,
@@ -2558,6 +2559,7 @@ const ProcedureBuilder = struct {
                     .contains_refcounted = self.result.layouts.layoutContainsRefcounted(layout_value) or worker_rep.contains_dynamic,
                     .shape = self.descriptorShapeForRep(frame.worker),
                     .nested_descs = frame.nested_descs,
+                    .recursive_box_slots = try self.recursiveBoxSlotsForDesc(frame.worker, .static),
                     .tag_variants = frame.tag_variants,
                     .tag_ext_desc = frame.tag_ext_desc,
                     .field_names = frame.field_names,
@@ -2805,9 +2807,16 @@ const ProcedureBuilder = struct {
 
     fn stepStaticPayloadDescs(self: *ProcedureBuilder, frame: *StaticPayloadDescsFrame, delivered: ?StaticValue) Allocator.Error!StaticStep {
         if (delivered) |value| {
+            const ref = staticValueRef(value) orelse boxyLowerInvariant("tag payload descriptor request delivered no descriptor");
+            const pending = frame.pending_index;
+            const payloads = frame.request.payloads;
             try frame.descs.append(self.allocator, .{
-                .payload_index = frame.pending_index,
-                .desc = staticValueRef(value) orelse boxyLowerInvariant("tag payload descriptor request delivered no descriptor"),
+                .payload_index = pending,
+                .desc = ref,
+                .recursive_box = self.slotIsRecursiveBox(
+                    payloads[pending].rep,
+                    self.tagVariantPayloadFieldLayout(frame.request.payload_layout, pending, payloads.len),
+                ),
             });
         }
         const payloads = frame.request.payloads;
@@ -6198,6 +6207,47 @@ const ProcedureBuilder = struct {
             .field, .list_elem => |storage_layout| self.layoutIsBoxStorage(storage_layout) or self.layoutNeedsNestedBoxyDesc(storage_layout),
             .box_payload => true,
         };
+    }
+
+    /// POLICY: recursive box slots (design.md "Recursive Box Slots"). A
+    /// recursive type's committed layout stores each recursion point behind a
+    /// box, which a slot's descriptor describes payload-direct, exactly as it
+    /// describes the payload of a source-language `Box`. The parent descriptor
+    /// marks which of its slots are recursion points, so inspection renders
+    /// the value stored there rather than a `Box`. A slot is one when its
+    /// value is stored in a concrete box while the value's own type is not
+    /// `Box`.
+    fn slotIsRecursiveBox(self: *const ProcedureBuilder, rep_id: Plan.TypeRepId, storage_layout: layout.Idx) bool {
+        const storage_tag = self.result.layouts.getLayout(storage_layout).tag;
+        if (storage_tag != .box and storage_tag != .box_of_zst) return false;
+        return switch (self.descriptorShapeForRep(rep_id)) {
+            .box, .erased => false,
+            .primitive, .record, .tuple, .tag_union, .list, .function, .internal => true,
+        };
+    }
+
+    /// The `nested_descs` positions of `rep_id`'s descriptor that are
+    /// recursion points (`slotIsRecursiveBox`), for a static descriptor or a
+    /// descriptor template, whose positions are those of the representation
+    /// that shapes it.
+    fn recursiveBoxSlotsForDesc(self: *ProcedureBuilder, rep_id: Plan.TypeRepId, comptime kind: enum { static, template }) Allocator.Error!LIR.BoxySpan {
+        var shape_rep = rep_id;
+        while (self.descriptorBackingShapeRep(shape_rep)) |backing_rep| shape_rep = backing_rep;
+        const payload_layout = switch (kind) {
+            .static => self.descriptorPayloadLayoutForRep(shape_rep),
+            .template => self.descriptorTemplatePayloadLayoutForRep(shape_rep),
+        };
+        var slots = std.ArrayList(NestedDescriptorSlot).empty;
+        defer slots.deinit(self.allocator);
+        try self.appendNestedDescriptorSlots(shape_rep, payload_layout, &slots);
+        const start: u32 = @intCast(self.result.boxy_recursive_box_slots.items.len);
+        for (slots.items, 0..) |slot, position| switch (slot.kind) {
+            .field, .list_elem => |storage_layout| if (self.slotIsRecursiveBox(slot.rep, storage_layout)) {
+                try self.result.boxy_recursive_box_slots.append(self.allocator, @intCast(position));
+            },
+            .box_payload => {},
+        };
+        return .{ .start = start, .len = @as(u32, @intCast(self.result.boxy_recursive_box_slots.items.len)) - start };
     }
 
     /// Source-language shape of the value `rep_id`'s descriptor describes.
@@ -34100,9 +34150,20 @@ const ProcBodyBuilder = struct {
                 const tag = &frame.tag;
                 const variants = plan.tagVariantSlice(plan.representations.items[@intFromEnum(tag.tag_rep_id)].tag_variants);
                 if (ref) |payload_desc| {
+                    const variant = variants[tag.variant];
+                    const payloads = plan.childSlice(variant.payloads);
+                    const payload_index = tag.payload - 1;
+                    const variant_payload_layout: layout.Idx = if (tag.zst)
+                        .zst
+                    else
+                        self.parent.result.layouts.getTagUnionInfo(self.templateTagLayout(frame.payload_layout).?).variants.get(tag.variant).payload_layout;
                     try tag.payload_descs.append(allocator, .{
-                        .payload_index = @intCast(tag.payload - 1),
+                        .payload_index = @intCast(payload_index),
                         .desc = payload_desc,
+                        .recursive_box = self.parent.slotIsRecursiveBox(
+                            payloads[payload_index].rep,
+                            self.parent.tagVariantPayloadFieldLayout(variant_payload_layout, payload_index, payloads.len),
+                        ),
                     });
                     ref = null;
                 }
@@ -34276,6 +34337,7 @@ const ProcBodyBuilder = struct {
             .contains_refcounted = self.parent.result.layouts.layoutContainsRefcounted(layout_value) or rep.contains_dynamic,
             .shape = self.parent.descriptorShapeForRep(rep_id),
             .nested_descs = frame.nested_descs,
+            .recursive_box_slots = try self.parent.recursiveBoxSlotsForDesc(rep_id, .template),
             .tag_variants = frame.tag_variants,
             .tag_ext_desc = frame.tag_ext_desc,
             .field_names = frame.field_names,
@@ -39205,8 +39267,18 @@ const ProcBodyBuilder = struct {
         /// payload unboxed from it.
         fields_source: LIR.LocalId,
         source_record_rep: Plan.TypeRepId,
+        /// Each field's converted value, in its representation's layout.
         target_fields: []LIR.LocalId = &.{},
+        /// Each field as the target record stores it: `target_fields` itself,
+        /// or a local in the record's committed field layout when that layout
+        /// stores the field behind a recursion box.
+        target_stored_fields: []LIR.LocalId = &.{},
+        /// Each field in its representation's layout, read from the source.
         source_fields: []LIR.LocalId = &.{},
+        /// The source record's stored field, when its committed layout stores
+        /// the field behind a recursion box; `source_fields` is then unboxed
+        /// from it.
+        source_stored_fields: []?LIR.LocalId = &.{},
         target_field_reps: []Plan.TypeRepId = &.{},
         source_field_reps: []Plan.TypeRepId = &.{},
         source_field_indices: []u32 = &.{},
@@ -39337,7 +39409,9 @@ const ProcBodyBuilder = struct {
             .bound_dynamic, .presence => {},
             .record => |state| {
                 allocator.free(state.target_fields);
+                allocator.free(state.target_stored_fields);
                 allocator.free(state.source_fields);
+                allocator.free(state.source_stored_fields);
                 allocator.free(state.target_field_reps);
                 allocator.free(state.source_field_reps);
                 allocator.free(state.source_field_indices);
@@ -39688,16 +39762,21 @@ const ProcBodyBuilder = struct {
             .record => |*state| {
                 if (child) |converted| {
                     const index = state.remaining;
+                    const stored = state.source_stored_fields[index];
+                    const field_value = if (stored) |stored_local|
+                        try self.assignWorkerValueToTagPayloadStorage(state.source_fields[index], stored_local, state.source_field_reps[index], converted)
+                    else
+                        converted;
                     const read_field = try self.parent.result.store.addCFStmt(.{ .assign_ref = .{
-                        .target = state.source_fields[index],
+                        .target = stored orelse state.source_fields[index],
                         .op = .{ .field = .{
                             .source = state.fields_source,
                             .field_idx = state.source_field_indices[index],
                         } },
-                        .next = converted,
+                        .next = field_value,
                     } }, self.glueOrigin());
                     state.current = try self.prependRecordFieldDescriptorBind(
-                        state.source_fields[index],
+                        stored orelse state.source_fields[index],
                         state.fields_source,
                         state.source_record_rep,
                         state.source_field_indices[index],
@@ -39975,7 +40054,9 @@ const ProcBodyBuilder = struct {
         errdefer self.releaseBoundaryFrame(&frame);
         const state = &frame.state.record;
         state.target_fields = try allocator.alloc(LIR.LocalId, target_field_count);
+        state.target_stored_fields = try allocator.alloc(LIR.LocalId, target_field_count);
         state.source_fields = try allocator.alloc(LIR.LocalId, target_field_count);
+        state.source_stored_fields = try allocator.alloc(?LIR.LocalId, target_field_count);
         state.target_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
         state.source_field_reps = try allocator.alloc(Plan.TypeRepId, target_field_count);
         state.source_field_indices = try allocator.alloc(u32, target_field_count);
@@ -39991,6 +40072,18 @@ const ProcBodyBuilder = struct {
                     else
                         try self.addFrameBoundaryTargetLocalForRep(target_child.rep);
                     state.source_fields[field_index] = try self.addFrameLocalForRep(source_field.rep);
+                    // A recursive type's record stores its recursion points
+                    // behind boxes, which its committed layout names.
+                    const target_stored_layout = try self.aggregateFieldLayout(self.parent.result.store.getLocal(state.target).layout_idx, field_index);
+                    state.target_stored_fields[field_index] = if (target_stored_layout == self.parent.result.store.getLocal(state.target_fields[field_index]).layout_idx)
+                        state.target_fields[field_index]
+                    else
+                        try self.addFrameLocal(target_stored_layout);
+                    const source_stored_layout = try self.aggregateFieldLayout(self.parent.result.store.getLocal(state.fields_source).layout_idx, source_field.index);
+                    state.source_stored_fields[field_index] = if (source_stored_layout == self.parent.result.store.getLocal(state.source_fields[field_index]).layout_idx)
+                        null
+                    else
+                        try self.addFrameLocal(source_stored_layout);
                     state.target_field_reps[field_index] = target_child.rep;
                     state.source_field_reps[field_index] = source_field.rep;
                     state.source_field_indices[field_index] = source_field.index;
@@ -40006,12 +40099,12 @@ const ProcBodyBuilder = struct {
 
         const descriptor_fields = try allocator.alloc(AggregateDescriptorField, target_field_count);
         defer allocator.free(descriptor_fields);
-        for (state.target_fields, state.target_field_reps, state.source_field_reps, descriptor_fields) |field_local, target_field_rep, source_field_rep, *field| {
+        for (state.target_fields, state.target_stored_fields, state.target_field_reps, state.source_field_reps, descriptor_fields) |field_local, stored_local, target_field_rep, source_field_rep, *field| {
             field.* = .{
-                .local = field_local,
+                .local = stored_local,
                 .target_rep = target_field_rep,
                 // This local is the boundary output, not the original field.
-                .source_rep = if (self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
+                .source_rep = if (stored_local == field_local and self.representationBoundaryIsDirect(target_field_rep, source_field_rep))
                     source_field_rep
                 else
                     target_field_rep,
@@ -40021,18 +40114,24 @@ const ProcBodyBuilder = struct {
 
         const assign_struct = try self.parent.result.store.addCFStmt(.{ .assign_struct = .{
             .target = state.target,
-            .fields = try self.parent.result.store.addLocalSpan(state.target_fields),
+            .fields = try self.parent.result.store.addLocalSpan(state.target_stored_fields),
             .contents_desc = state.aggregate_desc.contents_desc,
             .next = request.next,
         } }, self.glueOrigin());
         state.current = try self.prependOptionalDescriptorMaterialization(state.aggregate_desc.materialize, assign_struct);
+        // Each converted field enters its stored layout once every field is
+        // converted.
+        for (state.target_fields, state.target_stored_fields, state.target_field_reps) |field_local, stored_local, target_field_rep| {
+            if (stored_local == field_local) continue;
+            state.current = try self.assignWorkerValueToTagPayloadStorage(stored_local, field_local, target_field_rep, state.current);
+        }
         state.remaining = target_field_count;
         try frames.append(allocator, frame);
         return .pushed;
     }
 
     fn finishRecordBoundary(self: *ProcBodyBuilder, state: *const RecordBoundaryState) Allocator.Error!LIR.CFStmtId {
-        try self.recordAggregateLocalDescriptorEnvironment(state.target, state.target_rep, state.target_fields);
+        try self.recordAggregateLocalDescriptorEnvironment(state.target, state.target_rep, state.target_stored_fields);
         const fields_ready = if (state.unbox) |unbox|
             try self.parent.result.store.addCFStmt(.{ .assign_boxy_unbox = .{
                 .target = state.fields_source,

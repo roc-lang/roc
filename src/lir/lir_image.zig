@@ -129,6 +129,7 @@ pub const ProgramView = struct {
     boxy_tag_variants: []Program.BoxyTagVariant,
     boxy_tag_payload_descs: []Program.BoxyTagPayloadDesc,
     boxy_field_names: []LIR.BoxyNameId,
+    boxy_recursive_box_slots: []u32,
     boxy_adapt_steps: []Program.BoxyAdaptStep,
     boxy_payload_steps: []Program.BoxyPayloadStep,
     boxy_method_slots: []Program.BoxyMethodSlot,
@@ -536,6 +537,7 @@ pub const BoxyTablesImage = extern struct {
     tag_variants: ArrayRef,
     tag_payload_descs: ArrayRef,
     field_names: ArrayRef,
+    recursive_box_slots: ArrayRef,
     adapt_steps: ArrayRef,
     payload_steps: ArrayRef,
     method_slots: ArrayRef,
@@ -556,6 +558,7 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = lowered.boxy_tag_variants.items,
             .tag_payload_descs = lowered.boxy_tag_payload_descs.items,
             .field_names = lowered.boxy_field_names.items,
+            .recursive_box_slots = lowered.boxy_recursive_box_slots.items,
             .adapt_steps = lowered.boxy_adapt_steps.items,
             .payload_steps = lowered.boxy_payload_steps.items,
             .method_slots = lowered.boxy_method_slots.items,
@@ -583,6 +586,7 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = lowered.boxy_tag_variants.items,
             .tag_payload_descs = lowered.boxy_tag_payload_descs.items,
             .field_names = lowered.boxy_field_names.items,
+            .recursive_box_slots = lowered.boxy_recursive_box_slots.items,
             .adapt_steps = lowered.boxy_adapt_steps.items,
             .payload_steps = lowered.boxy_payload_steps.items,
             .method_slots = lowered.boxy_method_slots.items,
@@ -602,6 +606,7 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = try copyArrayRef(allocator, base_ptr, image_capacity, tables.tag_variants),
             .tag_payload_descs = try copyArrayRef(allocator, base_ptr, image_capacity, tables.tag_payload_descs),
             .field_names = try copyArrayRef(allocator, base_ptr, image_capacity, tables.field_names),
+            .recursive_box_slots = try copyArrayRef(allocator, base_ptr, image_capacity, tables.recursive_box_slots),
             .adapt_steps = try copyArrayRef(allocator, base_ptr, image_capacity, tables.adapt_steps),
             .payload_steps = try copyArrayRef(allocator, base_ptr, image_capacity, tables.payload_steps),
             .method_slots = try copyArrayRef(allocator, base_ptr, image_capacity, tables.method_slots),
@@ -624,6 +629,7 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = try arrayRef(base_ptr, image_size, tables.tag_variants),
             .tag_payload_descs = try arrayRef(base_ptr, image_size, tables.tag_payload_descs),
             .field_names = try arrayRef(base_ptr, image_size, tables.field_names),
+            .recursive_box_slots = try arrayRef(base_ptr, image_size, tables.recursive_box_slots),
             .adapt_steps = try arrayRef(base_ptr, image_size, tables.adapt_steps),
             .payload_steps = try arrayRef(base_ptr, image_size, tables.payload_steps),
             .method_slots = try arrayRef(base_ptr, image_size, tables.method_slots),
@@ -646,6 +652,7 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = try sliceFromRef(Program.BoxyTagVariant, base_ptr, image_size, self.tag_variants),
             .tag_payload_descs = try sliceFromRef(Program.BoxyTagPayloadDesc, base_ptr, image_size, self.tag_payload_descs),
             .field_names = try sliceFromRef(LIR.BoxyNameId, base_ptr, image_size, self.field_names),
+            .recursive_box_slots = try sliceFromRef(u32, base_ptr, image_size, self.recursive_box_slots),
             .adapt_steps = try sliceFromRef(Program.BoxyAdaptStep, base_ptr, image_size, self.adapt_steps),
             .payload_steps = try sliceFromRef(Program.BoxyPayloadStep, base_ptr, image_size, self.payload_steps),
             .method_slots = try sliceFromRef(Program.BoxyMethodSlot, base_ptr, image_size, self.method_slots),
@@ -669,6 +676,7 @@ pub const BoxyTablesView = struct {
     tag_variants: []Program.BoxyTagVariant,
     tag_payload_descs: []Program.BoxyTagPayloadDesc,
     field_names: []LIR.BoxyNameId,
+    recursive_box_slots: []u32,
     adapt_steps: []Program.BoxyAdaptStep,
     payload_steps: []Program.BoxyPayloadStep,
     method_slots: []Program.BoxyMethodSlot,
@@ -852,6 +860,7 @@ fn serializeSidecarInto(
     const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
     const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
     const field_names = try cloneStdArrayList(LIR.BoxyNameId, gpa, lowered.boxy_field_names);
+    const recursive_box_slots = try cloneStdArrayList(u32, gpa, lowered.boxy_recursive_box_slots);
     const adapt_steps = try cloneStdArrayList(Program.BoxyAdaptStep, gpa, lowered.boxy_adapt_steps);
     const payload_steps = try cloneStdArrayList(Program.BoxyPayloadStep, gpa, lowered.boxy_payload_steps);
     const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
@@ -871,6 +880,7 @@ fn serializeSidecarInto(
         .tag_variants = tag_variants.items,
         .tag_payload_descs = tag_payload_descs.items,
         .field_names = field_names.items,
+        .recursive_box_slots = recursive_box_slots.items,
         .adapt_steps = adapt_steps.items,
         .payload_steps = payload_steps.items,
         .method_slots = method_slots.items,
@@ -1118,6 +1128,7 @@ pub fn viewMappedImageWithAllocator(
         .boxy_tag_variants = boxy_tables.tag_variants,
         .boxy_tag_payload_descs = boxy_tables.tag_payload_descs,
         .boxy_field_names = boxy_tables.field_names,
+        .boxy_recursive_box_slots = boxy_tables.recursive_box_slots,
         .boxy_adapt_steps = boxy_tables.adapt_steps,
         .boxy_payload_steps = boxy_tables.payload_steps,
         .boxy_method_slots = boxy_tables.method_slots,
