@@ -8,7 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
-const debug_guards = builtin.mode == .Debug;
+const debug_guards = builtin.mode == .debug;
 
 /// Growable list wrapper that checks stale borrows in Debug and erases to `std.ArrayList` otherwise.
 pub fn List(comptime T: type, comptime list_name: []const u8) type {

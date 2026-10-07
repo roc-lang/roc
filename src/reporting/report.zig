@@ -207,7 +207,7 @@ fn isValidReportDescription(description: []const u8) bool {
 }
 
 fn assertValidTitleAndDescription(title: []const u8, description: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     std.debug.assert(isValidReportTitle(title));
     std.debug.assert(isValidReportDescription(description));

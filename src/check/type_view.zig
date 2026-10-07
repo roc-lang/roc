@@ -81,7 +81,7 @@ const DependencyNode = struct {
     formals: []bool,
     parents: std.ArrayList(u32) = .empty,
 };
-const absent_argument: Var = @enumFromInt(std.math.maxInt(u32));
+const absent_argument: Var = @fromBackingInt(std.math.maxInt(u32));
 
 pub fn init(gpa: Allocator, source: *const types.Store) Self {
     return .{
@@ -111,8 +111,8 @@ pub fn deinit(self: *Self) void {
 
 /// Analysis-owned views have no mutable solver representative.
 pub fn sourceVar(self: *const Self, view_id: Var) ?Var {
-    if (@intFromEnum(view_id) >= self.source_len) {
-        std.debug.assert(@intFromEnum(view_id) - self.source_len < self.nodes.items.len);
+    if (@backingInt(view_id) >= self.source_len) {
+        std.debug.assert(@backingInt(view_id) - self.source_len < self.nodes.items.len);
         return null;
     }
     return self.source.resolveVar(view_id).var_;
@@ -121,17 +121,17 @@ pub fn sourceVar(self: *const Self, view_id: Var) ?Var {
 /// Resolve identity without projecting a descriptor or allocating.
 pub fn root(self: *const Self, view_id: Var) Var {
     if (self.sourceVar(view_id)) |var_| return var_;
-    std.debug.assert(@intFromEnum(view_id) - self.source_len < self.nodes.items.len);
+    std.debug.assert(@backingInt(view_id) - self.source_len < self.nodes.items.len);
     return view_id;
 }
 
 /// Resolve a descriptor without mutating the source solver graph.
 pub fn resolveVar(self: *Self, view_id: Var) Allocator.Error!Resolved {
-    if (@intFromEnum(view_id) < self.source_len) {
+    if (@backingInt(view_id) < self.source_len) {
         const resolved = self.source.resolveVar(view_id);
         return .{ .var_ = resolved.var_, .desc = resolved.desc };
     }
-    const index = @intFromEnum(view_id) - self.source_len;
+    const index = @backingInt(view_id) - self.source_len;
     const node = self.nodes.items[index];
     if (node.descriptor) |descriptor| return .{ .var_ = view_id, .desc = descriptor };
     var descriptor = self.source.resolveVar(node.key.root).desc;
@@ -172,7 +172,7 @@ fn internEnvironment(self: *Self, environment: Environment) Allocator.Error!u32 
 }
 
 fn view(self: *Self, source_var: Var, environment: u32) Allocator.Error!Var {
-    std.debug.assert(@intFromEnum(source_var) < self.source_len);
+    std.debug.assert(@backingInt(source_var) < self.source_len);
     const resolved = self.source.resolveVar(source_var);
     const env = self.environments.items[environment];
     const decl = self.source.getNominalDecl(env.declaration);
@@ -201,7 +201,7 @@ fn view(self: *Self, source_var: Var, environment: u32) Allocator.Error!Var {
     const index = try addOffset(self.source_len, @intCast(self.nodes.items.len));
     // All-ones Var is RecordField.Presence's absent-presence sentinel.
     if (index == std.math.maxInt(u32)) return error.OutOfMemory;
-    const result: Var = @enumFromInt(index);
+    const result: Var = @fromBackingInt(index);
     try self.nodes.append(self.gpa, .{ .key = key });
     errdefer _ = self.nodes.pop();
     try self.node_index.putNoClobber(self.gpa, key, result);
@@ -318,7 +318,7 @@ fn projectVars(self: *Self, range: Var.SafeList.Range, environment: u32) Allocat
     for (source, projected) |var_, *dest| dest.* = try self.view(var_, environment);
     const start = try addOffset(@intCast(self.vars.items.len), self.vars_base);
     try self.vars.append(self.gpa, projected);
-    return .{ .start = @enumFromInt(start), .count = @intCast(source.len) };
+    return .{ .start = @fromBackingInt(start), .count = @intCast(source.len) };
 }
 
 fn addOffset(index: u32, offset: u32) Allocator.Error!u32 {
@@ -354,7 +354,7 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
                         .required(value);
                 }
                 const fields: types.RecordField.SafeMultiList.Range = .{
-                    .start = @enumFromInt(try addOffset(@intCast(self.fields.items.len), self.fields_base)),
+                    .start = @fromBackingInt(try addOffset(@intCast(self.fields.items.len), self.fields_base)),
                     .count = record.fields.count,
                 };
                 try self.fields.append(self.gpa, .{ .name = source.items(.name), .presence = projected });
@@ -367,7 +367,7 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
                     dest.* = try self.projectVars(args, environment);
                 }
                 const tags: types.Tag.SafeMultiList.Range = .{
-                    .start = @enumFromInt(try addOffset(@intCast(self.tags.items.len), self.tags_base)),
+                    .start = @fromBackingInt(try addOffset(@intCast(self.tags.items.len), self.tags_base)),
                     .count = tag_union.tags.count,
                 };
                 try self.tags.append(self.gpa, .{ .name = source.items(.name), .args = projected });
@@ -393,8 +393,8 @@ fn projectContent(self: *Self, content: types.Content, environment: u32) Allocat
 /// Read source or projected variable spans through the same view boundary.
 pub fn sliceVars(self: *const Self, range: Var.SafeList.Range) []const Var {
     if (range.count == 0) return &.{};
-    if (@intFromEnum(range.start) < self.vars_base) return self.source.sliceVars(range);
-    const span = self.vars.items[@intFromEnum(range.start) - self.vars_base];
+    if (@backingInt(range.start) < self.vars_base) return self.source.sliceVars(range);
+    const span = self.vars.items[@backingInt(range.start) - self.vars_base];
     std.debug.assert(span.len == range.count);
     return span;
 }
@@ -413,11 +413,11 @@ pub fn getAliasBackingVar(self: *const Self, alias: types.Alias) Var {
 /// Read tag rows without exposing source versus projected ownership.
 pub fn getTagsSlice(self: *const Self, range: types.Tag.SafeMultiList.Range) TagSlice {
     if (range.count == 0) return .{ .name = &.{}, .args = &.{} };
-    if (@intFromEnum(range.start) < self.tags_base) {
+    if (@backingInt(range.start) < self.tags_base) {
         const source = self.source.getTagsSlice(range);
         return .{ .name = source.items(.name), .args = source.items(.args) };
     }
-    const span = self.tags.items[@intFromEnum(range.start) - self.tags_base];
+    const span = self.tags.items[@backingInt(range.start) - self.tags_base];
     std.debug.assert(span.name.len == range.count);
     return span;
 }
@@ -429,11 +429,11 @@ pub fn getTagAt(self: *const Self, range: types.Tag.SafeMultiList.Range, offset:
 /// Read fields with presence evidence retained by the view.
 pub fn getRecordFieldsSlice(self: *const Self, range: types.RecordField.SafeMultiList.Range) FieldSlice {
     if (range.count == 0) return .{ .name = &.{}, .presence = &.{} };
-    if (@intFromEnum(range.start) < self.fields_base) {
+    if (@backingInt(range.start) < self.fields_base) {
         const source = self.source.getRecordFieldsSlice(range);
         return .{ .name = source.items(.name), .presence = source.items(.presence) };
     }
-    const span = self.fields.items[@intFromEnum(range.start) - self.fields_base];
+    const span = self.fields.items[@backingInt(range.start) - self.fields_base];
     std.debug.assert(span.name.len == range.count);
     return span;
 }

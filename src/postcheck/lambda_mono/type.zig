@@ -163,18 +163,18 @@ pub const Store = struct {
     }
 
     pub fn add(self: *Store, content: Content) std.mem.Allocator.Error!TypeId {
-        const id: TypeId = @enumFromInt(@as(u32, @intCast(self.types.len())));
+        const id: TypeId = @fromBackingInt(@intCast(@as(u32, @intCast(self.types.len()))));
         try self.types.append(self.allocator, content);
         return id;
     }
 
     pub fn set(self: *Store, id: TypeId, content: Content) void {
-        self.types.set(@intFromEnum(id), content);
+        self.types.set(@backingInt(id), content);
         self.sets += 1;
     }
 
     pub fn get(self: *const Store, id: TypeId) Content {
-        return self.types.unsafeRawItemsForView()[@intFromEnum(id)];
+        return self.types.unsafeRawItemsForView()[@backingInt(id)];
     }
 
     pub fn typeCount(self: *const Store) usize {
@@ -214,7 +214,7 @@ pub const Store = struct {
         const start: u32 = @intCast(self.fn_variants.len());
         for (values, 0..) |variant, i| {
             var stored = variant;
-            stored.id = @enumFromInt(@as(u32, @intCast(start + i)));
+            stored.id = @fromBackingInt(@intCast(@as(u32, @intCast(start + i))));
             try self.fn_variants.append(self.allocator, stored);
         }
         return .{ .start = start, .len = @intCast(values.len) };
@@ -312,8 +312,8 @@ pub const Store = struct {
         if (targets) |content| {
             hasher.update(&try content.identity(content.context, variant.target));
         } else {
-            writeU32(hasher, @intFromEnum(variant.source));
-            writeU32(hasher, @intFromEnum(variant.target));
+            writeU32(hasher, @backingInt(variant.source));
+            writeU32(hasher, @backingInt(variant.target));
         }
     }
 
@@ -374,7 +374,7 @@ pub const Store = struct {
                 writeU32(hasher, @intCast(field_slice.len));
                 for (0..field_slice.len) |index| {
                     const field = GuardedList.at(field_slice, index);
-                    if (targets == null) writeU32(hasher, @intFromEnum(field.symbol));
+                    if (targets == null) writeU32(hasher, @backingInt(field.symbol));
                     try scratch.child(hasher, field.ty);
                     try scratch.child(hasher, field.storage_ty);
                 }
@@ -509,7 +509,7 @@ const DigestScratch = struct {
 /// Test target identities: a target's identity is its number modulo 10, so
 /// targets 1 and 11 are one specialization.
 fn testCallableTarget(_: *anyopaque, target: FnId) std.mem.Allocator.Error![TypeDigestHasher.digest_length]u8 {
-    return @splat(@intCast(@intFromEnum(target) % 10));
+    return @splat(@intCast(@backingInt(target) % 10));
 }
 
 test "Lambda Mono content digest names callables by target identity, not program numbering" {
@@ -533,15 +533,15 @@ test "Lambda Mono content digest names callables by target identity, not program
         var variants: [2]FnVariant = undefined;
         for (shape, &variants, 0..) |variant, *out, position| {
             const capture = try store.add(.{ .capture_record = try store.addCaptureFields(&.{.{
-                .symbol = @enumFromInt(variant.capture_symbol),
+                .symbol = @fromBackingInt(@intCast(variant.capture_symbol)),
                 .binder = null,
                 .ty = captured,
                 .storage_ty = captured,
             }}) });
             out.* = .{
-                .id = @enumFromInt(position),
-                .source = @enumFromInt(variant.source),
-                .target = @enumFromInt(variant.target),
+                .id = @fromBackingInt(@intCast(position)),
+                .source = @fromBackingInt(@intCast(variant.source)),
+                .target = @fromBackingInt(@intCast(variant.target)),
                 .capture_ty = capture,
             };
         }
@@ -569,7 +569,7 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
         const record = second;
         const callable = if (i == 0) third else first;
         store.set(capture, .{ .capture_record = try store.addCaptureFields(&.{.{
-            .symbol = @enumFromInt(7),
+            .symbol = @fromBackingInt(@intCast(7)),
             .binder = null,
             .ty = record,
             .storage_ty = record,
@@ -584,8 +584,8 @@ test "Lambda Mono digest terminates recursive erased captures independent of all
                 .source_fn_ty = .{ .bytes = @splat(13) },
                 .members = try store.addFnVariants(&.{.{
                     .id = undefined, // Assigned by addFnVariants.
-                    .source = @enumFromInt(8),
-                    .target = @enumFromInt(9),
+                    .source = @fromBackingInt(@intCast(8)),
+                    .target = @fromBackingInt(@intCast(9)),
                     .capture_ty = capture,
                 }}),
             },
@@ -616,8 +616,8 @@ test "Lambda Mono digest distinguishes recursive edges and callable targets" {
         store.set(root, .{
             .callable = try store.addFnVariants(&.{.{
                 .id = undefined, // Assigned by addFnVariants.
-                .source = @enumFromInt(1),
-                .target = @enumFromInt(i),
+                .source = @fromBackingInt(@intCast(1)),
+                .target = @fromBackingInt(@intCast(i)),
                 .capture_ty = root,
             }}),
         });
@@ -796,14 +796,14 @@ test "lambda mono callable variants receive store-local ids" {
 
     const capture_ty = try store.add(.zst);
     const variants = try store.addFnVariants(&.{
-        .{ .id = @enumFromInt(99), .source = @enumFromInt(7), .target = @enumFromInt(70), .capture_ty = capture_ty },
-        .{ .id = @enumFromInt(99), .source = @enumFromInt(8), .target = @enumFromInt(80), .capture_ty = null },
+        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(7)), .target = @fromBackingInt(@intCast(70)), .capture_ty = capture_ty },
+        .{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(8)), .target = @fromBackingInt(@intCast(80)), .capture_ty = null },
     });
     const callable = try store.add(.{ .callable = variants });
 
     const stored_variants = store.fnVariantSpan(store.get(callable).callable);
-    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(variants.start)), GuardedList.at(stored_variants, 0).id);
-    try std.testing.expectEqual(@as(FnVariantId, @enumFromInt(1)), GuardedList.at(stored_variants, 1).id);
+    try std.testing.expectEqual(@as(FnVariantId, @fromBackingInt(@intCast(variants.start))), GuardedList.at(stored_variants, 0).id);
+    try std.testing.expectEqual(@as(FnVariantId, @fromBackingInt(@intCast(1))), GuardedList.at(stored_variants, 1).id);
     try std.testing.expectEqual(capture_ty, GuardedList.at(stored_variants, 0).capture_ty.?);
 }
 
@@ -813,10 +813,10 @@ test "lambda mono empty spans use shared empty descriptor" {
 
     const unit = try store.add(.zst);
     const nonempty_span = try store.addSpan(&.{unit});
-    const nonempty_fields = try store.addFields(&.{.{ .name = @enumFromInt(1), .ty = unit, .default = null }});
-    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @enumFromInt(2), .binder = null, .ty = unit, .storage_ty = unit }});
-    const nonempty_tags = try store.addTags(&.{.{ .name = @enumFromInt(3), .checked_name = @enumFromInt(3), .payloads = nonempty_span }});
-    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @enumFromInt(99), .source = @enumFromInt(4), .target = @enumFromInt(40), .capture_ty = unit }});
+    const nonempty_fields = try store.addFields(&.{.{ .name = @fromBackingInt(@intCast(1)), .ty = unit, .default = null }});
+    const nonempty_capture_fields = try store.addCaptureFields(&.{.{ .symbol = @fromBackingInt(@intCast(2)), .binder = null, .ty = unit, .storage_ty = unit }});
+    const nonempty_tags = try store.addTags(&.{.{ .name = @fromBackingInt(@intCast(3)), .checked_name = @fromBackingInt(@intCast(3)), .payloads = nonempty_span }});
+    const nonempty_variants = try store.addFnVariants(&.{.{ .id = @fromBackingInt(@intCast(99)), .source = @fromBackingInt(@intCast(4)), .target = @fromBackingInt(@intCast(40)), .capture_ty = unit }});
     try std.testing.expect(nonempty_span.len == 1);
     try std.testing.expect(nonempty_fields.len == 1);
     try std.testing.expect(nonempty_capture_fields.len == 1);

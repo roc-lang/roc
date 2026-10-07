@@ -696,7 +696,7 @@ fn reservationsOverlap(tree: *const Reservations, ranges: []const Range) bool {
 }
 
 fn testLocal(index: u32) lir.LocalId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 // The oracle deliberately uses dense statement-level fixed-point equations,
@@ -709,9 +709,9 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
         defer plan.deinit();
         const count = 20;
         const locals_count = 7;
-        var reads = [_]u8{0} ** count;
-        var writes = [_]u8{0} ** count;
-        var successors = [_]u32{0} ** count;
+        var reads = @as([count]u8, @splat(0));
+        var writes = @as([count]u8, @splat(0));
+        var successors = @as([count]u32, @splat(0));
         for (0..count) |_| _ = try plan.node();
         for (0..locals_count) |i| {
             try plan.access(0, testLocal(@intCast(i)), false, true);
@@ -737,8 +737,8 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
                 successors[i] |= @as(u32, 1) << @intCast(next);
             }
         }
-        var live_in = [_]u8{0} ** count;
-        var live_out = [_]u8{0} ** count;
+        var live_in = @as([count]u8, @splat(0));
+        var live_out = @as([count]u8, @splat(0));
         var changed = true;
         while (changed) {
             changed = false;

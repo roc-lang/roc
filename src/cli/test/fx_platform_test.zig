@@ -1462,7 +1462,7 @@ test "fx platform runtime stack overflow" {
     //    design.md), so the guard's crash output can be asserted only when
     //    this suite and the roc binary it spawns are built in Debug mode.
     // 2. The compiled dev-backend host path via the FX host self-test hook.
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         try expectInterpreterRuntimeStackOverflow();
     }
     try expectDevRuntimeStackOverflow();

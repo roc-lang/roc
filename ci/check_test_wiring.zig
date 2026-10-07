@@ -458,7 +458,7 @@ fn enumerateBinaryTests(
 
 fn sendClientMessage(io: std.Io, file: std.Io.File, tag: std.zig.Client.Message.Tag) !void {
     var message: [8]u8 = undefined;
-    std.mem.writeInt(u32, message[0..4], @intFromEnum(tag), .little);
+    std.mem.writeInt(u32, message[0..4], @backingInt(tag), .little);
     std.mem.writeInt(u32, message[4..8], 0, .little);
     try file.writeStreamingAll(io, &message);
 }
@@ -674,14 +674,14 @@ fn collectFileTests(
 ) !bool {
     const source = try readSourceFile(allocator, std_io, path);
     defer allocator.free(source);
-    var tree = try Ast.parse(allocator, source, .zig);
+    var tree = try Ast.parse(allocator, source, .{ .mode = .zig });
     defer tree.deinit(allocator);
 
     var file_copy: ?[]const u8 = null;
     var has_test_decl = false;
     var has_unnamed_test = false;
     for (0..tree.nodes.len) |node_index| {
-        const node: Ast.Node.Index = @enumFromInt(node_index);
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_index));
         if (tree.nodeTag(node) != .test_decl) continue;
         has_test_decl = true;
 
@@ -798,7 +798,7 @@ fn collectFileImports(
     };
     defer allocator.free(source);
 
-    var tree = try Ast.parse(allocator, source, .zig);
+    var tree = try Ast.parse(allocator, source, .{ .mode = .zig });
     defer tree.deinit(allocator);
 
     const tags = tree.tokens.items(.tag);

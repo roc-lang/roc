@@ -840,7 +840,12 @@ test "timing counter groups retain every Monotype graph diagnostic" {
     });
     defer reporter.deinit();
     reporter.start();
-    var counters = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }} ** 27;
+    var counters = repeated: {
+        const pattern = [_]Counter{.{ .name = "Graph diagnostic", .count = 0 }};
+        var result: [pattern.len * (27)]@TypeOf(pattern[0]) = undefined;
+        for (0..(27)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     counters[26] = .{ .name = "Generated-private guard returns", .count = 12345 };
     reporter.recordCounters("Monotype type graph", &counters);
     reporter.finish();
@@ -861,7 +866,12 @@ test "timing counters beyond the first 24 are printed" {
     defer reporter.deinit();
     reporter.start();
 
-    var counters = [_]Counter{.{ .name = "Earlier counter", .count = 0 }} ** 28;
+    var counters = repeated: {
+        const pattern = [_]Counter{.{ .name = "Earlier counter", .count = 0 }};
+        var result: [pattern.len * (28)]@TypeOf(pattern[0]) = undefined;
+        for (0..(28)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     counters[25] = .{ .name = "Union-find resolutions", .count = 123456789 };
     counters[27] = .{ .name = "Final counter", .count = 987654321 };
     reporter.recordCounters("Monotype graph", &counters);

@@ -101,7 +101,7 @@ pub fn initWithImport(module_name: []const u8, source: []const u8, other_module_
             if (type_ident) |ident| {
                 if (other_test_env.module_env.getExposedTypeNodeIndexById(ident)) |node_idx| {
                     // The node index IS the statement index for type declarations
-                    break :blk @as(CIR.Statement.Idx, @enumFromInt(node_idx));
+                    break :blk @as(CIR.Statement.Idx, @fromBackingInt(@intCast(node_idx)));
                 }
             }
         }
@@ -328,7 +328,7 @@ pub fn initWithExecutableRootNames(module_name: []const u8, source: []const u8, 
     checker.fixupTypeWriter();
     for (explicit_root_names) |root_name| {
         const root_def_idx = can.explicitRootDefByName(root_name) orelse {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.panic("test invariant violated: explicit executable root `{s}` was not found", .{root_name});
             }
             unreachable;
@@ -742,7 +742,7 @@ pub fn assertNominalDeclValidity(self: *TestEnv, name: []const u8, expected: boo
 
         const decl_idx = self.module_env.types.lookupNominalDeclByKey(
             self.module_env.selfModuleIdentity(),
-            @intFromEnum(stmt_idx),
+            @backingInt(stmt_idx),
         ) orelse return error.TestUnexpectedResult;
         try testing.expectEqual(expected, self.module_env.types.getNominalDecl(decl_idx).isValid());
         return;
@@ -1137,7 +1137,7 @@ pub fn methodTypeNode(self: *const TestEnv, name: []const u8) ?CIR.Node.Idx {
 /// the name its source spells.
 pub fn importIndex(self: *const TestEnv, module_name: []const u8) ?CIR.Import.Idx {
     for (self.module_env.imports.imports.items.items, 0..) |str_idx, i| {
-        if (std.mem.eql(u8, self.module_env.getString(str_idx), module_name)) return @enumFromInt(i);
+        if (std.mem.eql(u8, self.module_env.getString(str_idx), module_name)) return @fromBackingInt(@intCast(i));
     }
     return null;
 }

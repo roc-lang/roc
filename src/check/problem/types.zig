@@ -59,11 +59,11 @@ pub const RelationOwner = struct {
     pub const none: RelationOwner = .{};
 
     pub fn of(kind: Kind, expr: CIR.Expr.Idx, index: u32) RelationOwner {
-        return .{ .kind = kind, .expr = @intFromEnum(expr), .index = index };
+        return .{ .kind = kind, .expr = @backingInt(expr), .index = index };
     }
 
     pub fn exprIdx(self: RelationOwner) CIR.Expr.Idx {
-        return @enumFromInt(self.expr);
+        return @fromBackingInt(self.expr);
     }
 
     pub fn eql(a: RelationOwner, b: RelationOwner) bool {

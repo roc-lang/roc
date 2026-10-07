@@ -109,7 +109,7 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
     const identity = lir.ProcIdentity.forTest(43);
-    const key = [_]u8{41} ** 32;
+    const key = @as([32]u8, @splat(41));
     const set = backend.dev.ProcArtifact.Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .artifacts = &.{.{
@@ -191,11 +191,11 @@ test "object cache loading owns decoded packs and commits both indexes atomicall
 }
 
 test "object cache semantic offers select compatible relations in either order" {
-    const key = [_]u8{21} ** 32;
-    const independent_key = [_]u8{22} ** 32;
-    const mixed_key = [_]u8{23} ** 32;
-    const first_relation = [_]u8{31} ** 32;
-    const second_relation = [_]u8{32} ** 32;
+    const key = @as([32]u8, @splat(21));
+    const independent_key = @as([32]u8, @splat(22));
+    const mixed_key = @as([32]u8, @splat(23));
+    const first_relation = @as([32]u8, @splat(31));
+    const second_relation = @as([32]u8, @splat(32));
     const Attempt = struct {
         fn run(allocator: Allocator, reverse: bool) (LoadedPacks.LoadError || error{ TestExpectedEqual, TestUnexpectedResult })!void {
             var packs = LoadedPacks.init(allocator);
@@ -247,13 +247,13 @@ test "object cache semantic offers select compatible relations in either order" 
                 try std.testing.expectEqualSlices(u32, &.{0x0001_02ff}, hit.rc_ret_conditions);
             }
             // Independent offers are still visible beside incompatible ones.
-            const mixed = lookup.lookup(mixed_key, [_]u8{33} ** 32) orelse return error.TestUnexpectedResult;
+            const mixed = lookup.lookup(mixed_key, @as([32]u8, @splat(33))) orelse return error.TestUnexpectedResult;
             try std.testing.expect(mixed.platform_requirement_relation == null);
             try std.testing.expectEqualSlices(u8, &lir.ProcIdentity.forTest(53).bytes, &mixed.identity);
             const exact = lookup.lookup(mixed_key, second_relation) orelse return error.TestUnexpectedResult;
             try std.testing.expectEqualDeep(second_relation, exact.platform_requirement_relation.?);
             try std.testing.expect(lookup.lookup(key, null) == null);
-            try std.testing.expect(lookup.lookup(key, [_]u8{33} ** 32) == null);
+            try std.testing.expect(lookup.lookup(key, @as([32]u8, @splat(33))) == null);
             for ([_]?[32]u8{ null, first_relation, second_relation }) |relation| {
                 const hit = lookup.lookup(independent_key, relation) orelse return error.TestUnexpectedResult;
                 try std.testing.expect(hit.platform_requirement_relation == null);
@@ -315,7 +315,7 @@ test "object cache write failures preserve quiet behavior and report verbose cau
             }, .arm64mac, "dev");
             defer store.deinit();
             for (0..2) |_| {
-                try std.testing.expectError(error.PackWriteFailed, store.write(.local, [_]u8{1} ** 32, [_]u8{2} ** 32, "pack"));
+                try std.testing.expectError(error.PackWriteFailed, store.write(.local, @as([32]u8, @splat(1)), @as([32]u8, @splat(2)), "pack"));
             }
             if (verbose) {
                 const cause = switch (stage) {
@@ -394,10 +394,14 @@ pub const LoadedPacks = struct {
     /// Read every `.rpk` file in `dir_path`, in name order, without indexing.
     pub fn loadDirInto(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         std.debug.assert(self.state == .pending);
-        errdefer |err| {
+        self.loadDirIntoUnrecorded(io, dir_path, input) catch |err| {
             self.state = .unavailable;
             self.failure = err;
-        }
+            return err;
+        };
+    }
+
+    fn loadDirIntoUnrecorded(self: *LoadedPacks, io: std.Io, dir_path: []const u8, input: Input) LoadError!void {
         const allocator = self.allocator;
         var names = std.ArrayList([]u8).empty;
         defer {
@@ -452,10 +456,14 @@ pub const LoadedPacks = struct {
     pub fn indexPacks(self: *LoadedPacks) LoadError!void {
         if (self.state == .unavailable) return self.failure.?;
         std.debug.assert(self.state == .pending);
-        errdefer |err| {
+        self.indexPacksUnrecorded() catch |err| {
             self.state = .unavailable;
             self.failure = err;
-        }
+            return err;
+        };
+    }
+
+    fn indexPacksUnrecorded(self: *LoadedPacks) LoadError!void {
         for (self.packs.items) |*pack| {
             for (pack.set.artifacts, 0..) |artifact, index| {
                 switch (artifact.kind) {

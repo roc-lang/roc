@@ -320,7 +320,7 @@ pub const Module = struct {
 
     /// Return the checked module's method definition table for static-dispatch lowering.
     pub fn methodDefEntries(self: @This()) []const ModuleEnv.MethodDefs.Entry {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.assert(self.env().method_defs.sorted);
             std.debug.assert(self.env().method_defs.deduplicated);
         }

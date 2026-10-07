@@ -123,9 +123,9 @@ pub const AnalysisScratch = struct {
 pub fn firstFreshJoinPoint(store: *const LirStore) u32 {
     var next: u32 = 0;
     for (0..store.cfStmtCount()) |index| {
-        const stmt = store.getCFStmt(@enumFromInt(index));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(index)));
         if (stmt != .join) continue;
-        const raw = @intFromEnum(stmt.join.id);
+        const raw = @backingInt(stmt.join.id);
         if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         next = @max(next, raw + 1);
     }
@@ -157,7 +157,7 @@ pub const JoinParamIndex = struct {
 
     pub fn record(self: *JoinParamIndex, join: @FieldType(LIR.CFStmt, "join")) Allocator.Error!void {
         try self.params.put(join.id, join.params);
-        const raw = @intFromEnum(join.id);
+        const raw = @backingInt(join.id);
         if (raw == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
         self.next_join_point = @max(self.next_join_point, raw + 1);
     }
@@ -165,7 +165,7 @@ pub const JoinParamIndex = struct {
     /// Reserve an identity in the same domain used by subtree clones.
     pub fn freshJoinPoint(self: *JoinParamIndex) LIR.JoinPointId {
         if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(self.next_join_point);
         self.next_join_point += 1;
         return id;
     }
@@ -703,7 +703,7 @@ fn emitStepCaptures(store: *const LirStore, ctx: anytype, comptime note: fn (@Ty
 }
 
 fn noteRead(counts: []u32, local: LocalId) void {
-    counts[@intFromEnum(local)] += 1;
+    counts[@backingInt(local)] += 1;
 }
 
 fn noteReachableRead(counts: *ReadCounts, local: LocalId) void {
@@ -743,7 +743,7 @@ pub fn uniqueSortedLocals(items: []LocalId) usize {
 
 /// Order two local ids by their integer index, for `std.mem.sort`.
 pub fn localIdLessThan(_: void, a: LocalId, b: LocalId) bool {
-    return @intFromEnum(a) < @intFromEnum(b);
+    return @backingInt(a) < @backingInt(b);
 }
 
 /// The body of a proc these passes may rewrite, or null when the proc has no
@@ -840,7 +840,7 @@ fn noteDefinition(defined: anytype, local: LocalId) void {
     if (@TypeOf(defined) == *ReadCounts) {
         noteReachableRead(defined, local);
     } else {
-        defined[@intFromEnum(local)] = true;
+        defined[@backingInt(local)] = true;
     }
 }
 
@@ -970,7 +970,7 @@ pub fn collectCopiedStmts(
 
         fn note(self: *@This(), local: LocalId) void {
             if (self.failure != null) return;
-            self.edges.append(self.allocator, .{ .key = @intFromEnum(local), .stmt = self.stmt }) catch |err| {
+            self.edges.append(self.allocator, .{ .key = @backingInt(local), .stmt = self.stmt }) catch |err| {
                 self.failure = err;
             };
         }
@@ -992,7 +992,7 @@ pub fn collectCopiedStmts(
         successors.clearRetainingCapacity();
         try appendSuccessors(store, &successors, stmt_id, allocator);
         for (successors.items) |successor| {
-            try predecessors.append(allocator, .{ .key = @intFromEnum(successor), .stmt = stmt_id });
+            try predecessors.append(allocator, .{ .key = @backingInt(successor), .stmt = stmt_id });
         }
         const stmt = store.getCFStmt(stmt_id);
         var collector: ReaderCollector = .{ .edges = &readers, .stmt = stmt_id, .allocator = allocator };
@@ -1001,7 +1001,7 @@ pub fn collectCopiedStmts(
             const params = join_params.get(stmt.jump.target) orelse
                 base.invariant("{s}", .{"subtree copy plan found a jump to an unknown join"});
             emitSpan(store, &collector, ReaderCollector.note, params);
-            try jumps.append(allocator, .{ .key = @intFromEnum(stmt.jump.target), .stmt = stmt_id });
+            try jumps.append(allocator, .{ .key = @backingInt(stmt.jump.target), .stmt = stmt_id });
         }
         if (collector.failure) |err| return err;
     }
@@ -1019,15 +1019,15 @@ pub fn collectCopiedStmts(
     while (work.pop()) |stmt_id| {
         const entry = try copied.getOrPut(stmt_id);
         if (entry.found_existing) continue;
-        try appendEdgeStmts(Edge, &work, predecessors.items, @intFromEnum(stmt_id), allocator);
+        try appendEdgeStmts(Edge, &work, predecessors.items, @backingInt(stmt_id), allocator);
         defined.counts.clearRetainingCapacity();
         try markStmtDefinitionsSparse(store, &defined, stmt_id);
         var defined_locals = defined.counts.keyIterator();
         while (defined_locals.next()) |local| {
-            try appendEdgeStmts(Edge, &work, readers.items, @intFromEnum(local.*), allocator);
+            try appendEdgeStmts(Edge, &work, readers.items, @backingInt(local.*), allocator);
         }
         const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .join) try appendEdgeStmts(Edge, &work, jumps.items, @intFromEnum(stmt.join.id), allocator);
+        if (stmt == .join) try appendEdgeStmts(Edge, &work, jumps.items, @backingInt(stmt.join.id), allocator);
     }
     return copied;
 }
@@ -1069,7 +1069,7 @@ fn callVariantIdentity(source: LIR.ProcIdentity, spec: CallVariantSpec) LIR.Proc
     var key: [12]u8 = undefined;
     std.mem.writeInt(u32, key[0..4], @intCast(spec.leading_args.len), .little);
     std.mem.writeInt(u32, key[4..8], @intCast(spec.extra_frame_locals.len), .little);
-    std.mem.writeInt(u32, key[8..12], @intFromEnum(spec.ret_layout), .little);
+    std.mem.writeInt(u32, key[8..12], @backingInt(spec.ret_layout), .little);
     return source.derived("call-variant", &key);
 }
 
@@ -2116,7 +2116,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     entry.value_ptr.* = params.freshJoinPoint();
                 } else {
                     if (self.next_join_point == std.math.maxInt(u32)) base.invariant("{s}", .{"join-point id space exhausted"});
-                    entry.value_ptr.* = @enumFromInt(self.next_join_point);
+                    entry.value_ptr.* = @fromBackingInt(self.next_join_point);
                     self.next_join_point += 1;
                 }
             }
@@ -2269,8 +2269,8 @@ test "subtree clone bridges renamed parameters before an external join" {
     defer store.deinit();
 
     const shared_param = try store.addLocal(.{ .layout_idx = .u64 });
-    const external_id: LIR.JoinPointId = @enumFromInt(1);
-    const internal_id: LIR.JoinPointId = @enumFromInt(2);
+    const external_id: LIR.JoinPointId = @fromBackingInt(@intCast(1));
+    const internal_id: LIR.JoinPointId = @fromBackingInt(@intCast(2));
 
     const ret = try store.addCFStmt(.{ .ret = .{ .value = shared_param } }, .test_fixture);
     const jump_external = try store.addCFStmt(.{ .jump = .{ .target = external_id } }, .test_fixture);
@@ -2475,10 +2475,10 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     defer testing.allocator.free(dense);
     @memset(dense, 0);
     for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtReads(&store, dense, store.getCFStmt(stmt));
-    for (dense, 0..) |count, index| try testing.expectEqual(count, reads.get(@enumFromInt(index)));
+    for (dense, 0..) |count, index| try testing.expectEqual(count, reads.get(@fromBackingInt(@intCast(index))));
     @memset(dense, 0);
     for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtDefs(&store, dense, store.getCFStmt(stmt));
-    for (dense, 0..) |count, index| try testing.expectEqual(count, defs.get(@enumFromInt(index)));
+    for (dense, 0..) |count, index| try testing.expectEqual(count, defs.get(@fromBackingInt(@intCast(index))));
 
     var cloner = try BodyCloner(TestRetRewriter).initWithAllocator(&store, .{}, allocator);
     defer cloner.deinit();
@@ -2499,7 +2499,7 @@ test "body_clone sparse maps preserve loop back jumps and local reuse" {
     var store = LirStore.init(testing.allocator);
     defer store.deinit();
     const param = try store.addLocal(.{ .layout_idx = .u64 });
-    const id: LIR.JoinPointId = @enumFromInt(9);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(9));
     const jump = try store.addCFStmt(.{ .jump = .{ .target = id } }, .test_fixture);
     const write = try store.addCFStmt(.{ .set_local = .{ .target = param, .value = param, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
     const body = try store.addCFStmt(.{ .join = .{
@@ -2525,20 +2525,20 @@ test "body_clone join allocation belongs to the destination procedure" {
     defer store.deinit();
     const end = try store.addCFStmt(.runtime_error, .test_fixture);
     _ = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(9000),
+        .id = @fromBackingInt(@intCast(9000)),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
     } }, .test_fixture);
     const destination = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(40),
+        .id = @fromBackingInt(@intCast(40)),
         .params = LIR.LocalSpan.empty(),
         .body = end,
         .remainder = end,
     } }, .test_fixture);
-    const jump = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(2) } }, .test_fixture);
+    const jump = try store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(2)) } }, .test_fixture);
     const source = try store.addCFStmt(.{ .join = .{
-        .id = @enumFromInt(2),
+        .id = @fromBackingInt(@intCast(2)),
         .params = LIR.LocalSpan.empty(),
         .body = jump,
         .remainder = jump,
@@ -2546,7 +2546,7 @@ test "body_clone join allocation belongs to the destination procedure" {
     var inliner = try BodyCloner(TestRetRewriter).initWithInlineScopeOuter(&store, .{}, .none, destination);
     defer inliner.deinit();
     const cloned = store.getCFStmt(try inliner.cloneStmt(source)).join;
-    try testing.expectEqual(@as(u32, 41), @intFromEnum(cloned.id));
+    try testing.expectEqual(@as(u32, 41), @backingInt(cloned.id));
     try testing.expectEqual(cloned.id, store.getCFStmt(cloned.body).jump.target);
 
     var index = JoinParamIndex.init(testing.allocator);
@@ -2556,7 +2556,7 @@ test "body_clone join allocation belongs to the destination procedure" {
         var subtree = try BodyCloner(TestRetRewriter).initWithFreshDeclaredJoins(&store, .{}, source, &index);
         defer subtree.deinit();
         const clone = store.getCFStmt(try subtree.cloneStmt(source)).join;
-        try testing.expectEqual(@as(u32, @intCast(expected)), @intFromEnum(clone.id));
+        try testing.expectEqual(@as(u32, @intCast(expected)), @backingInt(clone.id));
     }
 }
 
@@ -2636,7 +2636,7 @@ test "body_clone retained counts isolate nested inventories and clear only live 
             const counts = &inventory.*.?;
             try testing.expectEqual(@as(u32, if (index % 2 == round % 2) 2 else 1), counts.get(low));
             try testing.expectEqual(@as(u32, 1), counts.get(high));
-            try testing.expectEqual(@as(u32, 0), counts.get(@enumFromInt(1)));
+            try testing.expectEqual(@as(u32, 0), counts.get(@fromBackingInt(@intCast(1))));
         }
         if (round == 0) {
             warmed_bytes = meter.allocated_bytes;

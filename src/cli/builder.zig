@@ -369,10 +369,10 @@ pub fn writeStaticArchive(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const output_z = try arena.dupeZ(u8, output_path);
+    const output_z = try arena.dupeSentinel(u8, output_path, 0);
     const names = try arena.alloc([*:0]const u8, input_paths.len);
     for (input_paths, 0..) |path, i| {
-        names[i] = try arena.dupeZ(u8, path);
+        names[i] = try arena.dupeSentinel(u8, path, 0);
     }
 
     const kind: c_int = if (roc_target.toOsTag() == .macos) LLVMArchiveKindDarwin else LLVMArchiveKindGNU;
@@ -422,7 +422,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     var mem_buf: ?*anyopaque = null;
     var error_message: [*:0]u8 = undefined;
 
-    const bitcode_path_z = try gpa.dupeZ(u8, config.input_path);
+    const bitcode_path_z = try gpa.dupeSentinel(u8, config.input_path, 0);
     defer gpa.free(bitcode_path_z);
 
     if (externs.LLVMCreateMemoryBufferWithContentsOfFile(bitcode_path_z.ptr, &mem_buf, &error_message) != 0) {
@@ -446,7 +446,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
 
     // 4. Get target triple and set it on the module
     const target_triple = config.target.toTriple();
-    const target_triple_z = try gpa.dupeZ(u8, target_triple);
+    const target_triple_z = try gpa.dupeSentinel(u8, target_triple, 0);
     defer gpa.free(target_triple_z);
 
     std.log.debug("Setting target triple on module: {s}", .{target_triple});
@@ -682,9 +682,9 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("LLVM target obtained successfully", .{});
 
     // 6. Create target machine
-    const cpu_z = try gpa.dupeZ(u8, config.cpu);
+    const cpu_z = try gpa.dupeSentinel(u8, config.cpu, 0);
     defer gpa.free(cpu_z);
-    const features_z = try gpa.dupeZ(u8, config.features);
+    const features_z = try gpa.dupeSentinel(u8, config.features, 0);
     defer gpa.free(features_z);
 
     std.log.debug("Creating target machine with CPU='{s}', Features='{s}'", .{ config.cpu, config.features });
@@ -710,7 +710,7 @@ pub fn compileBitcodeToObject(gpa: Allocator, std_io: std.Io, config: CompileCon
     std.log.debug("Target machine created successfully", .{});
 
     // 7. Prepare output path
-    const object_path_z = try gpa.dupeZ(u8, config.output_path);
+    const object_path_z = try gpa.dupeSentinel(u8, config.output_path, 0);
     defer gpa.free(object_path_z);
 
     // 8. Emit object file

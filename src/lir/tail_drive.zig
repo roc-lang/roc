@@ -85,7 +85,7 @@ pub fn run(
     var outside = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, proc_count);
     defer outside.deinit(allocator);
     for (entered_from_outside) |procs| {
-        for (procs) |proc| outside.set(@intFromEnum(proc));
+        for (procs) |proc| outside.set(@backingInt(proc));
     }
 
     var seen = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, store.cfStmtCount());
@@ -99,16 +99,16 @@ pub fn run(
     var late_desc_locals = std.ArrayList(LateDescLocal).empty;
     defer late_desc_locals.deinit(allocator);
     for (0..proc_count) |proc_index| {
-        const proc = store.getProcSpec(@enumFromInt(@as(u32, @intCast(proc_index))));
+        const proc = store.getProcSpec(@fromBackingInt(@as(u32, @intCast(proc_index))));
         const body = proc.body orelse continue;
         join_bodies.clearRetainingCapacity();
         try work.append(allocator, body);
         while (work.pop()) |stmt_id| {
-            if (seen.isSet(@intFromEnum(stmt_id))) continue;
-            seen.set(@intFromEnum(stmt_id));
+            if (seen.isSet(@backingInt(stmt_id))) continue;
+            seen.set(@backingInt(stmt_id));
             const stmt = store.getCFStmt(stmt_id);
             if (stmt == .join) {
-                const join_index = @intFromEnum(stmt.join.id);
+                const join_index = @backingInt(stmt.join.id);
                 if (join_index >= join_bodies.items.len) {
                     try join_bodies.appendNTimes(allocator, null, join_index + 1 - join_bodies.items.len);
                 }
@@ -116,7 +116,7 @@ pub fn run(
             } else if (stmt == .assign_call) {
                 try direct_calls.append(allocator, .{
                     .caller = @intCast(proc_index),
-                    .callee = @intFromEnum(stmt.assign_call.proc),
+                    .callee = @backingInt(stmt.assign_call.proc),
                     .stmt = stmt_id,
                     .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call),
                 });
@@ -127,7 +127,7 @@ pub fn run(
                     .returns = try returnOf(allocator, store, join_bodies.items, &late_desc_locals, stmt.assign_call_erased),
                 });
             } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
-                outside.set(@intFromEnum(stmt.assign_literal.value.proc_ref));
+                outside.set(@backingInt(stmt.assign_literal.value.proc_ref));
             }
             try body_clone.appendSuccessors(store, &work, stmt_id, allocator);
         }
@@ -163,7 +163,7 @@ pub fn run(
         if (deferred.returns == .converted and drive.canLeavePending()) {
             updated.returns_pending = deferred.returns.converted;
         }
-        if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(deferred.caller)).reads_caller_drives = true;
+        if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(deferred.caller)).reads_caller_drives = true;
     }
     for (direct_calls.items) |call| {
         if (!may_pend.isSet(call.callee)) continue;
@@ -178,7 +178,7 @@ pub fn run(
         }
         // A call that runs pending calls afterwards keeps its frame to do so.
         if (drive.canDriveHere()) updated.replaces_frame = false;
-        if (drive == .unless_caller_drives) store.getProcSpecPtr(@enumFromInt(call.caller)).reads_caller_drives = true;
+        if (drive == .unless_caller_drives) store.getProcSpecPtr(@fromBackingInt(call.caller)).reads_caller_drives = true;
     }
 }
 
@@ -186,7 +186,7 @@ const HandsUp = enum { never, always, when_runtime_called };
 
 /// Whether a procedure may return with a call pending.
 fn handsUp(store: *const LirStore, outside: *const std.bit_set.DynamicBitSetUnmanaged, proc_index: u32) HandsUp {
-    const proc = store.getProcSpec(@enumFromInt(proc_index));
+    const proc = store.getProcSpec(@fromBackingInt(proc_index));
     return switch (proc.abi) {
         .erased_callable => .when_runtime_called,
         .roc => if (outside.isSet(proc_index)) .never else .always,
@@ -258,7 +258,7 @@ fn returnOf(
             return .{ .converted = .{ .result_desc = stored_as } };
         }
         if (stmt == .jump) {
-            const join_index = @intFromEnum(stmt.jump.target);
+            const join_index = @backingInt(stmt.jump.target);
             if (jumps == join_bodies.len or join_index >= join_bodies.len) return .no;
             jumps += 1;
             current = join_bodies[join_index] orelse return .no;

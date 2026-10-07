@@ -452,8 +452,8 @@ pub const Timing = struct {
         self.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
         defer self.solved_lir_parallel_mutex.unlock(self.std_io);
         // All Solved-LIR metrics count completed work, not peaks or durations.
-        inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
-            @field(self.solved_lir_parallel, field.name) +|= @field(parallel, field.name);
+        inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names) |field_name| {
+            @field(self.solved_lir_parallel, field_name) +|= @field(parallel, field_name);
         }
     }
 
@@ -599,22 +599,22 @@ fn timingNowNs(std_io: std.Io) i64 {
 test "pipeline timing aggregates Solved-LIR counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: SolvedLirParallelMetrics = .{};
-    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
-        @field(first, field.name) = i + 1;
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        @field(first, field_name) = i + 1;
     }
     timing.addSolvedLirParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
-    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field.name));
-        @field(first, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field_name));
+        @field(first, field_name) = std.math.maxInt(u64);
     }
     aggregate.addSolvedLirParallel(first);
     const saturated = aggregate.snapshot();
-    inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
-        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field.name));
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names) |field_name| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field_name));
     }
     try std.testing.expectEqual(@as(u64, 0), saturated.lir_gen_ns);
     aggregate = Timing.init(std.testing.io);
@@ -660,20 +660,20 @@ test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot().spec_constr_parallel;
-    inline for (std.meta.fields(SpecConstrParallelMetrics)) |field| {
-        if (comptime std.mem.eql(u8, field.name, "peak_retained_shards")) {
-            try std.testing.expectEqual(@field(first, field.name), @field(doubled, field.name));
-        } else if (field.type == u64) {
-            try std.testing.expectEqual(2 * @field(first, field.name), @field(doubled, field.name));
+    inline for (@typeInfo(SpecConstrParallelMetrics).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "peak_retained_shards")) {
+            try std.testing.expectEqual(@field(first, field_name), @field(doubled, field_name));
+        } else if (@FieldType(SpecConstrParallelMetrics, field_name) == u64) {
+            try std.testing.expectEqual(2 * @field(first, field_name), @field(doubled, field_name));
         } else {
-            for (@field(first, field.name), @field(doubled, field.name)) |value, total| {
+            for (@field(first, field_name), @field(doubled, field_name)) |value, total| {
                 try std.testing.expectEqual(2 * value, total);
             }
         }
-        if (field.type == u64) {
-            @field(first, field.name) = std.math.maxInt(u64);
+        if (@FieldType(SpecConstrParallelMetrics, field_name) == u64) {
+            @field(first, field_name) = std.math.maxInt(u64);
         } else {
-            @memset(&@field(first, field.name), std.math.maxInt(u64));
+            @memset(&@field(first, field_name), std.math.maxInt(u64));
         }
     }
     aggregate.addSpecConstrParallel(first);
@@ -707,31 +707,31 @@ test "pipeline timing preserves explicit SpecConstr metrics output" {
 test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: ArcParallelMetrics = .{};
-    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        if (field.type == u64) @field(first, field.name) = i + 1;
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) @field(first, field_name) = i + 1;
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| @field(first.uniqueness, field.name) = i + 1;
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names, 0..) |field_name, i| @field(first.uniqueness, field_name) = i + 1;
     timing.addArcParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
-    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        if (field.type == u64) {
-            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
-            @field(first, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) {
+            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field_name));
+            @field(first, field_name) = std.math.maxInt(u64);
         }
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field.name));
-        @field(first.uniqueness, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names, 0..) |field_name, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field_name));
+        @field(first.uniqueness, field_name) = std.math.maxInt(u64);
     }
     aggregate.addArcParallel(first);
     const saturated = aggregate.snapshot();
-    inline for (std.meta.fields(ArcParallelMetrics)) |field| {
-        if (field.type == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names) |field_name| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field_name));
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics)) |field| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field.name));
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names) |field_name| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field_name));
     try std.testing.expectEqual(@as(u64, 0), saturated.arc_ns);
     aggregate = Timing.init(std.testing.io);
     try std.testing.expectEqualDeep(ArcParallelMetrics{}, aggregate.snapshot().arc_parallel);
@@ -899,15 +899,15 @@ pub const Observers = struct {
 
     pub fn fromTarget(target: TargetConfig) Observers {
         var observers = Observers{};
-        inline for (@typeInfo(Observers).@"struct".fields) |field| {
-            @field(observers, field.name) = @field(target, field.name);
+        inline for (@typeInfo(Observers).@"struct".field_names) |field_name| {
+            @field(observers, field_name) = @field(target, field_name);
         }
         return observers;
     }
 
     fn applyTo(self: Observers, target: *TargetConfig) void {
-        inline for (@typeInfo(Observers).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(Observers).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
@@ -950,15 +950,15 @@ pub const SolvedPolicy = struct {
 
     pub fn fromTarget(target: TargetConfig) SolvedPolicy {
         var policy: SolvedPolicy = undefined;
-        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
-            @field(policy, field.name) = @field(target, field.name);
+        inline for (@typeInfo(SolvedPolicy).@"struct".field_names) |field_name| {
+            @field(policy, field_name) = @field(target, field_name);
         }
         return policy;
     }
 
     pub fn applyTo(self: SolvedPolicy, target: *TargetConfig) void {
-        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(SolvedPolicy).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
@@ -984,15 +984,15 @@ pub const LirPolicy = struct {
 
     pub fn fromTarget(target: TargetConfig) LirPolicy {
         var policy: LirPolicy = undefined;
-        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
-            @field(policy, field.name) = @field(target, field.name);
+        inline for (@typeInfo(LirPolicy).@"struct".field_names) |field_name| {
+            @field(policy, field_name) = @field(target, field_name);
         }
         return policy;
     }
 
     fn applyTo(self: LirPolicy, target: *TargetConfig) void {
-        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(LirPolicy).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
@@ -1068,7 +1068,7 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.records.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
         }
         unreachable;
@@ -1078,7 +1078,7 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.tag_unions.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
         }
         unreachable;
@@ -1135,7 +1135,7 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
     result.comptime_value_guards.clearRetainingCapacity();
     for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     for (lowered.frozen_static_data.?.exports) |item| {
-        if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+        if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
     }
     for (result.static_data_values.items) |*value| value.compile_time_root = null;
 }
@@ -1151,7 +1151,7 @@ fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     if (lowered.frozen_static_data) |*frozen| {
         for (frozen.exports) |item| {
-            if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+            if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
         }
         for (result.static_data_values.items) |*value| value.compile_time_root = null;
         try ReachableProcs.runWithFrozen(result, frozen);
@@ -1422,11 +1422,11 @@ test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
     const policies = [_]checked.ExhaustivenessResolutionPolicy{
         .not_pending,
         .runtime_reachable,
-        .{ .compile_time_replaced_by_root = @enumFromInt(3) },
+        .{ .compile_time_replaced_by_root = @fromBackingInt(3) },
         .compile_time_only,
     };
     var sites = [_]checked.CheckedExhaustivenessSite{.{
-        .id = @enumFromInt(5),
+        .id = @fromBackingInt(5),
         .kind = .match,
         .region = std.mem.zeroes(base.Region),
         .policy = .not_pending,
@@ -1794,11 +1794,11 @@ fn finishLoweredOutput(
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
         @memset(seen, false);
-        for (arc_roots.items) |proc| seen[@intFromEnum(proc)] = true;
+        for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
-            if (seen[@intFromEnum(proc)]) continue;
-            seen[@intFromEnum(proc)] = true;
+            if (seen[@backingInt(proc)]) continue;
+            seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
         };
     }
@@ -1943,7 +1943,7 @@ pub fn prepareBoxyCheckedModules(
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_low_level) continue;
         const op = stmt.assign_low_level.op;
@@ -1961,7 +1961,7 @@ fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) vo
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
@@ -2130,7 +2130,7 @@ fn convertRuntimeSchemas(
 }
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant("checked pipeline invariant violated: {s}", .{message});
     }
     unreachable;
@@ -2163,7 +2163,7 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         const store = &result.store;
         const layouts = &result.layouts;
         for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const name = store.procDebugName(proc_id);
             if (name_filter.len != 0) {
                 const named = name orelse continue;
@@ -2210,8 +2210,8 @@ test "runtime extraction consumes producer root positions and preserves their or
     try std.testing.expectEqual(@as(usize, 2), lowered.lir_result.store.procSpecCount());
     try std.testing.expectEqual(@as(u32, 2), lowered.lir_result.root_metadata.items[0].order);
     try std.testing.expectEqual(@as(u32, 1), lowered.lir_result.root_metadata.items[1].order);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(lowered.lir_result.root_procs.items[0]));
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(lowered.lir_result.root_procs.items[1]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(lowered.lir_result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(lowered.lir_result.root_procs.items[1]));
     try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
 }
 
@@ -2245,7 +2245,7 @@ test "adopting completed compile-time values drops their initializers and identi
         .abi = .roc,
         .exposure = .private,
     });
-    const completed_slot: LIR.StaticDataId = @enumFromInt(lowered.lir_result.static_data_values.items.len);
+    const completed_slot: LIR.StaticDataId = @fromBackingInt(@intCast(lowered.lir_result.static_data_values.items.len));
     try lowered.lir_result.static_data_values.append(allocator, .{
         .initializer = procs[1],
         .layout_idx = .zst,
@@ -2306,9 +2306,9 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         // Bodies are appended in lowering order, so consecutive body ids
         // bound each function's expression count from above.
         for (0..lifted.fnCount()) |index| {
-            const lifted_fn = lifted.getFn(@enumFromInt(@as(u32, @intCast(index))));
+            const lifted_fn = lifted.getFn(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             const body: usize = switch (lifted_fn.body) {
-                .roc => |body| @intFromEnum(body),
+                .roc => |body| @backingInt(body),
                 .hosted => 0,
             };
             const name = if (lifted.procDebugName(lifted_fn.symbol)) |id| lifted.names.exportNameText(id) else "?";
@@ -2329,10 +2329,10 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     };
 
     fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
-        const key = info.names.procBase(@enumFromInt(proc_base));
+        const key = info.names.procBase(@fromBackingInt(@intCast(proc_base)));
         if (key.export_name) |export_name| return info.names.exportNameText(export_name);
         const def_idx = key.source_def_idx orelse return "?";
-        const def = info.env.store.getDef(@enumFromInt(def_idx));
+        const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
         return switch (info.env.store.getPattern(def.pattern)) {
             inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
             .as,
@@ -2684,7 +2684,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
                         const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
-                        if (@intFromEnum(source_fn_ty) < info.types.stored_payloads.len) {
+                        if (@backingInt(source_fn_ty) < info.types.stored_payloads.len) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }
                     }
@@ -2721,7 +2721,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         std.debug.print("CENSUS_STATIC\t{d}\t{d}\n", .{ result.static_data_values.items.len, result.const_plans.items.len });
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const spec = store.getProcSpec(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {

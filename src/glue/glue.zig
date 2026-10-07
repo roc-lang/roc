@@ -455,7 +455,7 @@ fn compileGlueSpec(
     errdefer lowered.deinit();
 
     const glue_proc = selectGlueSpecRootProc(root_artifact, &lowered, builtins.shim_symbols.roc_make_glue) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("glue invariant violated: glue spec produced no published make_glue platform root", .{});
         }
         unreachable;
@@ -763,6 +763,7 @@ fn buildGluePlugin(
         codegen.plugin_stamp_bytes = std.mem.asBytes(&stamp);
         codegen.plugin_stamp_alignment = @alignOf(GluePluginStampV1);
         codegen.emit_debug_info = opt == .dev;
+        codegen.unoptimized = opt == .dev;
         defer codegen.deinit();
 
         break :generate codegen.generateEntrypointModule("roc_glue_plugin", entrypoints[0..]) catch |err| switch (err) {
@@ -888,7 +889,7 @@ fn gluePluginCacheTempPath(allocator: Allocator, cache_path: [:0]const u8) Alloc
         counter,
     });
     defer allocator.free(path);
-    return try allocator.dupeZ(u8, path);
+    return try allocator.dupeSentinel(u8, path, 0);
 }
 
 fn deleteGluePluginCacheEntry(plugin: BuiltGluePlugin, std_io: std.Io) void {
@@ -913,9 +914,9 @@ fn gluePluginStamp(
     return .{
         .magic = glue_plugin_stamp_magic,
         .size = @sizeOf(GluePluginStampV1),
-        .kind = @intFromEnum(GluePluginKind.glue),
+        .kind = @backingInt(GluePluginKind.glue),
         .abi_version = glue_plugin_abi_version,
-        .specialization_strategy_tag = @as(u32, @intFromEnum(specialization_strategy)) + 1,
+        .specialization_strategy_tag = @as(u32, @backingInt(specialization_strategy)) + 1,
         .target_hash = hashTarget(),
         .compiler_hash = hashCompiler(),
         .glue_platform_hash = compile.compiler_platforms.sourceHash(.glue),
@@ -925,7 +926,7 @@ fn gluePluginStamp(
 
 test "glue plugin output hash includes specialization strategy" {
     const artifact_key: CheckedArtifact.CheckedModuleArtifactKey = .{
-        .bytes = [_]u8{0x5a} ** 32,
+        .bytes = @as([32]u8, @splat(0x5a)),
     };
     const lss_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .lss));
     const boxy_hash = gluePluginOutputHash(artifact_key, gluePluginStamp(artifact_key, .boxy));
@@ -948,7 +949,7 @@ fn hashTarget() [32]u8 {
 
 fn hashCompiler() [32]u8 {
     var hasher = std.crypto.hash.Blake3.init(.{});
-    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_version);
+    hashTaggedBytes(&hasher, "compiler-version", build_options.compiler_compatibility_id);
     hashTaggedBytes(&hasher, "compiler-artifact-hash", &build_options.compiler_artifact_hash);
     var digest: [32]u8 = undefined;
     hasher.final(&digest);
@@ -1010,7 +1011,7 @@ fn reportUnresolvedTypeVariable(stderr: *std.Io.Writer, type_table: *const TypeT
 }
 
 fn glueInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant("glue invariant violated: " ++ message, args);
     }
     unreachable;
@@ -1092,7 +1093,7 @@ fn collectHostedProcGlobalIndices(
             return switch (std.mem.order(u8, a.sort_key, b.sort_key)) {
                 .lt => true,
                 .gt => false,
-                .eq => @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx),
+                .eq => @backingInt(a.def_idx) < @backingInt(b.def_idx),
             };
         }
     };
@@ -2615,7 +2616,7 @@ const TypeTable = struct {
         for (self.roots.keys(), self.roots.values()) |entry_idx, root| {
             const lowering = findLowering(lowerings.items, root.artifact) orelse unreachable;
             const layout_idx = lowering.root_layouts.get(root.checked_type) orelse
-                glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@intFromEnum(root.checked_type)});
+                glueInvariant("compiler emitted no layout for requested glue root checked type {d}", .{@backingInt(root.checked_type)});
             try self.boxRootInPlace(&lowering.abi_layouts.layouts, entry_idx, layout_idx);
         }
 
@@ -3759,7 +3760,7 @@ const GlueRocValueWriter = struct {
             glueInvariant("glue schema record '{s}' missing field '{s}'", .{ record_type_name, field_name });
         const record_layout = self.layouts.getLayout(record_layout_idx);
         if (record_layout.tag != .struct_) {
-            glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @intFromEnum(record_layout_idx) });
+            glueInvariant("glue record '{s}' used non-struct layout {d}", .{ record_type_name, @backingInt(record_layout_idx) });
         }
         const offset = self.layouts.getStructFieldOffsetByOriginalIndex(record_layout.getStruct().idx, field_index);
         const field_layout = self.layouts.getStructFieldLayoutByOriginalIndex(record_layout.getStruct().idx, field_index);
@@ -3873,7 +3874,7 @@ const GlueRocValueWriter = struct {
         }
         const info = self.layouts.getTagUnionInfo(tag_union_layout);
         if (tag_index >= info.variants.len) {
-            glueInvariant("glue tag index {d} out of bounds for layout {d}", .{ tag_index, @intFromEnum(tag_union_layout_idx) });
+            glueInvariant("glue tag index {d} out of bounds for layout {d}", .{ tag_index, @backingInt(tag_union_layout_idx) });
         }
         return info.variants.get(tag_index).payload_layout;
     }
@@ -4491,7 +4492,7 @@ fn checkedTypePayload(
     artifact: *const CheckedArtifact.CheckedModuleArtifact,
     checked_type: CheckedArtifact.CheckedTypeId,
 ) CheckedArtifact.CheckedTypePayload {
-    const idx = @intFromEnum(checked_type);
+    const idx = @backingInt(checked_type);
     if (idx >= artifact.checked_types.payloadCount()) {
         glueInvariant("checked type id {d} out of bounds", .{idx});
     }

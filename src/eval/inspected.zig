@@ -230,7 +230,7 @@ fn importStatementIdx(env: *const ModuleEnv, module_name: []const u8) ?CIR.State
     }
     const type_ident = env.common.findIdent(module_name) orelse return null;
     const type_node_idx = env.getExposedTypeNodeIndexById(type_ident) orelse return null;
-    return @enumFromInt(type_node_idx);
+    return @fromBackingInt(@intCast(type_node_idx));
 }
 
 const ModuleValidation = enum {
@@ -372,7 +372,7 @@ pub const LirImageProgram = struct {
     /// rediscover roots from compiler data.
     pub fn mainProc(self: *const LirImageProgram) LirProcSpecId {
         if (self.view.root_procs.len == 0) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("eval LIR image invariant violated: no root procedures", .{});
             }
             unreachable;
@@ -1591,7 +1591,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         .eval_root => |root_inspect_wrap| {
             const root_name = evalRootName(source_kind, root_inspect_wrap);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .Debug) {
+                if (@import("builtin").mode == .debug) {
                     base.invariant("eval helper invariant violated: explicit eval root `{s}` was not found", .{root_name});
                 }
                 unreachable;
@@ -1607,7 +1607,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
         .comptime_repl_root => {
             const root_name = evalRootName(source_kind, false);
             const root_def_idx = main_checked.can.explicitRootDefByName(root_name) orelse {
-                if (@import("builtin").mode == .Debug) {
+                if (@import("builtin").mode == .debug) {
                     base.invariant("eval helper invariant violated: compile-time REPL root `{s}` was not found", .{root_name});
                 }
                 unreachable;
@@ -1615,7 +1615,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
             const root_def = main_checked.module_env.store.getDef(root_def_idx);
             if (main_checked.module_env.store.getExpr(root_def.expr) != .e_runtime_error) {
                 const body_expr = main_checked.checker.compileTimeExecutableRootBody(root_def_idx) orelse {
-                    if (@import("builtin").mode == .Debug) {
+                    if (@import("builtin").mode == .debug) {
                         base.invariant("eval helper invariant violated: compile-time REPL root body was not recorded", .{});
                     }
                     unreachable;
@@ -1816,7 +1816,7 @@ pub fn parseCheckModule(
     checker.fixupTypeWriter();
     for (executable_roots) |root| {
         const root_def_idx = czer.explicitRootDefByName(root.name) orelse {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 base.invariant("eval helper invariant violated: explicit executable root `{s}` was not found", .{root.name});
             }
             unreachable;
@@ -1987,7 +1987,7 @@ const ZeroArgRootBody = struct {
 };
 
 fn zeroArgRootInvariant(message: []const u8) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant("eval helper invariant violated: {s}", .{message});
     }
     unreachable;
@@ -2120,7 +2120,7 @@ fn zeroArgRootBody(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ZeroArgRo
         .e_deferred_import_ref => base.invariant("compiler invariant violated: deferred import reference reached a stage that runs after import resolution", .{}),
     };
     if (lambda.args.span.len != 0) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             base.invariant("eval helper invariant violated: compile-time REPL root had parameters", .{});
         }
         unreachable;
@@ -2235,7 +2235,7 @@ fn publishImportArtifacts(
         }
 
         if (!made_progress) {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 base.invariant("eval helper invariant violated: import artifact publication graph is cyclic or incomplete", .{});
             }
             unreachable;
@@ -2262,7 +2262,7 @@ fn directImportsArePublished(
 ) bool {
     const module_env = module.moduleEnvConst();
     for (module_env.imports.imports.items.items, 0..) |_, i| {
-        const import_idx: CIR.Import.Idx = @enumFromInt(@as(u32, @intCast(i)));
+        const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
         const resolved_module_idx = module.resolvedImportModule(import_idx) orelse continue;
         var found = false;
         for (published) |artifact| {
@@ -2467,7 +2467,7 @@ fn resolveImportsByModuleIndex(module_envs: []const *ModuleEnv) void {
         module_env.imports.clearResolvedModules();
         for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
             const import_name = module_env.getString(str_idx);
-            const import_idx: CIR.Import.Idx = @enumFromInt(i);
+            const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
             if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
                 for (module_envs, 0..) |candidate_env, module_idx| {
                     if (candidate_env.module_role == .builtin) {
@@ -2492,7 +2492,7 @@ fn resolveImportsConst(module_env: *ModuleEnv, imported_envs: []const *const Mod
     module_env.imports.clearResolvedModules();
     for (module_env.imports.imports.items.items, 0..) |str_idx, i| {
         const import_name = module_env.getString(str_idx);
-        const import_idx: CIR.Import.Idx = @enumFromInt(i);
+        const import_idx: CIR.Import.Idx = @fromBackingInt(@intCast(i));
         if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
             for (imported_envs, 0..) |candidate_env, module_idx| {
                 if (candidate_env.module_role == .builtin) {
@@ -2530,7 +2530,7 @@ pub fn entrypointParamSlotSizeForLayouts(layouts: *const LayoutStore, layout_idx
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
 
-    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+    if (@backingInt(runtime_layout_idx) < layouts.layouts.len()) {
         const layout_val = layouts.getLayout(runtime_layout_idx);
         const size = layouts.layoutSizeAlign(layout_val).size;
         if (layout_val.tag == .zst or size == 0) return 0;
@@ -2845,7 +2845,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
-    const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
+    const cpu = try allocator.dupeSentinel(u8, roc_target.llvmCpuName(resolved_target), 0);
     errdefer allocator.free(cpu);
     const features = try roc_target.llvmFeatureString(allocator, resolved_target);
     errdefer allocator.free(features);

@@ -75,15 +75,15 @@ pub const HelperKey = struct {
 
     /// Pack the helper key into a stable integer for backend caches.
     pub fn encode(self: HelperKey) u64 {
-        const op_raw: u32 = @intFromEnum(self.op);
-        const layout_raw: u32 = @intCast(@intFromEnum(self.layout_idx));
+        const op_raw: u32 = @backingInt(self.op);
+        const layout_raw: u32 = @intCast(@backingInt(self.layout_idx));
         return (@as(u64, op_raw) << 32) | layout_raw;
     }
 
     pub fn decode(raw: u64) HelperKey {
         return .{
-            .op = @enumFromInt(@as(u2, @intCast(raw >> 32))),
-            .layout_idx = @enumFromInt(@as(u32, @truncate(raw))),
+            .op = @fromBackingInt(@intCast(@as(u2, @intCast(raw >> 32)))),
+            .layout_idx = @fromBackingInt(@intCast(@as(u32, @truncate(raw)))),
         };
     }
 };

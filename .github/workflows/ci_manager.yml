@@ -157,7 +157,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -184,6 +184,36 @@ jobs:
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
         run: zig build run-test-zig-tidy-unit
+
+      # Uses real generated compiler options and an empty dependency bundle;
+      # no Roc CLI compilation or published LLVM bundle is needed.
+      - name: Check compiler artifact identities
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_compiler_artifact_identity.py zig \
+            --work-dir "$RUNNER_TEMP/roc-compiler-artifact-identity"
+
+      # Two std-only test producers exercise report isolation and dynamic
+      # filtering without compiling Roc or linking a dependency bundle.
+      - name: Check independent unit-test reports
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/roc-test-report-deps/include" "$RUNNER_TEMP/roc-test-report-deps/lib"
+          python3 ci/test_unit_report_isolation.py zig \
+            --work-dir "$RUNNER_TEMP/roc-test-reports" -- \
+            "-Droc-deps-path=$RUNNER_TEMP/roc-test-report-deps" \
+            -j2 --cache-poison=disallowed
+
+      # Exercises the production display-version reader in source archives,
+      # ordinary checkouts and worktrees without compiling Roc.
+      - name: Check cached Git display metadata
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_build_version_metadata.py zig \
+            --work-dir "$RUNNER_TEMP/roc-git-display-metadata" -- -j2
 
       - name: Install actionlint
         if: ${{ !cancelled() }}
@@ -223,7 +253,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -268,7 +298,7 @@ jobs:
       # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 
@@ -452,7 +482,7 @@ jobs:
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 

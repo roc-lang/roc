@@ -131,7 +131,7 @@ const wasm_erased_callable_on_drop_offset: u32 = 4;
 const Self = @This();
 
 fn wasmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) base.invariant(fmt, args);
+    if (builtin.mode == .debug) base.invariant(fmt, args);
     unreachable;
 }
 
@@ -494,7 +494,7 @@ pub fn deinit(self: *Self) void {
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
     const gop = try self.pending_bodies.getOrPut(local_idx);
     if (gop.found_existing) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("WasmCodeGen invariant violated: duplicate body for local function {d}", .{local_idx.raw()});
         }
         unreachable;
@@ -505,7 +505,7 @@ fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!voi
 
 fn currentBody(self: *Self) *CodeBuilder {
     if (self.active_fn_stack.items.len == 0) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("WasmCodeGen invariant violated: no active function body", .{});
         }
         unreachable;
@@ -603,7 +603,7 @@ fn emitI64Const(self: *Self, value: i64) Allocator.Error!void {
 /// `arg_index` says that argument's runtime uniqueness check is redundant,
 /// `.Immutable` (checked) otherwise.
 fn updateModeImmForArg(unique_args: u64, arg_index: u6) i32 {
-    return @intFromEnum(if ((unique_args >> arg_index) & 1 != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+    return @backingInt(if ((unique_args >> arg_index) & 1 != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
 /// Push the width (and, for integers, signedness) args of a prefix-parse call.
@@ -977,7 +977,7 @@ fn emitHasherLowLevel(self: *Self, op: HasherLowLevel, args: anytype) Allocator.
         .hasher_write_i64,
         => {
             try self.emitHasherState(GuardedList.at(args, 0));
-            try self.emitI32Const(@intCast(@intFromEnum(lir.hasherDomain(op.lowLevel()))));
+            try self.emitI32Const(@intCast(@backingInt(lir.hasherDomain(op.lowLevel()))));
             try self.emitHasherScalarAsI64(GuardedList.at(args, 1));
             try self.emitI32Const(@intCast(lir.hasherU64Width(op.lowLevel())));
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.hasherOp(.hasher_write_u64)));
@@ -1000,7 +1000,7 @@ fn emitHasherLowLevel(self: *Self, op: HasherLowLevel, args: anytype) Allocator.
         .hasher_write_dec,
         => {
             try self.emitHasherState(GuardedList.at(args, 0));
-            try self.emitI32Const(@intCast(@intFromEnum(lir.hasherDomain(op.lowLevel()))));
+            try self.emitI32Const(@intCast(@backingInt(lir.hasherDomain(op.lowLevel()))));
             try self.emitHasherU128Parts(GuardedList.at(args, 1));
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.hasherOp(.hasher_write_u128)));
             try self.emitHasherRecordFromI64();
@@ -1010,7 +1010,7 @@ fn emitHasherLowLevel(self: *Self, op: HasherLowLevel, args: anytype) Allocator.
             const fields = try self.loadRocListFields(list_ptr);
 
             try self.emitHasherState(GuardedList.at(args, 0));
-            try self.emitI32Const(@intCast(@intFromEnum(lir.hasherDomain(op.lowLevel()))));
+            try self.emitI32Const(@intCast(@backingInt(lir.hasherDomain(op.lowLevel()))));
             try self.emitLocalGets(.{ fields.bytes, fields.len });
             try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.hasherOp(.hasher_write_bytes)));
             try self.emitHasherRecordFromI64();
@@ -1154,7 +1154,7 @@ fn boxyListElementDescForLocals(
     if (elem_is_erased_box) {
         wasmInvariantFmt(
             "WASM/codegen invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
-            .{@intFromEnum(elem_layout)},
+            .{@backingInt(elem_layout)},
         );
     }
     return null;
@@ -1306,7 +1306,7 @@ fn emitDataAddressConst(self: *Self, address: DataAddress, addend: i32) Allocato
 }
 
 fn staticDataSymbol(self: *Self, id: LIR.StaticDataId) Allocator.Error!SymbolIndex {
-    const raw_id: u32 = @intFromEnum(id);
+    const raw_id: u32 = @backingInt(id);
     if (self.static_data_symbols.get(raw_id)) |symbol| return symbol;
 
     const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
@@ -1347,7 +1347,7 @@ fn emitCallIndirect(self: *Self, type_idx: u32) Allocator.Error!void {
 
         const table_pos: u32 = @intCast(self.currentCode().items.len);
         const table_symbol = self.indirect_table_symbol orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("WasmCodeGen invariant violated: relocatable call_indirect without table symbol", .{});
             }
             unreachable;
@@ -1458,7 +1458,7 @@ pub fn flushPendingBodies(self: *Self) Allocator.Error!void {
     for (keys.items) |local_idx| {
         const expected: u32 = @intCast(self.module.function_offsets.items.len);
         if (local_idx.raw() != expected) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "WasmCodeGen invariant violated: pending body local index {d}, expected {d}",
                     .{ local_idx.raw(), expected },
@@ -1508,10 +1508,10 @@ pub fn generateEntrypointWrapper(
     arg_layouts: []const layout.Idx,
     ret_layout: layout.Idx,
 ) Allocator.Error!u32 {
-    const root_key: u32 = @intFromEnum(entry_proc);
+    const root_key: u32 = @backingInt(entry_proc);
     const root_func_idx = self.registered_procs.get(root_key) orelse {
-        if (builtin.mode == .Debug) {
-            base.invariant("WASM/codegen invariant violated: missing compiled entry proc {d}", .{@intFromEnum(entry_proc)});
+        if (builtin.mode == .debug) {
+            base.invariant("WASM/codegen invariant violated: missing compiled entry proc {d}", .{@backingInt(entry_proc)});
         }
         unreachable;
     };
@@ -1776,7 +1776,7 @@ pub fn generateModule(
 
     const root_proc = self.store.getProcSpec(root_proc_id);
     if (!root_proc.args.isEmpty()) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: synthetic main expects a zero-arg root proc, got {d} args",
                 .{self.store.getLocalSpan(root_proc.args).len},
@@ -1785,10 +1785,10 @@ pub fn generateModule(
         unreachable;
     }
 
-    const root_key: u32 = @intFromEnum(root_proc_id);
+    const root_key: u32 = @backingInt(root_proc_id);
     const root_func_idx = self.registered_procs.get(root_key) orelse {
-        if (builtin.mode == .Debug) {
-            base.invariant("WASM/codegen invariant violated: missing compiled root proc {d}", .{@intFromEnum(root_proc_id)});
+        if (builtin.mode == .debug) {
+            base.invariant("WASM/codegen invariant violated: missing compiled root proc {d}", .{@backingInt(root_proc_id)});
         }
         unreachable;
     };
@@ -1930,7 +1930,7 @@ fn encodeLocalsDecl(self: *Self, func_body: *std.ArrayList(u8), skip_count: u32)
             count += 1;
         }
         WasmModule.leb128WriteU32(self.allocator, func_body, count) catch return error.OutOfMemory;
-        func_body.append(self.allocator, @intFromEnum(vt)) catch return error.OutOfMemory;
+        func_body.append(self.allocator, @backingInt(vt)) catch return error.OutOfMemory;
         i += count;
     }
 }
@@ -1955,7 +1955,7 @@ fn emitExplicitRcForValueLocal(
     if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
         wasmInvariantFmt(
             "WASM/codegen invariant violated: explicit RC statement used noop helper for layout {d}",
-            .{@intFromEnum(helper_key.layout_idx)},
+            .{@backingInt(helper_key.layout_idx)},
         );
     }
     if (value_vt != .i32) {
@@ -1976,7 +1976,7 @@ fn emitExplicitRcForValueLocal(
     if (size_align.size == 0) {
         wasmInvariantFmt(
             "WASM/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}",
-            .{@intFromEnum(helper_key.layout_idx)},
+            .{@backingInt(helper_key.layout_idx)},
         );
     }
 
@@ -2109,7 +2109,7 @@ fn emitExplicitRcHelperCallForValuePtr(
     if (helper_plan == .noop) {
         wasmInvariantFmt(
             "WASM/codegen invariant violated: explicit RC statement used noop helper for layout {d}",
-            .{@intFromEnum(helper_key.layout_idx)},
+            .{@backingInt(helper_key.layout_idx)},
         );
     }
     if (try self.emitRawDirectRcPlan(helper_key, helper_plan, value_ptr_local, null)) return;
@@ -2139,7 +2139,7 @@ fn emitDecodeListAllocPtr(self: *Self, list_ptr_local: u32, out_alloc_ptr: u32, 
 
     try self.emitLocalGet(out_is_slice);
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
     try self.emitI32Const(-2);
     try self.emitOps(.{ Op.i32_and, Op.@"else" });
@@ -2172,7 +2172,7 @@ fn emitDecodeStrAllocPtr(self: *Self, str_ptr_local: u32, out_alloc_ptr: u32, ou
 
     try self.emitLocalGet(is_slice);
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
     try self.emitLocalGet(cap_local);
     try self.emitI32Const(-2);
     try self.emitOps(.{ Op.i32_and, Op.@"else" });
@@ -2573,7 +2573,7 @@ fn emitBuiltinInternalStrRc(self: *Self, comptime kind: RcOpKind, str_ptr_local:
 /// `.atomic`.
 fn rcHelperCacheKey(helper_key: RcHelperKey, atomicity: RcAtomicity) u64 {
     // RcHelperKey.encode() occupies bits 0..33 (layout index + op).
-    return helper_key.encode() | (@as(u64, @intFromEnum(atomicity)) << 34);
+    return helper_key.encode() | (@as(u64, @backingInt(atomicity)) << 34);
 }
 
 fn staticDataRequiresRcHelper(self: *const Self, helper_key: RcHelperKey, atomicity: RcAtomicity) bool {
@@ -2616,10 +2616,10 @@ fn emitRawRcHelperCallByKey(
 /// Look up a previously-reserved RC helper's global function index.
 fn rcHelperFuncIdx(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) u32 {
     return self.rc_helper_funcs.get(rcHelperCacheKey(helper_key, atomicity)) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: RC helper for layout {d} op {s} atomicity {s} was not reserved before body emission",
-                .{ @intFromEnum(helper_key.layout_idx), @tagName(helper_key.op), @tagName(atomicity) },
+                .{ @backingInt(helper_key.layout_idx), @tagName(helper_key.op), @tagName(atomicity) },
             );
         }
         unreachable;
@@ -2897,8 +2897,8 @@ fn rcHelperParamTypes(op: layout.RcOp, buf: *[builtins.rc_callback_abi.max_param
 fn reserveRcHelperFunc(self: *Self, helper_key: RcHelperKey, atomicity: RcAtomicity) Allocator.Error!u32 {
     const helper_plan = self.getLayoutStore().rcHelperPlan(helper_key);
     if (helper_plan == .noop) {
-        if (builtin.mode == .Debug) {
-            base.invariant("WASM/codegen invariant violated: attempted to compile noop RC helper for layout {d}", .{@intFromEnum(helper_key.layout_idx)});
+        if (builtin.mode == .debug) {
+            base.invariant("WASM/codegen invariant violated: attempted to compile noop RC helper for layout {d}", .{@backingInt(helper_key.layout_idx)});
         }
         unreachable;
     }
@@ -2935,8 +2935,9 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicit
         return func_idx;
     }
 
-    var sfa = std.heap.stackFallback(64 * @sizeOf(RcHelperKey), self.allocator);
-    const wa = sfa.get();
+    var sfa_buffer: [64 * @sizeOf(RcHelperKey)]u8 align(@alignOf(usize)) = undefined;
+    var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+    const wa = sfa.allocator();
 
     // Pre-order reservation of every transitively-needed helper slot.
     var to_emit = std.ArrayList(RcHelperKey).empty;
@@ -2984,10 +2985,10 @@ fn compileBuiltinInternalRcHelper(self: *Self, helper_key: RcHelperKey, atomicit
 pub fn compileStaticDataRcHelpers(self: *Self, helpers: []const RcHelperKey) Allocator.Error!void {
     for (helpers) |helper_key| {
         if (self.getLayoutStore().rcHelperPlan(helper_key) == .noop) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "WASM/codegen invariant violated: static data requested noop RC helper for layout {d}",
-                    .{@intFromEnum(helper_key.layout_idx)},
+                    .{@backingInt(helper_key.layout_idx)},
                 );
             }
             unreachable;
@@ -3105,12 +3106,12 @@ fn procLocalBinding(self: *Self, value: ProcLocalId) Allocator.Error!Storage.Loc
         // The binding already carries the value type its layout resolved to,
         // so the common case—every use after the first—costs one column read
         // and no layout traversal. Debug builds re-resolve to prove they agree.
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             const expected = try self.procLocalValType(value);
             if (info.val_type != expected) {
                 base.invariant(
                     "WASM/codegen invariant violated: LIR local {d} is bound as {s} but its layout requires {s}",
-                    .{ @intFromEnum(value), @tagName(info.val_type), @tagName(expected) },
+                    .{ @backingInt(value), @tagName(info.val_type), @tagName(expected) },
                 );
             }
         }
@@ -3140,10 +3141,10 @@ fn bindProcParamLocal(self: *Self, param: ProcLocalId) Allocator.Error!Storage.L
 /// established, so only debug builds check it.
 fn bindProcParamLocalAs(self: *Self, param: ProcLocalId, expected: ValType) Allocator.Error!u32 {
     const binding = try self.bindProcParamLocal(param);
-    if (builtin.mode == .Debug and binding.val_type != expected) {
+    if (builtin.mode == .debug and binding.val_type != expected) {
         base.invariant(
             "WASM/codegen invariant violated: ABI parameter {d} is read as {s} but its LIR layout is {s}",
-            .{ @intFromEnum(param), @tagName(expected), @tagName(binding.val_type) },
+            .{ @backingInt(param), @tagName(expected), @tagName(binding.val_type) },
         );
     }
     return binding.idx;
@@ -3427,8 +3428,9 @@ fn emitListEqLoop(
 /// `compareCompositeByLayout`/`compareTagUnionByLayout`/`compareFieldByLayout`/
 /// `emitListEqLoop` functions.
 fn runEqWork(self: *Self, initial: EqWork) Allocator.Error!void {
-    var sfa = std.heap.stackFallback(64 * @sizeOf(EqWork), self.allocator);
-    const wa = sfa.get();
+    var sfa_buffer: [64 * @sizeOf(EqWork)]u8 align(@alignOf(usize)) = undefined;
+    var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+    const wa = sfa.allocator();
     var work = std.ArrayList(EqWork).empty;
     defer work.deinit(wa);
     try work.append(wa, initial);
@@ -3515,8 +3517,9 @@ fn expandComposite(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs
             // Collect the non-zero-size fields in source order, then push their
             // child frames (and the `i32_and` glue that follows all but the first)
             // in reverse so popping reproduces the original left-to-right emission.
-            var sfa = std.heap.stackFallback(16 * @sizeOf(u32), self.allocator);
-            const ta = sfa.get();
+            var sfa_buffer: [16 * @sizeOf(u32)]u8 align(@alignOf(usize)) = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const ta = sfa.allocator();
             var fields = std.ArrayList(u32).empty;
             defer fields.deinit(ta);
 
@@ -4080,7 +4083,7 @@ fn emitCompositeNumericOp(self: *Self, op: NumericOp, args: anytype, ret_layout:
                 const is_signed = operand_layout == .i128 or operand_layout == .dec;
                 try self.emitI128CompareWithSignedness(lhs_local, rhs_local, .gte, is_signed);
                 self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
                 try self.emitI128Sub(lhs_local, rhs_local);
                 self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
                 try self.emitI128Sub(rhs_local, lhs_local);
@@ -4128,7 +4131,7 @@ fn emitCompositeI128BitCount(self: *Self, ptr_local: u32, op: NumericOp) Allocat
             // high == 0 ? 64 + clz(low) : clz(high)
             try self.emitLoadAt(ptr_local, .i64, 8);
             try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
-            self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
             try self.emitLoadAt(ptr_local, .i64, 0);
             self.currentCode().append(self.allocator, Op.i64_clz) catch return error.OutOfMemory;
             try self.emitI64Const(64);
@@ -4140,7 +4143,7 @@ fn emitCompositeI128BitCount(self: *Self, ptr_local: u32, op: NumericOp) Allocat
             // low == 0 ? 64 + ctz(high) : ctz(low)
             try self.emitLoadAt(ptr_local, .i64, 0);
             try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
-            self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
             try self.emitLoadAt(ptr_local, .i64, 8);
             self.currentCode().append(self.allocator, Op.i64_ctz) catch return error.OutOfMemory;
             try self.emitI64Const(64);
@@ -4411,7 +4414,7 @@ fn emitCheckedCompositeNumericOp(self: *Self, checked_op: LIR.LowLevel, plain_op
             if (operand_layout == .i128) {
                 try self.emitCompositeIsSignedMinNegOne(lhs_local, rhs_local);
                 self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, @intFromEnum(BlockType.i32)) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, @backingInt(BlockType.i32)) catch return error.OutOfMemory;
                 try self.emitZeroI128ResultPtr();
                 self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
                 if (plain_op == .num_mod_by) {
@@ -4818,7 +4821,7 @@ fn emitCheckedScalarDivRemMod(self: *Self, checked_op: LIR.LowLevel, plain_op: N
             .num_rem_by, .num_mod_by => {
                 try self.emitScalarSignedMinNegOneCondition(lhs, rhs, layout_idx, vt);
                 self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, @intFromEnum(scalarBlockType(vt))) catch return error.OutOfMemory;
+                self.currentCode().append(self.allocator, @backingInt(scalarBlockType(vt))) catch return error.OutOfMemory;
                 try self.emitScalarZero(vt);
                 self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
                 try self.emitCheckedScalarDivRemModPlain(plain_op, lhs, rhs, layout_idx, vt);
@@ -4863,7 +4866,7 @@ fn emitCheckedScalarUnary(self: *Self, checked_op: LIR.LowLevel, plain_op: Numer
                 .f32, .f64, .v128 => unreachable,
             }
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, @intFromEnum(scalarBlockType(vt))) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(scalarBlockType(vt))) catch return error.OutOfMemory;
             try self.emitScalarZero(vt);
             try self.emitLocalGet(value);
             self.currentCode().append(self.allocator, switch (vt) {
@@ -5143,7 +5146,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
     // produce the wrong result.
     try self.emitLocalGet(shift_local);
     try self.emitOps(.{ Op.i64_eqz, Op.@"if" });
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.void)) catch return error.OutOfMemory;
     try self.emitLocalGet(a_low);
     try self.emitLocalSet(r_low);
     try self.emitLocalGet(a_high);
@@ -5156,7 +5159,7 @@ fn emitI128Shift(self: *Self, op: NumericOp, args: anytype) Allocator.Error!void
     self.currentCode().append(self.allocator, Op.i64_ge_u) catch return error.OutOfMemory;
 
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.void)) catch return error.OutOfMemory;
 
     // === shift >= 64 path ===
     switch (op) {
@@ -5404,7 +5407,7 @@ fn emitI128CompareWithSignedness(self: *Self, lhs_local: u32, rhs_local: u32, cm
     self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
     // if (result is i32)
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
 
     // Then: compare low words unsigned
     try self.emitLoadAt(lhs_local, .i64, 0);
@@ -5540,7 +5543,7 @@ fn emitCompositeI128Abs(self: *Self, expr: ProcLocalId) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.i64_lt_s) catch return error.OutOfMemory;
 
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
     try self.emitCompositeI128NegateFromLocal(src_local);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGet(src_local);
@@ -5652,7 +5655,7 @@ fn emitI64MulToI128Signed(self: *Self, a_local: u32, b_local: u32) Allocator.Err
     const abs_val = self.storage.allocAnonymousLocal(.i64) catch return error.OutOfMemory;
     try self.emitLocalGet(is_neg);
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
     try self.emitI64Const(0);
     try self.emitLocalGet(a_local);
     try self.emitOps(.{ Op.i64_sub, Op.@"else" });
@@ -5665,7 +5668,7 @@ fn emitI64MulToI128Signed(self: *Self, a_local: u32, b_local: u32) Allocator.Err
 
     try self.emitLocalGet(is_neg);
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
     try self.emitCompositeI128NegateFromLocal(result_ptr);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGet(result_ptr);
@@ -6429,11 +6432,11 @@ fn internFuncType(self: *Self, params: []const ValType, results: []const ValType
     self.func_type_key_scratch.clearRetainingCapacity();
     try self.func_type_key_scratch.append(self.allocator, @intCast(params.len));
     for (params) |param| {
-        try self.func_type_key_scratch.append(self.allocator, @intFromEnum(param));
+        try self.func_type_key_scratch.append(self.allocator, @backingInt(param));
     }
     try self.func_type_key_scratch.append(self.allocator, @intCast(results.len));
     for (results) |result| {
-        try self.func_type_key_scratch.append(self.allocator, @intFromEnum(result));
+        try self.func_type_key_scratch.append(self.allocator, @backingInt(result));
     }
 
     if (self.func_type_cache.get(self.func_type_key_scratch.items)) |existing| {
@@ -6457,7 +6460,7 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     // are already known and can be called without triggering recursive compilation.
     for (proc_specs, 0..) |proc, i| {
         if (proc.is_static_initializer) continue;
-        try self.registerProcSpec(@enumFromInt(@as(u32, @intCast(i))), proc);
+        try self.registerProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
     }
     try self.buildProcArgCountsTable(proc_specs);
     try self.registerTailDrivers(proc_specs);
@@ -6466,14 +6469,14 @@ pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocat
     for (self.boxy_worker_procs) |proc_id| {
         const proc = self.store.getProcSpec(proc_id);
         if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
-            wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+            wasmInvariantFmt("Boxy worker proc {d} had a non-worker procedure shape", .{@backingInt(proc_id)});
         }
         try self.generateBoxyDictProcThunk(proc_id, proc);
     }
     // Pass 2: Compile proc bodies.
     for (proc_specs, 0..) |proc, i| {
         if (proc.is_static_initializer) continue;
-        try self.compileProcSpecBody(@enumFromInt(@as(u32, @intCast(i))), proc);
+        try self.compileProcSpecBody(@fromBackingInt(@intCast(@as(u32, @intCast(i)))), proc);
     }
     try self.compileTailDrivers();
 }
@@ -6543,7 +6546,7 @@ fn registerTailDrivers(self: *Self, proc_specs: []const LirProcSpec) Allocator.E
             try self.tail_drivers.append(self.allocator, .{ .group = proc.tail_group.?, .result = result, .returns_desc = returns_desc, .defined = defined });
             break :blk &self.tail_drivers.items[self.tail_drivers.items.len - 1];
         };
-        try driver.members.append(self.allocator, @enumFromInt(@as(u32, @intCast(i))));
+        try driver.members.append(self.allocator, @fromBackingInt(@as(u32, @intCast(i))));
     }
     if (self.tail_drivers.items.len == 0) return;
 
@@ -6565,7 +6568,7 @@ fn tailMemberNumber(driver: *const TailDriver, proc_id: LIR.LirProcSpecId) u32 {
     for (driver.members.items, 0..) |member, index| {
         if (member == proc_id) return @intCast(index + 1);
     }
-    wasmInvariantFmt("WASM/codegen invariant violated: proc {d} is missing from its tail driver", .{@intFromEnum(proc_id)});
+    wasmInvariantFmt("WASM/codegen invariant violated: proc {d} is missing from its tail driver", .{@backingInt(proc_id)});
 }
 
 fn compileTailDrivers(self: *Self) Allocator.Error!void {
@@ -6591,7 +6594,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
         const member_count: u32 = @intCast(driver.members.items.len);
 
         code.append(self.allocator, Op.loop_) catch return error.OutOfMemory;
-        code.append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        code.append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
 
         // Nothing pending: the last member's result is the group's result.
         try self.emitDataAddressConst(area, 0);
@@ -6600,7 +6603,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
         WasmModule.leb128WriteU32(self.allocator, self.currentCode(), pending_local) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
         try self.emitLocalGet(result_local);
         self.currentCode().append(self.allocator, Op.@"return") catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -6614,7 +6617,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
         var opened: u32 = 0;
         while (opened <= member_count) : (opened += 1) {
             self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
         }
         try self.emitLocalGet(pending_local);
         try self.emitI32Const(1);
@@ -6641,7 +6644,7 @@ fn compileTailDrivers(self: *Self) Allocator.Error!void {
                 }
             }
             if (desc_ptr_local) |desc_ptr| try self.emitLocalGet(desc_ptr);
-            try self.emitCall(self.registered_procs.get(@intFromEnum(member)) orelse unreachable);
+            try self.emitCall(self.registered_procs.get(@backingInt(member)) orelse unreachable);
             try self.emitLocalSet(result_local);
             self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
             WasmModule.leb128WriteU32(self.allocator, self.currentCode(), member_count - 1 - @as(u32, @intCast(index))) catch return error.OutOfMemory;
@@ -6687,7 +6690,7 @@ fn generateFrameReplacingCall(self: *Self, proc_id: LIR.LirProcSpecId, call_args
     const area = self.tail_area orelse wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call without a tail area", .{});
     const proc = self.store.getProcSpec(proc_id);
     const driver = try self.tailDriverFor(proc) orelse
-        wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call to proc {d} outside a tail group", .{@intFromEnum(proc_id)});
+        wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call to proc {d} outside a tail group", .{@backingInt(proc_id)});
     const args = self.store.getLocalSpan(call_args);
     const params = self.store.getLocalSpan(proc.args);
     if (args.len != params.len) wasmInvariantFmt("WASM/codegen invariant violated: frame-replacing call arity mismatch", .{});
@@ -6731,11 +6734,11 @@ fn emitReturnIfCallPending(self: *Self, pending: LIR.PendingReturn) Allocator.Er
     const proc_id = self.current_proc_id orelse
         wasmInvariantFmt("WASM/codegen invariant violated: a pending-call return outside a procedure", .{});
     if (pending.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
+    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(self.store.getProcSpec(proc_id).ret_layout))));
     try self.emitI32Const(@intFromBool(pending.keeps_own_desc));
     try self.emitBoxyCall("roc_boxy_return_pending");
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.br) catch return error.OutOfMemory;
     WasmModule.leb128WriteU32(self.allocator, self.currentCode(), self.cf_depth) catch return error.OutOfMemory;
     self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -6760,7 +6763,7 @@ fn emitZeroValue(self: *Self, val_type: ValType) Allocator.Error!void {
             self.currentCode().append(self.allocator, Op.f64_const) catch return error.OutOfMemory;
             try self.currentCode().appendSlice(self.allocator, &.{ 0, 0, 0, 0, 0, 0, 0, 0 });
         },
-        .v128 => try self.emitV128Const([_]u8{0} ** 16),
+        .v128 => try self.emitV128Const(@as([16]u8, @splat(0))),
     }
 }
 
@@ -6769,9 +6772,9 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     // storage, result descriptor storage.
     const type_idx = try self.internFuncType(&.{ .i32, .i32, .i32 }, &.{});
     const defined = self.module.addDefinedFunction(type_idx) catch return error.OutOfMemory;
-    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_boxy_dict_thunk", @intFromEnum(proc_id));
+    _ = try self.addOwnedLocalFunctionSymbol(defined, "roc_boxy_dict_thunk", @backingInt(proc_id));
     const table_idx = self.module.addTableElement(defined.function.raw()) catch return error.OutOfMemory;
-    try self.boxy_dict_thunk_table_indices.put(@intFromEnum(proc_id), table_idx);
+    try self.boxy_dict_thunk_table_indices.put(@backingInt(proc_id), table_idx);
 
     const saved = self.saveState() catch return error.OutOfMemory;
     errdefer self.abandonState(saved);
@@ -6803,7 +6806,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
     if (proc.runtime_ret_desc != null) {
         try self.emitLocalGet(ret_desc_local);
     }
-    const proc_fn = self.registered_procs.get(@intFromEnum(proc_id)) orelse unreachable;
+    const proc_fn = self.registered_procs.get(@backingInt(proc_id)) orelse unreachable;
     try self.emitCall(proc_fn);
     try self.emitTailDrive(proc, if (proc.runtime_ret_desc != null) ret_desc_local else null);
 
@@ -6866,8 +6869,8 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
     @memset(counts, 0);
 
     for (proc_specs, 0..) |proc, i| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(i)));
-        const key: u32 = @intFromEnum(proc_id);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(i))));
+        const key: u32 = @backingInt(proc_id);
         const table_idx = self.proc_table_indices.get(key) orelse continue;
         counts[table_idx] = @intCast(self.store.getLocalSpan(proc.args).len);
     }
@@ -6886,7 +6889,7 @@ fn buildProcArgCountsTable(self: *Self, proc_specs: []const LirProcSpec) Allocat
 /// Compile a single LirProcSpec as a wasm function.
 /// Does NOT compile the body—that's done by compileProcSpecBody.
 fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
-    const key: u32 = @intFromEnum(proc_id);
+    const key: u32 = @backingInt(proc_id);
 
     if (proc.abi == .erased_callable) {
         // Matches `builtins.erased_callable.ErasedCallableFn`: pointers for
@@ -6929,7 +6932,7 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
 fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
-    const key: u32 = @intFromEnum(proc_id);
+    const key: u32 = @backingInt(proc_id);
 
     // Get the pre-registered func_idx (must exist—registerProcSpec runs in pass 1)
     const func_idx = self.registered_procs.get(key) orelse unreachable;
@@ -7029,7 +7032,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
     }
 
     if (proc.hosted) |hosted| {
-        if (builtin.mode == .Debug and proc.body != null) {
+        if (builtin.mode == .debug and proc.body != null) {
             base.invariant(
                 "WASM/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                 .{proc.name.raw()},
@@ -7113,7 +7116,7 @@ fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpe
 fn requireProcBody(proc_id: LIR.LirProcSpecId, proc: LirProcSpec) LIR.CFStmtId {
     return proc.body orelse wasmInvariantFmt(
         "WASM/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
-        .{ @intFromEnum(proc_id), proc.name.raw() },
+        .{ @backingInt(proc_id), proc.name.raw() },
     );
 }
 
@@ -7339,23 +7342,23 @@ fn emitBoxyOutValue(self: *Self, layout_idx: layout.Idx, ptr_local: u32) Allocat
 fn resolveBoxyDesc(self: *Self, desc: LIR.BoxyDescRef) Allocator.Error!void {
     switch (desc) {
         .static => |desc_id| {
-            try self.emitI32Const(@intCast(@intFromEnum(desc_id)));
+            try self.emitI32Const(@intCast(@backingInt(desc_id)));
             try self.emitBoxyCall("roc_boxy_static_desc");
         },
         .local => |local| try self.emitProcLocal(local),
         .dict_method_arg => |projection| {
             try self.emitProcLocal(projection.dict);
             try self.emitI32Const(@intCast(projection.method_slot));
-            try self.emitI32Const(@intCast(@intFromEnum(projection.method)));
+            try self.emitI32Const(@intCast(@backingInt(projection.method)));
             try self.emitI32Const(@intCast(projection.arg_index));
             try self.emitBoxyCall("roc_boxy_dict_method_arg_desc");
         },
         .dict_method_hidden => |projection| {
             try self.emitProcLocal(projection.dict);
             try self.emitI32Const(@intCast(projection.method_slot));
-            try self.emitI32Const(@intCast(@intFromEnum(projection.method)));
+            try self.emitI32Const(@intCast(@backingInt(projection.method)));
             try self.emitI32Const(@intCast(projection.hidden_index));
-            try self.emitI32Const(@intCast(@intFromEnum(projection.shape)));
+            try self.emitI32Const(@intCast(@backingInt(projection.shape)));
             try self.emitBoxyCall("roc_boxy_dict_method_hidden_desc");
         },
         .runtime => wasmInvariantFmt(
@@ -7368,7 +7371,7 @@ fn resolveBoxyDesc(self: *Self, desc: LIR.BoxyDescRef) Allocator.Error!void {
 fn resolveBoxyDict(self: *Self, dict: LIR.BoxyDictRef) Allocator.Error!void {
     switch (dict) {
         .static => |dict_id| {
-            try self.emitI32Const(@intCast(@intFromEnum(dict_id)));
+            try self.emitI32Const(@intCast(@backingInt(dict_id)));
             try self.emitBoxyCall("roc_boxy_static_dict");
         },
         .local => |local| try self.emitProcLocal(local),
@@ -7393,14 +7396,14 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
 
     for (self.boxy_worker_procs) |proc_id| {
         const proc = self.store.getProcSpec(proc_id);
-        const proc_index = @intFromEnum(proc_id);
+        const proc_index = @backingInt(proc_id);
         const table_idx = self.boxy_dict_thunk_table_indices.get(proc_index) orelse wasmInvariantFmt(
             "Boxy worker proc {d} had no generated dispatch thunk",
             .{proc_index},
         );
         try self.emitI32Const(@intCast(proc_index));
         try self.emitFunctionTableIndexConst(table_idx);
-        try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc.ret_layout))));
+        try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(proc.ret_layout))));
         try self.emitI64Const(@bitCast(proc.rc_borrowed_params));
         try self.emitI32Const(@intFromBool(proc.rc_ret_borrowed));
         try self.emitI64Const(@bitCast(proc.rc_ret_lenders));
@@ -7415,7 +7418,7 @@ fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
             "WasmCodeGen invariant violated: frozen erased worker {d} missing table index",
             .{index},
         );
-        try self.emitErasedProcRegistration(@enumFromInt(index), table_idx, @intCast(builtins.erased_callable.compilerMetadataOffset(try self.layoutStorageByteSize(capture_layout))));
+        try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), table_idx, @intCast(builtins.erased_callable.compilerMetadataOffset(try self.layoutStorageByteSize(capture_layout))));
     }
 }
 
@@ -7448,12 +7451,12 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
         try self.emitLocalSet(descs_ptr);
         for (0..captures.len) |i| {
             const capture = GuardedList.at(captures, i);
-            try self.emitI32Const(@intCast(@intFromEnum(capture)));
+            try self.emitI32Const(@intCast(@backingInt(capture)));
             try self.emitStoreToMemSized(ids_ptr, @intCast(i * 4), .i32, 4);
             try self.resolveBoxyDesc(.{ .local = capture });
             try self.emitStoreToMemSized(descs_ptr, @intCast(i * 4), .i32, 4);
         }
-        try self.emitI32Const(@intCast(@intFromEnum(desc_id)));
+        try self.emitI32Const(@intCast(@backingInt(desc_id)));
         try self.emitLocalGets(.{ ids_ptr, descs_ptr });
         try self.emitI32Const(@intCast(captures.len));
         try self.emitBoxyCall("roc_boxy_desc_copy");
@@ -7464,13 +7467,13 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
         @intFromBool(assign.tag_payload != null) + @intFromBool(assign.tag_ext);
     if (projection_count > 1) wasmInvariantFmt("WASM/codegen invariant violated: descriptor requested multiple projections", .{});
     if (assign.box_payload_layout) |box_layout| {
-        try self.emitI32Const(@intCast(@intFromEnum(box_layout)));
+        try self.emitI32Const(@intCast(@backingInt(box_layout)));
         try self.emitBoxyCall("roc_boxy_box_payload_desc");
     } else if (assign.nested_index) |nested_index| {
         try self.emitI32Const(@intCast(nested_index));
         try self.emitBoxyCall("roc_boxy_nested_desc");
     } else if (assign.tag_payload) |payload| {
-        try self.emitI32Const(@intCast(@intFromEnum(payload.tag_name)));
+        try self.emitI32Const(@intCast(@backingInt(payload.tag_name)));
         try self.emitI32Const(@intCast(payload.payload_index));
         try self.emitBoxyCall("roc_boxy_tag_payload_desc");
     } else if (assign.tag_ext) {
@@ -7499,12 +7502,12 @@ fn generateBoxyDictRef(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitLocalSet(values_ptr);
     for (0..captures.len) |i| {
         const capture = GuardedList.at(captures, i);
-        try self.emitI32Const(@intCast(@intFromEnum(capture)));
+        try self.emitI32Const(@intCast(@backingInt(capture)));
         try self.emitStoreToMemSized(ids_ptr, @intCast(i * 4), .i32, 4);
         try self.emitProcLocal(capture);
         try self.emitStoreToMemSized(values_ptr, @intCast(i * 4), .i32, 4);
     }
-    try self.emitI32Const(@intCast(@intFromEnum(dict_id)));
+    try self.emitI32Const(@intCast(@backingInt(dict_id)));
     try self.emitLocalGets(.{ ids_ptr, values_ptr });
     try self.emitI32Const(@intCast(captures.len));
     try self.emitBoxyCall("roc_boxy_dict_copy");
@@ -7520,11 +7523,11 @@ fn generateBoxyBox(self: *Self, assign: anytype) Allocator.Error!void {
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.emitBoxyValuePtr(assign.payload);
-    try self.emitI32Const(@intCast(@intFromEnum(assign.payload_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.payload_layout)));
     if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
     try self.resolveBoxyDesc(payload_desc);
-    try self.emitI32Const(@intCast(@intFromEnum(assign.payload_mode)));
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.payload_mode)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall("roc_boxy_box");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7536,12 +7539,12 @@ fn generateBoxyRecordUpdate(self: *Self, assign: anytype) Allocator.Error!void {
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.emitBoxyValuePtr(assign.base);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.base))));
+    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.base))));
     try self.resolveBoxyDesc(assign.base_desc);
     try self.emitBoxyValuePtr(assign.fields);
-    try self.emitI32Const(@intCast(@intFromEnum(assign.fields_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.fields_layout)));
     try self.resolveBoxyDesc(assign.fields_desc);
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall("roc_boxy_record_update");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7553,11 +7556,11 @@ fn generateBoxyUnbox(self: *Self, assign: anytype) Allocator.Error!void {
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.source))));
+    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
     try self.resolveBoxyDesc(assign.source_desc);
     if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(assign.target_layout)));
-    try self.emitI32Const(@intCast(@intFromEnum(assign.source_mode)));
+    try self.emitI32Const(@intCast(@backingInt(assign.target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
     try self.emitBoxyCall("roc_boxy_unbox");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7571,8 +7574,8 @@ fn generateBoxyAdapt(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitBoxyValuePtr(assign.source);
     if (assign.source_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
     if (assign.target_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(assign.adapter)));
-    try self.emitI32Const(@intCast(@intFromEnum(assign.source_mode)));
+    try self.emitI32Const(@intCast(@backingInt(assign.adapter)));
+    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
     try self.emitBoxyCall("roc_boxy_adapt");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7584,7 +7587,7 @@ fn generateBoxyInspect(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitLocalGet(out_ptr);
     try self.emitNullPtr();
     try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.source))));
+    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
     try self.resolveBoxyDesc(assign.source_desc);
     try self.emitBoxyCall("roc_boxy_inspect");
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7596,14 +7599,14 @@ fn generateBoxyEq(self: *Self, assign: anytype) Allocator.Error!void {
     if (self.procLocalLayoutIdx(assign.rhs) != value_layout) {
         wasmInvariantFmt(
             "WASM/codegen invariant violated: boxy equality operands had layouts {d} and {d}",
-            .{ @intFromEnum(value_layout), @intFromEnum(self.procLocalLayoutIdx(assign.rhs)) },
+            .{ @backingInt(value_layout), @backingInt(self.procLocalLayoutIdx(assign.rhs)) },
         );
     }
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
     try self.emitLocalGet(out_ptr);
     try self.emitBoxyValuePtr(assign.lhs);
     try self.emitBoxyValuePtr(assign.rhs);
-    try self.emitI32Const(@intCast(@intFromEnum(value_layout)));
+    try self.emitI32Const(@intCast(@backingInt(value_layout)));
     try self.resolveBoxyDesc(assign.desc);
     try self.emitBoxyCall("roc_boxy_eq");
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7614,7 +7617,7 @@ fn generateBoxyHash(self: *Self, assign: anytype) Allocator.Error!void {
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
     try self.emitLocalGet(out_ptr);
     try self.emitBoxyValuePtr(assign.value);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.value))));
+    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.value))));
     try self.resolveBoxyDesc(assign.desc);
     try self.emitBoxyValuePtr(assign.hasher);
     try self.emitBoxyCall("roc_boxy_hash");
@@ -7626,12 +7629,12 @@ fn generateBoxyTag(self: *Self, assign: anytype) Allocator.Error!void {
     const out_ptr = try self.allocBoxyOutPtr(target_layout);
     try self.emitLocalGet(out_ptr);
     try self.resolveBoxyDesc(assign.target_desc);
-    try self.emitI32Const(@intCast(@intFromEnum(assign.tag_name)));
+    try self.emitI32Const(@intCast(@backingInt(assign.tag_name)));
     if (assign.payload) |payload| try self.emitBoxyValuePtr(payload) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(assign.payload_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.payload_layout)));
     if (assign.payload_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(assign.payload_mode)));
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.payload_mode)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall("roc_boxy_tag");
     try self.emitBoxyOutValue(target_layout, out_ptr);
 }
@@ -7642,12 +7645,12 @@ fn generateBoxyTagPayload(self: *Self, assign: anytype) Allocator.Error!void {
     const out_desc_ptr = try self.allocBoxyOutDescPtr();
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.emitBoxyValuePtr(assign.source);
-    try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(assign.source))));
+    try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(assign.source))));
     try self.resolveBoxyDesc(assign.source_desc);
-    try self.emitI32Const(@intCast(@intFromEnum(assign.tag_name)));
+    try self.emitI32Const(@intCast(@backingInt(assign.tag_name)));
     try self.emitI32Const(@intCast(assign.payload_index));
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
-    try self.emitI32Const(@intCast(@intFromEnum(assign.source_mode)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(assign.source_mode)));
     try self.emitBoxyCall("roc_boxy_tag_payload");
     if (assign.target_desc) |desc_local| {
         try self.emitLocalGet(out_desc_ptr);
@@ -7671,7 +7674,7 @@ fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
             const entry_offset: u32 = @intCast(i * 12);
             try self.emitBoxyValuePtr(local);
             try self.emitStoreToMemSized(ptr, entry_offset, .i32, 4);
-            try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(local))));
+            try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(local))));
             try self.emitStoreToMemSized(ptr, entry_offset + 4, .i32, 4);
             try self.emitProcLocal(desc_local);
             try self.emitStoreToMemSized(ptr, entry_offset + 8, .i32, 4);
@@ -7694,13 +7697,13 @@ fn generateBoxyCallDict(self: *Self, assign: anytype) Allocator.Error!void {
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.resolveBoxyDict(assign.dict);
     try self.emitI32Const(@intCast(assign.method_slot));
-    try self.emitI32Const(@intCast(@intFromEnum(assign.method)));
+    try self.emitI32Const(@intCast(@backingInt(assign.method)));
     if (args_ptr) |ptr| try self.emitLocalGet(ptr) else try self.emitNullPtr();
     try self.emitI32Const(@intCast(arg_locals.len));
     if (hidden_ptr) |ptr| try self.emitLocalGet(ptr) else try self.emitNullPtr();
     try self.emitI32Const(@intCast(hidden_locals.len));
     if (assign.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall("roc_boxy_call_dict");
     try self.bindBoxyOutDesc(assign.target, out_desc_ptr);
     try self.emitBoxyOutValue(target_layout, out_ptr);
@@ -7854,7 +7857,7 @@ fn emitHostedCall(
     // The call goes directly to the host's linker symbol, registered before
     // proc compilation by registerHostedSymbolTargets.
     const target = self.hosted_symbol_targets.get(hosted.dispatch_index) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: hosted dispatch index {d} has no registered symbol target",
                 .{hosted.dispatch_index},
@@ -7916,7 +7919,7 @@ fn bindErasedCallableAdapterParams(
     reuse_ptr_local: u32,
 ) Allocator.Error!void {
     if (args.len < 2) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("WASM/codegen invariant violated: erased callable adapter lacks hidden capture/reuse args", .{});
         }
         unreachable;
@@ -8033,7 +8036,7 @@ fn bindErasedCallableAdapterParams(
                     try self.emitBoxyCall("roc_boxy_nested_desc");
                 },
                 .tag_payload => {
-                    try self.emitI32Const(@bitCast(@intFromEnum(param.source_tag_name)));
+                    try self.emitI32Const(@bitCast(@backingInt(param.source_tag_name)));
                     try self.emitI32Const(@intCast(param.source_nested_index));
                     try self.emitBoxyCall("roc_boxy_tag_payload_desc");
                 },
@@ -8125,7 +8128,7 @@ fn saveState(self: *Self) Allocator.Error!SavedState {
 /// Restore codegen state, and the caller's binding scope, after a nested function.
 fn restoreState(self: *Self, saved: SavedState) void {
     if (self.active_fn_stack.items.len != saved.active_fn_stack_len) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WasmCodeGen invariant violated: active function stack len {d}, expected {d}",
                 .{ self.active_fn_stack.items.len, saved.active_fn_stack_len },
@@ -8212,8 +8215,9 @@ fn generateCFStmt(self: *Self, stmt_id: CFStmtId) Allocator.Error!void {
 
 /// Explicit work-stack driver for the CFStmt walker (stack-safe; no recursion).
 fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocator.Error!void {
-    var sfa = std.heap.stackFallback(64 * @sizeOf(StmtWork), self.allocator);
-    const wa = sfa.get();
+    var sfa_buffer: [64 * @sizeOf(StmtWork)]u8 align(@alignOf(usize)) = undefined;
+    var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+    const wa = sfa.allocator();
     var work = std.ArrayList(StmtWork).empty;
     defer work.deinit(wa);
     try work.append(wa, .{ .node = .{ .stmt_id = stmt_id, .stop = stop } });
@@ -8221,7 +8225,7 @@ fn generateCFStmtUntil(self: *Self, stmt_id: CFStmtId, stop: ?CFStmtId) Allocato
     while (work.pop()) |item| {
         switch (item) {
             .deactivate => |key| {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     _ = self.active_stmt_generations.remove(key);
                 }
             },
@@ -8283,8 +8287,8 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         if (stmt_id == stop_id) return;
     }
 
-    const stmt_key = @intFromEnum(stmt_id);
-    if (builtin.mode == .Debug) {
+    const stmt_key = @backingInt(stmt_id);
+    if (builtin.mode == .debug) {
         const gop = try self.stmt_generation_counts.getOrPut(stmt_key);
         if (gop.found_existing) {
             gop.value_ptr.* += 1;
@@ -8433,9 +8437,9 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         },
         .boxy_tag_match => |tag_match| {
             try self.emitBoxyValuePtr(tag_match.source);
-            try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(tag_match.source))));
+            try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(tag_match.source))));
             try self.resolveBoxyDesc(tag_match.source_desc);
-            try self.emitI32Const(@intCast(@intFromEnum(tag_match.tag_name)));
+            try self.emitI32Const(@intCast(@backingInt(tag_match.tag_name)));
             try self.emitBoxyCall("roc_boxy_tag_match");
             try self.emitVoidIf();
             self.cf_depth += 1;
@@ -8469,7 +8473,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 self.pending_overflow_result_target = null;
                 try self.bindAssignedLocal(assign.target);
                 if (fusion) |matched| {
-                    try self.precomputed_overflow_results.put(@intFromEnum(matched.consumer_stmt), {});
+                    try self.precomputed_overflow_results.put(@backingInt(matched.consumer_stmt), {});
                 }
             }
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
@@ -8539,7 +8543,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 },
                 .f32, .f64, .v128 => wasmInvariantFmt(
                     "WasmCodeGen invariant violated: expect condition local {d} had non-integer value type {s}",
-                    .{ @intFromEnum(expect_stmt.condition), @tagName(condition_vt) },
+                    .{ @backingInt(expect_stmt.condition), @tagName(condition_vt) },
                 ),
             }
             try self.emitOps(.{ Op.i32_eqz, Op.@"if" });
@@ -8626,7 +8630,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 },
                 .f32, .f64, .v128 => wasmInvariantFmt(
                     "WASM/codegen invariant violated: switch_initialized_payload condition local {d} had non-integer value type {s}",
-                    .{ @intFromEnum(sw.cond), @tagName(cond_vt) },
+                    .{ @backingInt(sw.cond), @tagName(cond_vt) },
                 ),
             }
             try self.emitLocalSet(cond_local);
@@ -8668,7 +8672,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             }
         },
         .join => |j| {
-            const jp_key = @intFromEnum(j.id);
+            const jp_key = @backingInt(j.id);
 
             const jp_params = self.store.getLocalSpan(j.params);
             var param_locals = self.allocator.alloc(u32, jp_params.len) catch return error.OutOfMemory;
@@ -8706,7 +8710,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try work.append(wa, .{ .node = .{ .stmt_id = j.body, .stop = stop } });
         },
         .jump => |jmp| {
-            const jp_key = @intFromEnum(jmp.target);
+            const jp_key = @backingInt(jmp.target);
 
             const state_local = self.join_point_state_locals.get(jp_key) orelse wasmInvariantFmt(
                 "WASM/codegen invariant violated: jump target {d} has no active join-point state",
@@ -8747,7 +8751,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
                 },
                 .f32, .f64, .v128 => wasmInvariantFmt(
                     "WASM/codegen invariant violated: decref_if_initialized condition local {d} had non-integer value type {s}",
-                    .{ @intFromEnum(dec.cond), @tagName(cond_vt) },
+                    .{ @backingInt(dec.cond), @tagName(cond_vt) },
                 ),
             }
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
@@ -8767,7 +8771,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .runtime_error => {
             var msg_buf: [64]u8 = undefined;
             const proc_id = self.current_proc_id orelse {
-                if (comptime builtin.mode == .Debug) {
+                if (comptime builtin.mode == .debug) {
                     base.invariant("runtime_error emitted without current proc", .{});
                 }
                 unreachable;
@@ -8775,7 +8779,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             const msg = std.fmt.bufPrint(
                 &msg_buf,
                 "runtime_error {d} proc {d}",
-                .{ @intFromEnum(stmt_id), @intFromEnum(proc_id) },
+                .{ @backingInt(stmt_id), @backingInt(proc_id) },
             ) catch "runtime_error";
             try self.emitRocStaticStringCall(.crashed, msg);
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
@@ -8800,7 +8804,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
         },
         .loop_continue => {
-            if (builtin.mode == .Debug and self.loop_continue_target_depths.items.len == 0) {
+            if (builtin.mode == .debug and self.loop_continue_target_depths.items.len == 0) {
                 base.invariant(
                     "WasmCodeGen invariant violated: loop_continue encountered outside a loop",
                     .{},
@@ -8811,7 +8815,7 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.emitBr(br_target);
         },
         .loop_break => {
-            if (builtin.mode == .Debug and self.loop_break_target_depths.items.len == 0) {
+            if (builtin.mode == .debug and self.loop_break_target_depths.items.len == 0) {
                 base.invariant(
                     "WasmCodeGen invariant violated: loop_break encountered outside a loop",
                     .{},
@@ -8869,11 +8873,11 @@ fn generateLiteral(self: *Self, target: ProcLocalId, value: LIR.LiteralValue) Al
         .static_data => |id| try self.generateStaticDataLiteral(id, self.procLocalLayoutIdx(target)),
         .bytes_literal => |bytes_idx| try self.generateBytesLiteral(bytes_idx),
         .proc_ref => |proc_id| {
-            const key: u32 = @intFromEnum(proc_id);
+            const key: u32 = @backingInt(proc_id);
             const table_idx = self.proc_table_indices.get(key) orelse {
                 wasmInvariantFmt(
                     "WasmCodeGen invariant violated: proc_ref target {d} missing table index",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             };
             try self.emitFunctionTableIndexConst(table_idx);
@@ -8895,8 +8899,8 @@ fn generateBoxyDynamicLiteral(
     try self.emitLocalGets(.{ out_ptr, out_desc_ptr });
     try self.generateI128Literal(value);
     try self.resolveBoxyDesc(desc);
-    try self.emitI32Const(@intCast(@intFromEnum(default_layout)));
-    try self.emitI32Const(@intCast(@intFromEnum(target_layout)));
+    try self.emitI32Const(@intCast(@backingInt(default_layout)));
+    try self.emitI32Const(@intCast(@backingInt(target_layout)));
     try self.emitBoxyCall(if (fractional) "roc_boxy_dynamic_frac_literal_ref" else "roc_boxy_dynamic_num_literal_ref");
     try self.emitBoxyOutValue(target_layout, out_ptr);
     try self.bindBoxyOutDesc(target, out_desc_ptr);
@@ -8997,10 +9001,10 @@ fn emitRocDbg(self: *Self, message: ProcLocalId) Allocator.Error!void {
 
 /// Call a diagnostic runtime symbol with the contents of a Str-layout proc local.
 fn emitRocStrCall(self: *Self, message: ProcLocalId, diagnostic: RuntimeDiagnostic) Allocator.Error!void {
-    if (builtin.mode == .Debug and self.procLocalLayoutIdx(message) != .str) {
+    if (builtin.mode == .debug and self.procLocalLayoutIdx(message) != .str) {
         base.invariant(
             "WasmCodeGen invariant violated: message local {d} did not have Str layout",
-            .{@intFromEnum(message)},
+            .{@backingInt(message)},
         );
     }
 
@@ -9169,7 +9173,7 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                     try self.emitI32Const(@intCast(field_offset));
                     self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
                 }
-            } else if (builtin.mode == .Debug and payload.payload_idx != 0) {
+            } else if (builtin.mode == .debug and payload.payload_idx != 0) {
                 base.invariant(
                     "LIR/wasm invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload",
                     .{payload.payload_idx},
@@ -9198,15 +9202,15 @@ fn generateRefOp(self: *Self, op: RefOp, target_layout: layout.Idx) Allocator.Er
                 .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box tag payload access survived Boxy lowering", .{}),
                 .scalar, .box_of_zst, .list, .list_of_zst, .struct_, .closure, .erased_callable, .zst, .ptr => .zst,
             };
-            if (builtin.mode == .Debug and payload_layout_idx != target_layout) {
+            if (builtin.mode == .debug and payload_layout_idx != target_layout) {
                 const payload_layout = ls.getLayout(payload_layout_idx);
                 const target_layout_val = ls.getLayout(target_layout);
                 base.invariant(
                     "LIR/wasm invariant violated: tag_payload_struct payload layout {d} ({s}) did not match target layout {d} ({s})",
                     .{
-                        @intFromEnum(payload_layout_idx),
+                        @backingInt(payload_layout_idx),
                         @tagName(payload_layout.tag),
-                        @intFromEnum(target_layout),
+                        @backingInt(target_layout),
                         @tagName(target_layout_val.tag),
                     },
                 );
@@ -9238,11 +9242,11 @@ fn generateRcStmt(
         },
         .boxy => |desc| {
             try self.emitBoxyValuePtr(value);
-            try self.emitI32Const(@intCast(@intFromEnum(self.procLocalLayoutIdx(value))));
+            try self.emitI32Const(@intCast(@backingInt(self.procLocalLayoutIdx(value))));
             try self.resolveBoxyDesc(desc);
-            try self.emitI32Const(@intCast(@intFromEnum(op)));
+            try self.emitI32Const(@intCast(@backingInt(op)));
             try self.emitI32Const(@intCast(inc_count));
-            try self.emitI32Const(@intCast(@intFromEnum(atomicity)));
+            try self.emitI32Const(@intCast(@backingInt(atomicity)));
             try self.emitBoxyCall("roc_boxy_drop");
         },
     }
@@ -9276,9 +9280,9 @@ fn runtimeRepresentationLayoutIdx(self: *const Self, layout_idx: layout.Idx) lay
 /// just handles explicit direct-call symbols plus the residual runtime
 /// function-value expression path. No closure-specific dispatch.
 fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
-    const proc_key: u32 = @intFromEnum(c.proc);
+    const proc_key: u32 = @backingInt(c.proc);
     const proc = self.store.getProcSpec(c.proc);
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const call_args = self.store.getLocalSpan(c.args);
         const callee_args = self.store.getLocalSpan(proc.args);
         if (call_args.len != callee_args.len) {
@@ -9286,7 +9290,7 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 wasmInvariantFmt("WASM/codegen invariant violated: direct call emitted outside a procedure", .{});
             base.invariant(
                 "WASM/codegen invariant violated: direct call from proc {d} to proc {d} passed {d} args but callee expects {d}",
-                .{ @intFromEnum(caller_proc), proc_key, call_args.len, callee_args.len },
+                .{ @backingInt(caller_proc), proc_key, call_args.len, callee_args.len },
             );
         }
         if ((c.out_desc != null) != (proc.runtime_ret_desc != null)) {
@@ -9294,13 +9298,13 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
                 wasmInvariantFmt("WASM/codegen invariant violated: direct call emitted outside a procedure", .{});
             base.invariant(
                 "WASM/codegen invariant violated: direct call from proc {d} to proc {d} descriptor output ({}) did not match callee ABI ({})",
-                .{ @intFromEnum(caller_proc), proc_key, c.out_desc != null, proc.runtime_ret_desc != null },
+                .{ @backingInt(caller_proc), proc_key, c.out_desc != null, proc.runtime_ret_desc != null },
             );
         }
     }
     const func_idx = self.registered_procs.get(proc_key) orelse {
-        if (builtin.mode == .Debug) {
-            base.invariant("generateCall: unresolved proc call target {d}", .{@intFromEnum(c.proc)});
+        if (builtin.mode == .debug) {
+            base.invariant("generateCall: unresolved proc call target {d}", .{@backingInt(c.proc)});
         }
         unreachable;
     };
@@ -9329,13 +9333,13 @@ fn generateCall(self: *Self, c: anytype) Allocator.Error!void {
 }
 
 fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const closure_layout = self.procLocalLayoutIdx(c.closure);
         const closure_layout_val = self.getLayoutStore().getLayout(closure_layout);
         if (closure_layout_val.tag != .erased_callable) {
             base.invariant(
                 "WasmCodeGen invariant violated: erased call closure layout {d} is not erased_callable",
-                .{@intFromEnum(closure_layout)},
+                .{@backingInt(closure_layout)},
             );
         }
     }
@@ -9355,7 +9359,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
 
     const arg_refs = self.store.getLocalSpan(c.args);
     const arg_desc_refs = self.store.getLocalSpan(c.arg_descs);
-    if (builtin.mode == .Debug and arg_desc_refs.len != c.arg_desc_keys.len) {
+    if (builtin.mode == .debug and arg_desc_refs.len != c.arg_desc_keys.len) {
         base.invariant(
             "WasmCodeGen invariant violated: erased call passed {d} descriptors but {d} descriptor keys",
             .{ arg_desc_refs.len, c.arg_desc_keys.len },
@@ -9422,7 +9426,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
         try self.emitI32Const(@intCast(c.arg_layouts.start));
         try self.emitI32Const(@intCast(c.arg_layouts.len));
         if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-        try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(c.ret_layout))));
+        try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(c.ret_layout))));
         try self.emitBoxyCall("roc_boxy_defer_erased");
         if (c.out_desc) |desc_local| {
             try self.emitNullPtr();
@@ -9445,7 +9449,7 @@ fn generateErasedCall(self: *Self, c: anytype) Allocator.Error!void {
     if (c.reuse_closure) try self.emitLocalGet(payload_ptr) else try self.emitNullPtr();
     try self.emitLocalGet(out_desc_ptr);
     if (c.result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(c.ret_layout))));
+    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(c.ret_layout))));
     if (arg_descs_ptr) |offset| try self.emitFpOffset(offset) else try self.emitNullPtr();
     try self.emitI32Const(@intCast(c.arg_desc_keys.start));
     try self.emitI32Const(@intCast(c.arg_desc_keys.len));
@@ -9509,12 +9513,12 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
         try self.emitLocalGet(flag);
         self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
         self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-        self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+        self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
     }
     if (slot_local) |slot| try self.emitLocalGet(slot) else try self.emitNullPtr();
     try self.emitLocalGet(out_desc_ptr);
     if (result_desc) |desc| try self.resolveBoxyDesc(desc) else try self.emitNullPtr();
-    try self.emitI32Const(@intCast(@intFromEnum(runtime_layout)));
+    try self.emitI32Const(@intCast(@backingInt(runtime_layout)));
     try self.emitBoxyCall("roc_boxy_drive_pending");
     if (drive == .unless_caller_drives) {
         self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory;
@@ -9536,21 +9540,21 @@ fn emitDrivePending(self: *Self, drive: LIR.PendingDrive, ret_layout: layout.Idx
 }
 
 fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const target_layout_val = self.getLayoutStore().getLayout(c.target_layout);
         if (target_layout_val.tag != .erased_callable) {
             base.invariant(
                 "WasmCodeGen invariant violated: packed erased fn target layout {d} is not erased_callable",
-                .{@intFromEnum(c.target_layout)},
+                .{@backingInt(c.target_layout)},
             );
         }
     }
-    if (builtin.mode == .Debug and (c.capture != null) != (c.capture_layout != null)) {
+    if (builtin.mode == .debug and (c.capture != null) != (c.capture_layout != null)) {
         base.invariant("WasmCodeGen invariant violated: packed erased fn capture value/layout presence differed", .{});
     }
 
     const capture_size = if (c.capture_layout) |capture_layout| try self.layoutStorageByteSize(capture_layout) else 0;
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         if (c.capture_layout) |capture_layout| {
             const capture_align = try self.layoutStorageByteAlign(capture_layout);
             if (capture_align > builtins.erased_callable.capture_alignment) {
@@ -9561,11 +9565,11 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
             }
         }
     }
-    const proc_key: u32 = @intFromEnum(c.proc);
+    const proc_key: u32 = @backingInt(c.proc);
     const table_idx = self.proc_table_indices.get(proc_key) orelse {
         wasmInvariantFmt(
             "WasmCodeGen invariant violated: packed erased fn target {d} missing table index",
-            .{@intFromEnum(c.proc)},
+            .{@backingInt(c.proc)},
         );
     };
     const on_drop_table_idx = try self.erasedCallableOnDropTableIndex(c.on_drop);
@@ -9656,8 +9660,8 @@ fn generatePackedErasedFn(self: *Self, c: anytype) Allocator.Error!void {
 fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx: u32, metadata_offset: u32) Allocator.Error!void {
     const proc_spec = self.store.getProcSpec(proc_id);
     try self.emitFunctionTableIndexConst(table_idx);
-    try self.emitI32Const(@intCast(@intFromEnum(proc_id)));
-    try self.emitI32Const(@intCast(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
+    try self.emitI32Const(@intCast(@backingInt(proc_id)));
+    try self.emitI32Const(@intCast(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout))));
     try self.emitI32Const(@intCast(metadata_offset));
     try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.start));
     try self.emitI32Const(@intCast(proc_spec.erased_arg_layouts.len));
@@ -9668,7 +9672,7 @@ fn emitErasedProcRegistration(self: *Self, proc_id: LIR.LirProcSpecId, table_idx
 }
 
 fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
-    return (@as(u64, @intFromEnum(capture_layout)) << 32) | desc_field_offset;
+    return (@as(u64, @backingInt(capture_layout)) << 32) | desc_field_offset;
 }
 
 fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field_offset: u32) Allocator.Error!u32 {
@@ -9703,12 +9707,12 @@ fn boxyCaptureDropTableIndex(self: *Self, capture_layout: layout.Idx, desc_field
     try WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0);
 
     try self.emitLocalGet(capture_local);
-    try self.emitI32Const(@intCast(@intFromEnum(capture_layout)));
+    try self.emitI32Const(@intCast(@backingInt(capture_layout)));
     try self.emitLocalGet(capture_local);
     try self.emitLoadOpSized(.i32, 4, desc_field_offset);
-    try self.emitI32Const(@intCast(@intFromEnum(layout.RcOp.decref)));
+    try self.emitI32Const(@intCast(@backingInt(layout.RcOp.decref)));
     try self.emitI32Const(1);
-    try self.emitI32Const(@intCast(@intFromEnum(RcAtomicity.atomic)));
+    try self.emitI32Const(@intCast(@backingInt(RcAtomicity.atomic)));
     try self.emitBoxyCall("roc_boxy_drop");
 
     try self.emitOps(.{ Op.end, Op.end });
@@ -10285,7 +10289,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
 
     if (l.tag == .zst) {
         if (t.discriminant != 0) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "WASM/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
                     .{t.discriminant},
@@ -10298,7 +10302,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     }
 
     if (l.tag != .tag_union) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: tag assignment target must be tag_union or zst, got {s}",
                 .{@tagName(l.tag)},
@@ -10313,7 +10317,7 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     const tu_data = ls.getTagUnionData(l.getTagUnion().idx);
     const variants = ls.getTagUnionVariants(tu_data);
     if (@as(usize, t.variant_index) >= variants.len) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "WASM/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                 .{ t.variant_index, variants.len },
@@ -10339,10 +10343,10 @@ fn generateTag(self: *Self, t: anytype) Allocator.Error!void {
     // clobber the discriminant).
     if (t.payload) |payload_local| {
         const payload_byte_size = try self.layoutByteSize(variant_payload_layout);
-        if (builtin.mode == .Debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
+        if (builtin.mode == .debug and self.procLocalLayoutIdx(payload_local) != variant_payload_layout) {
             base.invariant(
                 "WASM/codegen invariant violated: tag payload local layout {d} did not match variant payload layout {d}",
-                .{ @intFromEnum(self.procLocalLayoutIdx(payload_local)), @intFromEnum(variant_payload_layout) },
+                .{ @backingInt(self.procLocalLayoutIdx(payload_local)), @backingInt(variant_payload_layout) },
             );
         }
         try self.emitProcLocal(payload_local);
@@ -11060,7 +11064,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
             try self.emitOps(.{ Op.i32_and, Op.@"if" });
-            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitLocalGet(len_local);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             try self.emitLocalGet(cap_local);
@@ -11133,14 +11137,14 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
             try self.emitOps(.{ Op.i32_and, Op.@"if" });
-            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(0);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             // Zero capacity has no heap refcount and counts as unique.
             try self.emitLocalGet(cap_local);
             try self.emitI32Const(1);
             try self.emitOps(.{ Op.i32_shr_u, Op.i32_eqz, Op.@"if" });
-            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             try self.emitI32Const(1);
             self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
             // The refcount lives one usize before the data pointer.
@@ -11613,7 +11617,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             const record_idx = record_layout.getStruct().idx;
             const len_field_off = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 0);
             const start_field_off = try self.structFieldOffsetByOriginalIndexWasm(record_idx, 1);
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 const sd = ls.getStructData(record_idx);
                 const sorted_fields = ls.struct_fields.sliceRange(sd.getFields());
                 if (sorted_fields.len != 2) {
@@ -11707,7 +11711,7 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
 
             // if SSO: len = tag_byte & 0x7F; else: len = load i32 from offset 8
             self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-            self.currentCode().append(self.allocator, @intFromEnum(ValType.i32)) catch return error.OutOfMemory;
+            self.currentCode().append(self.allocator, @backingInt(ValType.i32)) catch return error.OutOfMemory;
             // SSO path
             try self.emitLocalGet(tag_byte);
             try self.emitI32Const(0x7F);
@@ -13848,7 +13852,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                 self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
                 return;
             }
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "wasm numeric lowering invariant violated: operand layouts differ for {s}: lhs={s} rhs={s}",
                     .{ @tagName(plain_op), @tagName(operand_layout), @tagName(rhs_layout) },
@@ -14116,7 +14120,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     try self.emitLocalGets(.{ lhs, rhs });
                     self.currentCode().append(self.allocator, if (is_unsigned) Op.i32_ge_u else Op.i32_ge_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i32)) catch return error.OutOfMemory;
                     try self.emitLocalGets(.{ lhs, rhs });
                     try self.emitOps(.{ Op.i32_sub, Op.@"else" });
                     try self.emitLocalGets(.{ rhs, lhs });
@@ -14129,7 +14133,7 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                     try self.emitLocalGets(.{ lhs, rhs });
                     self.currentCode().append(self.allocator, if (is_unsigned) Op.i64_ge_u else Op.i64_ge_s) catch return error.OutOfMemory;
                     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-                    self.currentCode().append(self.allocator, @intFromEnum(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
+                    self.currentCode().append(self.allocator, @backingInt(WasmModule.BlockType.i64)) catch return error.OutOfMemory;
                     try self.emitLocalGets(.{ lhs, rhs });
                     try self.emitOps(.{ Op.i64_sub, Op.@"else" });
                     try self.emitLocalGets(.{ rhs, lhs });
@@ -14473,7 +14477,7 @@ fn generateBytesLiteral(self: *Self, literal: LIR.ListLiteral) Allocator.Error!v
 }
 
 fn staticStrDataOffset(self: *Self, backing_idx: base.StringLiteral.Idx) Allocator.Error!DataAddress {
-    const key: u32 = @intFromEnum(backing_idx);
+    const key: u32 = @backingInt(backing_idx);
     if (self.static_str_offsets.get(key)) |offset| return offset;
 
     const backing_bytes = self.store.getString(backing_idx);
@@ -15128,19 +15132,19 @@ fn emitBrIf(self: *Self, depth: u32) Allocator.Error!void {
 /// Helper: open a block that yields no value
 fn emitVoidBlock(self: *Self) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
 }
 
 /// Helper: open an `if` that yields no value
 fn emitVoidIf(self: *Self) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.@"if") catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
 }
 
 /// Helper: open a loop that yields no value
 fn emitVoidLoop(self: *Self) Allocator.Error!void {
     self.currentCode().append(self.allocator, Op.loop_) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.void)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(BlockType.void)) catch return error.OutOfMemory;
 }
 
 /// Emit Roc's exact float remainder through the shared builtin. WebAssembly
@@ -16362,14 +16366,14 @@ fn emitSimdRoundedShift(self: *Self, args: anytype, kind: layout.Vector) Allocat
 
     try self.emitLocalGet(count);
     try self.emitOps(.{ Op.i32_eqz, Op.@"if" });
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.v128)) catch return error.OutOfMemory;
+    self.currentCode().append(self.allocator, @backingInt(BlockType.v128)) catch return error.OutOfMemory;
     try self.emitLocalGet(value);
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     try self.emitLocalGet(count);
     try self.emitI32Const(@intCast(kind.laneBits()));
     try self.emitOps(.{ Op.i32_ge_u, Op.@"if" });
-    self.currentCode().append(self.allocator, @intFromEnum(BlockType.v128)) catch return error.OutOfMemory;
-    try self.emitV128Const([_]u8{0} ** 16);
+    self.currentCode().append(self.allocator, @backingInt(BlockType.v128)) catch return error.OutOfMemory;
+    try self.emitV128Const(@as([16]u8, @splat(0)));
     self.currentCode().append(self.allocator, Op.@"else") catch return error.OutOfMemory;
     // Add the rounding bias in double-width lanes. A same-width add would
     // wrap for positive lanes near the signed maximum before the shift.
@@ -16874,7 +16878,7 @@ fn emitStrMatchCapture(
             if (target_binding.val_type != .i32) {
                 wasmInvariantFmt(
                     "WASM/codegen invariant violated: string-pattern capture local {d} was not represented as i32",
-                    .{@intFromEnum(target)},
+                    .{@backingInt(target)},
                 );
             }
             const target_local = target_binding.idx;
@@ -17077,7 +17081,7 @@ fn generateLLListPrepend(self: *Self, args: anytype, ret_layout: layout.Idx, tar
         try self.emitI32Const(@intCast(elem_align));
         try self.emitLocalGet(elem_ptr);
         try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_prepend");
@@ -17340,7 +17344,7 @@ fn generateLLListConcat(self: *Self, args: anytype, ret_layout: layout.Idx, targ
         try self.emitRocListFields(b_fields);
         try self.emitI32Const(@intCast(elem_align));
         try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI64Const(@intCast(unique_args & 0b11));
         try self.emitBoxyCall("roc_boxy_list_concat");
@@ -17402,7 +17406,7 @@ fn generateLLListDropAt(self: *Self, args: anytype, ret_layout: layout.Idx, targ
         try self.emitI32Const(@intCast(elem_align));
         try self.emitI32Const(@intCast(elem_size));
         try self.emitLocalGet(index_local);
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_drop_at");
@@ -17442,7 +17446,7 @@ fn generateLLListReverse(self: *Self, args: anytype, ret_layout: layout.Idx, tar
         try self.emitRocListFields(fields);
         try self.emitI32Const(@intCast(elem_align));
         try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_reverse");
@@ -17479,7 +17483,7 @@ fn generateLLListSortWith(self: *Self, args: anytype, ret_layout: layout.Idx, ta
         try self.emitI32Const(1);
         try self.emitI32Const(0);
         try self.emitI32Const(0);
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitI32Const(0);
@@ -17712,7 +17716,7 @@ fn generateLLListSet(self: *Self, args: anytype, ret_layout: layout.Idx, target:
         try self.emitI32Const(@intCast(elem_align));
         try self.emitLocalGets(.{ index_local, elem_ptr });
         try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_set");
@@ -17758,7 +17762,7 @@ fn generateLLListReplaceUnsafe(self: *Self, args: anytype, ret_layout: layout.Id
         try self.emitLocalGets(.{ index_local, elem_ptr });
         try self.emitI32Const(@intCast(elem_size));
         try self.emitFpOffset(result_offset + pair.elem_offset);
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_replace");
@@ -17807,7 +17811,7 @@ fn generateLLListSwap(self: *Self, args: anytype, ret_layout: layout.Idx, target
         try self.emitI32Const(@intCast(elem_align));
         try self.emitI32Const(@intCast(elem_size));
         try self.emitLocalGets(.{ index_1_local, index_2_local });
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_swap");
@@ -17857,7 +17861,7 @@ fn generateLLListReserve(self: *Self, kind: BuiltinKind, boxy_symbol: []const u8
         try self.emitI32Const(@intCast(elem_align));
         try self.emitLocalGet(spare_local);
         try self.emitI32Const(@intCast(elem_size));
-        try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
         try self.resolveBoxyDesc(boxy_elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall(boxy_symbol);
@@ -17917,7 +17921,7 @@ fn generateListSublistLocals(self: *Self, list_local: u32, rec_local: u32, len_f
         try self.emitI32Const(@intCast(boxy_list_abi.elem_align));
         try self.emitI32Const(@intCast(boxy_list_abi.elem_size));
         try self.emitLocalGets(.{ start_local, len_local });
-        try self.emitI32Const(@intCast(@intFromEnum(elem.elem_layout)));
+        try self.emitI32Const(@intCast(@backingInt(elem.elem_layout)));
         try self.resolveBoxyDesc(elem.desc);
         try self.emitI32Const(updateModeImmForArg(unique_args, 0));
         try self.emitBoxyCall("roc_boxy_list_sublist");
@@ -18009,7 +18013,7 @@ fn generateLLListReleaseExcessCapacity(self: *Self, args: anytype, ret_layout: l
             try self.emitRocListFields(fields);
             try self.emitI32Const(@intCast(elem_align));
             try self.emitI32Const(@intCast(elem_size));
-            try self.emitI32Const(@intCast(@intFromEnum(boxy_elem.elem_layout)));
+            try self.emitI32Const(@intCast(@backingInt(boxy_elem.elem_layout)));
             try self.resolveBoxyDesc(boxy_elem.desc);
             try self.emitI32Const(updateModeImmForArg(unique_args, 0));
             try self.emitBoxyCall("roc_boxy_list_release_excess_capacity");
@@ -18659,7 +18663,7 @@ fn scanBody(allocator: Allocator, body: []const u8, literal: i64) ScanError!Body
 
     var saw_literal = false;
     while (cursor < body.len) {
-        const op: ScanOp = @enumFromInt(body[cursor]);
+        const op: ScanOp = @fromBackingInt(@intCast(body[cursor]));
         cursor += 1;
         switch (op) {
             .block, .loop_, .@"if" => {
@@ -18744,7 +18748,7 @@ const JoinFixtureShape = enum {
 };
 
 fn freshJoinFixtureJoinPointId(next_join_point: *u32) LIR.JoinPointId {
-    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(next_join_point.*));
     next_join_point.* += 1;
     return id;
 }

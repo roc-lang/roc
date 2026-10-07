@@ -7,10 +7,7 @@ const std = @import("std");
 const base = @import("base");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
-const c = @cImport({
-    @cDefine("ZSTD_STATIC_LINKING_ONLY", "1");
-    @cInclude("zstd.h");
-});
+const c = @import("zstd");
 
 const WriterError = std.Io.Writer.Error;
 const Writer = std.Io.Writer;
@@ -45,7 +42,7 @@ pub const CompressingHashWriter = struct {
 
         const rc = c.ZSTD_CCtx_setParameter(ctx, c.ZSTD_c_compressionLevel, compression_level);
         if (c.ZSTD_isError(rc) != 0) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("ZSTD_CCtx_setParameter failed: {s}", .{c.ZSTD_getErrorName(rc)});
             }
             unreachable;

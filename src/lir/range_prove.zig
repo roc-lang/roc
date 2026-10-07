@@ -106,7 +106,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        try pass.transformProc(@enumFromInt(proc_index));
+        try pass.transformProc(@fromBackingInt(@intCast(proc_index)));
     }
 }
 
@@ -175,7 +175,7 @@ test "range prove ordered procedure runs match whole-store constant arithmetic a
             for (0..store.procSpecCount()) |index| {
                 var scratch = std.heap.ArenaAllocator.init(testing.allocator);
                 defer scratch.deinit();
-                try runProc(&store, &layouts, @enumFromInt(index), scratch.allocator());
+                try runProc(&store, &layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
             }
         } else {
             try run(&store, &layouts);
@@ -1755,7 +1755,7 @@ const Pass = struct {
         const ra = self.rootOf(a);
         const rb = self.rootOf(b);
         const m = k + self.offLoOf(b) - self.offHiOf(a);
-        if (builtin.mode == .Debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
+        if (builtin.mode == .debug) self.last_claim = .{ .ordering = .{ .a = ra, .b = rb, .m = m } };
         if (ra == rb) return m >= 0;
 
         // Reach rb from ra along fact edges with accumulated slack <= m.
@@ -2116,8 +2116,8 @@ const Pass = struct {
                 .join => |s| {
                     try self.join_stmts.put(s.id, current);
                     try self.joins_in_order.append(self.allocator, current);
-                    if (@intFromEnum(s.id) + 1 > self.max_join_id) {
-                        self.max_join_id = @intFromEnum(s.id) + 1;
+                    if (@backingInt(s.id) + 1 > self.max_join_id) {
+                        self.max_join_id = @backingInt(s.id) + 1;
                     }
                     try self.edgeTo(s.remainder);
                     // The body is only entered through jumps, so it is only
@@ -2644,7 +2644,7 @@ const Pass = struct {
     }
 
     fn joinAssignedKey(join_id: JoinPointId, local: LocalId) u64 {
-        return (@as(u64, @intFromEnum(join_id)) << 32) | @as(u64, @intFromEnum(local));
+        return (@as(u64, @backingInt(join_id)) << 32) | @as(u64, @backingInt(local));
     }
 
     /// The local a statement writes, if any.
@@ -2844,11 +2844,11 @@ const Pass = struct {
     }
 
     fn stableTermOrder(a: StableTerm, b: StableTerm) std.math.Order {
-        const tag_a = @intFromEnum(std.meta.activeTag(a));
-        const tag_b = @intFromEnum(std.meta.activeTag(b));
+        const tag_a = @backingInt(std.meta.activeTag(a));
+        const tag_b = @backingInt(std.meta.activeTag(b));
         if (tag_a != tag_b) return std.math.order(tag_a, tag_b);
         return switch (a) {
-            .value_of, .len_of => |local| std.math.order(@intFromEnum(local), @intFromEnum(switch (b) {
+            .value_of, .len_of => |local| std.math.order(@backingInt(local), @backingInt(switch (b) {
                 .value_of, .len_of => |other| other,
                 .constant => unreachable,
             })),
@@ -3296,7 +3296,7 @@ const Pass = struct {
 
     /// Key for one loop parameter's cross-round bounds.
     fn loopBoundKey(join_id: JoinPointId, local: LocalId) u64 {
-        return (@as(u64, @intFromEnum(join_id)) << 32) | @intFromEnum(local);
+        return (@as(u64, @backingInt(join_id)) << 32) | @backingInt(local);
     }
 
     /// Round-stable form of a bound root: a list-length term of a stable
@@ -4288,8 +4288,8 @@ const Pass = struct {
                 structural_jumps_ready = true;
             }
 
-            const true_id: JoinPointId = @enumFromInt(self.max_join_id);
-            const false_id: JoinPointId = @enumFromInt(self.max_join_id + 1);
+            const true_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id));
+            const false_id: JoinPointId = @fromBackingInt(@intCast(self.max_join_id + 1));
             self.max_join_id += 2;
 
             const empty_params = try self.store.addLocalSpan(&.{});
@@ -4392,7 +4392,7 @@ const Pass = struct {
     /// Debug-only: snapshot the deciding proof of a rewrite for independent
     /// certification at the end of the round.
     fn recordProof(self: *Pass, stmt: CFStmtId) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         const claim = self.last_claim orelse return;
         const start: u32 = @intCast(self.proof_facts.items.len);
         try self.proof_facts.appendSlice(self.allocator, self.facts.items);
@@ -4411,7 +4411,7 @@ const Pass = struct {
     /// closure over the snapshot facts re-derives the claim. A failure is a
     /// compiler bug in the pass, never a property of the compiled program.
     fn certifyRound(self: *Pass, body: CFStmtId) ResourceError!void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         if (self.proof_records.items.len == 0) return;
 
         var doms = try RangeProveCertify.dominators(self.allocator, self.store, body);
@@ -4425,7 +4425,7 @@ const Pass = struct {
                         if (!doms.dominates(origin_stmt, record.stmt)) {
                             invariant(
                                 "range_prove certification failed: fact from s{d} does not dominate rewritten s{d}",
-                                .{ @intFromEnum(origin_stmt), @intFromEnum(record.stmt) },
+                                .{ @backingInt(origin_stmt), @backingInt(record.stmt) },
                             );
                         }
                     },
@@ -4437,7 +4437,7 @@ const Pass = struct {
                     if (!RangeProveCertify.implies(self.allocator, facts, self.nodes.items, claim.a, claim.b, claim.m)) {
                         invariant(
                             "range_prove certification failed: claim at s{d} does not follow from its facts",
-                            .{@intFromEnum(record.stmt)},
+                            .{@backingInt(record.stmt)},
                         );
                     }
                 },
@@ -4447,7 +4447,7 @@ const Pass = struct {
                     {
                         invariant(
                             "range_prove certification failed: overflow claim at s{d} does not follow from its false predicate edge",
-                            .{@intFromEnum(record.stmt)},
+                            .{@backingInt(record.stmt)},
                         );
                     }
                 },
@@ -5786,7 +5786,7 @@ const Pass = struct {
         var proof = try self.proveFamilyNoOverflow(entry.operation, lhs, rhs, operand_layout);
         if (!proof.proven) {
             if (self.pathNoOverflowFact(entry.operation, lhs, rhs, operand_layout)) |fact| {
-                if (builtin.mode == .Debug) self.last_claim = .{ .no_overflow = fact };
+                if (builtin.mode == .debug) self.last_claim = .{ .no_overflow = fact };
                 proof = .{
                     .proven = true,
                     .result = try self.survivingFamilyResult(entry.operation, lhs, rhs),
@@ -5978,7 +5978,7 @@ const Pass = struct {
         rhs: NodeId,
         operand_layout: layout_mod.Idx,
     ) ResourceError!ArithmeticProof {
-        if (builtin.mode == .Debug) self.last_claim = null;
+        if (builtin.mode == .debug) self.last_claim = null;
         const max = trackedIntMax(operand_layout) orelse return .{};
         const lhs_lo = self.absLoOf(lhs);
         const lhs_hi = self.absHiOf(lhs);

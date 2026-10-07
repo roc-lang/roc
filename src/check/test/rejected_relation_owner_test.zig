@@ -14,9 +14,9 @@ fn liveRecordDestructureStatements(test_env: *TestEnv) usize {
     var count: usize = 0;
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(raw_node_idx);
         if (store.nodes.get(node_idx).tag != .statement_decl) continue;
-        const stmt = store.getStatement(@enumFromInt(raw_node_idx)).s_decl;
+        const stmt = store.getStatement(@fromBackingInt(raw_node_idx)).s_decl;
         if (store.getPattern(stmt.pattern) == .record_destructure) count += 1;
     }
     return count;

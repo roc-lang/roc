@@ -720,7 +720,7 @@ fn fileWriteRequestLimit(comptime os_tag: std.Target.Os.Tag, page_size: usize) u
         .wasi => if (builtin.link_libc) @min(std.math.maxInt(u32), std.math.maxInt(isize)) else std.math.maxInt(u32),
         // POSIX writev limits the total iovec length to SSIZE_MAX.
         .freebsd, .openbsd, .netbsd, .dragonfly, .illumos, .haiku, .hurd => std.math.maxInt(isize),
-        .freestanding, .other, .contiki, .fuchsia, .hermit, .managarm, .plan9, .rtems, .serenity, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => @compileError("file-write request limit is not defined for this OS"),
+        .freestanding, .other, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos, .contiki, .fuchsia, .hermit, .managarm, .plan9, .rtems, .serenity, .uefi, .@"3ds", .ps3, .ps4, .ps5, .psp, .vita, .emscripten, .amdhsa, .amdpal, .cuda, .mesa3d, .nvcl, .opencl, .opengl, .vulkan => @compileError("file-write request limit is not defined for this OS"),
     };
 }
 
@@ -893,7 +893,7 @@ fn osCanonicalize(_: ?*anyopaque, std_io: std.Io, path: []const u8, allocator: A
         return osCanonicalizeLibc(path, allocator);
     }
 
-    var buffer: [std.Io.Dir.max_path_bytes]u8 = [_]u8{0} ** std.Io.Dir.max_path_bytes;
+    var buffer: [std.Io.Dir.max_path_bytes]u8 = @as([std.Io.Dir.max_path_bytes]u8, @splat(0));
     const len = std.Io.Dir.cwd().realPathFile(std_io, path, &buffer) catch |err| return switch (err) {
         error.FileNotFound => error.FileNotFound,
         error.AccessDenied => error.AccessDenied,
@@ -906,11 +906,11 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
     if (std.mem.findScalar(u8, path, 0) != null) return error.IoError;
     if (path.len >= std.posix.PATH_MAX) return error.IoError;
 
-    var path_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var path_buffer: [std.posix.PATH_MAX]u8 = @as([std.posix.PATH_MAX]u8, @splat(0));
     @memcpy(path_buffer[0..path.len], path);
     const path_z = path_buffer[0..path.len :0];
 
-    var resolved_buffer: [std.posix.PATH_MAX]u8 = [_]u8{0} ** std.posix.PATH_MAX;
+    var resolved_buffer: [std.posix.PATH_MAX]u8 = @as([std.posix.PATH_MAX]u8, @splat(0));
     while (true) {
         if (std.c.realpath(path_z, resolved_buffer[0..].ptr)) |resolved| {
             std.debug.assert(resolved == resolved_buffer[0..].ptr);
@@ -918,7 +918,7 @@ fn osCanonicalizeLibc(path: []const u8, allocator: Allocator) CanonicalizeError!
             return allocator.dupe(u8, resolved_buffer[0..len]) catch error.OutOfMemory;
         }
 
-        const err = @as(std.posix.E, @enumFromInt(std.c._errno().*));
+        const err = @as(std.posix.E, @fromBackingInt(@intCast(std.c._errno().*)));
         if (err == .INTR) continue;
         if (err == .NOENT or err == .NOTDIR) return error.FileNotFound;
         if (err == .ACCES) return error.AccessDenied;
@@ -935,7 +935,7 @@ fn osRename(_: ?*anyopaque, std_io: std.Io, old_path: []const u8, new_path: []co
 }
 
 fn osGetEnvVar(_: ?*anyopaque, _: std.Io, key: []const u8, allocator: Allocator) GetEnvVarError![]u8 {
-    const key_z = allocator.dupeZ(u8, key) catch return error.OutOfMemory;
+    const key_z = allocator.dupeSentinel(u8, key, 0) catch return error.OutOfMemory;
     defer allocator.free(key_z);
     const value = std.c.getenv(key_z) orelse return error.EnvironmentVariableMissing;
     return allocator.dupe(u8, std.mem.span(value)) catch return error.OutOfMemory;
@@ -1007,7 +1007,7 @@ fn osIsTty(_: ?*anyopaque, std_io: std.Io) bool {
 fn osTerminalWidth(_: ?*anyopaque, std_io: std.Io) ?u16 {
     return switch (builtin.os.tag) {
         .windows => winTerminalWidth(std_io),
-        .wasi, .freestanding => null,
+        .wasi, .freestanding, .wiiu, .@"switch", .gba, .psx, .tios, .ashetos => null,
         .other,
         .contiki,
         .fuchsia,
@@ -1525,7 +1525,7 @@ const BoundedWriteTestIo = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         const request = switch (operation) {
             .file_write_streaming => |request| request,
-            .file_read_streaming, .device_io_control, .net_receive => unreachable,
+            .file_read_streaming, .device_io_control, .net_receive, .net_send, .net_read, .net_write => unreachable,
         };
         std.debug.assert(request.header.len == 0 and request.data.len == 1 and request.splat == 1);
         const bytes = request.data[0];

@@ -638,7 +638,7 @@ pub const content_data_symbol_prefix = "roc__h";
 /// Symbol of the value in static-data slot `id`: `roc__d{id}`. The naming
 /// scheme is in design.md, "Object Symbol Names".
 pub fn staticDataSymbolName(allocator: Allocator, id: LIR.StaticDataId) Allocator.Error![]u8 {
-    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@intFromEnum(id)});
+    return try std.fmt.allocPrint(allocator, "roc__d{d}", .{@backingInt(id)});
 }
 
 /// Symbol of the `index`th further node (from 1) of the value owner `owner`
@@ -821,7 +821,7 @@ pub const Result = struct {
     ) Allocator.Error!LIR.ComptimeSiteId {
         const owned_branch_regions = try self.store.allocator.dupe(base.Region, branch_regions);
         errdefer self.store.allocator.free(owned_branch_regions);
-        const id: LIR.ComptimeSiteId = @enumFromInt(@as(u32, @intCast(self.comptime_sites.items.len)));
+        const id: LIR.ComptimeSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.comptime_sites.items.len))));
         try self.comptime_sites.append(self.store.allocator, .{
             .kind = kind,
             .owner = owner,
@@ -842,7 +842,7 @@ pub const Result = struct {
 
     /// The checked module a `LIR.LoweringModuleId` names.
     pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
-        const raw = @intFromEnum(id);
+        const raw = @backingInt(id);
         if (raw >= self.lowering_modules.items.len) {
             base.invariant("{s}", .{"LIR program invariant violated: lowering module id has no published checked module"});
         }
@@ -853,7 +853,7 @@ pub const Result = struct {
     /// part of its lowering input.
     pub fn loweringModuleId(self: *const Result, key: checked.ModuleId) ?LIR.LoweringModuleId {
         for (self.lowering_modules.items, 0..) |candidate, index| {
-            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @enumFromInt(@as(u32, @intCast(index)));
+            if (std.mem.eql(u8, &candidate.bytes, &key.bytes)) return @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         }
         return null;
     }
@@ -864,7 +864,7 @@ pub const Result = struct {
         const entry = try self.expect_site_ids.getOrPut(self.store.allocator, key);
         if (entry.found_existing) return entry.value_ptr.*;
         errdefer _ = self.expect_site_ids.remove(key);
-        const id: LIR.ExpectSiteId = @enumFromInt(@as(u32, @intCast(self.expect_sites.items.len)));
+        const id: LIR.ExpectSiteId = @fromBackingInt(@intCast(@as(u32, @intCast(self.expect_sites.items.len))));
         try self.expect_sites.append(self.store.allocator, .{ .loc = loc, .region = region });
         entry.value_ptr.* = id;
         return id;
@@ -889,7 +889,7 @@ pub const Result = struct {
         for (descs) |desc| {
             var refs = self.boxyDescRefIterator(desc);
             while (refs.next()) |ref| switch (ref) {
-                .static => |child| edge_starts[@intFromEnum(child) + 1] += 1,
+                .static => |child| edge_starts[@backingInt(child) + 1] += 1,
                 .local, .runtime, .dict_method_arg, .dict_method_hidden => {},
             };
         }
@@ -906,10 +906,10 @@ pub const Result = struct {
             var refs = self.boxyDescRefIterator(desc.*);
             while (refs.next()) |ref| switch (ref) {
                 .static => |child| {
-                    parents[fill[@intFromEnum(child)]] = @intCast(desc_index);
-                    fill[@intFromEnum(child)] += 1;
+                    parents[fill[@backingInt(child)]] = @intCast(desc_index);
+                    fill[@backingInt(child)] += 1;
                 },
-                .local => class = @enumFromInt(@max(@intFromEnum(class), @intFromEnum(BoxyDescClosure.captures))),
+                .local => class = @fromBackingInt(@intCast(@max(@backingInt(class), @backingInt(BoxyDescClosure.captures)))),
                 .runtime, .dict_method_arg, .dict_method_hidden => class = .context,
             };
             desc.closure = class;
@@ -919,7 +919,7 @@ pub const Result = struct {
         while (worklist.pop()) |child| {
             const class = descs[child].closure;
             for (parents[edge_starts[child]..edge_starts[child + 1]]) |parent| {
-                if (@intFromEnum(descs[parent].closure) >= @intFromEnum(class)) continue;
+                if (@backingInt(descs[parent].closure) >= @backingInt(class)) continue;
                 descs[parent].closure = class;
                 try worklist.append(allocator, parent);
             }
@@ -1068,7 +1068,7 @@ test "lowering module table resolves checked module provenance both ways" {
     try result.setLoweringModules(&keys);
 
     for (keys, 0..) |key, index| {
-        const id: LIR.LoweringModuleId = @enumFromInt(@as(u32, @intCast(index)));
+        const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         try std.testing.expectEqualSlices(u8, &key.bytes, &result.loweringModuleKey(id).bytes);
         try std.testing.expectEqual(id, result.loweringModuleId(key).?);
     }
@@ -1078,11 +1078,11 @@ test "lowering module table resolves checked module provenance both ways" {
     try std.testing.expectEqual(@as(?LIR.LoweringModuleId, null), result.loweringModuleId(absent));
 
     // A site keeps the owner its producer recorded, not the procedure's owner.
-    const owner: LIR.LoweringModuleId = @enumFromInt(2);
-    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @enumFromInt(41), .first, &.{});
-    const stored = result.comptime_sites.items[@intFromEnum(site)];
+    const owner: LIR.LoweringModuleId = @fromBackingInt(@intCast(2));
+    const site = try result.addComptimeSite(.destructure, owner, base.Region.zero(), @fromBackingInt(@intCast(41)), .first, &.{});
+    const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
-    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @enumFromInt(41)), stored.checked_site);
+    try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
     try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.loweringModuleKey(stored.owner).bytes);
 }
 
@@ -1103,13 +1103,13 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
 
     const desc_refs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const desc_refs = BoxySpan{ .start = @intCast(desc_refs_start), .len = 1 };
 
     const copy_plan_start = result.boxy_payload_steps.items.len;
     try result.boxy_payload_steps.append(allocator, .{ .dynamic = .{
         .op = .copy,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     } });
     const copy_plan = BoxySpan{ .start = @intCast(copy_plan_start), .len = 1 };
 
@@ -1134,11 +1134,11 @@ test "boxy side tables initialize empty and use flat pools" {
     const arg_layouts = BoxySpan{ .start = @intCast(arg_layouts_start), .len = 1 };
 
     const arg_descs_start = result.boxy_desc_refs.items.len;
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const arg_descs = BoxySpan{ .start = @intCast(arg_descs_start), .len = 1 };
 
     const nested_dicts_start = result.boxy_dict_refs.items.len;
-    try result.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_dict_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const nested_dicts = BoxySpan{ .start = @intCast(nested_dicts_start), .len = 1 };
 
     const hidden_desc_sources_start = result.boxy_method_hidden_desc_sources.items.len;
@@ -1147,8 +1147,8 @@ test "boxy side tables initialize empty and use flat pools" {
 
     const method_slots_start = result.boxy_method_slots.items.len;
     try result.boxy_method_slots.append(allocator, .{
-        .method = @enumFromInt(fixtureTableIndex(0)),
-        .proc = @enumFromInt(fixtureTableIndex(0)),
+        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .proc = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .adapter = .{
             .arg_layouts = arg_layouts,
             .arg_descs = arg_descs,
@@ -1158,7 +1158,7 @@ test "boxy side tables initialize empty and use flat pools" {
     });
     const method_slots = BoxySpan{ .start = @intCast(method_slots_start), .len = 1 };
 
-    try result.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
 
     try result.boxy_dicts.append(allocator, .{
         .method_slots = method_slots,
@@ -1168,8 +1168,8 @@ test "boxy side tables initialize empty and use flat pools" {
     try result.boxy_adapt_steps.append(allocator, .{ .dynamic_payload = .{
         .source_offset = 0,
         .target_offset = 8,
-        .source_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
-        .target_desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .source_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
+        .target_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
         .mode = .copy,
     } });
     const adapt_steps = BoxySpan{ .start = @intCast(adapt_steps_start), .len = 1 };
