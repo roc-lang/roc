@@ -345,9 +345,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          dereference=()
-          if [ "$RUNNER_OS" = "Windows" ]; then dereference=(--dereference); fi
-          tar "${dereference[@]}" -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tar --dereference -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          else
+            tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          fi
 
       # Packing is the disk high-water mark of this job. Report free space and
       # the packed size here, where the peak actually is.
