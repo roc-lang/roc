@@ -975,6 +975,7 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
+                    .predeclared_use => |ctx| self.buildPredeclaredUse(mismatch.types, ctx),
                     .platform_requirement, .platform_requirement_return => |ctx| {
                         const is_return = mismatch.context == .platform_requirement_return;
                         var report = try self.makeMismatchReport(
@@ -4131,6 +4132,29 @@ pub const ReportBuilder = struct {
             &.{D.bytes("But other places expect it to be:")},
             types.expected_snapshot,
             &.{},
+        );
+    }
+
+    fn buildPredeclaredUse(
+        self: *Self,
+        types: TypePair,
+        ctx: problem_mod.Context.PredeclaredUseContext,
+    ) Allocator.Error!Report {
+        return try self.makeMismatchReport(
+            ProblemRegion{ .direct = ctx.region },
+            if (ctx.def_name) |def_name|
+                &.{
+                    D.bytes("This use of"),
+                    D.ident(def_name).withAnnotation(.inline_code),
+                    D.bytes("needs a type its definition does not have."),
+                }
+            else
+                &.{D.bytes("This use needs a type its definition does not have.")},
+            &.{D.bytes("Here it is used as:")},
+            types.actual_snapshot,
+            &.{D.bytes("But its definition has the type:")},
+            types.expected_snapshot,
+            &.{&.{D.bytes("A tag union in an output position is open for callers only as far as the definition's body leaves it open. This definition's body narrows it (for example, by returning a value whose tag union is closed), so no use, including one inside the definition itself, may rely on the annotation alone.")}},
         );
     }
 

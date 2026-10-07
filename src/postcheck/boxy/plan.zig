@@ -22022,7 +22022,7 @@ fn selectedDispatchCallableType(
     node: static_dispatch.EvidenceNode,
 ) CheckedTypeIdentity {
     return switch (node.instantiation) {
-        .callable => |callable_ty| typeRef(site_view, callable_ty),
+        .callable, .derived_from_callable => |callable_ty| typeRef(site_view, callable_ty),
         .monomorphic => typeRef(target_view, node.target.callable_ty),
     };
 }

@@ -38,6 +38,8 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 decl_index: DeclIndex,
 root_node_idx: u32 = 0,
+/// Parser-owned function result context, indexed by AST node.
+redundant_returns: std.DynamicBitSetUnmanaged = .{},
 tokenize_diagnostics: std.ArrayList(tokenize.Diagnostic),
 parse_diagnostics: std.ArrayList(AST.Diagnostic),
 /// Tokenization failure independent of stored diagnostic capacity.
@@ -122,6 +124,7 @@ pub fn deinit(self: *AST) void {
     self.tokens.deinit(gpa);
     self.store.deinit();
     self.decl_index.deinit();
+    self.redundant_returns.deinit(gpa);
     self.tokenize_diagnostics.deinit(gpa);
     self.parse_diagnostics.deinit(gpa);
 

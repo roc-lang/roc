@@ -50195,7 +50195,7 @@ const BodyContext = struct {
             .target = frame.node.target,
             .instantiation = if (frame.retain_instantiation) switch (frame.node.instantiation) {
                 .monomorphic => null,
-                .callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
+                .callable, .derived_from_callable => |callable_ty| .{ .view = site_view, .callable_ty = callable_ty },
             } else null,
             .local_proc_context = frame.lookup.local_proc_context,
             .substitution = checkedTargetSubstitution(site_view, frame.node),
@@ -50912,24 +50912,29 @@ const BodyContext = struct {
         };
     }
 
-    /// The substitution a checked direct dispatch plan recorded for its
-    /// target: the target scheme's quantified variables as copied at that
-    /// edge, instantiated in this context.
-    /// The substitution of a direct dispatch target's scheme. The checked
-    /// record substitutes the scheme the dispatch edge instantiated; for a
-    /// target reached through an exact procedure alias that is the alias's
-    /// scheme, so the target's own scheme is instantiated at the dispatch's
-    /// callable instead, which the alias's instantiation fixes.
+    /// The substitution of a direct dispatch target's scheme. A checked
+    /// record substitutes the scheme the dispatch edge instantiated. When the
+    /// evidence node says the substitution derives from its callable (a target
+    /// reached through an exact procedure alias, or a numeric default owner),
+    /// the target's own scheme is instantiated at the dispatch's callable
+    /// instead.
     fn directDispatchTargetSubstitution(
         self: *BodyContext,
         plan: static_dispatch.StaticDispatchCallPlan,
         lookup: MethodLookup,
         callable_node: NodeId,
     ) Allocator.Error!?SpecSubstitution {
-        if (!lookup.target.reached_through_alias) return try self.dispatchTargetSubstitution(plan);
+        const direct = switch (plan.resolution) {
+            .direct_closed, .direct_parametric => |direct| direct,
+            .evidence_dependent, .structural, .checked_error, .@"unreachable", .direct_pending => return try self.dispatchTargetSubstitution(plan),
+        };
+        switch (self.view.static_dispatch_plans.evidenceNode(direct.evidence).instantiation) {
+            .monomorphic, .callable => return try self.dispatchTargetSubstitution(plan),
+            .derived_from_callable => {},
+        }
         const procedure = switch (lookup.target.kind) {
             .procedure => |procedure| procedure,
-            .local_proc, .structural => Common.invariant("a non-procedure method target was reached through a procedure alias"),
+            .local_proc, .structural => Common.invariant("a callable-derived substitution reached a non-procedure method target"),
         };
         const template = lookup.view.templates.get(procedure.template.template);
         var target_ctx = try BodyContext.initWithMethodScope(
@@ -51049,7 +51054,7 @@ const BodyContext = struct {
                 var lookup = self.methodLookupForResolvedTarget(node.target);
                 lookup.instantiation = switch (node.instantiation) {
                     .monomorphic => null,
-                    .callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
+                    .callable, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
                 };
                 return .{ .target = lookup };
             },
@@ -61386,7 +61391,7 @@ const BodyContext = struct {
                 var lookup = self.methodLookupForResolvedTarget(node.target);
                 lookup.instantiation = switch (node.instantiation) {
                     .monomorphic => null,
-                    .callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
+                    .callable, .derived_from_callable => |callable_ty| .{ .view = self.view, .callable_ty = callable_ty },
                 };
                 break :blk lookup;
             },

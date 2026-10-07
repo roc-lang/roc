@@ -1666,6 +1666,12 @@ pub const EvidenceTargetInstantiation = union(enum(u8)) {
     monomorphic,
     /// Exact callable relation produced while discharging this edge.
     callable: CheckedTypeId,
+    /// Checking performed no instantiation of the target's scheme for this
+    /// edge: the target was reached through a procedure alias, or publication
+    /// selected it as the numeric default owner of an unpinned dispatcher. The
+    /// node carries no substitution; specialization relates the target's
+    /// scheme to this callable.
+    derived_from_callable: CheckedTypeId,
 };
 
 /// Producer-authored source of a target's own evidence vector.
@@ -2277,6 +2283,7 @@ pub const StaticDispatchPlanTable = struct {
                     try plan_sources.append(allocator, .{
                         .dispatcher_var = dispatcher_var,
                         .constraint_fn_var = constraint_fn_var,
+                        .literal_kind = .interpolation,
                     });
                 },
                 .e_type_dispatch_call => {
@@ -2487,6 +2494,8 @@ pub const StaticDispatchPlanTable = struct {
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @enumFromInt(numeral_plan.target_var),
                 .constraint_fn_var = @enumFromInt(numeral_plan.fn_var),
+                .target_selected_by_checking = numeral_plan.dispatchResolution() != .specialization_dispatch,
+                .literal_kind = .numeral,
             });
             try numeral_by_node.put(allocator, node, plan_id);
         }
@@ -2542,6 +2551,8 @@ pub const StaticDispatchPlanTable = struct {
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @enumFromInt(quote_plan.target_var),
                 .constraint_fn_var = @enumFromInt(quote_plan.fn_var),
+                .target_selected_by_checking = quote_plan.dispatchResolution() != .specialization_dispatch,
+                .literal_kind = .quote,
             });
             try quote_by_node.put(allocator, node, plan_id);
         }
@@ -2811,6 +2822,11 @@ fn siteEvidenceOrder(e: SiteEvidenceEntry, key: u32) std.math.Order {
 pub const PlanSource = struct {
     dispatcher_var: Var,
     constraint_fn_var: ?Var,
+    /// False for a literal conversion checking left to each specialization:
+    /// any target publication resolves for it was not selected by checking.
+    target_selected_by_checking: bool = true,
+    /// The kind of source literal a literal-conversion plan converts.
+    literal_kind: ?types.StaticDispatchConstraint.LiteralKind = null,
 };
 
 /// Build-time-only side data for iterator plans, parallel to
