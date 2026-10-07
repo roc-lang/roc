@@ -188,13 +188,17 @@ pub const DirExtractWriter = struct {
         const parent = self.openContainedDir(parent_path) catch return error.FileCreateFailed;
         defer parent.close(self.io);
 
+        // The handle also reads, because the containment checks below stat
+        // it: Windows grants a write-only handle no right to read the file's
+        // attributes.
         const name = std.fs.path.basename(path);
         const file = parent.openFile(self.io, name, .{
-            .mode = .write_only,
+            .mode = .read_write,
             .follow_symlinks = false,
             .resolve_beneath = true,
         }) catch |err| switch (err) {
             error.FileNotFound => parent.createFile(self.io, name, .{
+                .read = true,
                 .exclusive = true,
                 .truncate = false,
                 .resolve_beneath = true,
