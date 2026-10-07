@@ -86,6 +86,36 @@ pub const runtime_set = [_][:0]const u8{
     roc_crashed,
 };
 
+/// The C memory routines native code generation calls instead of copying,
+/// moving, filling, comparing or measuring bytes inline. Whatever completes a
+/// compiled Roc program defines them: a platform's C runtime, the freestanding
+/// default platform's compiler-rt carrier, or the compiler itself for an
+/// object it loads into its own process.
+pub const c_memory_set = [_][:0]const u8{
+    "memcpy",
+    "memmove",
+    "memset",
+    "memcmp",
+    "strlen",
+};
+
+/// The C math routines native code generation calls for a float operation the
+/// target has no instruction for: a remainder on every target, and rounding to
+/// an integral value or a square root on a CPU without those instructions.
+/// They are defined by the same providers as `c_memory_set`.
+pub const c_math_set = [_][:0]const u8{
+    "fmod",
+    "fmodf",
+    "floor",
+    "floorf",
+    "ceil",
+    "ceilf",
+    "trunc",
+    "truncf",
+    "sqrt",
+    "sqrtf",
+};
+
 /// Export the six fixed host callbacks using canonical names. Callback types
 /// remain those supplied by the canonical ABI or the generated-ABI fixture.
 /// Visibility is explicit because static runtime hosts hide their callbacks,

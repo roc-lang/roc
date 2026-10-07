@@ -11,6 +11,7 @@ const builtin = @import("builtin");
 const types_mod = @import("types");
 const collections = @import("collections");
 const base = @import("base");
+const reporting = @import("reporting");
 
 const Node = @import("Node.zig");
 const NodeStore = @import("NodeStore.zig");
@@ -239,6 +240,26 @@ pub const CommonIdents = extern struct {
     // declaration bodies (see types.polarity_var_text)
     polarity_var: Ident.Idx,
 
+    /// The builtin number type `ident` names, in either its bare (`U8`) or its
+    /// fully-qualified (`Builtin.Num.U8`) spelling.
+    pub fn numKindFromTypeIdent(self: *const CommonIdents, ident: Ident.Idx) ?CIR.NumKind {
+        inline for (CIR.builtin_type_specs) |spec| {
+            if (spec.num_kind) |num_kind| {
+                if (ident.eql(@field(self, @tagName(num_kind))) or ident.eql(@field(self, spec.type_field))) return num_kind;
+            }
+        }
+        return null;
+    }
+
+    /// The fully-qualified ident of a concrete builtin number type.
+    pub fn numTypeIdent(self: *const CommonIdents, num_kind: CIR.NumKind) Ident.Idx {
+        inline for (CIR.builtin_type_specs) |spec| {
+            const spec_kind = comptime spec.num_kind orelse continue;
+            if (spec_kind == num_kind) return @field(self, spec.type_field);
+        }
+        unreachable; // unbound kinds name no builtin type
+    }
+
     /// Insert all well-known identifiers into a CommonEnv.
     /// Use this when creating a fresh ModuleEnv from scratch.
     pub fn insert(gpa: std.mem.Allocator, common: *CommonEnv) std.mem.Allocator.Error!CommonIdents {
@@ -257,81 +278,81 @@ pub const CommonIdents = extern struct {
             .is_lte = try common.insertIdent(gpa, Ident.for_text("is_lte")),
             .is_gt = try common.insertIdent(gpa, Ident.for_text("is_gt")),
             .is_gte = try common.insertIdent(gpa, Ident.for_text("is_gte")),
-            .is_eq = try common.insertIdent(gpa, Ident.for_text("is_eq")),
+            .is_eq = try common.insertIdent(gpa, Ident.for_text(Ident.IS_EQ_METHOD_NAME)),
             .range_exclusive_to = try common.insertIdent(gpa, Ident.for_text("range_exclusive_to")),
             .range_inclusive_to = try common.insertIdent(gpa, Ident.for_text("range_inclusive_to")),
-            .to_hash = try common.insertIdent(gpa, Ident.for_text("to_hash")),
-            .parser_for = try common.insertIdent(gpa, Ident.for_text("parser_for")),
-            .encoder_for = try common.insertIdent(gpa, Ident.for_text("encoder_for")),
+            .to_hash = try common.insertIdent(gpa, Ident.for_text(Ident.TO_HASH_METHOD_NAME)),
+            .parser_for = try common.insertIdent(gpa, Ident.for_text(Ident.PARSER_FOR_METHOD_NAME)),
+            .encoder_for = try common.insertIdent(gpa, Ident.for_text(Ident.ENCODER_FOR_METHOD_NAME)),
             .map = try common.insertIdent(gpa, Ident.for_text("map")),
             .map_bang = try common.insertIdent(gpa, Ident.for_text("map!")),
-            .@"try" = try common.insertIdent(gpa, Ident.for_text("Try")),
+            .@"try" = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("try_type").display_name)),
             .out_of_range = try common.insertIdent(gpa, Ident.for_text("OutOfRange")),
             .builtin_module = try common.insertIdent(gpa, Ident.for_text("Builtin")),
             .main_bang = try common.insertIdent(gpa, Ident.for_text("main!")),
-            .str = try common.insertIdent(gpa, Ident.for_text("Str")),
-            .list = try common.insertIdent(gpa, Ident.for_text("List")),
-            .iter = try common.insertIdent(gpa, Ident.for_text("Iter")),
-            .stream = try common.insertIdent(gpa, Ident.for_text("Stream")),
-            .box = try common.insertIdent(gpa, Ident.for_text("Box")),
-            .dict = try common.insertIdent(gpa, Ident.for_text("Dict")),
-            .set = try common.insertIdent(gpa, Ident.for_text("Set")),
+            .str = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("str_type").display_name)),
+            .list = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("list_type").display_name)),
+            .iter = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("iter_type").display_name)),
+            .stream = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("stream_type").display_name)),
+            .box = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("box_type").display_name)),
+            .dict = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("dict_type").display_name)),
+            .set = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("set_type").display_name)),
             // Unqualified builtin type names
             .num = try common.insertIdent(gpa, Ident.for_text("Num")),
-            .bool = try common.insertIdent(gpa, Ident.for_text("Bool")),
-            .u8 = try common.insertIdent(gpa, Ident.for_text("U8")),
-            .u16 = try common.insertIdent(gpa, Ident.for_text("U16")),
-            .u32 = try common.insertIdent(gpa, Ident.for_text("U32")),
-            .u64 = try common.insertIdent(gpa, Ident.for_text("U64")),
-            .u128 = try common.insertIdent(gpa, Ident.for_text("U128")),
-            .i8 = try common.insertIdent(gpa, Ident.for_text("I8")),
-            .i16 = try common.insertIdent(gpa, Ident.for_text("I16")),
-            .i32 = try common.insertIdent(gpa, Ident.for_text("I32")),
-            .i64 = try common.insertIdent(gpa, Ident.for_text("I64")),
-            .i128 = try common.insertIdent(gpa, Ident.for_text("I128")),
-            .f32 = try common.insertIdent(gpa, Ident.for_text("F32")),
-            .f64 = try common.insertIdent(gpa, Ident.for_text("F64")),
-            .dec = try common.insertIdent(gpa, Ident.for_text("Dec")),
-            .builtin_iter = try common.insertIdent(gpa, Ident.for_text("Builtin.Iter")),
-            .builtin_stream = try common.insertIdent(gpa, Ident.for_text("Builtin.Stream")),
-            .builtin_range = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Range")),
-            .builtin_try = try common.insertIdent(gpa, Ident.for_text("Builtin.Try")),
-            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Numeral")),
-            .builtin_str = try common.insertIdent(gpa, Ident.for_text("Builtin.Str")),
-            .builtin_list = try common.insertIdent(gpa, Ident.for_text("Builtin.List")),
-            .builtin_box = try common.insertIdent(gpa, Ident.for_text("Builtin.Box")),
-            .builtin_dict = try common.insertIdent(gpa, Ident.for_text("Builtin.Dict")),
-            .builtin_set = try common.insertIdent(gpa, Ident.for_text("Builtin.Set")),
-            .builtin_encoding_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.ParseTagUnionSpec")),
-            .builtin_encoding_field_names = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName.FieldNames")),
-            .builtin_encoding_field_name = try common.insertIdent(gpa, Ident.for_text("Builtin.Encoding.FieldName")),
+            .bool = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("bool_type").display_name)),
+            .u8 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u8_type").display_name)),
+            .u16 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u16_type").display_name)),
+            .u32 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u32_type").display_name)),
+            .u64 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u64_type").display_name)),
+            .u128 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u128_type").display_name)),
+            .i8 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i8_type").display_name)),
+            .i16 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i16_type").display_name)),
+            .i32 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i32_type").display_name)),
+            .i64 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i64_type").display_name)),
+            .i128 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i128_type").display_name)),
+            .f32 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("f32_type").display_name)),
+            .f64 = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("f64_type").display_name)),
+            .dec = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("dec_type").display_name)),
+            .builtin_iter = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("iter_type").qualified_name)),
+            .builtin_stream = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("stream_type").qualified_name)),
+            .builtin_range = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("range_type").qualified_name)),
+            .builtin_try = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("try_type").qualified_name)),
+            .builtin_numeral = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("numeral_type").qualified_name)),
+            .builtin_str = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("str_type").qualified_name)),
+            .builtin_list = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("list_type").qualified_name)),
+            .builtin_box = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("box_type").qualified_name)),
+            .builtin_dict = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("dict_type").qualified_name)),
+            .builtin_set = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("set_type").qualified_name)),
+            .builtin_encoding_parse_tag_union_spec = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("parse_tag_union_spec_type").qualified_name)),
+            .builtin_encoding_field_names = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("fields_type").qualified_name)),
+            .builtin_encoding_field_name = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("field_type").qualified_name)),
             .builtin_str_inspect = try common.insertIdent(gpa, Ident.for_text("Builtin.Str.inspect")),
-            .builtin_crypto_sha256_digest = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.SHA256.Digest")),
-            .builtin_crypto_sha256_hasher = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.SHA256.Hasher")),
-            .builtin_crypto_blake3_digest = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.BLAKE3.Digest")),
-            .builtin_crypto_blake3_hasher = try common.insertIdent(gpa, Ident.for_text("Builtin.Crypto.BLAKE3.Hasher")),
-            .u8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8")),
-            .i8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8")),
-            .u16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16")),
-            .i16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16")),
-            .u32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32")),
-            .i32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32")),
-            .u64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64")),
-            .i64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64")),
-            .u128_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U128")),
-            .i128_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I128")),
-            .f32_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F32")),
-            .f64_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.F64")),
-            .dec_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.Dec")),
-            .u8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U8x16")),
-            .i8x16_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I8x16")),
-            .u16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U16x8")),
-            .i16x8_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I16x8")),
-            .u32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U32x4")),
-            .i32x4_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I32x4")),
-            .u64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.U64x2")),
-            .i64x2_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Num.I64x2")),
-            .bool_type = try common.insertIdent(gpa, Ident.for_text("Builtin.Bool")),
+            .builtin_crypto_sha256_digest = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("crypto_sha256_digest_type").qualified_name)),
+            .builtin_crypto_sha256_hasher = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("crypto_sha256_hasher_type").qualified_name)),
+            .builtin_crypto_blake3_digest = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("crypto_blake3_digest_type").qualified_name)),
+            .builtin_crypto_blake3_hasher = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("crypto_blake3_hasher_type").qualified_name)),
+            .u8_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u8_type").qualified_name)),
+            .i8_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i8_type").qualified_name)),
+            .u16_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u16_type").qualified_name)),
+            .i16_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i16_type").qualified_name)),
+            .u32_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u32_type").qualified_name)),
+            .i32_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i32_type").qualified_name)),
+            .u64_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u64_type").qualified_name)),
+            .i64_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i64_type").qualified_name)),
+            .u128_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u128_type").qualified_name)),
+            .i128_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i128_type").qualified_name)),
+            .f32_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("f32_type").qualified_name)),
+            .f64_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("f64_type").qualified_name)),
+            .dec_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("dec_type").qualified_name)),
+            .u8x16_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u8x16_type").qualified_name)),
+            .i8x16_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i8x16_type").qualified_name)),
+            .u16x8_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u16x8_type").qualified_name)),
+            .i16x8_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i16x8_type").qualified_name)),
+            .u32x4_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u32x4_type").qualified_name)),
+            .i32x4_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i32x4_type").qualified_name)),
+            .u64x2_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("u64x2_type").qualified_name)),
+            .i64x2_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("i64x2_type").qualified_name)),
+            .bool_type = try common.insertIdent(gpa, Ident.for_text(CIR.builtinTypeSpec("bool_type").qualified_name)),
             .before_dot = try common.insertIdent(gpa, Ident.for_text("before_dot")),
             .after_dot = try common.insertIdent(gpa, Ident.for_text("after_dot")),
             .provided_by_compiler = try common.insertIdent(gpa, Ident.for_text("ProvidedByCompiler")),
@@ -349,8 +370,8 @@ pub const CommonIdents = extern struct {
             .to_inspect = try common.insertIdent(gpa, Ident.for_text("to_inspect")),
             .ok = try common.insertIdent(gpa, Ident.for_text("Ok")),
             .err = try common.insertIdent(gpa, Ident.for_text("Err")),
-            .from_numeral = try common.insertIdent(gpa, Ident.for_text("from_numeral")),
-            .from_quote = try common.insertIdent(gpa, Ident.for_text("from_quote")),
+            .from_numeral = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_NUMERAL_METHOD_NAME)),
+            .from_quote = try common.insertIdent(gpa, Ident.for_text(Ident.FROM_QUOTE_METHOD_NAME)),
             .from_interpolation = try common.insertIdent(gpa, Ident.for_text("from_interpolation")),
             .true_tag = try common.insertIdent(gpa, Ident.for_text("True")),
             .false_tag = try common.insertIdent(gpa, Ident.for_text("False")),
@@ -373,144 +394,6 @@ pub const CommonIdents = extern struct {
             .missing_field = try common.insertIdent(gpa, Ident.for_text("MissingField")),
             // Synthetic identifier for polarity-deferred tag union extensions
             .polarity_var = try common.insertIdent(gpa, Ident.for_text(types_mod.polarity_var_text)),
-        };
-    }
-
-    /// Find all well-known identifiers in a CommonEnv that has already interned them.
-    /// Use this when loading a pre-compiled module where identifiers are already present.
-    /// Panics if any identifier is not found (indicates corrupted/incompatible pre-compiled data).
-    pub fn find(common: *const CommonEnv) CommonIdents {
-        return .{
-            .plus = common.findIdent(Ident.PLUS_METHOD_NAME) orelse unreachable,
-            .minus = common.findIdent("minus") orelse unreachable,
-            .times = common.findIdent("times") orelse unreachable,
-            .div_by = common.findIdent("div_by") orelse unreachable,
-            .div_trunc_by = common.findIdent("div_trunc_by") orelse unreachable,
-            .rem_by = common.findIdent("rem_by") orelse unreachable,
-            .negate = common.findIdent(Ident.NEGATE_METHOD_NAME) orelse unreachable,
-            .abs = common.findIdent("abs") orelse unreachable,
-            .abs_diff = common.findIdent("abs_diff") orelse unreachable,
-            .not = common.findIdent("not") orelse unreachable,
-            .is_lt = common.findIdent("is_lt") orelse unreachable,
-            .is_lte = common.findIdent("is_lte") orelse unreachable,
-            .is_gt = common.findIdent("is_gt") orelse unreachable,
-            .is_gte = common.findIdent("is_gte") orelse unreachable,
-            .is_eq = common.findIdent("is_eq") orelse unreachable,
-            .range_exclusive_to = common.findIdent("range_exclusive_to") orelse unreachable,
-            .range_inclusive_to = common.findIdent("range_inclusive_to") orelse unreachable,
-            .to_hash = common.findIdent("to_hash") orelse unreachable,
-            .parser_for = common.findIdent("parser_for") orelse unreachable,
-            .encoder_for = common.findIdent("encoder_for") orelse unreachable,
-            .map = common.findIdent("map") orelse unreachable,
-            .map_bang = common.findIdent("map!") orelse unreachable,
-            .@"try" = common.findIdent("Try") orelse unreachable,
-            .out_of_range = common.findIdent("OutOfRange") orelse unreachable,
-            .builtin_module = common.findIdent("Builtin") orelse unreachable,
-            .main_bang = common.findIdent("main!") orelse unreachable,
-            .str = common.findIdent("Str") orelse unreachable,
-            .list = common.findIdent("List") orelse unreachable,
-            .iter = common.findIdent("Iter") orelse unreachable,
-            .stream = common.findIdent("Stream") orelse unreachable,
-            .box = common.findIdent("Box") orelse unreachable,
-            .dict = common.findIdent("Dict") orelse unreachable,
-            .set = common.findIdent("Set") orelse unreachable,
-            // Unqualified builtin type names
-            .num = common.findIdent("Num") orelse unreachable,
-            .bool = common.findIdent("Bool") orelse unreachable,
-            .u8 = common.findIdent("U8") orelse unreachable,
-            .u16 = common.findIdent("U16") orelse unreachable,
-            .u32 = common.findIdent("U32") orelse unreachable,
-            .u64 = common.findIdent("U64") orelse unreachable,
-            .u128 = common.findIdent("U128") orelse unreachable,
-            .i8 = common.findIdent("I8") orelse unreachable,
-            .i16 = common.findIdent("I16") orelse unreachable,
-            .i32 = common.findIdent("I32") orelse unreachable,
-            .i64 = common.findIdent("I64") orelse unreachable,
-            .i128 = common.findIdent("I128") orelse unreachable,
-            .f32 = common.findIdent("F32") orelse unreachable,
-            .f64 = common.findIdent("F64") orelse unreachable,
-            .dec = common.findIdent("Dec") orelse unreachable,
-            .builtin_iter = common.findIdent("Builtin.Iter") orelse unreachable,
-            .builtin_stream = common.findIdent("Builtin.Stream") orelse unreachable,
-            .builtin_range = common.findIdent("Builtin.Num.Range") orelse unreachable,
-            .builtin_try = common.findIdent("Builtin.Try") orelse unreachable,
-            .builtin_numeral = common.findIdent("Builtin.Num.Numeral") orelse unreachable,
-            .builtin_str = common.findIdent("Builtin.Str") orelse unreachable,
-            .builtin_list = common.findIdent("Builtin.List") orelse unreachable,
-            .builtin_box = common.findIdent("Builtin.Box") orelse unreachable,
-            .builtin_dict = common.findIdent("Builtin.Dict") orelse unreachable,
-            .builtin_set = common.findIdent("Builtin.Set") orelse unreachable,
-            .builtin_encoding_parse_tag_union_spec = common.findIdent("Builtin.Encoding.ParseTagUnionSpec") orelse unreachable,
-            .builtin_encoding_field_names = common.findIdent("Builtin.Encoding.FieldName.FieldNames") orelse unreachable,
-            .builtin_encoding_field_name = common.findIdent("Builtin.Encoding.FieldName") orelse unreachable,
-            .builtin_str_inspect = common.findIdent("Builtin.Str.inspect") orelse unreachable,
-            .builtin_crypto_sha256_digest = common.findIdent("Builtin.Crypto.SHA256.Digest") orelse unreachable,
-            .builtin_crypto_sha256_hasher = common.findIdent("Builtin.Crypto.SHA256.Hasher") orelse unreachable,
-            .builtin_crypto_blake3_digest = common.findIdent("Builtin.Crypto.BLAKE3.Digest") orelse unreachable,
-            .builtin_crypto_blake3_hasher = common.findIdent("Builtin.Crypto.BLAKE3.Hasher") orelse unreachable,
-            .u8_type = common.findIdent("Builtin.Num.U8") orelse unreachable,
-            .i8_type = common.findIdent("Builtin.Num.I8") orelse unreachable,
-            .u16_type = common.findIdent("Builtin.Num.U16") orelse unreachable,
-            .i16_type = common.findIdent("Builtin.Num.I16") orelse unreachable,
-            .u32_type = common.findIdent("Builtin.Num.U32") orelse unreachable,
-            .i32_type = common.findIdent("Builtin.Num.I32") orelse unreachable,
-            .u64_type = common.findIdent("Builtin.Num.U64") orelse unreachable,
-            .i64_type = common.findIdent("Builtin.Num.I64") orelse unreachable,
-            .u128_type = common.findIdent("Builtin.Num.U128") orelse unreachable,
-            .i128_type = common.findIdent("Builtin.Num.I128") orelse unreachable,
-            .f32_type = common.findIdent("Builtin.Num.F32") orelse unreachable,
-            .f64_type = common.findIdent("Builtin.Num.F64") orelse unreachable,
-            .dec_type = common.findIdent("Builtin.Num.Dec") orelse unreachable,
-            .u8x16_type = common.findIdent("Builtin.Num.U8x16") orelse unreachable,
-            .i8x16_type = common.findIdent("Builtin.Num.I8x16") orelse unreachable,
-            .u16x8_type = common.findIdent("Builtin.Num.U16x8") orelse unreachable,
-            .i16x8_type = common.findIdent("Builtin.Num.I16x8") orelse unreachable,
-            .u32x4_type = common.findIdent("Builtin.Num.U32x4") orelse unreachable,
-            .i32x4_type = common.findIdent("Builtin.Num.I32x4") orelse unreachable,
-            .u64x2_type = common.findIdent("Builtin.Num.U64x2") orelse unreachable,
-            .i64x2_type = common.findIdent("Builtin.Num.I64x2") orelse unreachable,
-            .bool_type = common.findIdent("Builtin.Bool") orelse unreachable,
-            .before_dot = common.findIdent("before_dot") orelse unreachable,
-            .after_dot = common.findIdent("after_dot") orelse unreachable,
-            .provided_by_compiler = common.findIdent("ProvidedByCompiler") orelse unreachable,
-            .tag = common.findIdent("tag") orelse unreachable,
-            .payload = common.findIdent("payload") orelse unreachable,
-            .is_negative = common.findIdent("is_negative") orelse unreachable,
-            .digits_before_pt = common.findIdent("digits_before_pt") orelse unreachable,
-            .digits_after_pt = common.findIdent("digits_after_pt") orelse unreachable,
-            .digits_after_pt_count = common.findIdent("digits_after_pt_count") orelse unreachable,
-            .box_method = common.findIdent("box") orelse unreachable,
-            .unbox_method = common.findIdent("unbox") orelse unreachable,
-            // Fully qualified Box intrinsic method names
-            .builtin_box_box = common.findIdent("Builtin.Box.box") orelse unreachable,
-            .builtin_box_unbox = common.findIdent("Builtin.Box.unbox") orelse unreachable,
-            .to_inspect = common.findIdent("to_inspect") orelse unreachable,
-            .ok = common.findIdent("Ok") orelse unreachable,
-            .err = common.findIdent("Err") orelse unreachable,
-            .from_numeral = common.findIdent("from_numeral") orelse unreachable,
-            .from_quote = common.findIdent("from_quote") orelse unreachable,
-            .from_interpolation = common.findIdent("from_interpolation") orelse unreachable,
-            .true_tag = common.findIdent("True") orelse unreachable,
-            .false_tag = common.findIdent("False") orelse unreachable,
-            // from_utf8 result fields
-            .byte_index = common.findIdent("byte_index") orelse unreachable,
-            .string = common.findIdent("string") orelse unreachable,
-            .is_ok = common.findIdent("is_ok") orelse unreachable,
-            .problem_code = common.findIdent("problem_code") orelse unreachable,
-            // from_utf8 error payload fields (BadUtf8 record)
-            .problem = common.findIdent("problem") orelse unreachable,
-            .index = common.findIdent("index") orelse unreachable,
-            // Synthetic identifiers for ? operator desugaring
-            .question_ok = common.findIdent("#ok") orelse unreachable,
-            .question_err = common.findIdent("#err") orelse unreachable,
-            // Synthetic identifier for .. implicit rigids in open tag unions or records
-            .open_ext = common.findIdent("#others") orelse unreachable,
-            // Synthetic identifier naming rigid presence vars for `?:` fields
-            .optional_presence = common.findIdent("#optional") orelse unreachable,
-            // Error tag for optional field access on an absent field
-            .missing_field = common.findIdent("MissingField") orelse unreachable,
-            // Synthetic identifier for polarity-deferred tag union extensions
-            .polarity_var = common.findIdent(types_mod.polarity_var_text) orelse unreachable,
         };
     }
 };
@@ -767,6 +650,12 @@ pub const SchemeUseRecord = extern struct {
         /// or substitution of its own; an accompanying value/shared use owns
         /// those facts when the referenced scheme has quantified variables.
         recursive_reference,
+        /// A reference to a block-local value binding from inside that
+        /// binding's own value. Canonicalization rejects an eager
+        /// self-reference, so the reference is delayed through a function and
+        /// the binding is a recursive value. The record carries no evidence or
+        /// substitution.
+        recursive_value_reference,
         /// One body dispatch's per-use instantiation of its where-method
         /// signature. `slot_data` is the body's constraint callable and
         /// `scheme_root` is the pristine where-method signature callable.
@@ -1473,46 +1362,6 @@ pub const DeferredImportRef = extern struct {
     }
 };
 
-/// Relocate all pointers in the ModuleEnv by the given offset.
-/// This is used by serialized compiler artifacts whose internal pointers are
-/// stored relative to the artifact buffer.
-pub fn relocate(self: *Self, offset: isize) void {
-    // Relocate all sub-structures that contain pointers
-    self.common.relocate(offset);
-    self.types.relocate(offset);
-    self.module_identities.relocate(offset);
-    self.module_identity_displays.relocate(offset);
-    self.external_decls.relocate(offset);
-    self.requires_types.relocate(offset);
-    self.for_clause_aliases.relocate(offset);
-    self.provides_entries.relocate(offset);
-    self.hosted_entries.relocate(offset);
-    self.imports.relocate(offset);
-    self.file_dependencies.relocate(offset);
-    self.deferred_import_refs.relocate(offset);
-    self.import_identities.relocate(offset);
-    self.store.relocate(offset);
-    self.top_level_demand_dependencies.relocate(offset);
-    self.method_idents.relocate(offset);
-    self.method_defs.relocate(offset);
-    self.provided_low_level_defs.relocate(offset);
-    self.for_loop_dispatch_plans.relocate(offset);
-    self.scheme_uses.relocate(offset);
-    self.scheme_use_pairs.relocate(offset);
-    self.binding_schemes.relocate(offset);
-    self.binding_scheme_codec_requirements.relocate(offset);
-    self.rejected_static_dispatches.relocate(offset);
-    self.record_omitted_defaults.relocate(offset);
-    self.inspect_override_instances.relocate(offset);
-
-    // Relocate the module_name pointer if it's not empty
-    if (self.module_name.len > 0) {
-        const old_ptr = @intFromPtr(self.module_name.ptr);
-        const new_ptr = @as(isize, @intCast(old_ptr)) + offset;
-        self.module_name.ptr = @ptrFromInt(@as(usize, @intCast(new_ptr)));
-    }
-}
-
 /// Initialize the compilation fields in an existing ModuleEnv
 pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void {
     self.module_kind = .module; // Placeholder - set to actual kind during header canonicalization
@@ -1537,11 +1386,6 @@ pub fn initCIRFields(self: *Self, module_name: []const u8) Allocator.Error!void 
     self.top_level_demand_dependencies = .{};
     self.top_level_demand_dependencies_ready = false;
     self.runtime_prepared = false;
-}
-
-/// Alias for initCIRFields for backwards compatibility with tests
-pub fn initModuleEnvFields(self: *Self, module_name: []const u8) Allocator.Error!void {
-    return self.initCIRFields(module_name);
 }
 
 /// Initialize the module environment with capacity heuristics based on source size.
@@ -1962,6 +1806,30 @@ pub fn publishScratchDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.
 /// Compilation error report type for user-friendly error messages
 pub const Report = CIR.Report;
 
+/// Appends this module's source excerpt for `region_info` to `document`.
+fn addSourceRegionTo(
+    self: *const Self,
+    document: *reporting.Document,
+    region_info: RegionInfo,
+    annotation: reporting.Annotation,
+    filename: []const u8,
+) Allocator.Error!void {
+    try document.addSourceRegion(region_info, annotation, filename, self.getSourceAll(), self.getLineStartsAll());
+}
+
+/// Appends this module's source excerpt for `region_info` to `report`, which
+/// takes its own copy of `filename`.
+fn addOwnedSourceRegionTo(
+    self: *const Self,
+    report: *Report,
+    region_info: RegionInfo,
+    annotation: reporting.Annotation,
+    filename: []const u8,
+) Allocator.Error!void {
+    const owned_filename = try report.addOwnedString(filename);
+    try self.addSourceRegionTo(&report.document, region_info, annotation, owned_filename);
+}
+
 /// Convert a canonicalization diagnostic to a Report for rendering.
 pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: std.mem.Allocator, filename: []const u8) Allocator.Error!Report {
     return switch (diagnostic) {
@@ -1977,14 +1845,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_literal);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Check that the number is correctly formatted. Valid examples include: ");
@@ -2009,16 +1870,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" in this scope.");
             try report.document.addReflowingText("Is it misspelled, or is there an import missing?");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2031,14 +1884,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("This reads ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" before every path has assigned it a value.");
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2052,16 +1898,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is assigned to itself, which would cause an infinite loop at runtime.");
             try report.document.addReflowingText("Only functions can reference themselves (for recursion). For non-function values, the right-hand side must be fully computable without referring to the value being assigned.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2075,16 +1913,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is part of a recursive non-function definition cycle.");
             try report.document.addReflowingText("Only functions can be recursive. Non-function top-level values must be fully computable without depending on themselves through other values.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2100,16 +1930,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Local definitions are evaluated in order: a definition can refer to itself or to definitions written before it, but not to definitions written later in the same block. Move ");
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" above this use, or move both to the top level.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2127,16 +1949,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident2);
             try report.headline.addReflowingText(" are mutually recursive, which isn't supported for local definitions.");
             try report.document.addReflowingText("Local definitions are evaluated in order and can only refer to themselves or to earlier definitions. Move these mutually recursive definitions to the top level, where mutual recursion is supported.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2150,16 +1964,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" was rewritten to crash because the referenced top-level value failed type checking earlier.");
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this value.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2168,16 +1974,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Syntax Error", "This expression was replaced by a crash because it could not be parsed.", .runtime_error);
             try report.document.addReflowingText("Fix the syntax error reported for this expression instead of trying to execute it.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2186,16 +1984,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Erroneous Value", "This expression was rewritten to crash because it failed type checking.", .runtime_error);
             try report.document.addReflowingText("Fix the earlier type error instead of trying to execute this expression.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2207,14 +1997,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_ident = try report.addOwnedString(ident_name);
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" does not exist.");
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2269,8 +2052,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(", then reference that entrypoint from ");
             try report.document.addInlineCode("provides");
             try report.document.addReflowingText(". For example:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             const owned_example = try report.addOwnedString(example);
             try report.document.addInlineCode(owned_example);
 
@@ -2294,14 +2076,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2331,14 +2106,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("The type ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2351,17 +2119,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("You are using the type ");
             try report.headline.addInlineCode(owned_type_name);
             try report.headline.addReflowingText(" like a nominal type, but it is an alias.");
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" You can declare this type with ");
             try report.document.addInlineCode(":=");
@@ -2381,13 +2141,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" is being redeclared.");
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                redeclared_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, redeclared_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
@@ -2396,13 +2150,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(original_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             break :blk report;
         },
@@ -2418,13 +2166,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" is being redeclared.");
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                redeclared_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, redeclared_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
@@ -2433,13 +2175,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(original_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             break :blk report;
         },
@@ -2455,13 +2191,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" is being redeclared.");
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                redeclared_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, redeclared_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("But ");
@@ -2470,13 +2200,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(original_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             break :blk report;
         },
@@ -2490,16 +2214,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed at the top level.");
             try report.document.addReflowingText("Only definitions, type annotations, and imports are allowed at the top level.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2513,16 +2229,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_stmt);
             try report.headline.addReflowingText(" is not allowed in an associated block.");
             try report.document.addReflowingText("Only associated values, type declarations, and type annotations are allowed in an associated block.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2545,16 +2253,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_suggested = try report.addOwnedString(suggested_name);
             try report.document.addUnqualifiedSymbol(owned_suggested);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -2563,14 +2263,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Unrecognized Syntax", "I don't recognize this syntax.", .runtime_error);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("This might be a syntax error, an unsupported language feature, or a typo.");
@@ -2587,14 +2280,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("For example: ");
             try report.document.addAnnotated("crash \"Something went wrong\"", .inline_code);
             try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2610,13 +2296,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" appears more than once in this record.");
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                duplicate_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, duplicate_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("The field ");
@@ -2625,13 +2305,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(original_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Record fields must have unique names. Consider renaming one of these fields or removing the duplicate.");
@@ -2650,29 +2324,16 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" is bound more than once in this pattern.");
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                duplicate_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, duplicate_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("It was first bound here:");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Each name in a pattern must be different. To check whether two values are equal, give them different names and compare them in a guard:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addCodeBlock("(a, b) if a == b => ...");
 
             break :blk report;
@@ -2701,14 +2362,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText("The identifier ");
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is exposed multiple times in the module header.");
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addReflowingText("You can remove the duplicate entry to fix this warning.");
 
@@ -2724,17 +2378,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_type_var_name);
             try report.headline.addReflowingText(" is not declared in this scope.");
             try report.document.addReflowingText("Type variables must be introduced in a type annotation before they can be used.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -2747,13 +2393,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(".");
             const owned_filename = try report.addOwnedString(filename);
             const region_info = self.calcRegionInfo(data.region);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("This error doesn't have a proper diagnostic report yet. Let us know if you want to help improve Roc's error messages!");
             try report.document.addLineBreak();
@@ -2764,13 +2404,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             const owned_filename = try report.addOwnedString(filename);
             const region_info = self.calcRegionInfo(data.region);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             break :blk report;
         },
@@ -2790,8 +2424,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is used as an expression that evaluates to a value, ");
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" is required because otherwise there wouldn't always be a value available.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addReflowingText("Either add an ");
             try report.document.addKeyword("else");
             try report.document.addReflowingText(" branch, or use this ");
@@ -2812,17 +2445,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             var report = try Report.init(allocator, "Unreachable Pattern Capture", "This string pattern capture is directly after another capture, so it is unreachable.", .warning);
             try report.document.addReflowingText("String pattern captures need literal text between them. Add a delimiter between the captures, or remove this capture.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -2839,13 +2464,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
 
             // The primary region shows the new declaration; point below it at the original.
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                new_region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, new_region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("In this scope, ");
@@ -2854,13 +2473,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(original_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                original_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, original_region_info, .dimmed, owned_filename);
 
             break :blk report;
         },
@@ -2912,30 +2525,15 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 },
             }
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
             break :blk report;
         },
         .empty_tuple => |data| blk: {
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Empty Tuple Not Allowed", "I am part way through parsing this tuple, but it is empty.", .runtime_error);
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("If you want to represent nothing, try using an empty record: ");
             try report.document.addAnnotated("{}", .inline_code);
@@ -2947,14 +2545,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const region_info = self.calcRegionInfo(data.region);
 
             var report = try Report.init(allocator, "Malformed Where Clause", "This where clause could not be parsed correctly.", .runtime_error);
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("Check the syntax of your where clause.");
 
@@ -2985,8 +2576,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode("Dec");
             try report.document.addReflowingText(" type and would require F64 representation. ");
             try report.document.addReflowingText("Floating-point numbers (F64) cannot be used in patterns because they don't have reliable equality comparison.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("Consider one of these alternatives:");
             try report.document.addLineBreak();
@@ -2995,8 +2585,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("• Use a smaller number that fits in Dec's precision");
             try report.document.addLineBreak();
             try report.document.addText("• Restructure your code to avoid pattern matching on this value");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addText("For example, instead of:");
             try report.document.addLineBreak();
@@ -3023,14 +2612,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3054,20 +2636,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Other modules can see ");
             try report.document.addType(exposed_type);
             try report.document.addReflowingText("'s public shape, but they cannot name this private type.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Expose the referenced type, make ");
             try report.document.addType(exposed_type);
@@ -3103,20 +2676,11 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("Other modules can see this field because ");
             try report.document.addType(exposed_type);
             try report.document.addReflowingText(" is exposed and not opaque, but they cannot name this private type.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Expose the referenced type, make ");
             try report.document.addType(exposed_type);
@@ -3143,14 +2707,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(", which does not exist.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3164,14 +2721,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(self.getIdent(data.module_name));
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3234,14 +2784,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" was not found in this Roc project.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3256,14 +2799,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(module_name);
             try report.headline.addReflowingText(" imported into this Roc file.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3292,14 +2828,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(nested_name);
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3318,14 +2847,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(parent_name);
             try report.headline.addReflowingText(", so it can't be named here.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addReflowingText("It describes how a builtin format tracks its own state while encoding or parsing, which is why it has no spelling in Roc code. To require that a type can be encoded or parsed, name the constraint instead, as in ");
             try report.document.addInlineCode(switch (data.kind) {
@@ -3359,17 +2881,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is in scope, but it has no associated ");
             try report.document.addInlineCode(nested_name);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3388,14 +2902,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("map2");
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
 
             // Hint
@@ -3420,14 +2927,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode(owned_count);
             try report.headline.addReflowingText(" values, which exceeds the compiler limit.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3439,14 +2939,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("where");
             try report.headline.addReflowingText(" clause inside a type declaration.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" ");
@@ -3461,14 +2954,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             var report = try Report.init(allocator, "Where Alias Constrains Another Type", "", .runtime_error);
             try report.headline.addReflowingText("A where alias constrains only its receiver, but this constraint is on a different type variable.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
             try report.document.addLineBreak();
             try report.document.addReflowingText("Write this constraint against ");
             try report.document.addInlineCode(self.getIdent(data.receiver_name));
@@ -3484,17 +2970,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("..");
             try report.headline.addReflowingText(" inside a type declaration.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" You need a named variable, like ");
             try report.document.addInlineCode("..others");
@@ -3512,14 +2990,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addRecordField(owned_field_name);
             try report.headline.addReflowingText(" field depends on itself.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("A field default (");
@@ -3542,14 +3013,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(" instead.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3565,14 +3029,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(" default. Remove the default, or give the field a regular name if it should be filled when omitted.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3584,17 +3041,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(") are only allowed on the fields of a nominal record type declaration's backing record, not in structural record types (type aliases, inline annotations, or nested records).");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" A default belongs to one named type, so declare a nominal type (with ");
             try report.document.addInlineCode(":=");
@@ -3610,17 +3059,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("??");
             try report.headline.addReflowingText(") are only allowed on nominal type declarations at the top level of a module, not on type declarations inside a function or block.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" A default is materialized at every construction site that omits the field, so it cannot depend on the locals of one function. Move the type declaration to the module top level, or remove the default.");
 
@@ -3636,17 +3077,9 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("_name");
             try report.headline.addReflowingText(") are only allowed in nominal record type declarations, not in structural record types.");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.addAnnotated("Hint:", .emphasized);
             try report.document.addReflowingText(" Unnamed fields reserve layout padding for a nominal type (declared with ");
             try report.document.addInlineCode(":=");
@@ -3667,8 +3100,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(".roc, but no top-level nominal type named ");
             try report.document.addInlineCode(module_name);
             try report.document.addReflowingText(" was found.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Add a nominal type like:");
             try report.document.addLineBreak();
@@ -3686,14 +3118,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" (opaque nominal type)");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3717,12 +3142,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("), not type aliases (");
             try report.document.addInlineCode(":");
             try report.document.addReflowingText(").");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Nominal types must be records or tag unions:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("# Record example:");
             try report.document.addLineBreak();
@@ -3730,8 +3153,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             defer allocator.free(record_example);
             const owned_record = try report.addOwnedString(record_example);
             try report.document.addInlineCode(owned_record);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("# Tag union example:");
             try report.document.addLineBreak();
@@ -3739,22 +3161,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             defer allocator.free(tag_example);
             const owned_tag = try report.addOwnedString(tag_example);
             try report.document.addInlineCode(owned_tag);
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Tip: Nominal types have their own identity and can have associated functions. Type aliases (");
             try report.document.addInlineCode(":");
             try report.document.addReflowingText(") are just shorthand for another type and cannot define modules.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3769,22 +3183,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("No ");
             try report.document.addInlineCode("main!");
             try report.document.addReflowingText(" function was found.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Add a main! function like:");
             try report.document.addLineBreak();
             try report.document.addInlineCode("main! = |arg| { ... }");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3803,22 +3209,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addText("Found ");
             try report.document.addInlineCode(owned_arity);
             try report.document.addReflowingText(" arguments.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Change it to:");
             try report.document.addLineBreak();
             try report.document.addInlineCode("main! = |arg| { ... }");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3835,14 +3233,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" is a default app module and cannot be imported.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3868,20 +3259,12 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(".roc, but the type is named ");
             try report.document.addInlineCode(type_name);
             try report.document.addReflowingText(".");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Make sure the type name matches the filename exactly (case-sensitive).");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -3894,22 +3277,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addReflowingText(" header is deprecated.");
 
             try report.document.addReflowingText("Type modules (headerless files with a top-level type matching the filename) are now the preferred way to define modules.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Remove the ");
             try report.document.addInlineCode("module");
             try report.document.addReflowingText(" header and ensure your file defines a type that matches the filename.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -3933,14 +3308,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" to update the pin, or switch to the pinned version of the compiler.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .warning_highlight, filename);
 
             break :blk report;
         },
@@ -3962,22 +3330,14 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("The type ");
             try report.document.addInlineCode(type_name);
             try report.document.addReflowingText(" is automatically exposed when importing a type module.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Remove ");
             try report.document.addInlineCode(type_name);
             try report.document.addReflowingText(" from the exposing clause.");
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4007,14 +3367,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addInlineCode(owned_example);
             try report.document.addLineBreak();
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4028,16 +3381,8 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(" is already defined in this scope.");
             try report.document.addReflowingText("Choose a different name for this identifier.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try report.document.addLineBreaks(2);
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4053,13 +3398,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("for", .inline_code);
             try report.headline.addReflowingText(" to exit the loop early.");
 
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4077,13 +3416,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("break", .inline_code);
             try report.headline.addReflowingText(" that exits this loop, so it will run forever and hang the program.");
 
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4095,13 +3428,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addAnnotated("?", .inline_code);
             try report.headline.addReflowingText(" on values being returned implicitly at the end of a function like this:");
 
-            try report.document.addSourceRegion(
-                region_info,
-                .warning_highlight,
-                filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .warning_highlight, filename);
             try report.document.addLineBreak();
 
             try report.document.addReflowingText("This is because ");
@@ -4111,8 +3438,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(" on a ");
             try report.document.addAnnotated("Try", .inline_code);
             try report.document.addReflowingText(" value like this:");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
             try report.document.startAnnotation(.code_block);
             try report.document.addIndent(1);
             try report.document.addKeyword("match");
@@ -4146,8 +3472,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addIndent(1);
             try report.document.addText("}");
             try report.document.endAnnotation();
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("When you use ");
             try report.document.addAnnotated("?", .inline_code);
@@ -4166,8 +3491,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText(", which is so unusual that using ");
             try report.document.addAnnotated("?", .inline_code);
             try report.document.addReflowingText(" here is almost always a mistake in practice.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             try report.document.addReflowingText("Usually removing the ");
             try report.document.addAnnotated("?", .inline_code);
@@ -4213,13 +3537,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 },
             };
 
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4256,13 +3574,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
                 },
             };
 
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Optimized builds remove inline ");
@@ -4294,25 +3606,13 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addUnqualifiedSymbol(owned_ident);
             try report.headline.addReflowingText(", which was declared outside of it:");
 
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addUnqualifiedSymbol(owned_ident);
             try report.document.addReflowingText(" was declared here:");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                declaration_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, declaration_region_info, .dimmed, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("Optimized builds remove inline ");
@@ -4344,17 +3644,10 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addReflowingText("If you need recursive types, use nominal types (");
             try report.document.addAnnotated(":=", .inline_code);
             try report.document.addReflowingText(") instead.");
-            try report.document.addLineBreak();
-            try report.document.addLineBreak();
+            try report.document.addLineBreaks(2);
 
             const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, region_info, .error_highlight, owned_filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("And it references ");
@@ -4363,13 +3656,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.document.addSourceLocation(other_region_info, owned_filename);
             try report.document.addReflowingText(":");
             try report.document.addLineBreak();
-            try report.document.addSourceRegion(
-                other_region_info,
-                .dimmed,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addSourceRegionTo(&report.document, other_region_info, .dimmed, owned_filename);
 
             break :blk report;
         },
@@ -4382,14 +3669,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             const owned_suffix = try report.addOwnedString(suffix);
             const owned_suggested = try report.addOwnedString(suggested);
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             try report.document.addLineBreak();
             try report.document.addReflowingText("The ");
@@ -4410,14 +3690,7 @@ pub fn diagnosticToReport(self: *Self, diagnostic: CIR.Diagnostic, allocator: st
             try report.headline.addInlineCode("a..=b");
             try report.headline.addReflowingText(".");
 
-            const owned_filename = try report.addOwnedString(filename);
-            try report.document.addSourceRegion(
-                region_info,
-                .error_highlight,
-                owned_filename,
-                self.getSourceAll(),
-                self.getLineStartsAll(),
-            );
+            try self.addOwnedSourceRegionTo(&report, region_info, .error_highlight, filename);
 
             break :blk report;
         },
@@ -4484,11 +3757,6 @@ pub fn getRegionInfo(self: *const Self, region: Region) error{ BeginTooLarge, En
 /// to avoid storing it in the cacheable IR structure.
 pub fn calcRegionInfo(self: *const Self, region: Region) RegionInfo {
     return self.common.calcRegionInfo(region);
-}
-
-/// Extract a literal from source code between given byte offsets
-pub fn literal_from_source(self: *const Self, start_offset: u32, end_offset: u32) []const u8 {
-    return self.common.source[start_offset..end_offset];
 }
 
 /// Get the source line for a given region
@@ -4681,83 +3949,6 @@ pub const Serialized = extern struct {
         try self.inspect_override_instances.serialize(&env.inspect_override_instances, allocator, writer);
 
         self._reserved_flags = .{ 0, 0 };
-    }
-
-    /// Deserialize into a freshly allocated ModuleEnv (no in-place modification of cache buffer).
-    /// The base_addr parameter is the base address of the serialized buffer in memory.
-    /// WARNING: The returned ModuleEnv has data pointing into the cache buffer (read-only).
-    /// Use deserializeWithMutableTypes() if types/store need to be mutable.
-    pub fn deserializeInto(
-        self: *const Serialized,
-        base_addr: usize,
-        gpa: std.mem.Allocator,
-        source: []const u8,
-        module_basename: []const u8,
-    ) std.mem.Allocator.Error!*Self {
-        // Allocate a fresh ModuleEnv on the heap
-        const env = try gpa.create(Self);
-        errdefer gpa.destroy(env);
-
-        env.* = Self{
-            .gpa = gpa,
-            .common = self.common.deserializeInto(base_addr, source),
-            .types = self.types.deserializeInto(base_addr, gpa),
-            .module_kind = self.module_kind.decode(),
-            .module_role = self.module_role,
-            .all_defs = self.all_defs,
-            .global_value_defs = self.global_value_defs,
-            .top_level_value_defs = self.top_level_value_defs,
-            .value_binding_defs = self.value_binding_defs,
-            .hosted_defs = self.hosted_defs,
-            .all_statements = self.all_statements,
-            .type_decls = self.type_decls,
-            .forward_type_decls = self.forward_type_decls,
-            .exports = self.exports,
-            .requires_types = self.requires_types.deserializeInto(base_addr),
-            .for_clause_aliases = self.for_clause_aliases.deserializeInto(base_addr),
-            .provides_entries = self.provides_entries.deserializeInto(base_addr),
-            .hosted_entries = self.hosted_entries.deserializeInto(base_addr),
-            .builtin_statements = self.builtin_statements,
-            .external_decls = self.external_decls.deserializeInto(base_addr),
-            .imports = try self.imports.deserializeInto(base_addr, gpa),
-            .file_dependencies = self.file_dependencies.deserializeInto(base_addr),
-            .deferred_import_refs = self.deferred_import_refs.deserializeInto(base_addr),
-            .import_identities = self.import_identities.deserializeInto(base_addr),
-            .module_name = module_basename,
-            .display_module_name_idx = @bitCast(self.display_module_name_idx_reserved),
-            .qualified_module_name = "",
-            .module_identities = self.module_identities.deserialize(base_addr),
-            .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
-            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
-            .diagnostics = self.diagnostics,
-            .store = self.store.deserializeInto(base_addr, gpa),
-            .evaluation_order = null, // Not serialized, will be recomputed if needed
-            .top_level_demand_dependencies = self.top_level_demand_dependencies.deserializeInto(base_addr),
-            .top_level_demand_dependencies_ready = self.top_level_demand_dependencies_ready,
-            .runtime_prepared = self.runtime_prepared,
-            .idents = self.idents,
-            .import_mapping = types_mod.import_mapping.ImportMapping.init(gpa),
-            .method_idents = self.method_idents.deserializeInto(base_addr),
-            .method_defs = self.method_defs.deserializeInto(base_addr),
-            .provided_low_level_defs = self.provided_low_level_defs.deserializeInto(base_addr),
-            .for_loop_dispatch_plans = self.for_loop_dispatch_plans.deserializeInto(base_addr),
-            .numeral_digit_bytes = self.numeral_digit_bytes.deserializeInto(base_addr),
-            .numeral_literals = self.numeral_literals.deserializeInto(base_addr),
-            .numeric_suffix_targets = self.numeric_suffix_targets.deserializeInto(base_addr),
-            .scheme_uses = self.scheme_uses.deserializeInto(base_addr),
-            .scheme_use_pairs = self.scheme_use_pairs.deserializeInto(base_addr),
-            .binding_schemes = self.binding_schemes.deserializeInto(base_addr),
-            .binding_scheme_codec_requirements = self.binding_scheme_codec_requirements.deserializeInto(base_addr),
-            .generated_codec_derivations = self.generated_codec_derivations.deserializeInto(base_addr),
-            .generated_codec_calls = self.generated_codec_calls.deserializeInto(base_addr),
-            .rejected_static_dispatches = self.rejected_static_dispatches.deserializeInto(base_addr),
-            .record_omitted_defaults = self.record_omitted_defaults.deserializeInto(base_addr),
-            .inspect_override_instances = self.inspect_override_instances.deserializeInto(base_addr),
-        };
-
-        env.debugAssertModuleBasename();
-
-        return env;
     }
 
     /// Materialize a non-owning view over statically embedded serialized bytes.
@@ -5076,15 +4267,6 @@ pub fn recordForLoopDispatchPlan(
         .next_method_ident = @bitCast(next_method),
         .step_topology = step_topology,
     });
-}
-
-/// Return the checked iterator dispatch functions for a semantic `for` loop node.
-pub fn forLoopDispatchPlanForNode(self: *const Self, node_idx: Node.Idx) ?ForLoopDispatchPlan {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    for (self.for_loop_dispatch_plans.items.items) |plan| {
-        if (plan.node_idx == raw_node) return plan;
-    }
-    return null;
 }
 
 /// Record exact base-256 digits for a numeric source node.
@@ -5576,11 +4758,6 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
     self.common.exposed_items.ensureSorted(allocator);
 }
 
-/// Checks whether the given identifier is exposed by this module.
-pub fn containsExposedById(self: *const Self, ident_idx: Ident.Idx) bool {
-    return self.common.exposed_items.containsById(self.gpa, @bitCast(ident_idx));
-}
-
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
     if (builtin.mode == .Debug) {
@@ -5588,7 +4765,7 @@ pub inline fn debugAssertArraysInSync(self: *const Self) void {
         const region_nodes = self.store.regions.len();
 
         if (!(cir_nodes == region_nodes)) {
-            std.debug.panic(
+            base.invariant(
                 "Arrays out of sync:\n  cir_nodes={}\n  region_nodes={}\n",
                 .{ cir_nodes, region_nodes },
             );
@@ -5778,47 +4955,6 @@ pub fn addMatchBranchPattern(self: *Self, expr: CIR.Expr.Match.BranchPattern, re
     return expr_idx;
 }
 
-/// Add a new type variable to the node store.
-/// This function asserts that the nodes and regions are in sync.
-pub fn addTypeSlot(
-    self: *Self,
-    parent_node: CIR.Node.Idx,
-    region: Region,
-    comptime RetIdx: type,
-) std.mem.Allocator.Error!RetIdx {
-    comptime if (!isCastable(RetIdx)) @compileError("Idx type " ++ @typeName(RetIdx) ++ " is not castable");
-    const node_idx = try self.store.addTypeVarSlot(parent_node, region);
-    self.debugAssertArraysInSync();
-    return @enumFromInt(@intFromEnum(node_idx));
-}
-
-/// Adds an external declaration and returns its index
-pub fn pushExternalDecl(self: *Self, decl: CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Idx {
-    const idx = @as(u32, @intCast(self.external_decls.len()));
-    _ = try self.external_decls.append(self.gpa, decl);
-    return @enumFromInt(idx);
-}
-
-/// Retrieves an external declaration by its index
-pub fn getExternalDecl(self: *const Self, idx: CIR.ExternalDecl.Idx) *const CIR.ExternalDecl {
-    return self.external_decls.get(@as(CIR.ExternalDecl.SafeList.Idx, @enumFromInt(@intFromEnum(idx))));
-}
-
-/// Adds multiple external declarations and returns a span
-pub fn pushExternalDecls(self: *Self, decls: []const CIR.ExternalDecl) std.mem.Allocator.Error!CIR.ExternalDecl.Span {
-    const start = @as(u32, @intCast(self.external_decls.len()));
-    for (decls) |decl| {
-        _ = try self.external_decls.append(self.gpa, decl);
-    }
-    return CIR.ExternalDecl.Span{ .span = .{ .start = start, .len = @as(u32, @intCast(decls.len)) } };
-}
-
-/// Gets a slice of external declarations from a span
-pub fn sliceExternalDecls(self: *const Self, span: CIR.ExternalDecl.Span) []const CIR.ExternalDecl {
-    const range = CIR.ExternalDecl.SafeList.Range{ .start = @enumFromInt(span.span.start), .count = span.span.len };
-    return self.external_decls.sliceRange(range);
-}
-
 /// Retrieves the text of an identifier by its index
 pub fn getIdentText(self: *const Self, idx: Ident.Idx) []const u8 {
     return self.getIdent(idx);
@@ -5835,30 +4971,6 @@ pub fn qualifiedModuleName(self: *const Self) []const u8 {
     return self.qualified_module_name;
 }
 
-/// Builds a mapping from platform for-clause alias ident indices to the
-/// equivalent ident indices in the app module's store.
-///
-/// This encapsulates all cross-module string-based ident resolution so that
-/// downstream code (e.g. in src/eval/) only needs to do index lookups via `map.get()`.
-pub fn buildPlatformToAppIdentMap(
-    self: *const Self,
-    gpa: std.mem.Allocator,
-    app_env: *const Self,
-) std.mem.Allocator.Error!std.AutoHashMap(Ident.Idx, Ident.Idx) {
-    var map = std.AutoHashMap(Ident.Idx, Ident.Idx).init(gpa);
-    errdefer map.deinit();
-    const all_aliases = self.for_clause_aliases.items.items;
-    for (self.requires_types.items.items) |required_type| {
-        const type_aliases_slice = all_aliases[@intFromEnum(required_type.type_aliases.start)..][0..required_type.type_aliases.count];
-        for (type_aliases_slice) |alias| {
-            if (app_env.common.findIdentFrom(&self.common, alias.alias_name)) |app_ident| {
-                try map.put(alias.alias_name, app_ident);
-            }
-        }
-    }
-    return map;
-}
-
 /// Helper function to generate the S-expression node for the entire module.
 /// If a single expression is provided, only that expression is returned.
 pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprTree) std.mem.Allocator.Error!void {
@@ -5866,8 +4978,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
         // Only output the given expression
         try self.store.getExpr(expr_idx).pushToSExprTree(self, tree, expr_idx);
     } else {
-        const root_begin = tree.beginNode();
-        try tree.pushStaticAtom("can-ir");
+        const root_begin = try tree.beginNamedNode("can-ir");
 
         // Iterate over all the definitions in the file and convert each to an S-expression tree
         const defs_slice = self.store.sliceDefs(self.all_defs);
@@ -5895,6 +5006,13 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
     }
 }
 
+/// Begin an S-expression node named `name` that carries the region of node `idx`.
+pub fn beginSExprNodeAt(self: *const Self, tree: *SExprTree, name: []const u8, idx: anytype) std.mem.Allocator.Error!SExprTree.NodeBegin {
+    const begin = try tree.beginNamedNode(name);
+    try self.appendRegionInfoToSExprTree(tree, idx);
+    return begin;
+}
+
 /// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
     const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
@@ -5916,12 +5034,6 @@ pub fn appendRegionInfoToSExprTreeFromRegion(self: *const Self, tree: *SExprTree
     );
 }
 
-/// Get region information for a node.
-pub fn getNodeRegionInfo(self: *const Self, idx: anytype) RegionInfo {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
-    return self.getRegionInfo(region);
-}
-
 /// Helper function to convert type information to an SExpr node
 /// in S-expression format for snapshot testing. Implements the definition-focused
 /// format showing final types for defs, expressions, and builtins.
@@ -5934,14 +5046,12 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         defer type_writer.deinit();
 
         // Generate full type information for all definitions and expressions
-        const root_begin = tree.beginNode();
-        try tree.pushStaticAtom("inferred-types");
+        const root_begin = try tree.beginNamedNode("inferred-types");
 
         const root_attrs = tree.beginNode();
 
         // Create defs section
-        const defs_begin = tree.beginNode();
-        try tree.pushStaticAtom("defs");
+        const defs_begin = try tree.beginNamedNode("defs");
         const defs_attrs = tree.beginNode();
 
         // Iterate through all definitions to extract pattern types
@@ -5966,8 +5076,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             try type_writer.write(def_var, .one_line);
 
             // Add the pattern type entry
-            const patt_begin = tree.beginNode();
-            try tree.pushStaticAtom("patt");
+            const patt_begin = try tree.beginNamedNode("patt");
             try self.appendRegionInfoToSExprTreeFromRegion(tree, pattern_region);
 
             const type_str = type_writer.get();
@@ -5991,16 +5100,14 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 
         // Create type_decls section if we have any type declarations
         if (has_type_decl) {
-            const type_decls_begin = tree.beginNode();
-            try tree.pushStaticAtom("type_decls");
+            const type_decls_begin = try tree.beginNamedNode("type_decls");
             const type_decls_attrs = tree.beginNode();
 
             for (all_stmts) |stmt_idx| {
                 const stmt = self.store.getStatement(stmt_idx);
                 switch (stmt) {
                     .s_alias_decl => |alias| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("alias");
+                        const stmt_begin = try tree.beginNamedNode("alias");
 
                         // Add region info for the statement
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -6024,8 +5131,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_where_alias_decl => |where_alias| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("where-alias");
+                        const stmt_begin = try tree.beginNamedNode("where-alias");
 
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
                         try self.appendRegionInfoToSExprTreeFromRegion(tree, stmt_region);
@@ -6039,8 +5145,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
                         try tree.endNode(stmt_begin, stmt_attrs);
                     },
                     .s_nominal_decl => |nominal| {
-                        const stmt_begin = tree.beginNode();
-                        try tree.pushStaticAtom("nominal");
+                        const stmt_begin = try tree.beginNamedNode("nominal");
 
                         // Add region info for the statement
                         const stmt_region = self.store.getStatementRegion(stmt_idx);
@@ -6089,8 +5194,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
         }
 
         // Create expressions section
-        const exprs_begin = tree.beginNode();
-        try tree.pushStaticAtom("expressions");
+        const exprs_begin = try tree.beginNamedNode("expressions");
         const exprs_attrs = tree.beginNode();
 
         // Iterate through all definitions to extract expression types
@@ -6107,8 +5211,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             try type_writer.write(expr_var, .one_line);
 
             // Add the expression type entry
-            const expr_begin = tree.beginNode();
-            try tree.pushStaticAtom("expr");
+            const expr_begin = try tree.beginNamedNode("expr");
             try self.appendRegionInfoToSExprTreeFromRegion(tree, expr_region);
 
             const type_str = type_writer.get();
@@ -6123,8 +5226,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
 }
 
 fn pushExprTypesToSExprTree(self: *Self, expr_idx: CIR.Expr.Idx, tree: *SExprTree) (std.mem.Allocator.Error || error{WriteFailed})!void {
-    const expr_begin = tree.beginNode();
-    try tree.pushStaticAtom("expr");
+    const expr_begin = try tree.beginNamedNode("expr");
 
     // Add region info for the expression
     try self.appendRegionInfoToSExprTree(tree, expr_idx);
@@ -6304,15 +5406,6 @@ pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Id
     return self.module_identity_displays.items.items[@intFromEnum(idx)];
 }
 
-/// Look up an env-local module identity entry by its env-local display ident.
-/// Callers must use the returned identity's content hash for identity decisions.
-pub fn moduleIdentityForDisplayIdent(self: *const Self, display: Ident.Idx) ?base.ModuleIdentity.Idx {
-    for (self.module_identity_displays.items.items, 0..) |candidate, i| {
-        if (candidate.eql(display)) return @enumFromInt(i);
-    }
-    return null;
-}
-
 /// Display text for an env-local identity index. Diagnostics only.
 pub fn moduleIdentityDisplayText(self: *const Self, idx: base.ModuleIdentity.Idx) []const u8 {
     const display = self.moduleIdentityDisplayIdent(idx);
@@ -6330,7 +5423,7 @@ pub fn contentIdentityHash(self: *const Self) ?*const base.ModuleIdentity.Hash {
 /// callers run after import resolution, where the identity must exist.
 pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
     if (self.self_module_identity.isNone()) {
-        std.debug.panic("module content identity not finalized for module '{s}'", .{self.module_name});
+        base.invariant("module content identity not finalized for module '{s}'", .{self.module_name});
     }
     return self.self_module_identity;
 }
@@ -6340,7 +5433,7 @@ pub fn selfModuleIdentity(self: *const Self) base.ModuleIdentity.Idx {
 pub fn setContentIdentity(self: *Self, hash: base.ModuleIdentity.Hash) std.mem.Allocator.Error!void {
     if (self.contentIdentityHash()) |existing| {
         if (!std.mem.eql(u8, existing, &hash)) {
-            std.debug.panic("conflicting module content identity for module '{s}'", .{self.module_name});
+            base.invariant("conflicting module content identity for module '{s}'", .{self.module_name});
         }
         return;
     }
@@ -6362,7 +5455,7 @@ pub fn ensureContentIdentity(
     for (imported_envs) |imported_env| {
         if (imported_env == @as(*const Self, self)) continue;
         const import_hash = imported_env.contentIdentityHash() orelse {
-            std.debug.panic(
+            base.invariant(
                 "module content identity missing for import '{s}' of module '{s}'",
                 .{ imported_env.module_name, self.module_name },
             );
@@ -6469,12 +5562,6 @@ pub fn lookupMethodBindingForMethodOwnerConst(self: *const Self, owner: MethodOw
 pub fn finalizeMethodTables(self: *Self) void {
     self.method_idents.ensureSortedUnique();
     self.method_defs.ensureSortedUnique();
-}
-
-/// Looks up method metadata using a type declaration owner from one environment
-/// and a method ident from the same source environment.
-pub fn lookupMethodBindingFromEnvAndDeclConst(self: *const Self, source_env: *const Self, source_decl: ?u32, method_ident: Ident.Idx) ?MethodBinding {
-    return self.lookupMethodBindingFromOwnerAndMethodEnvsConst(source_env, source_decl, source_env, method_ident);
 }
 
 /// Looks up method metadata using a type declaration owner and a method ident

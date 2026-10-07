@@ -121,7 +121,7 @@ match person {
 							(p-assign (ident "#interp_2"))
 							(e-lookup-local
 								(p-assign (ident "city"))))
-						(e-interpolation (constraint-fn-var 271) (dispatcher-var 30)
+						(e-interpolation
 							(first
 								(e-literal (string "")))
 							(parts
@@ -137,5 +137,5 @@ match person {
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Str"))
+(expr (type "_a"))
 ~~~

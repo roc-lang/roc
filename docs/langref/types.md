@@ -21,25 +21,39 @@ Roc uses Hindley–Milner type inference with a few deliberate restrictions:
 ### Generalization
 
 A definition is *generalized*—made reusable at many types—only in these
-cases:
+cases, which depend on its body alone:
 
 - **Functions** are always generalized; each call site is checked at its own
   types.
-- **Number literals** default rather than generalize: an unsuffixed literal
-  resolves to a concrete type, ultimately falling back to `Dec`. See
-  [numbers](numbers).
-- **An explicitly annotated value** is generalized to its annotated scheme.
-  Annotating a value with a free type variable opts into a type scheme, so
-  the binding is generalized to it (`empty : List(a)` is then reusable at any
-  `a`). Note that we report an error for top-level values with free vars, so in
-  practice this only applies to let-defs.
 - **A value alias**—a binding whose right-hand side is a bare reference to an
   already-generalized binding (`shorthand = Foo.my_func`)—stays generalized,
   since copying a reference does no work and so is safe to reuse at many types.
 
 Every other value is monomorphic: one type, fixed by its definition and uses.
 This is what stops a value (or its `dbg`/`expect`) from being silently
-recomputed at each type it might otherwise take.
+recomputed at each type it might otherwise take. **Number literals** are no
+exception: an unsuffixed literal resolves to a concrete type, ultimately
+falling back to `Dec` (see [numbers](numbers)).
+
+An annotation can make a definition's type more specific, but never more
+general. Annotating a value that is not a function with a type variable it
+would have to be generalized over is an error:
+
+```roc
+empty : List(a)  # error: `empty` isn't defined as a function, so it has one type
+empty = []
+```
+
+Write `_` (`empty : List(_)`) or a concrete type to give it one type, or make
+it a function that takes `{}` to use it at many types:
+
+```roc
+empty : {} -> List(a)
+empty = |{}| []
+```
+
+A type variable that an enclosing function's annotation introduced is fine,
+since the enclosing function is what is generalized over it.
 
 A mutable variable (`var`) is never generalized, even with an annotation: it has
 a single type, fixed by its first use. This is the value restriction in its
@@ -71,11 +85,12 @@ provide. Each constraint has the form `var.method : signature`:
 join : List(a) -> Str where [a.to_str : a -> Str]
 ```
 
-A `where` clause can appear on any annotation, including a value's:
+A `where` clause can appear on any annotation that introduces the type
+variable it constrains, such as a function's:
 
 ```roc
-items : List(a) where [a.to_str : a -> Str]
-items = []
+items : {} -> List(a) where [a.to_str : a -> Str]
+items = |{}| []
 ```
 
 ## Structural Types

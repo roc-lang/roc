@@ -498,10 +498,7 @@ nested_shadow = |n| |n| n
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "same_rest"))
-		(e-lambda
-			(args
-				(p-assign (ident "items")))
-			(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "same_args"))
 		(e-runtime-error (tag "erroneous_value_expr")))
@@ -579,10 +576,10 @@ nested_shadow = |n| |n| n
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(_field, Error) -> [False, True]"))
-		(patt (type "{ x: b, y: Error } -> b"))
+		(patt (type "(Error, Error) -> [False, True]"))
+		(patt (type "{ x: Error, y: Error } -> _ret"))
 		(patt (type "Error -> _ret"))
-		(patt (type "List(List(b)) -> List(b)"))
+		(patt (type "List(Error) -> List(_b)"))
 		(patt (type "b, Error -> b"))
 		(patt (type "[Err(b), Ok(b)] -> b"))
 		(patt (type "_arg -> (b -> b)"))
@@ -592,10 +589,10 @@ nested_shadow = |n| |n| n
 		(patt (type "Dec"))
 		(patt (type "(b, _field) -> b")))
 	(expressions
-		(expr (type "(_field, Error) -> [False, True]"))
-		(expr (type "{ x: b, y: Error } -> b"))
+		(expr (type "(Error, Error) -> [False, True]"))
+		(expr (type "{ x: Error, y: Error } -> _ret"))
 		(expr (type "Error -> _ret"))
-		(expr (type "List(List(b)) -> List(b)"))
+		(expr (type "List(Error) -> List(_b)"))
 		(expr (type "b, Error -> b"))
 		(expr (type "[Err(b), Ok(b)] -> b"))
 		(expr (type "_arg -> (b -> b)"))

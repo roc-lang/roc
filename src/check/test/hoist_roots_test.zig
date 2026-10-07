@@ -800,7 +800,7 @@ test "refutable closed destructure selects validation root without live binders"
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
     try std.testing.expectEqual(@as(?CIR.Pattern.Idx, null), roots[0].pattern);
@@ -819,7 +819,7 @@ test "unused concrete binder retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -851,7 +851,7 @@ test "non-concrete extraction retains refutable destructure validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -1176,7 +1176,7 @@ fn expectPatternExtractionRoot(root: hoist_roots.SelectedHoistedRoot) error{ Tes
     try std.testing.expect(root.pattern != null);
     const extraction = switch (root.body) {
         .pattern_extraction => |extraction| extraction,
-        .expr, .pattern_validation, .pattern_error => return error.ExpectedPatternExtractionRoot,
+        .expr, .pattern_validation, .pattern_error, .valueless_binding => return error.ExpectedPatternExtractionRoot,
     };
     try std.testing.expectEqual(root.expr, extraction.base_expr);
     try std.testing.expectEqual(root.pattern.?, extraction.result_pattern);
@@ -1205,7 +1205,7 @@ fn countPatternExtractionRoots(roots: []const hoist_roots.SelectedHoistedRoot) u
     for (roots) |root| {
         switch (root.body) {
             .pattern_extraction => count += 1,
-            .expr, .pattern_validation, .pattern_error => {},
+            .expr, .pattern_validation, .pattern_error, .valueless_binding => {},
         }
     }
     return count;
@@ -1399,7 +1399,7 @@ test "refutable destructure after an effect selects validation root" {
     try std.testing.expectEqual(@as(usize, 1), roots.len);
     const validation = switch (roots[0].body) {
         .pattern_validation => |validation| validation,
-        .expr, .pattern_extraction, .pattern_error => return error.ExpectedPatternValidationRoot,
+        .expr, .pattern_extraction, .pattern_error, .valueless_binding => return error.ExpectedPatternValidationRoot,
     };
     try std.testing.expectEqual(roots[0].expr, validation.base_expr);
 }
@@ -2151,7 +2151,7 @@ test "issue 11731 - nested closed helpers retain recursive promotion" {
     try std.testing.expectEqual(@as(usize, 2), test_env.checker.promotedLocalProcedures().len);
 }
 
-test "issue 11993 - condition dispatching to a capturing local method does not warn" {
+test "issue 11993 - condition dispatching to a rejected capturing local method does not warn" {
     var test_env = try TestEnv.init("Test",
         \\choose = |hay| {
         \\    offset = 1
@@ -2164,10 +2164,10 @@ test "issue 11993 - condition dispatching to a capturing local method does not w
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
-test "issue 11993 - comparison dispatching to a capturing local is_eq does not warn" {
+test "issue 11993 - comparison dispatching to a rejected capturing local is_eq does not warn" {
     var test_env = try TestEnv.init("Test",
         \\choose = |hay| {
         \\    offset = 1
@@ -2179,7 +2179,7 @@ test "issue 11993 - comparison dispatching to a capturing local is_eq does not w
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "issue 11993 - condition dispatching to a promoted local method still warns" {
@@ -2198,7 +2198,7 @@ test "issue 11993 - condition dispatching to a promoted local method still warns
     try std.testing.expectEqual(@as(usize, 1), test_env.checker.promotedLocalProcedures().len);
 }
 
-test "issue 11993 - condition through a helper whose evidence is a capturing local method does not warn" {
+test "issue 11993 - condition through a helper whose evidence is a rejected capturing local method does not warn" {
     var test_env = try TestEnv.init("Test",
         \\choose = |hay| {
         \\    offset = 1
@@ -2211,7 +2211,7 @@ test "issue 11993 - condition through a helper whose evidence is a capturing loc
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "issue 11993 - condition through a helper whose evidence is a promoted local method still warns" {
@@ -2229,7 +2229,7 @@ test "issue 11993 - condition through a helper whose evidence is a promoted loca
     try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
 }
 
-test "issue 11993 - structural comparison whose component is_eq captures a local does not warn" {
+test "issue 11993 - structural comparison whose component is_eq is a rejected capturing method does not warn" {
     var test_env = try TestEnv.init("Test",
         \\choose = |hay| {
         \\    offset = 1
@@ -2241,7 +2241,7 @@ test "issue 11993 - structural comparison whose component is_eq captures a local
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "issue 11993 - structural comparison whose component is_eq is promoted still warns" {
@@ -2258,7 +2258,7 @@ test "issue 11993 - structural comparison whose component is_eq is promoted stil
     try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
 }
 
-test "issue 11993 - method bound to a capturing local function does not warn" {
+test "issue 11993 - method bound to a capturing local function is rejected and does not warn" {
     var test_env = try TestEnv.init("Test",
         \\choose = |hay| {
         \\    offset = 1
@@ -2272,7 +2272,7 @@ test "issue 11993 - method bound to a capturing local function does not warn" {
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "issue 11993 - method bound to a promoted local function still warns" {
@@ -2291,7 +2291,7 @@ test "issue 11993 - method bound to a promoted local function still warns" {
     try test_env.assertTypeErrorTitles(&.{"Unconditional Condition"});
 }
 
-test "issue 11993 - generic is_eq whose evidence is a capturing local is_eq does not warn" {
+test "issue 11993 - generic is_eq whose evidence is a rejected capturing local is_eq does not warn" {
     var test_env = try TestEnv.init("Test",
         \\Wrap(a) := { inner : a }.{
         \\    is_eq = |x, y| x.inner == y.inner
@@ -2307,5 +2307,5 @@ test "issue 11993 - generic is_eq whose evidence is a capturing local is_eq does
     );
     defer test_env.deinit();
 
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }

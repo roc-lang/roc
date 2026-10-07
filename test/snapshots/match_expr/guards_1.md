@@ -110,7 +110,7 @@ describe = |value| match value {
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 302) (dispatcher-var 20)
+									(e-interpolation (constraint-fn-var 298) (dispatcher-var 20)
 										(first
 											(e-literal (string "positive: ")))
 										(parts
@@ -132,12 +132,12 @@ describe = |value| match value {
 								(e-block
 									(s-let
 										(p-assign (ident "#interp_1"))
-										(e-dispatch-call (method "to_str") (constraint-fn-var 323)
+										(e-dispatch-call (method "to_str") (constraint-fn-var 319)
 											(receiver
 												(e-lookup-local
 													(p-assign (ident "x"))))
 											(args)))
-									(e-interpolation (constraint-fn-var 344) (dispatcher-var 35)
+									(e-interpolation (constraint-fn-var 336) (dispatcher-var 35)
 										(first
 											(e-literal (string "negative: ")))
 										(parts
@@ -145,7 +145,7 @@ describe = |value| match value {
 												(p-assign (ident "#interp_1")))
 											(e-literal (string ""))))))
 							(guard
-								(e-dispatch-call (method "is_lt") (constraint-fn-var 313)
+								(e-dispatch-call (method "is_lt") (constraint-fn-var 309)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "x"))))

@@ -8,7 +8,7 @@ platform "repro"
 		"roc_process_string": process_string_for_host!,
 	}
 	targets: {
-		inputs_dir: "../../str/platform/targets/",
+		inputs_dir: "targets/",
 		x64mac: { inputs: ["libhost.a", app] },
 		arm64mac: { inputs: ["libhost.a", app] },
 		x64musl: { inputs: ["crt1.o", "libhost.a", app, "libc.a"] },

@@ -92,5 +92,7 @@ expect Parser.parse(keep_second, "input") == Ok("b", "input")
 
 # Regression for issue 9465. The parser value type is unconstrained by both
 # failing branches and is witnessed only by the equality RHS.
-both_fail = Parser.alt(Parser.fail("first"), Parser.fail("second"))
-expect Parser.parse(both_fail, "input") == Err("second")
+expect {
+    both_fail = Parser.alt(Parser.fail("first"), Parser.fail("second"))
+    Parser.parse(both_fail, "input") == Err("second")
+}

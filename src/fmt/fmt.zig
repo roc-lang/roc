@@ -34,6 +34,11 @@ pub const FormatParseError = Allocator.Error || FormatAstError || error{ParseFai
 /// Errors that can occur in formatting tests.
 pub const FormatTestError = FormatParseError || error{ SecondParseFailed, FormattingNotStable };
 
+/// The source spelling of a keyword, read from the tokenizer's keyword table.
+inline fn kw(comptime tag: Token.Tag) []const u8 {
+    return comptime Token.keywordText(tag) orelse @compileError(@tagName(tag) ++ " is not a keyword token");
+}
+
 const FormatFlags = enum {
     debug_binop,
     no_debug,
@@ -87,6 +92,63 @@ fn parseDiagnosticsPermitFormatting(diagnostics: []const AST.Diagnostic) bool {
     return true;
 }
 
+/// Formats one file for `formatPath`, printing any failure to `stderr` under
+/// `display_path`.
+fn formatFilePathReportingFailure(
+    gpa: std.mem.Allocator,
+    base_dir: std.Io.Dir,
+    path: []const u8,
+    display_path: []const u8,
+    unformatted_files: ?*std.array_list.Managed([]const u8),
+    options: Options,
+    io: std.Io,
+    stderr: *std.Io.Writer,
+) std.Io.Writer.Error!enum { formatted, failed, not_roc_file } {
+    if (formatFilePath(gpa, base_dir, path, unformatted_files, options, io, stderr)) |_| {
+        return .formatted;
+    } else |err| switch (err) {
+        error.NotRocFile => return .not_roc_file,
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileSizeChangedDuringRead,
+        error.FileTooBig,
+        error.InputOutput,
+        error.IsDir,
+        error.LockViolation,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.NotOpenForReading,
+        error.OutOfMemory,
+        error.ParsingFailed,
+        error.PathAlreadyExists,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadFailed,
+        error.ReadOnlyFileSystem,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.Unseekable,
+        error.WouldBlock,
+        error.WriteFailed,
+        => {
+            try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = display_path }, err });
+            return .failed;
+        },
+    }
+}
+
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files successfully formatted and that failed to format.
@@ -116,94 +178,18 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
                 if (!std.mem.eql(u8, std.fs.path.extension(entry.basename), ".roc")) continue;
                 const file_path = try std.fs.path.join(gpa, &.{ path, entry.path });
                 defer gpa.free(file_path);
-                if (formatFilePath(gpa, base_dir, file_path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
-                    success_count += 1;
-                } else |err| switch (err) {
-                    error.NotRocFile => {},
-                    error.AccessDenied,
-                    error.AntivirusInterference,
-                    error.BadPathName,
-                    error.Canceled,
-                    error.DeviceBusy,
-                    error.FileBusy,
-                    error.FileLocksUnsupported,
-                    error.FileNotFound,
-                    error.FileSizeChangedDuringRead,
-                    error.FileTooBig,
-                    error.InputOutput,
-                    error.IsDir,
-                    error.LockViolation,
-                    error.NameTooLong,
-                    error.NetworkNotFound,
-                    error.NoDevice,
-                    error.NoSpaceLeft,
-                    error.NotDir,
-                    error.NotOpenForReading,
-                    error.OutOfMemory,
-                    error.ParsingFailed,
-                    error.PathAlreadyExists,
-                    error.PermissionDenied,
-                    error.PipeBusy,
-                    error.ProcessFdQuotaExceeded,
-                    error.ReadFailed,
-                    error.ReadOnlyFileSystem,
-                    error.SymLinkLoop,
-                    error.SystemFdQuotaExceeded,
-                    error.SystemResources,
-                    error.Unexpected,
-                    error.Unseekable,
-                    error.WouldBlock,
-                    error.WriteFailed,
-                    => {
-                        try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = entry.path }, err });
-                        failed_count += 1;
-                    },
+                switch (try formatFilePathReportingFailure(gpa, base_dir, file_path, entry.path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+                    .formatted => success_count += 1,
+                    .failed => failed_count += 1,
+                    .not_roc_file => {},
                 }
             }
         }
     } else |_| {
-        if (formatFilePath(gpa, base_dir, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) |_| {
-            success_count += 1;
-        } else |err| switch (err) {
-            error.NotRocFile => {},
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.DeviceBusy,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileSizeChangedDuringRead,
-            error.FileTooBig,
-            error.InputOutput,
-            error.IsDir,
-            error.LockViolation,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotOpenForReading,
-            error.OutOfMemory,
-            error.ParsingFailed,
-            error.PathAlreadyExists,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadFailed,
-            error.ReadOnlyFileSystem,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.Unseekable,
-            error.WouldBlock,
-            error.WriteFailed,
-            => {
-                try stderr.print("Failed to format {f}: {any}\n", .{ base.bidi.Display{ .bytes = path }, err });
-                failed_count += 1;
-            },
+        switch (try formatFilePathReportingFailure(gpa, base_dir, path, path, if (unformatted_files) |*to_reformat| to_reformat else null, shared_options, io, stderr)) {
+            .formatted => success_count += 1,
+            .failed => failed_count += 1,
+            .not_roc_file => {},
         }
     }
 
@@ -852,7 +838,7 @@ const Formatter = struct {
             },
             .@"var" => |v| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("var");
+                try fmt.pushAll(kw(.KwVar));
                 if (multiline and try fmt.flushContinuationComments(v.name)) {
                     try fmt.pushIndent();
                 } else {
@@ -885,7 +871,7 @@ const Formatter = struct {
             },
             .import => |i| {
                 var flushed = false;
-                try fmt.pushAll("import");
+                try fmt.pushAll(kw(.KwImport));
                 if (multiline) {
                     flushed = try fmt.flushCommentsBefore(i.target.start_tok);
                 }
@@ -906,7 +892,7 @@ const Formatter = struct {
                         if (flushed) {
                             fmt.curr_indent += 1;
                             try fmt.pushIndent();
-                            try fmt.pushAll("as");
+                            try fmt.pushAll(kw(.KwAs));
                         } else {
                             try fmt.pushAll(" as");
                         }
@@ -940,7 +926,7 @@ const Formatter = struct {
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                        try fmt.pushAll("exposing ");
+                        try fmt.pushAll(kw(.KwExposing) ++ " ");
                     } else {
                         try fmt.pushAll(" exposing ");
                     }
@@ -955,13 +941,13 @@ const Formatter = struct {
                 return fmt.finishStatement(f);
             },
             .file_import => |fi| {
-                try fmt.pushAll("import");
+                try fmt.pushAll(kw(.KwImport));
                 try fmt.commentBoundary(fi.path_tok - 1, true);
                 try fmt.push('"');
                 try fmt.pushTokenText(fi.path_tok);
                 try fmt.push('"');
                 try fmt.commentBoundary(fi.name_tok - 1, true);
-                try fmt.pushAll("as");
+                try fmt.pushAll(kw(.KwAs));
                 try fmt.commentBoundary(fi.name_tok, true);
                 try fmt.pushTokenText(fi.name_tok);
                 try fmt.commentBoundary(fi.name_tok + 1, true);
@@ -1101,7 +1087,7 @@ const Formatter = struct {
             .type_anno => |t| switch (f.phase) {
                 0 => {
                     if (t.is_var) {
-                        try fmt.pushAll("var ");
+                        try fmt.pushAll(kw(.KwVar) ++ " ");
                     }
                     try fmt.pushTokenText(t.name);
                     if (multiline and try fmt.flushCommentsAfter(t.name)) {
@@ -1140,7 +1126,7 @@ const Formatter = struct {
             },
             .expect => |e| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("expect");
+                try fmt.pushAll(kw(.KwExpect));
                 const body_region = fmt.nodeRegion(@intFromEnum(e.body));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1171,7 +1157,7 @@ const Formatter = struct {
                         } else {
                             try fmt.push(' ');
                         }
-                        try fmt.pushAll("in");
+                        try fmt.pushAll(kw(.KwIn));
                         if (multiline and try fmt.flushContinuationComments(expr_region.start)) {
                             try fmt.pushIndent();
                         } else {
@@ -1196,7 +1182,7 @@ const Formatter = struct {
                 const cond_region = fmt.nodeRegion(@intFromEnum(w.cond));
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("while");
+                        try fmt.pushAll(kw(.KwWhile));
                         if (multiline and try fmt.flushContinuationComments(cond_region.start)) {
                             try fmt.pushIndent();
                         } else {
@@ -1219,7 +1205,7 @@ const Formatter = struct {
             },
             .crash => |c| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("crash");
+                try fmt.pushAll(kw(.KwCrash));
                 const body_region = fmt.nodeRegion(@intFromEnum(c.expr));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1231,7 +1217,7 @@ const Formatter = struct {
             },
             .dbg => |d| {
                 if (f.phase != 0) return fmt.finishStatement(f);
-                try fmt.pushAll("dbg");
+                try fmt.pushAll(kw(.KwDbg));
                 const body_region = fmt.nodeRegion(@intFromEnum(d.expr));
                 if (multiline and try fmt.flushContinuationComments(body_region.start)) {
                     try fmt.pushIndent();
@@ -1244,7 +1230,7 @@ const Formatter = struct {
             .@"return" => |r| {
                 if (f.phase != 0) return fmt.finishStatement(f);
                 const redundant = fmt.ast.redundant_returns.isSet(@intFromEnum(f.si));
-                if (!redundant) try fmt.pushAll("return");
+                if (!redundant) try fmt.pushAll(kw(.KwReturn));
                 const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
                 if (redundant and !f.return_comments_flushed and fmt.hasCommentBefore(body_region.start)) {
                     _ = try fmt.flushCommentsBefore(body_region.start);
@@ -1258,7 +1244,7 @@ const Formatter = struct {
                 return call(exprFrame(r.expr, .{ .block_is_statement = redundant }));
             },
             .@"break" => {
-                try fmt.pushAll("break");
+                try fmt.pushAll(kw(.KwBreak));
                 return fmt.finishStatement(f);
             },
             .malformed => {
@@ -1289,7 +1275,7 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
 
-                try fmt.pushAll("where");
+                try fmt.pushAll(kw(.KwWhere));
 
                 // Add opening bracket
                 try fmt.commentBoundary(clause_coll.region.start + 1, true);
@@ -2492,22 +2478,13 @@ const Formatter = struct {
                 },
                 else => return fmt.finishExpr(f),
             },
-            .int => |i| {
+            inline .int, .frac => |i| {
                 try fmt.pushTokenText(i.token);
                 return fmt.finishExpr(f);
             },
-            .frac => |fr| {
-                try fmt.pushTokenText(fr.token);
-                return fmt.finishExpr(f);
-            },
-            .typed_int => |ti| {
+            inline .typed_int, .typed_frac => |ti| {
                 try fmt.pushTokenText(ti.token);
                 try fmt.formatLiteralTypeSuffix(ti.type_suffix);
-                return fmt.finishExpr(f);
-            },
-            .typed_frac => |tf| {
-                try fmt.pushTokenText(tf.token);
-                try fmt.formatLiteralTypeSuffix(tf.type_suffix);
                 return fmt.finishExpr(f);
             },
             .list => |l| switch (f.phase) {
@@ -2828,7 +2805,7 @@ const Formatter = struct {
                 const then_region = fmt.nodeRegion(@intFromEnum(i.then));
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("if");
+                        try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
                         const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                         if (try fmt.flushCommentsBefore(cond_region.start)) {
@@ -2861,7 +2838,7 @@ const Formatter = struct {
                         } else {
                             try fmt.push(' ');
                         }
-                        try fmt.pushAll("else");
+                        try fmt.pushAll(kw(.KwElse));
                         if (!has_blocks) fmt.curr_indent = base_indent;
                         const else_region = fmt.nodeRegion(@intFromEnum(i.@"else"));
                         if (try fmt.flushCommentsBefore(else_region.start)) {
@@ -2882,7 +2859,7 @@ const Formatter = struct {
                 const then_is_block = fmt.ast.store.getExpr(i.then) == .block;
                 switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("if");
+                        try fmt.pushAll(kw(.KwIf));
                         f.locals = .{ .conditional = .{ .base_indent = fmt.curr_indent } };
                         const cond_region = fmt.nodeRegion(@intFromEnum(i.condition));
                         if (try fmt.flushCommentsBefore(cond_region.start)) {
@@ -2913,7 +2890,7 @@ const Formatter = struct {
                 const branches = fmt.ast.store.matchBranchSlice(m.branches);
                 sw: switch (f.phase) {
                     0 => {
-                        try fmt.pushAll("match");
+                        try fmt.pushAll(kw(.KwMatch));
                         try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(m.expr)).start, true);
                         f.phase = 1;
                         return call(exprFrame(m.expr, .{}));
@@ -2958,7 +2935,7 @@ const Formatter = struct {
                             } else {
                                 try fmt.push(' ');
                             }
-                            try fmt.pushAll("if");
+                            try fmt.pushAll(kw(.KwIf));
                             const guard_region = fmt.nodeRegion(@intFromEnum(guard));
                             if (try fmt.flushCommentsBefore(guard_region.start)) {
                                 try fmt.pushIndent();
@@ -2987,7 +2964,7 @@ const Formatter = struct {
             },
             .dbg => |d| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll("dbg");
+                    try fmt.pushAll(kw(.KwDbg));
                     const expr_node = fmt.nodeRegion(@intFromEnum(d.expr));
                     if (multiline and try fmt.flushContinuationComments(expr_node.start)) {
                         try fmt.pushIndent();
@@ -3001,7 +2978,7 @@ const Formatter = struct {
             },
             .crash => |c| switch (f.phase) {
                 0 => {
-                    try fmt.pushAll("crash");
+                    try fmt.pushAll(kw(.KwCrash));
                     const expr_node = fmt.nodeRegion(@intFromEnum(c.expr));
                     if (multiline and try fmt.flushContinuationComments(expr_node.start)) {
                         try fmt.pushIndent();
@@ -3114,7 +3091,7 @@ const Formatter = struct {
             .@"return" => |r| switch (f.phase) {
                 0 => {
                     const redundant = fmt.ast.redundant_returns.isSet(@intFromEnum(f.ei));
-                    if (!redundant) try fmt.pushAll("return");
+                    if (!redundant) try fmt.pushAll(kw(.KwReturn));
                     const body_region = fmt.nodeRegion(@intFromEnum(r.expr));
                     if (redundant and fmt.hasCommentBefore(body_region.start)) {
                         if (!fmt.has_newline) fmt.curr_indent += 1;
@@ -3131,7 +3108,7 @@ const Formatter = struct {
                 else => return fmt.finishExpr(f),
             },
             .@"break" => {
-                try fmt.pushAll("break");
+                try fmt.pushAll(kw(.KwBreak));
                 return fmt.finishExpr(f);
             },
             .record_builder => |rb| {
@@ -3435,7 +3412,7 @@ const Formatter = struct {
                 return done;
             },
             .var_ident => |i| {
-                try fmt.pushAll("var ");
+                try fmt.pushAll(kw(.KwVar) ++ " ");
                 try fmt.formatIdent(i.ident_tok, null);
                 return done;
             },
@@ -3479,20 +3456,11 @@ const Formatter = struct {
                 }
                 return done;
             },
-            .int => |n| {
+            inline .int, .frac => |n| {
                 try fmt.formatIdent(n.number_tok, null);
                 return done;
             },
-            .frac => |n| {
-                try fmt.formatIdent(n.number_tok, null);
-                return done;
-            },
-            .typed_int => |n| {
-                try fmt.formatIdent(n.number_tok, null);
-                try fmt.formatLiteralTypeSuffix(n.type_suffix);
-                return done;
-            },
-            .typed_frac => |n| {
+            inline .typed_int, .typed_frac => |n| {
                 try fmt.formatIdent(n.number_tok, null);
                 try fmt.formatLiteralTypeSuffix(n.type_suffix);
                 return done;
@@ -3525,7 +3493,7 @@ const Formatter = struct {
                     } else {
                         try fmt.push(' ');
                     }
-                    try fmt.pushAll("as");
+                    try fmt.pushAll(kw(.KwAs));
                     if (multiline and try fmt.flushContinuationComments(n)) {
                         try fmt.pushIndent();
                     } else {
@@ -3587,7 +3555,7 @@ const Formatter = struct {
                 }
                 Formatter.discardRegion(result.region);
                 try fmt.commentBoundary(a.name - 1, true);
-                try fmt.pushAll("as");
+                try fmt.pushAll(kw(.KwAs));
                 try fmt.commentBoundary(a.name, true);
                 try fmt.pushTokenText(a.name);
                 return done;
@@ -3603,7 +3571,7 @@ const Formatter = struct {
         const item = fmt.ast.store.getExposedItem(idx);
         var region = AST.TokenizedRegion{ .start = 0, .end = 0 };
         switch (item) {
-            .lower_ident => |i| {
+            inline .lower_ident, .upper_ident => |i| {
                 region = i.region;
                 for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
                     try fmt.pushTokenText(qualifier);
@@ -3612,21 +3580,7 @@ const Formatter = struct {
                 try fmt.pushTokenText(i.ident);
                 if (i.as) |a| {
                     try fmt.commentBoundary(a - 1, true);
-                    try fmt.pushAll("as");
-                    try fmt.commentBoundary(a, true);
-                    try fmt.pushTokenText(a);
-                }
-            },
-            .upper_ident => |i| {
-                region = i.region;
-                for (fmt.ast.store.tokenSlice(i.qualifiers)) |qualifier| {
-                    try fmt.pushTokenText(qualifier);
-                    try fmt.push('.');
-                }
-                try fmt.pushTokenText(i.ident);
-                if (i.as) |a| {
-                    try fmt.commentBoundary(a - 1, true);
-                    try fmt.pushAll("as");
+                    try fmt.pushAll(kw(.KwAs));
                     try fmt.commentBoundary(a, true);
                     try fmt.pushTokenText(a);
                 }
@@ -3656,7 +3610,7 @@ const Formatter = struct {
         const start_indent = fmt.curr_indent;
         defer fmt.curr_indent = start_indent;
 
-        try fmt.pushAll("targets: {");
+        try fmt.pushAll(kw(.KwTargets) ++ ": {");
 
         var has_content = false;
 
@@ -3866,9 +3820,7 @@ const Formatter = struct {
     fn plannedRocVersionUpgrade(fmt: *Formatter, header: AST.Header) ?RocVersionUpgrade {
         const current = fmt.options.compiler_version orelse return null;
         const field_idx = switch (header) {
-            .app => |h| h.roc_version,
-            .package => |h| h.roc_version,
-            .platform => |h| h.roc_version,
+            inline .app, .package, .platform => |h| h.roc_version,
             .module, .hosted, .type_module, .default_app, .malformed => null,
         } orelse return null;
         const pinned = fmt.ast.rocVersionText(field_idx) orelse return null;
@@ -3891,7 +3843,7 @@ const Formatter = struct {
             try fmt.commentBoundary(field.name + 1, false);
             try fmt.push(':');
             try fmt.commentBoundary(field.name + 2, true);
-            try fmt.pushAll("platform");
+            try fmt.pushAll(kw(.KwPlatform));
             try fmt.commentBoundary(fmt.nodeRegion(@intFromEnum(field.value.supplied)).start, true);
             try fmt.formatExprDiscard(field.value.supplied);
             return field.region;
@@ -3912,7 +3864,7 @@ const Formatter = struct {
         switch (header) {
             .app => |a| {
                 const provides = fmt.ast.store.getCollection(a.provides);
-                try fmt.pushAll("app");
+                try fmt.pushAll(kw(.KwApp));
                 if (multiline and try fmt.flushCommentsAfter(a.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -3941,7 +3893,7 @@ const Formatter = struct {
                 try fmt.formatPackageDependencyRecord(a.packages, a.platform_idx);
             },
             .module => |m| {
-                try fmt.pushAll("module");
+                try fmt.pushAll(kw(.KwModule));
                 const exposes = fmt.ast.store.getCollection(m.exposes);
                 if (multiline and try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
@@ -3959,7 +3911,7 @@ const Formatter = struct {
                 );
             },
             .hosted => |h| {
-                try fmt.pushAll("hosted");
+                try fmt.pushAll(kw(.KwHosted));
                 const exposes = fmt.ast.store.getCollection(h.exposes);
                 if (multiline and try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
@@ -3977,7 +3929,7 @@ const Formatter = struct {
                 );
             },
             .package => |p| {
-                try fmt.pushAll("package");
+                try fmt.pushAll(kw(.KwPackage));
                 if (multiline) {
                     try fmt.flushCommentsAfterDiscard(p.region.start);
                     try fmt.ensureNewline();
@@ -4008,7 +3960,7 @@ const Formatter = struct {
                 try fmt.formatPackageDependencyRecord(p.packages, p.platform_idx);
             },
             .platform => |p| {
-                try fmt.pushAll("platform");
+                try fmt.pushAll(kw(.KwPlatform));
                 if (try fmt.flushCommentsAfter(p.region.start)) {
                     fmt.curr_indent += 1;
                     try fmt.pushIndent();
@@ -4024,11 +3976,11 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("requires ");
+                try fmt.pushAll(kw(.KwRequires) ++ " ");
                 try fmt.formatOrderedCollection(p.requires_entries.region, .expanded, .curly, AST.RequiresEntry.Idx, fmt.ast.store.requiresEntrySlice(p.requires_entries), Formatter.formatRequiresEntry, false);
                 const exposes = fmt.ast.store.getCollection(p.exposes);
                 try fmt.formatSectionBoundary(exposes.region.start - 1, start_indent + 1);
-                try fmt.pushAll("exposes");
+                try fmt.pushAll(kw(.KwExposes));
                 if (try fmt.flushContinuationComments(exposes.region.start)) {
                     try fmt.pushIndent();
                 } else {
@@ -4049,7 +4001,7 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("packages");
+                try fmt.pushAll(kw(.KwPackages));
                 const packages = fmt.ast.store.getCollection(p.packages);
                 if (try fmt.flushContinuationComments(packages.region.start)) {
                     try fmt.pushIndent();
@@ -4063,12 +4015,12 @@ const Formatter = struct {
                 fmt.curr_indent = start_indent + 1;
                 try fmt.pushIndent();
 
-                try fmt.pushAll("provides ");
+                try fmt.pushAll(kw(.KwProvides) ++ " ");
                 try fmt.formatSymbolMapSection(p.provides, start_indent + 1);
 
                 if (p.hosted.span.len > 0 or fmt.regionHasInteriorComment(p.hosted.region)) {
                     try fmt.formatSectionBoundary(p.hosted.region.start - 1, start_indent + 1);
-                    try fmt.pushAll("hosted ");
+                    try fmt.pushAll(kw(.KwHosted) ++ " ");
                     try fmt.formatSymbolMapSection(p.hosted, start_indent + 1);
                 }
 
@@ -4079,9 +4031,7 @@ const Formatter = struct {
                     try fmt.formatTargetsSection(targets_idx);
                 }
             },
-            .type_module => {},
-            .default_app => {},
-            .malformed => {},
+            .type_module, .default_app, .malformed => {},
         }
     }
 
@@ -4328,12 +4278,8 @@ const Formatter = struct {
                     else => return done,
                 }
             },
-            .ty_var => |v| {
+            inline .ty_var, .underscore_type_var => |v| {
                 try fmt.pushTokenText(v.tok);
-                return done;
-            },
-            .underscore_type_var => |utv| {
-                try fmt.pushTokenText(utv.tok);
                 return done;
             },
             .ty => |t| {
@@ -5348,9 +5294,7 @@ const Formatter = struct {
             .record_builder => |rb| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
                 try fmt.itemsLayout(sink, AST.RecordField.Idx, fmt.ast.store.recordFieldSlice(rb.fields)),
             .nominal_record => |nr| try fmt.groupedExprChild(sink, nr.mapper) or try fmt.groupedExprChild(sink, nr.backing),
-            .suffix_single_question => |s| fmt.groupedExprChild(sink, s.expr),
-            .tuple_access => |t| fmt.groupedExprChild(sink, t.expr),
-            .unary_op => |u| fmt.groupedExprChild(sink, u.expr),
+            inline .suffix_single_question, .tuple_access, .unary_op => |s| fmt.groupedExprChild(sink, s.expr),
             .field_access => |f| (fmt.ast.store.getExpr(f.receiver) == .arrow_call and try fmt.exprChild(sink, f.receiver)) or
                 try fmt.groupedExprChild(sink, f.receiver),
             .method_call => |m| fmt.ast.store.getCollectionLayout(expr_idx) == .expanded or
@@ -5460,14 +5404,8 @@ const Formatter = struct {
 
                 return fmt.exprChild(sink, nr.backing);
             },
-            .suffix_single_question => |s| {
+            inline .suffix_single_question, .tuple_access, .unary_op => |s| {
                 return fmt.exprChild(sink, s.expr);
-            },
-            .tuple_access => |t| {
-                return fmt.exprChild(sink, t.expr);
-            },
-            .unary_op => |u| {
-                return fmt.exprChild(sink, u.expr);
             },
             .field_access => |f| {
                 return fmt.exprChild(sink, f.receiver);
@@ -5781,8 +5719,8 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) FormatPar
 
 fn forKeyword(kind: AST.ForKind) []const u8 {
     return switch (kind) {
-        .iter => "for",
-        .stream => "for!",
+        .iter => kw(.KwFor),
+        .stream => kw(.KwForBang),
     };
 }
 

@@ -1,21 +1,18 @@
-//! Tests for the bundle and download functionality.
+//! Tests for the bundle functionality.
 //!
 //! This file contains comprehensive tests for:
 //! - Bundle creation with tar and zstd compression
 //! - Bundle extraction with hash verification
 //! - Base58 encoding/decoding
-//! - Download URL validation
-//! - Memory-based file system for testing
 
+const builtin = @import("builtin");
 const std = @import("std");
 const collections = @import("collections");
-const Allocator = std.mem.Allocator;
 const bundle = @import("bundle.zig");
-const download = @import("download.zig");
 const streaming_writer = @import("streaming_writer.zig");
 const test_util = @import("test_util.zig");
 const unbundle_mod = @import("unbundle");
-const DirExtractWriter = bundle.DirExtractWriter;
+const DirExtractWriter = unbundle_mod.DirExtractWriter;
 const BufferExtractWriter = unbundle_mod.BufferExtractWriter;
 const FilePathIterator = test_util.FilePathIterator;
 const EntryIterator = test_util.EntryIterator;
@@ -23,179 +20,131 @@ const EntryIterator = test_util.EntryIterator;
 // Use fast compression for tests
 const TEST_COMPRESSION_LEVEL: c_int = 2;
 
-test "path validation for unbundle prevents security issues" {
+const PathReason = std.meta.Tag(unbundle_mod.PathValidationReason);
+
+/// The reason a path whose only fault is a backslash is refused: a backslash
+/// is a path separator on Windows and not portable anywhere else.
+const backslash_reason: ?PathReason = if (builtin.os.tag == .windows) null else .contained_backslash_on_unix;
+
+/// Archive path shapes, each with the reason the path rules refuse it (null
+/// when the path is accepted).
+const path_corpus = [_]struct { path: []const u8, reason: ?PathReason }{
+    .{ .path = "foo/bar.txt", .reason = null },
+    .{ .path = "src/main.zig", .reason = null },
+    .{ .path = "a-b_c.123", .reason = null },
+    .{ .path = "test-folder/tests.zig", .reason = null },
+    .{ .path = "nested/folder/structure.txt", .reason = null },
+    .{ .path = "control\x01char.txt", .reason = null },
+    .{ .path = "a" ** 255, .reason = null },
+    .{ .path = "console/printer.txt", .reason = null },
+
+    .{ .path = "", .reason = .empty_path },
+    .{ .path = "a" ** 256, .reason = .path_too_long },
+
+    .{ .path = "/etc/passwd", .reason = .absolute_path },
+    .{ .path = "C:/Windows/System32", .reason = .absolute_path },
+    .{ .path = "Z:file.txt", .reason = .absolute_path },
+    .{ .path = "D:\\file.txt", .reason = .absolute_path },
+    .{ .path = "\\\\server\\share", .reason = .absolute_path },
+
+    .{ .path = "../etc/passwd", .reason = .path_traversal },
+    .{ .path = "../../../etc/passwd", .reason = .path_traversal },
+    .{ .path = "foo/../../../etc/passwd", .reason = .path_traversal },
+    .{ .path = "foo/bar/..", .reason = .path_traversal },
+
+    .{ .path = ".", .reason = .current_directory_reference },
+    .{ .path = "./foo", .reason = .current_directory_reference },
+    .{ .path = "foo/./bar", .reason = .current_directory_reference },
+    .{ .path = "./foo/../../bar", .reason = .current_directory_reference },
+
+    .{ .path = "foo:bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo*bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo?bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo\"bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo<bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo>bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo|bar.txt", .reason = .windows_reserved_char },
+    .{ .path = "foo\x00bar", .reason = .windows_reserved_char },
+
+    .{ .path = "CON", .reason = .windows_reserved_name },
+    .{ .path = "con", .reason = .windows_reserved_name },
+    .{ .path = "CON.txt", .reason = .windows_reserved_name },
+    .{ .path = "PRN.txt", .reason = .windows_reserved_name },
+    .{ .path = "com1.txt", .reason = .windows_reserved_name },
+    .{ .path = "AUX", .reason = .windows_reserved_name },
+    .{ .path = "NUL", .reason = .windows_reserved_name },
+    .{ .path = "LPT9", .reason = .windows_reserved_name },
+    .{ .path = "folder/CON/file.txt", .reason = .windows_reserved_name },
+
+    .{ .path = "foo ", .reason = .component_ends_with_space },
+    .{ .path = "foo /bar.txt", .reason = .component_ends_with_space },
+    .{ .path = "folder/file.txt ", .reason = .component_ends_with_space },
+    .{ .path = "foo.", .reason = .component_ends_with_period },
+    .{ .path = "foo./bar.txt", .reason = .component_ends_with_period },
+    .{ .path = "folder/file.txt.", .reason = .component_ends_with_period },
+
+    .{ .path = "foo\\bar.txt", .reason = backslash_reason },
+    .{ .path = "path\\with\\backslash", .reason = backslash_reason },
+
+    // Components end at a backslash too, so these are refused for what they
+    // name on Windows rather than accepted there as one opaque component.
+    .{ .path = "foo\\..\\..\\etc\\passwd", .reason = .path_traversal },
+    .{ .path = "foo\\.\\bar", .reason = .current_directory_reference },
+    .{ .path = "folder\\CON\\file.txt", .reason = .windows_reserved_name },
+    .{ .path = "foo \\bar.txt", .reason = .component_ends_with_space },
+    .{ .path = "foo.\\bar.txt", .reason = .component_ends_with_period },
+};
+
+test "bundle writes a path exactly when unbundle accepts it" {
     const testing = std.testing;
+    var allocator = testing.allocator;
 
-    const test_cases = [_]struct {
-        path: []const u8,
-        should_fail: bool,
-        description: []const u8,
-    }{
-        // Directory traversal
-        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
-        .{ .path = "foo/../../../etc/passwd", .should_fail = true, .description = "Directory traversal in middle" },
-        .{ .path = "./foo/../../bar", .should_fail = true, .description = "Directory traversal with current dir" },
-        .{ .path = "foo/bar/..", .should_fail = true, .description = "Trailing directory traversal" },
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "source.txt", .data = "content" });
 
-        // Absolute paths
-        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path Unix" },
-        .{ .path = "C:/Windows/System32", .should_fail = true, .description = "Absolute path Windows" },
+    for (path_corpus) |case| {
+        errdefer std.debug.print("archive path: '{s}'\n", .{case.path});
 
-        // Current directory references
-        .{ .path = "foo/./bar", .should_fail = true, .description = "Current directory reference" },
-        .{ .path = ".", .should_fail = true, .description = "Single dot" },
-        .{ .path = "./foo", .should_fail = true, .description = "Current directory prefix" },
+        const reader_reason: ?PathReason = if (unbundle_mod.pathHasUnbundleErr(case.path)) |err| err.reason else null;
+        try testing.expectEqual(case.reason, reader_reason);
 
-        // Edge cases
-        .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long (> 255 chars)" },
+        var archive: std.Io.Writer.Allocating = .init(allocator);
+        defer archive.deinit();
+        const entries = [_]bundle.Entry{.{ .source_path = "source.txt", .archive_path = case.path }};
+        var iter = EntryIterator{ .entries = &entries };
+        var bundle_ctx: bundle.ErrorContext = undefined;
+        const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, testing.io, &archive.writer, tmp.dir, &bundle_ctx) catch |err| {
+            try testing.expectEqual(error.InvalidPath, err);
+            try testing.expectEqualStrings(case.path, bundle_ctx.path);
+            try testing.expectEqual(case.reason, @as(?PathReason, bundle_ctx.reason));
+            continue;
+        };
+        defer allocator.free(result.filename);
+        try testing.expectEqual(@as(?PathReason, null), case.reason);
 
-        // Valid paths (these should work with pathHasUnbundleErr)
-        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
-        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
-        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
-        .{ .path = "foo:bar.txt", .should_fail = false, .description = "Path with colon (allowed in unbundle)" },
-        .{ .path = "foo\\bar.txt", .should_fail = false, .description = "Path with backslash (allowed in unbundle)" },
-        .{ .path = "CON.txt", .should_fail = false, .description = "Windows reserved name (allowed in unbundle)" },
-        .{ .path = "file.txt ", .should_fail = false, .description = "Trailing space (allowed in unbundle)" },
-    };
+        // Every archive the writer produces extracts, with the file stored
+        // under the forward-slash form of the path it was given.
+        const hash = (try unbundle_mod.validateBase58Hash(result.filename[0 .. result.filename.len - ".tar.zst".len])).?;
+        var archive_reader = std.Io.Reader.fixed(archive.written());
+        var extracted = BufferExtractWriter.init(allocator);
+        defer extracted.deinit();
+        _ = try unbundle_mod.unbundleStream(allocator, &archive_reader, extracted.extractWriter(), &hash, null, .{});
 
-    for (test_cases) |tc| {
-        const validation_result = bundle.pathHasUnbundleErr(tc.path);
-        const is_valid = validation_result == null;
-
-        if (tc.should_fail) {
-            try testing.expect(!is_valid);
-        } else {
-            if (validation_result) |err| {
-                std.debug.print("Unexpected validation failure for '{s}': {any}\n", .{ tc.path, err.reason });
-            }
-            try testing.expect(is_valid);
-        }
+        const stored_path = try allocator.dupe(u8, case.path);
+        defer allocator.free(stored_path);
+        if (builtin.os.tag == .windows) std.mem.replaceScalar(u8, stored_path, '\\', '/');
+        try testing.expectEqual(@as(usize, 1), extracted.files.count());
+        try testing.expect(extracted.files.contains(stored_path));
     }
 }
 
-test "path validation for bundle prevents Windows issues" {
-    const testing = std.testing;
-
-    // Test cases for pathHasBundleErr - security + Windows compatibility
-    const test_cases = [_]struct {
-        path: []const u8,
-        should_fail: bool,
-        description: []const u8,
-    }{
-        // All the security checks from pathHasUnbundleErr should still fail
-        .{ .path = "../../../etc/passwd", .should_fail = true, .description = "Directory traversal" },
-        .{ .path = "/etc/passwd", .should_fail = true, .description = "Absolute path" },
-        .{ .path = "./foo", .should_fail = true, .description = "Current directory reference" },
-        .{ .path = "", .should_fail = true, .description = "Empty path" },
-        .{ .path = "a" ** 256, .should_fail = true, .description = "Path too long" },
-
-        // Windows-specific checks (these fail in bundle but not unbundle)
-        .{ .path = "foo:bar.txt", .should_fail = true, .description = "Colon character" },
-        .{ .path = "foo*bar.txt", .should_fail = true, .description = "Asterisk character" },
-        .{ .path = "foo?bar.txt", .should_fail = true, .description = "Question mark" },
-        .{ .path = "foo\"bar.txt", .should_fail = true, .description = "Quote character" },
-        .{ .path = "foo<bar.txt", .should_fail = true, .description = "Less than character" },
-        .{ .path = "foo>bar.txt", .should_fail = true, .description = "Greater than character" },
-        .{ .path = "foo|bar.txt", .should_fail = true, .description = "Pipe character" },
-
-        // Windows reserved names
-        .{ .path = "CON", .should_fail = true, .description = "Windows reserved name CON" },
-        .{ .path = "con", .should_fail = true, .description = "Windows reserved name con (lowercase)" },
-        .{ .path = "PRN.txt", .should_fail = true, .description = "Windows reserved name PRN with extension" },
-        .{ .path = "AUX", .should_fail = true, .description = "Windows reserved name AUX" },
-        .{ .path = "NUL", .should_fail = true, .description = "Windows reserved name NUL" },
-        .{ .path = "COM1", .should_fail = true, .description = "Windows reserved name COM1" },
-        .{ .path = "LPT1", .should_fail = true, .description = "Windows reserved name LPT1" },
-        .{ .path = "folder/CON/file.txt", .should_fail = true, .description = "Windows reserved name in path" },
-
-        // Components ending with space or period
-        .{ .path = "foo /bar.txt", .should_fail = true, .description = "Component ending with space" },
-        .{ .path = "foo./bar.txt", .should_fail = true, .description = "Component ending with period" },
-        .{ .path = "folder/file.txt ", .should_fail = true, .description = "Filename ending with space" },
-        .{ .path = "folder/file.txt.", .should_fail = true, .description = "Filename ending with period" },
-
-        // Valid paths
-        .{ .path = "foo/bar.txt", .should_fail = false, .description = "Valid path" },
-        .{ .path = "src/main.zig", .should_fail = false, .description = "Valid source path" },
-        .{ .path = "a-b_c.123", .should_fail = false, .description = "Valid filename with special chars" },
-        .{ .path = "test-folder/tests.zig", .should_fail = false, .description = "Path with dash" },
-        .{ .path = "nested/folder/structure.txt", .should_fail = false, .description = "Nested path" },
-    };
-
-    for (test_cases) |tc| {
-        const validation_result = bundle.pathHasBundleErr(tc.path);
-        const is_valid = validation_result == null;
-
-        if (tc.should_fail) {
-            try testing.expect(!is_valid);
-        } else {
-            if (validation_result) |err| {
-                std.debug.print("Unexpected validation failure for '{s}': {any}\n", .{ tc.path, err.reason });
-            }
-            try testing.expect(is_valid);
-        }
-    }
-
-    // Test path with NUL byte separately since we can't put it in a string literal easily
-    const nul_path = [_]u8{ 'f', 'o', 'o', 0, 'b', 'a', 'r' };
-    const nul_result = bundle.pathHasBundleErr(&nul_path);
-    try testing.expect(nul_result != null);
-    if (nul_result) |err| {
-        try testing.expectEqual(bundle.PathValidationReason{ .windows_reserved_char = 0 }, err.reason);
-    }
-}
-
-test "path validation returns correct error reasons" {
-    const testing = std.testing;
-
-    // Test specific error reasons for unbundle (pathHasUnbundleErr)
-    const unbundle_test_cases = [_]struct {
-        path: []const u8,
-        expected_reason: bundle.PathValidationReason,
-    }{
-        .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
-        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
-        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
-        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
-    };
-
-    for (unbundle_test_cases) |tc| {
-        const result = bundle.pathHasUnbundleErr(tc.path);
-        try testing.expect(result != null);
-        if (result) |err| {
-            try testing.expectEqual(tc.expected_reason, err.reason);
-        }
-    }
-
-    // Test specific error reasons for bundle (pathHasBundleErr)
-    const bundle_test_cases = [_]struct {
-        path: []const u8,
-        expected_reason: bundle.PathValidationReason,
-    }{
-        .{ .path = "", .expected_reason = .empty_path },
-        .{ .path = "a" ** 256, .expected_reason = .path_too_long },
-        .{ .path = "foo:bar", .expected_reason = .{ .windows_reserved_char = ':' } },
-        .{ .path = "foo*bar", .expected_reason = .{ .windows_reserved_char = '*' } },
-        .{ .path = "foo?bar", .expected_reason = .{ .windows_reserved_char = '?' } },
-        .{ .path = "foo<bar", .expected_reason = .{ .windows_reserved_char = '<' } },
-        .{ .path = "/etc/passwd", .expected_reason = .absolute_path },
-        .{ .path = "../etc/passwd", .expected_reason = .path_traversal },
-        .{ .path = "foo/./bar", .expected_reason = .current_directory_reference },
-        .{ .path = "CON", .expected_reason = .windows_reserved_name },
-        .{ .path = "com1.txt", .expected_reason = .windows_reserved_name },
-        .{ .path = "foo ", .expected_reason = .component_ends_with_space },
-        .{ .path = "foo.", .expected_reason = .component_ends_with_period },
-    };
-
-    for (bundle_test_cases) |tc| {
-        const result = bundle.pathHasBundleErr(tc.path);
-        try testing.expect(result != null);
-        if (result) |err| {
-            try testing.expectEqual(tc.expected_reason, err.reason);
-        }
+test "the archive path corpus covers every validation reason" {
+    inline for (comptime std.meta.tags(PathReason)) |reason| {
+        const covered = for (path_corpus) |case| {
+            if (case.reason == reason) break true;
+        } else false;
+        try std.testing.expect(covered or (reason == .contained_backslash_on_unix and backslash_reason == null));
     }
 }
 
@@ -224,7 +173,7 @@ test "bundle validates paths correctly" {
         const result = bundle.bundle(&iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, &error_ctx);
 
         try testing.expectError(error.InvalidPath, result);
-        try testing.expectEqual(bundle.PathValidationReason.windows_reserved_name, error_ctx.reason);
+        try testing.expectEqual(PathReason.windows_reserved_name, @as(PathReason, error_ctx.reason));
     }
 
     // Test case 2: Normal files should bundle successfully
@@ -302,15 +251,9 @@ test "path validation prevents directory traversal" {
     defer compressed_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(compressed_list.items);
-    var allocator_copy2 = allocator;
-    var dir_writer = DirExtractWriter.init(tmp.dir, io);
-    const result = bundle.unbundleStream(
-        &stream_reader,
-        dir_writer.extractWriter(),
-        &allocator_copy2,
-        &hash,
-        null,
-    );
+    var dir_writer = DirExtractWriter.init(tmp.dir, io, allocator);
+    defer dir_writer.deinit();
+    const result = unbundle_mod.unbundleStream(allocator, &stream_reader, dir_writer.extractWriter(), &hash, null, .{});
 
     try testing.expectError(error.InvalidPath, result);
 }
@@ -385,7 +328,7 @@ test "bundle and unbundle roundtrip" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify all files exist with correct content
     const file1_content = try dst_dir.readFileAlloc(io, "file1.txt", allocator, .limited(1024));
@@ -557,7 +500,7 @@ test "bundle and unbundle over socket stream" {
     var stream_buffer: [1024]u8 = undefined;
     var buffered_reader = stream.reader(io, &stream_buffer);
     const socket_reader = &buffered_reader.interface;
-    try bundle.unbundle(socket_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, socket_reader, dst_dir, io, filename, null);
 
     // Wait for server to finish
     try server_ctx.done.wait(io);
@@ -616,7 +559,7 @@ test "minimal bundle unbundle" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Read and verify content
     const content = try dst_dir.readFileAlloc(io, "test.txt", allocator, .limited(1024));
@@ -674,7 +617,7 @@ test "bundle stores an archive path distinct from its source path" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify files exist WITHOUT the prefix
     const main_content = try dst_dir.readFileAlloc(io, "main.txt", allocator, .limited(1024));
@@ -722,7 +665,7 @@ test "blake3 hash verification failure" {
     defer bundle_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    const result = bundle.unbundle(&stream_reader, dst_dir, io, &allocator, wrong_filename, null);
+    const result = unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, wrong_filename, null);
 
     try testing.expectError(error.InvalidFilename, result);
 }
@@ -768,7 +711,7 @@ test "unbundle tolerates a pre-existing directory named after the archive" {
     defer output_list.deinit(allocator);
 
     var stream_reader = std.Io.Reader.fixed(output_list.items);
-    try bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    try unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Verify the roundtrip content is intact
     const content = try dst_dir.readFileAlloc(io, "test.txt", allocator, .limited(1024));
@@ -818,7 +761,7 @@ test "blake3 hash detects corruption" {
 
     // Try to unbundle corrupted data - should fail with HashMismatch or DecompressionFailed
     var stream_reader = std.Io.Reader.fixed(bundle_list.items);
-    const result = bundle.unbundle(&stream_reader, dst_dir, io, &allocator, filename, null);
+    const result = unbundle_mod.unbundleFiles(allocator, &stream_reader, dst_dir, io, filename, null);
 
     // Corruption can cause either hash mismatch (if decompression succeeds but data is wrong)
     // or decompression failure (if the compressed stream structure is corrupted)
@@ -839,6 +782,13 @@ test "blake3 hash detects corruption" {
             error.InvalidPath,
             error.NoDataExtracted,
             error.OutOfMemory,
+            error.EndOfStream,
+            error.WriteFailed,
+            error.ChecksumFailure,
+            error.DictionaryIdFlagUnsupported,
+            error.MalformedBlock,
+            error.MalformedFrame,
+            error.ExpandedSizeLimitExceeded,
             => return err,
         }
     }
@@ -911,7 +861,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         var reader_buffer: [4096]u8 = undefined;
         var bundle_reader = bundle_file.reader(io, &reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, io, &allocator, filename1, null);
+        try unbundle_mod.unbundleFiles(allocator, &bundle_reader.interface, extract_dir, io, filename1, null);
     }
 
     // Second bundle (from first extraction)
@@ -955,7 +905,7 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
         var reader_buffer: [4096]u8 = undefined;
         var bundle_reader = bundle_file.reader(io, &reader_buffer);
-        try bundle.unbundle(&bundle_reader.interface, extract_dir, io, &allocator, filename2, null);
+        try unbundle_mod.unbundleFiles(allocator, &bundle_reader.interface, extract_dir, io, filename2, null);
     }
 
     // Verify all files match original content
@@ -968,290 +918,6 @@ test "double roundtrip bundle -> unbundle -> bundle -> unbundle" {
 
     // Bundle sizes should be identical
     try testing.expectEqual(first_bundle_list.items.len, second_bundle_list.items.len);
-}
-
-test "download URL validation" {
-    const testing = std.testing;
-
-    // Invalid: no hash in URL
-    {
-        const url = "https://example.com/path/to/";
-        const result = download.validateUrl(url);
-        try testing.expectError(download.DownloadError.NoHashInUrl, result);
-    }
-
-    // Valid: hash without .tar.zst extension
-    {
-        const url = "https://example.com/4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf";
-        const parsed = try download.validateUrl(url);
-        try testing.expectEqualStrings("4ZGqXJtqH5n9wMmQ7nPQTU8zgHBNfZ3kcVnNcL3hKqXf", parsed.hash);
-        try testing.expectEqual(download.Version.none, parsed.version);
-        try testing.expectEqualStrings("example.com", parsed.urlIdPrefix(url));
-    }
-}
-
-// In-memory file system for testing
-const MemoryFileSystem = struct {
-    allocator: std.mem.Allocator,
-    files: std.StringHashMap(std.array_list.Managed(u8)),
-    directories: std.StringHashMap(void),
-
-    pub fn init(allocator: std.mem.Allocator) MemoryFileSystem {
-        return .{
-            .allocator = allocator,
-            .files = std.StringHashMap(std.array_list.Managed(u8)).init(allocator),
-            .directories = std.StringHashMap(void).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *MemoryFileSystem) void {
-        var file_iter = self.files.iterator();
-        while (file_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            entry.value_ptr.deinit();
-        }
-        self.files.deinit();
-
-        var dir_iter = self.directories.iterator();
-        while (dir_iter.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-        }
-        self.directories.deinit();
-    }
-
-    pub fn extractWriter(self: *MemoryFileSystem) bundle.ExtractWriter {
-        return .{
-            .ptr = self,
-            .makeDirFn = makeDir,
-            .streamFileFn = streamFile,
-        };
-    }
-
-    fn makeDir(ptr: *anyopaque, path: []const u8) bundle.ExtractError!void {
-        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
-        if (!self.directories.contains(path)) {
-            try self.directories.put(try self.allocator.dupe(u8, path), {});
-        }
-    }
-
-    fn streamFile(ptr: *anyopaque, path: []const u8, reader: *std.Io.Reader, size: usize) bundle.ExtractError!void {
-        const self = @as(*MemoryFileSystem, @ptrCast(@alignCast(ptr)));
-
-        // Create parent directories if needed
-        if (std.fs.path.dirname(path)) |dir_name| {
-            if (!self.directories.contains(dir_name)) {
-                try self.directories.put(try self.allocator.dupe(u8, dir_name), {});
-            }
-        }
-
-        // Create new file data
-        var file_data = std.array_list.Managed(u8).init(self.allocator);
-
-        // Stream from reader
-        var buffer: [bundle.STREAM_BUFFER_SIZE]u8 = undefined;
-        var total_read: usize = 0;
-
-        while (total_read < size) {
-            const to_read = @min(buffer.len, size - total_read);
-            const bytes_read = try reader.read(buffer[0..to_read]);
-
-            if (bytes_read == 0) {
-                break;
-            }
-
-            try file_data.appendSlice(buffer[0..bytes_read]);
-            total_read += bytes_read;
-        }
-
-        if (total_read != size) {
-            file_data.deinit();
-            return error.UnexpectedEndOfStream;
-        }
-
-        // Store the file
-        try self.files.put(try self.allocator.dupe(u8, path), file_data);
-    }
-
-    pub fn getFileContent(self: *MemoryFileSystem, path: []const u8) ?[]const u8 {
-        const file = self.files.get(path) orelse return null;
-        return file.items;
-    }
-};
-
-test "download from local server" {
-    const testing = std.testing;
-    var allocator = testing.allocator;
-    const io = std.testing.io;
-
-    // Create a temp directory for test files
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    // Create test files
-    {
-        const file = try tmp.dir.createFile(io, "README.md", .{});
-        defer file.close(io);
-        try file.writeStreamingAll(io, "# Test Project\n\nThis is a test README.");
-    }
-    {
-        try tmp.dir.createDirPath(io, "src");
-        const file = try tmp.dir.createFile(io, "src/main.roc", .{});
-        defer file.close(io);
-        try file.writeStreamingAll(io, "app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"");
-    }
-    {
-        const file = try tmp.dir.createFile(io, "src/lib.roc", .{});
-        defer file.close(io);
-        try file.writeStreamingAll(io, "helper = \\x -> x * 2");
-    }
-
-    // Bundle the files
-    var bundle_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer bundle_writer.deinit();
-
-    const file_paths = [_][]const u8{
-        "README.md",
-        "src/main.roc",
-        "src/lib.roc",
-    };
-    var file_iter = FilePathIterator{ .paths = &file_paths };
-
-    const filename = (try bundle.bundle(&file_iter, TEST_COMPRESSION_LEVEL, &allocator, io, &bundle_writer.writer, tmp.dir, null)).filename;
-    defer allocator.free(filename);
-
-    // Extract hash from filename
-    const base58_hash = filename[0 .. filename.len - 8]; // Remove .tar.zst
-
-    var bundle_list = bundle_writer.toArrayList();
-    defer bundle_list.deinit(allocator);
-
-    // Create HTTP server on port 0 (let OS assign available port)
-    const loopback = try std.Io.net.IpAddress.parse("127.0.0.1", 0);
-    var server = try loopback.listen(io, .{ .reuse_address = true });
-    defer server.deinit(io);
-
-    // Get the actual port assigned by the OS
-    const port = server.socket.address.getPort();
-
-    // Server context for thread communication
-    const ServerContext = struct {
-        server: *std.Io.net.Server,
-        bundle_data: []const u8,
-        request_path: ?[]const u8 = null,
-        response_sent: std.Io.Semaphore = .{},
-        allocator: std.mem.Allocator,
-        error_occurred: ?ThreadError = null,
-
-        const ThreadError = std.mem.Allocator.Error || std.Io.net.Server.AcceptError || std.Io.net.Stream.Reader.Error || std.Io.net.Stream.Writer.Error || std.Io.Writer.Error || error{Unexpected};
-
-        fn run(ctx: *@This()) void {
-            const thread_io = std.testing.io;
-            ctx.runImpl() catch |err| {
-                ctx.error_occurred = err;
-                ctx.response_sent.post(thread_io);
-            };
-        }
-
-        fn runImpl(ctx: *@This()) ThreadError!void {
-            const thread_io = std.testing.io;
-            const stream = try ctx.server.accept(thread_io);
-            defer stream.close(thread_io);
-
-            // Read HTTP request
-            var request_buf: [4096]u8 = undefined;
-            var recv_buffer: [512]u8 = undefined;
-            var conn_reader = stream.reader(thread_io, &recv_buffer);
-            var slices = [_][]u8{request_buf[0..]};
-            const bytes_read = std.Io.Reader.readVec(&conn_reader.interface, &slices) catch |err| switch (err) {
-                error.EndOfStream => 0,
-                error.ReadFailed => return conn_reader.err orelse error.Unexpected,
-            };
-
-            // Parse request line to get the path
-            const request = request_buf[0..bytes_read];
-            if (std.mem.find(u8, request, " ")) |first_space| {
-                if (std.mem.find(u8, request[first_space + 1 ..], " ")) |second_space| {
-                    const path = request[first_space + 1 ..][0..second_space];
-                    ctx.request_path = try ctx.allocator.dupe(u8, path);
-                }
-            }
-
-            // Send HTTP response with bundle data
-            const response_header = try std.fmt.allocPrint(ctx.allocator, "HTTP/1.1 200 OK\r\nContent-Length: {d}\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n", .{ctx.bundle_data.len});
-            defer ctx.allocator.free(response_header);
-
-            var write_buf: [4096]u8 = undefined;
-            var stream_writer = stream.writer(thread_io, &write_buf);
-            try stream_writer.interface.writeAll(response_header);
-            try stream_writer.interface.writeAll(ctx.bundle_data);
-            try stream_writer.interface.flush();
-
-            ctx.response_sent.post(thread_io);
-        }
-    };
-
-    var server_ctx = ServerContext{
-        .server = &server,
-        .bundle_data = bundle_list.items,
-        .allocator = allocator,
-    };
-
-    // Start server thread
-    const server_thread = try std.Thread.spawn(.{}, ServerContext.run, .{&server_ctx});
-    defer server_thread.join();
-
-    // Create download destination
-    var extract_tmp = testing.tmpDir(.{});
-    defer extract_tmp.cleanup();
-
-    // Download and extract
-    {
-        const url = try std.fmt.allocPrint(allocator, "http://127.0.0.1:{d}/{s}.tar.zst", .{ port, base58_hash });
-        defer allocator.free(url);
-
-        try download.download(&allocator, io, url, extract_tmp.dir);
-    }
-
-    // Wait for server to complete
-    try server_ctx.response_sent.wait(io);
-
-    // Check if server had any errors
-    if (server_ctx.error_occurred) |err| {
-        return err;
-    }
-
-    // Verify request path
-    try testing.expect(server_ctx.request_path != null);
-    if (server_ctx.request_path) |path| {
-        defer allocator.free(path);
-        const expected_path = try std.fmt.allocPrint(allocator, "/{s}.tar.zst", .{base58_hash});
-        defer allocator.free(expected_path);
-        try testing.expectEqualStrings(expected_path, path);
-    }
-
-    // Verify files were extracted correctly
-    {
-        const content = try extract_tmp.dir.readFileAlloc(io, "README.md", allocator, .limited(1024));
-        defer allocator.free(content);
-        try testing.expectEqualStrings("# Test Project\n\nThis is a test README.", content);
-    }
-    {
-        const content = try extract_tmp.dir.readFileAlloc(io, "src/main.roc", allocator, .limited(1024));
-        defer allocator.free(content);
-        try testing.expectEqualStrings("app \"test\"\n    packages {}\n    imports []\n    provides [main] to pf\n\nmain = \"Hello!\"", content);
-    }
-    {
-        const content = try extract_tmp.dir.readFileAlloc(io, "src/lib.roc", allocator, .limited(1024));
-        defer allocator.free(content);
-        try testing.expectEqualStrings("helper = \\x -> x * 2", content);
-    }
-
-    // Verify directory structure
-    {
-        var src_dir = try extract_tmp.dir.openDir(io, "src", .{});
-        defer src_dir.close(io);
-        // If we got here, src directory exists
-    }
 }
 
 // Test unbundleStream with BufferExtractWriter - simulates WASM usage
