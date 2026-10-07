@@ -2,6 +2,7 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -363,15 +364,19 @@ const Builder = struct {
         if (count != 1) invariant("frozen erased callable lacks unique target identity");
         for (self.program.erased_fns.items[@intFromEnum(target_set)].entries, 0..) |entry, recipe_index| {
             if (!sameErasedFunction(source_entry, entry)) continue;
-            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment);
-            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + (if (entry.boxy != null) std.mem.alignForward(usize, self.size(entry.capture_layout), self.word()) + self.word() else self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            // The target program's erased capture prefix stays zeroed: a
+            // static value is never dropped, so nothing reads its header.
+            const prefix: usize = self.program.erased_capture_prefix;
+            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment) + prefix;
+            const capture_size = prefix + self.size(entry.capture_layout);
+            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + (if (entry.boxy != null) std.mem.alignForward(usize, capture_size, self.word()) + self.word() else capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
+                .boxy_capture => invariant("frozen callable target lacks durable drop authority"),
             }
 
             if (entry.boxy) |boxy| {
@@ -388,7 +393,7 @@ const Builder = struct {
                         .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
                     }
                 }
-                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset + std.mem.alignForward(usize, self.size(entry.capture_layout), self.word())), try self.frozenDescriptor(id));
+                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset - prefix + std.mem.alignForward(usize, capture_size, self.word())), try self.frozenDescriptor(id));
             } else try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
             return;
         }
@@ -443,7 +448,7 @@ const Builder = struct {
     }
 };
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic("frozen root transcode invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .Debug) compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
     unreachable;
 }
 

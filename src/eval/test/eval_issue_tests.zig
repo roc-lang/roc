@@ -266,6 +266,165 @@ const issue11377GenericNominalCollectionSource =
 /// Public value `tests`.
 pub const tests = [_]TestCase{
     .{
+        .name = "issue 11992: local value captures itself through a function field",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done] }
+        \\main = {
+        \\    thing : Thing
+        \\    thing = { call: |{}| Again(thing) }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => match (next.call)({}) {
+        \\            Again(_) => "again twice"
+        \\            Done => "done"
+        \\        }
+        \\        Done => "done"
+        \\    }
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"again twice\"" },
+    },
+    .{
+        .name = "issue 11992: recursive local value also captures runtime values",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], name : Str }
+        \\walk : Thing, U64, Str -> Str
+        \\walk = |t, n, acc| if n == 0 acc else match (t.call)({}) {
+        \\    Again(next) => walk(next, n - 1, acc.concat(next.name))
+        \\    Done => acc
+        \\}
+        \\make : Str -> Thing
+        \\make = |name| {
+        \\    thing : Thing
+        \\    thing = { call: |{}| Again(thing), name: name.concat("!") }
+        \\    thing
+        \\}
+        \\main = walk(make(Str.repeat("ab", 2)), 3, "")
+        ,
+        .expected = .{ .inspect_str = "\"abab!abab!abab!\"" },
+    },
+    .{
+        .name = "issue 11992: recursive tuple destructure captures a sibling binder",
+        .source_kind = .module,
+        .source =
+        \\make : U64 -> U64
+        \\make = |base| {
+        \\    (f, n) = (|{}| n + 1, base)
+        \\    f({})
+        \\}
+        \\main = make(41)
+        ,
+        .expected = .{ .inspect_str = "42" },
+    },
+    .{
+        .name = "issue 11992: recursive record destructure binds mutually recursive functions",
+        .source_kind = .module,
+        .source =
+        \\parity : U64 -> (Bool, Bool)
+        \\parity = |k| {
+        \\    { even, odd } = {
+        \\        even: |x| if x == 0 Bool.True else odd(x - 1),
+        \\        odd: |x| if x == 0 Bool.False else even(x - 1),
+        \\    }
+        \\    (even(k), odd(k))
+        \\}
+        \\main = parity(7)
+        ,
+        .expected = .{ .inspect_str = "(False, True)" },
+    },
+    .{
+        .name = "issue 11992: recursive destructure with record rest and nested tuple",
+        .source_kind = .module,
+        .source =
+        \\sums : U64 -> (U64, U64)
+        \\sums = |k| {
+        \\    { get, ..rest } = { get: |{}| rest.n + k, n: 5 }
+        \\    (g, (m, z)) = (|{}| m + z, (k, 3))
+        \\    (get({}), g({}))
+        \\}
+        \\main = sums(10)
+        ,
+        .expected = .{ .inspect_str = "(15, 13)" },
+    },
+    .{
+        .name = "issue 11992: recursive value from an if that reassigns a var",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> (U64, U64)
+        \\run = |k| {
+        \\    var $count = 0
+        \\    thing : Thing
+        \\    thing = if k == 0 {
+        \\        $count = 5
+        \\        { call: |{}| Again(thing), n: 1 }
+        \\    } else {
+        \\        { call: |{}| Done, n: 2 }
+        \\    }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => (next.n, $count)
+        \\        Done => (thing.n, $count)
+        \\    }
+        \\}
+        \\main = (run(0), run(1))
+        ,
+        .expected = .{ .inspect_str = "((1, 5), (2, 0))" },
+    },
+    .{
+        .name = "issue 11992: recursive value from a match that reassigns a var",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> (U64, U64)
+        \\run = |k| {
+        \\    var $hits = 0
+        \\    thing : Thing
+        \\    thing = match k {
+        \\        10 => {
+        \\            $hits = $hits + 1
+        \\            { call: |{}| Again(thing), n: 7 }
+        \\        }
+        \\        _ => { call: |{}| Done, n: 8 }
+        \\    }
+        \\    match (thing.call)({}) {
+        \\        Again(next) => (next.n, $hits)
+        \\        Done => (thing.n, $hits)
+        \\    }
+        \\}
+        \\main = (run(10), run(3))
+        ,
+        .expected = .{ .inspect_str = "((7, 1), (8, 0))" },
+    },
+    .{
+        .name = "issue 11992: recursive tag destructure of a nominal value",
+        .source_kind = .module,
+        .source =
+        \\Thing := { call : {} -> [Again(Thing), Done], n : U64 }
+        \\run : U64 -> U64
+        \\run = |k| {
+        \\    Wrapped(t) = Wrapped(Thing.{ call: |{}| Again(t), n: k + 3 })
+        \\    match (t.call)({}) {
+        \\        Again(next) => next.n
+        \\        Done => 0
+        \\    }
+        \\}
+        \\main = run(4)
+        ,
+        .expected = .{ .inspect_str = "7" },
+    },
+    .{
+        .name = "issue 11992: unannotated local recursive value reports anonymous recursion",
+        .source_kind = .module,
+        .source =
+        \\main = {
+        \\    t = { call: |{}| Again(t), n: 3 }
+        \\    t.n
+        \\}
+        ,
+        .expected = .{ .problem = {} },
+    },
+    .{
         .name = "issue 11737: independent calls select different nested method targets",
         .source_kind = .module,
         .source =
@@ -2079,8 +2238,8 @@ pub const tests = [_]TestCase{
         .source_kind = .module,
         .source =
         \\Wrap := [W(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Wrap
-        \\    from_interpolation = |first, rest| W(Str.concat("<", Str.concat(Str.from_interpolation(first, rest), ">")))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Wrap), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| W(Str.concat("<", Str.concat(assemble(values), ">"))))
         \\
         \\    text : Wrap -> Str
         \\    text = |W(s)| s
@@ -2227,7 +2386,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "custom vector" },
     },
     .{
-        .name = "issue 11170: unconstrained custom inspect argument uses SIMD backing",
+        .name = "issue 11170: a custom inspect with an unconstrained argument is an inspect override",
         .source_kind = .module,
         .source =
         \\Vector := U64x2.{
@@ -2235,7 +2394,7 @@ pub const tests = [_]TestCase{
         \\}
         \\main = (Str.inspect(Vector.(U64x2.default())), Vector.to_inspect({}))
         ,
-        .expected = .{ .inspect_str = "(\"U64x2(0, 0)\", \"custom vector\")" },
+        .expected = .{ .inspect_str = "(\"custom vector\", \"custom vector\")" },
     },
     .{
         // https://github.com/roc-lang/roc/issues/11189
@@ -4414,6 +4573,52 @@ pub const tests = [_]TestCase{
         .expected = .{ .problem_and_crash = {} },
     },
     .{
+        // Concrete dispatch replay: later uses of `big` select each `step`
+        // from the first use's settled instance, and publish its `bump`.
+        .name = "issue 11801: replayed method chain computes each use's own values",
+        .source_kind = .module,
+        .source =
+        \\Wrap(a) := [W(a)].{
+        \\  step : Wrap(a) -> Wrap(a) where [a.bump : a -> a]
+        \\  step = |Wrap.W(x)| Wrap.W(x.bump())
+        \\}
+        \\
+        \\Cnt := [Cnt(I64)].{
+        \\  bump : Cnt -> Cnt
+        \\  bump = |Cnt.Cnt(n)| Cnt.Cnt(n + 1)
+        \\  pair_with : Cnt, b -> (Cnt, b)
+        \\  pair_with = |c, x| (c, x)
+        \\}
+        \\
+        \\big = |a| a.step().step().step()
+        \\
+        \\value : Wrap(Cnt) -> I64
+        \\value = |Wrap.W(Cnt.Cnt(n))| n
+        \\
+        \\small : (Cnt, U8)
+        \\small = Cnt.Cnt(1.I64).pair_with(200)
+        \\
+        \\wide : (Cnt, I32)
+        \\wide = Cnt.Cnt(2.I64).pair_with(-70000)
+        \\
+        \\main = (value(big(Wrap.W(Cnt.Cnt(0.I64)))), value(big(Wrap.W(Cnt.Cnt(10.I64)))), value(Wrap.W(Cnt.Cnt(5.I64)).step()), small.1, wide.1)
+        ,
+        .expected = .{ .inspect_str = "(3, 13, 6, 200, -70000)" },
+    },
+    .{
+        // Whole-use replay: the first use makes `big` replayable, the last
+        // `I64` use takes the second one's settled instance, and the `U8` use
+        // settles its own.
+        .name = "issue 11801: replayed uses compute each use's own values",
+        .source_kind = .module,
+        .source =
+        \\big = |a| a.map(|x| x + 1).map(|x| x * 2)
+        \\
+        \\main = (big([1.I64, 5]), big([2.I64]), big([3.U8]), big([4.I64]))
+        ,
+        .expected = .{ .inspect_str = "([4, 12], [6], [8], [10])" },
+    },
+    .{
         // https://github.com/roc-lang/roc/issues/12051
         // `List.get` and `List.set` return `Try`, so this insertion sort has
         // type errors. With `replace` left unannotated, compilation must still
@@ -4521,7 +4726,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "1" },
     },
     .{
-        .name = "issue 11993: method of a function-body nominal type that captures a local",
+        .name = "issue 11993: a method of a function-body nominal type that captures a local is rejected",
         .source_kind = .module,
         .source =
         \\run = |_| {
@@ -4538,7 +4743,7 @@ pub const tests = [_]TestCase{
         \\
         \\main = run({})
         ,
-        .expected = .{ .inspect_str = "1" },
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         // https://github.com/roc-lang/roc/issues/12100
@@ -4590,10 +4795,10 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "True" },
     },
     .{
-        // A generalized value's literal conversion is committed per
+        // A generalized function's literal conversion is committed per
         // specialization: each use converts at its own type, and checking
         // instantiates no target for the literal itself.
-        .name = "issue 12100: generalized value literal used at a custom numeral type and at Dec",
+        .name = "issue 12100: generalized function literal used at a custom numeral type and at Dec",
         .source_kind = .module,
         .source =
         \\Unit :: I64.{
@@ -4604,9 +4809,7 @@ pub const tests = [_]TestCase{
         \\    to_i64 = |Unit.(n)| n
         \\}
         \\
-        \\t = {
-        \\    (|| 0)
-        \\}
+        \\t = || 0
         \\
         \\main = {
         \\    u : Unit
@@ -4620,12 +4823,10 @@ pub const tests = [_]TestCase{
     },
     .{
         // A literal no use pins converts at its numeric default.
-        .name = "issue 12100: unpinned generalized value literal converts at its numeric default",
+        .name = "issue 12100: unpinned generalized function literal converts at its numeric default",
         .source_kind = .module,
         .source =
-        \\t = {
-        \\    (|| 0)
-        \\}
+        \\t = || 0
         \\
         \\main = t()
         ,

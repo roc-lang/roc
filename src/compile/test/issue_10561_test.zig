@@ -20,8 +20,8 @@ fn liftedExprCountForChain(allocator: std.mem.Allocator, links: usize) harness.L
         \\    Node(List(Box(V(model)))),
         \\    Handler(Box((U64, model -> model))),
         \\].{
-        \\    leaf : V(model)
-        \\    leaf = V.Node([])
+        \\    leaf : {} -> V(model)
+        \\    leaf = |{}| V.Node([])
         \\
         \\    handler : (U64, model -> model) -> V(model)
         \\    handler = |f| V.Handler(Box.box(f))
@@ -45,7 +45,7 @@ fn liftedExprCountForChain(allocator: std.mem.Allocator, links: usize) harness.L
         \\
         \\main! = |args| {
         \\    tree =
-        \\        V.leaf
+        \\        V.leaf({})
         \\
     );
     for (0..links) |index| {

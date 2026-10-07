@@ -59,7 +59,7 @@ packages can define and require their own methods with `where` clauses.
 | `negate`, `not` | Unary `-`, unary `!` | The type has a unary negation or complement operation. |
 | `from_numeral : Numeral -> Try(T, [InvalidNumeral(Str)])` | Number literals with target type `T` | Plain numeric literal syntax should construct the type. |
 | `from_quote : Str -> Try(T, [BadQuotedBytes(Str)])` | Quoted string literals with target type `T` | Plain quoted literal syntax should construct the type. |
-| `from_interpolation : Str, Iter((item, Str)) -> T` | Interpolated string literals with target type `T` | Interpolation should construct the type. |
+| `from_interpolation : List(Str) -> Try((List(item) -> T), [InvalidInterpolation(Str)])` | Interpolated string literals with target type `T` | Interpolation should construct the type. |
 | `iter : T -> Iter(item)` | `for item in value` | The type should be iterable in `for` loops. |
 | `next` | `for` loop iteration steps | Usually provided by `Iter`; collection authors usually implement `iter`. |
 | `parser_for : encoding -> (state -> Try({ value : T, rest : state }, err))` | Generic parser APIs such as JSON parsing | A format should be able to parse the type. |
@@ -328,17 +328,41 @@ If the method returns `Err(BadQuotedBytes(message))`, the compiler reports the
 literal conversion error before the program runs.
 
 Interpolated string literals dispatch `from_interpolation` based on the result
-type. The first argument is the literal segment before the first interpolation.
-The iterator yields each interpolated value paired with the literal segment that
-follows it.
+type. It runs in two stages. The method receives the literal's segments, the
+text around the interpolations, and returns a function that assembles the
+interpolated values into the result:
 
 ```roc
-# For a target type named Html:
-from_interpolation : Str, Iter((Html, Str)) -> Html
+Html := [Html(Str)].{
+    from_interpolation : List(Str) -> Try((List(Str) -> Html), [InvalidInterpolation(Str)])
+    from_interpolation = |segments|
+        if segments.any(|segment| segment.contains("<script")) {
+            Err(InvalidInterpolation("Html literals can't contain script tags"))
+        } else {
+            Str.from_interpolation(segments).map_ok(|assemble|
+                |values| Html(assemble(values.map(|value| value.replace_each("<", "&lt;")))))
+        }
+}
+
+page : Str -> Html
+page = |name| "<p>Hello, ${name}!</p>"  # segments: ["<p>Hello, ", "!</p>"]
 ```
 
+The segments are part of the source code, so the compiler calls
+`from_interpolation` on them before the program runs, the same way it calls
+`from_quote` on a quoted literal. If it returns
+`Err(InvalidInterpolation(message))`, the compiler reports the literal
+conversion error. If it returns `Ok`, each time the interpolated string
+literal runs, its value is the assembling function called with the
+interpolated values, in order. A literal with `n` interpolations has `n + 1`
+segments, any of which may be empty.
+
+Assembling can't fail, so a type validates the parts of a literal that the
+source code wrote, and decides how values that are only known when the
+program runs get into the result: here, `Html` escapes them.
+
 Plain quoted string segments inside an interpolation are always `Str` values;
-the interpolated values are the `item` type in `Iter((item, Str))`.
+the interpolated values are the `item` type in `List(item)`.
 
 ### Iteration
 

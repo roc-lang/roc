@@ -6,6 +6,7 @@
 //! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 
@@ -26,15 +27,34 @@ const enable_store_tracking = builtin.mode == .Debug;
 pub const PLUS_METHOD_NAME = "plus";
 /// Method name for negation - used by unary - operator desugaring
 pub const NEGATE_METHOD_NAME = "negate";
+/// Method name for equality - used by == desugaring and structural equality
+pub const IS_EQ_METHOD_NAME = "is_eq";
+/// Method name for hashing - used by structural hashing
+pub const TO_HASH_METHOD_NAME = "to_hash";
+/// Method name a type provides to parse itself from an encoding
+pub const PARSER_FOR_METHOD_NAME = "parser_for";
+/// Method name a type provides to encode itself into an encoding
+pub const ENCODER_FOR_METHOD_NAME = "encoder_for";
+/// Method name a type provides to be built from a number literal
+pub const FROM_NUMERAL_METHOD_NAME = "from_numeral";
+/// Method name a type provides to be built from a quoted literal
+pub const FROM_QUOTE_METHOD_NAME = "from_quote";
 
 /// Compare two identifier texts exactly.
 pub fn textEql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
 }
 
-/// Compare two identifier texts in deterministic lexicographic order.
+/// Order two identifier texts by ascending byte value. This is the canonical
+/// order of record fields and tags: rows are sorted and merged by it, and tag
+/// discriminants number the tags of a union in it.
+pub fn textOrder(a: []const u8, b: []const u8) std.math.Order {
+    return std.mem.order(u8, a, b);
+}
+
+/// Whether `a` comes before `b` in `textOrder`.
 pub fn textLessThan(a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
+    return textOrder(a, b) == .lt;
 }
 
 /// Check whether identifier text starts with a fixed prefix.
@@ -164,7 +184,7 @@ pub const Store = struct {
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
             if (!self.interner.isInBounds(@enumFromInt(@as(u32, idx.idx)))) {
-                std.debug.panic(
+                invariant(
                     "Ident.Idx lookup in wrong store: offset {d} is not a valid " ++
                         "entry in this interner. It was created by a different store.",
                     .{idx.idx},
@@ -417,49 +437,6 @@ pub const Store = struct {
     pub fn builtinStrTypeIdent(self: *const Store) Idx {
         return self.findByString("Builtin.Str") orelse unreachable;
     }
-
-    /// Calculate the size needed to serialize this Ident.Store
-    pub fn serializedSize(self: *const Store) usize {
-        var size: usize = 0;
-
-        // SmallStringInterner components
-        size += @sizeOf(u32); // bytes_len
-        size += self.interner.bytes.len(); // bytes data
-        size = std.mem.alignForward(usize, size, @alignOf(u32)); // align for next u32
-
-        size += @sizeOf(u32); // next_unique_name
-
-        // Align to SERIALIZATION_ALIGNMENT to maintain alignment for subsequent data
-        return std.mem.alignForward(usize, size, collections.SERIALIZATION_ALIGNMENT.toByteUnits());
-    }
-
-    /// Serialize this Store to the given CompactWriter. The resulting Store
-    /// in the writer's buffer will have offsets instead of pointers. Calling any
-    /// methods on it or dereferencing its internal "pointers" (which are now
-    /// offsets) is illegal behavior!
-    pub fn serialize(
-        self: *const Store,
-        allocator: std.mem.Allocator,
-        writer: *collections.CompactWriter,
-    ) std.mem.Allocator.Error!*const Store {
-        // First, write the Store struct itself
-        const offset_self = try writer.appendAlloc(allocator, Store);
-
-        // Then serialize the sub-structures and update the struct
-        offset_self.* = .{
-            .interner = (try self.interner.serialize(allocator, writer)).*,
-            .attributes = (try self.attributes.serialize(allocator, writer)).*,
-            .next_unique_name = self.next_unique_name,
-        };
-
-        return @constCast(offset_self);
-    }
-
-    /// Add the given offset to the memory addresses of all pointers in `self`.
-    pub fn relocate(self: *Store, offset: isize) void {
-        self.interner.relocate(offset);
-        self.attributes.relocate(offset);
-    }
 };
 
 test "from_bytes validates empty text" {
@@ -536,8 +513,8 @@ test "Ident.Store empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Ident.Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -552,11 +529,11 @@ test "Ident.Store empty CompactWriter roundtrip" {
     const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    // Cast and relocate
+    // Deserialize
     // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const Ident.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify empty - interner always has at least 1 byte (0) to ensure Idx.unused doesn't point to valid data
     try std.testing.expectEqual(@as(usize, 1), deserialized.interner.bytes.len());
@@ -604,8 +581,8 @@ test "Ident.Store basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Ident.Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -620,11 +597,11 @@ test "Ident.Store basic CompactWriter roundtrip" {
     const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    // Cast and relocate
+    // Deserialize
     // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const Ident.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
@@ -687,8 +664,8 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Ident.Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -703,11 +680,11 @@ test "Ident.Store with genUnique CompactWriter roundtrip" {
     const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    // Cast and relocate
+    // Deserialize
     // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const Ident.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all identifiers
 
@@ -748,8 +725,8 @@ test "Ident.Store CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Ident.Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -764,11 +741,11 @@ test "Ident.Store CompactWriter roundtrip" {
     const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    // Cast and relocate
+    // Deserialize
     // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const Ident.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify the identifiers are accessible
     try std.testing.expectEqualStrings("test1", deserialized.getText(idx1));
@@ -835,8 +812,8 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(arena_allocator);
 
-    const serialized = try original.serialize(arena_allocator, &writer);
-    try std.testing.expect(@intFromPtr(serialized) != 0);
+    const serialized = try writer.appendAlloc(arena_allocator, Ident.Store.Serialized);
+    try serialized.serialize(&original, arena_allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -851,11 +828,11 @@ test "Ident.Store comprehensive CompactWriter roundtrip" {
     const bytes_read = file_size;
     try std.testing.expectEqual(writer.total_bytes, bytes_read);
 
-    // Cast and relocate
+    // Deserialize
     // The Store struct should be at the beginning (it was appended first)
-    const deserialized = @as(*Ident.Store, @ptrCast(@alignCast(buffer.ptr)));
-
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    const deserialized_serialized: *const Ident.Store.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify all identifiers (skip duplicate at end)
     for (test_idents[0..10], 0..) |test_ident, i| {

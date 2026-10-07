@@ -223,7 +223,11 @@ y = x == x
 				(ty-tag-name (name "None")))))
 	(d-let
 		(p-assign (ident "y"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "x")))
+			(e-lookup-local
+				(p-assign (ident "x")))))
 	(s-nominal-decl
 		(ty-header (name "Nullable")
 			(ty-args

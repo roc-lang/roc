@@ -1,7 +1,7 @@
 //! Freestanding Linux runtime for the build-only default app platform.
 //!
 //! This provides raw syscall-based stdout/stderr, allocation, crash reporting,
-//! and stack-overflow signal handling without linking libc.
+//! and fatal-signal reporting without linking libc.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -12,10 +12,16 @@ const linux = std.os.linux;
 /// process moves the program break.
 const heap: std.mem.Allocator = .{ .ptr = undefined, .vtable = &std.heap.BrkAllocator.vtable };
 
+const memory_fault = @import("memory_fault");
 const RocStr = @import("roc_str_view").RocStr;
 const roc_args = @import("roc_args");
 const RocList = @import("roc_str_view").RocList;
 const shim_symbols = @import("shim_symbols");
+const runtime_shared = @import("runtime_shared.zig");
+const SourceFrame = runtime_shared.SourceFrame;
+const normalizedAlignment = runtime_shared.normalizedAlignment;
+const alignForward = runtime_shared.alignForward;
+const defaultTrunc = runtime_shared.defaultTrunc;
 
 pub const panic = std.debug.no_panic;
 
@@ -33,15 +39,6 @@ const max_backtrace_frames = 64;
 const BacktraceEntry = extern struct {
     start: usize,
     end: usize,
-    name_ptr: [*]const u8,
-    name_len: usize,
-    file_ptr: [*]const u8,
-    file_len: usize,
-    line: u32,
-    column: u32,
-};
-
-const SourceFrame = extern struct {
     name_ptr: [*]const u8,
     name_len: usize,
     file_ptr: [*]const u8,
@@ -84,7 +81,7 @@ comptime {
     @export(&rocDealloc, .{ .name = shim_symbols.roc_dealloc });
 
     if (default_platform_options.include_process_entrypoint) {
-        switch (builtin.cpu.arch) {
+        switch (linux_arch) {
             .x86_64 => {
                 @export(&linuxStartX86_64, .{ .name = "_start" });
                 @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
@@ -93,63 +90,7 @@ comptime {
                 @export(&linuxStartAarch64, .{ .name = "_start" });
                 @export(&linuxStartMain, .{ .name = "roc_default_linux_start_main", .visibility = .hidden });
             },
-            .alpha,
-            .amdgcn,
-            .arc,
-            .arceb,
-            .arm,
-            .armeb,
-            .aarch64_be,
-            .avr,
-            .bpfeb,
-            .bpfel,
-            .csky,
-            .hexagon,
-            .hppa,
-            .hppa64,
-            .kalimba,
-            .kvx,
-            .lanai,
-            .loongarch32,
-            .loongarch64,
-            .m68k,
-            .microblaze,
-            .microblazeel,
-            .mips,
-            .mipsel,
-            .mips64,
-            .mips64el,
-            .msp430,
-            .nvptx,
-            .nvptx64,
-            .or1k,
-            .powerpc,
-            .powerpcle,
-            .powerpc64,
-            .powerpc64le,
-            .propeller,
-            .riscv32,
-            .riscv32be,
-            .riscv64,
-            .riscv64be,
-            .s390x,
-            .sh,
-            .sheb,
-            .sparc,
-            .sparc64,
-            .spirv32,
-            .spirv64,
-            .thumb,
-            .thumbeb,
-            .ve,
-            .wasm32,
-            .wasm64,
-            .x86_16,
-            .x86,
-            .xcore,
-            .xtensa,
-            .xtensaeb,
-            => @compileError("unsupported default-platform Linux architecture"),
+            .unsupported => @compileError("unsupported default-platform Linux architecture"),
         }
     }
 }
@@ -158,6 +99,71 @@ comptime {
 /// the program continue; `roc_default_exit` turns an otherwise-successful exit
 /// into status 1, matching the interpreter's default-app behavior.
 var inline_expect_failed: bool = false;
+
+/// The architectures this runtime has process-entry and backtrace code for.
+const LinuxArch = enum { x86_64, aarch64, unsupported };
+
+const linux_arch: LinuxArch = switch (builtin.cpu.arch) {
+    .x86_64 => .x86_64,
+    .aarch64 => .aarch64,
+    .alpha,
+    .amdgcn,
+    .arc,
+    .arceb,
+    .arm,
+    .armeb,
+    .aarch64_be,
+    .avr,
+    .bpfeb,
+    .bpfel,
+    .csky,
+    .hexagon,
+    .hppa,
+    .hppa64,
+    .kalimba,
+    .kvx,
+    .lanai,
+    .loongarch32,
+    .loongarch64,
+    .m68k,
+    .microblaze,
+    .microblazeel,
+    .mips,
+    .mipsel,
+    .mips64,
+    .mips64el,
+    .msp430,
+    .nvptx,
+    .nvptx64,
+    .or1k,
+    .powerpc,
+    .powerpcle,
+    .powerpc64,
+    .powerpc64le,
+    .propeller,
+    .riscv32,
+    .riscv32be,
+    .riscv64,
+    .riscv64be,
+    .s390x,
+    .sh,
+    .sheb,
+    .sparc,
+    .sparc64,
+    .spirv32,
+    .spirv64,
+    .thumb,
+    .thumbeb,
+    .ve,
+    .wasm32,
+    .wasm64,
+    .x86_16,
+    .x86,
+    .xcore,
+    .xtensa,
+    .xtensaeb,
+    => .unsupported,
+};
 
 fn linuxStartMain(argc: usize, argv: [*][*:0]u8) callconv(.c) noreturn {
     runtimeInit();
@@ -337,93 +343,71 @@ fn installSignal(sig: linux.SIG) void {
     }
 }
 
-fn signalHandler(sig: linux.SIG, _: *const linux.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+fn signalHandler(sig: linux.SIG, info: *const linux.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+    const interrupted = interruptedRegisters(ctx);
+
     if (sig == .SEGV) {
-        writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n");
+        const fault_addr = @intFromPtr(info.fields.sigfault.addr);
+        // The kernel grows this thread's stack on demand and stops at a limit
+        // that depends on the process's resource limits and neighbouring
+        // mappings. Without libc there is no exact stack range to report, so
+        // the fault is classified by its distance from the interrupted stack
+        // pointer alone.
+        const stack_pointer: ?usize = if (interrupted) |registers| registers.stack_pointer else null;
+        switch (memory_fault.classifyFault(fault_addr, stack_pointer, null)) {
+            .stack_overflow => writeLiteral(stderr_fd, "Roc application overflowed its stack memory\n\n"),
+            .access_violation => {
+                var address_buf: [2 + 2 * @sizeOf(usize)]u8 = undefined;
+                writeLiteral(stderr_fd, "Roc process terminated by a segmentation fault at address ");
+                writeAll(stderr_fd, memory_fault.formatHex(fault_addr, &address_buf));
+                writeLiteral(stderr_fd, "\n\n");
+            },
+        }
     } else {
         writeLiteral(stderr_fd, "Roc process terminated by signal ");
         writeUnsigned(stderr_fd, @intFromEnum(sig));
         writeLiteral(stderr_fd, "\n\n");
     }
 
-    if (ctx) |context_ptr| {
-        switch (builtin.cpu.arch) {
-            .x86_64 => {
-                const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
-                const rip: usize = @bitCast(context.mcontext.gregs[REG_RIP]);
-                const rbp: usize = @bitCast(context.mcontext.gregs[REG_RBP]);
-                printBacktrace(rip, rbp);
-            },
-            .aarch64 => {
-                const context: *const Aarch64UContext = @ptrCast(@alignCast(context_ptr));
-                const pc: usize = @intCast(context.mcontext.pc);
-                const fp: usize = @intCast(context.mcontext.regs[29]);
-                printBacktrace(pc, fp);
-            },
-            .alpha,
-            .amdgcn,
-            .arc,
-            .arceb,
-            .arm,
-            .armeb,
-            .aarch64_be,
-            .avr,
-            .bpfeb,
-            .bpfel,
-            .csky,
-            .hexagon,
-            .hppa,
-            .hppa64,
-            .kalimba,
-            .kvx,
-            .lanai,
-            .loongarch32,
-            .loongarch64,
-            .m68k,
-            .microblaze,
-            .microblazeel,
-            .mips,
-            .mipsel,
-            .mips64,
-            .mips64el,
-            .msp430,
-            .nvptx,
-            .nvptx64,
-            .or1k,
-            .powerpc,
-            .powerpcle,
-            .powerpc64,
-            .powerpc64le,
-            .propeller,
-            .riscv32,
-            .riscv32be,
-            .riscv64,
-            .riscv64be,
-            .s390x,
-            .sh,
-            .sheb,
-            .sparc,
-            .sparc64,
-            .spirv32,
-            .spirv64,
-            .thumb,
-            .thumbeb,
-            .ve,
-            .wasm32,
-            .wasm64,
-            .x86_16,
-            .x86,
-            .xcore,
-            .xtensa,
-            .xtensaeb,
-            => {},
-        }
+    if (interrupted) |registers| {
+        printBacktrace(registers.instruction_pointer, registers.frame_pointer);
     }
 
     exitFailure();
 }
 
+/// The registers of the code a signal interrupted.
+const InterruptedRegisters = struct {
+    instruction_pointer: usize,
+    frame_pointer: usize,
+    stack_pointer: usize,
+};
+
+fn interruptedRegisters(ctx: ?*anyopaque) ?InterruptedRegisters {
+    const context_ptr = ctx orelse return null;
+    switch (linux_arch) {
+        .x86_64 => {
+            const context: *const X86_64UContext = @ptrCast(@alignCast(context_ptr));
+            return .{
+                .instruction_pointer = @bitCast(context.mcontext.gregs[REG_RIP]),
+                .frame_pointer = @bitCast(context.mcontext.gregs[REG_RBP]),
+                .stack_pointer = @bitCast(context.mcontext.gregs[REG_RSP]),
+            };
+        },
+        .aarch64 => {
+            const context: *const Aarch64UContext = @ptrCast(@alignCast(context_ptr));
+            return .{
+                .instruction_pointer = @intCast(context.mcontext.pc),
+                .frame_pointer = @intCast(context.mcontext.regs[29]),
+                .stack_pointer = @intCast(context.mcontext.sp),
+            };
+        },
+        .unsupported => return null,
+    }
+}
+
 const REG_RBP = 10;
+const REG_RSP = 15;
 const REG_RIP = 16;
 
 const X86_64MContext = extern struct {
@@ -637,14 +621,6 @@ fn allocationHeaderPtr(user: [*]u8, index: usize) *usize {
     return @ptrCast(@alignCast(user - byte_offset));
 }
 
-fn normalizedAlignment(alignment: usize) usize {
-    return @max(alignment, @alignOf(usize));
-}
-
-fn alignForward(value: usize, alignment: usize) usize {
-    return (value + alignment - 1) & ~(alignment - 1);
-}
-
 fn writeLiteral(fd: i32, comptime text: []const u8) void {
     writeAll(fd, text);
 }
@@ -710,17 +686,4 @@ fn defaultMemset(dest: [*]u8, value: c_int, len: usize) callconv(.c) [*]u8 {
         volatile_dest[i] = byte;
     }
     return dest;
-}
-
-fn defaultTrunc(value: f64) callconv(.c) f64 {
-    const bits: u64 = @bitCast(value);
-    const exponent_bits = (bits >> 52) & 0x7ff;
-    const exponent: i32 = @as(i32, @intCast(exponent_bits)) - 1023;
-
-    if (exponent >= 52) return value;
-    if (exponent < 0) return @bitCast(bits & (@as(u64, 1) << 63));
-
-    const fraction_bits: u6 = @intCast(52 - exponent);
-    const fraction_mask = (@as(u64, 1) << fraction_bits) - 1;
-    return @bitCast(bits & ~fraction_mask);
 }

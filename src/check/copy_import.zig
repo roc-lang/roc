@@ -981,7 +981,7 @@ fn ensureNominalDeclCopied(
         // declaration in that store, so a keyed application without a source
         // table entry is a compiler bug.
         if (builtin.mode == .Debug) {
-            std.debug.panic(
+            base.invariant(
                 "copy_import invariant violated: nominal '{s}' has a source declaration but no declaration table entry in its source store",
                 .{ctx.sourceIdents().getText(source_nominal.ident.ident_idx)},
             );

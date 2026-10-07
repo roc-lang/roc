@@ -103,14 +103,6 @@ pub const Store = struct {
         return ExtraStringIdx{ .start = start, .count = end - start };
     }
 
-    /// Put an extra string in the backing store, returning an "id" (range)
-    pub fn putFmtExtraString(self: *Self, comptime format: []const u8, args: anytype) std.mem.Allocator.Error!ExtraStringIdx {
-        const start = self.extra_strings_backing.items.len;
-        try self.extra_strings_backing.print(format, args);
-        const end = self.extra_strings_backing.items.len;
-        return ExtraStringIdx{ .start = start, .count = end - start };
-    }
-
     /// Get a stored pattern string by its range
     pub fn getExtraString(self: *const Self, idx: ExtraStringIdx) []const u8 {
         return self.extra_strings_backing.items[idx.start..][0..idx.count];
@@ -157,7 +149,7 @@ pub const Store = struct {
             return;
         }
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
+            base.invariant("checked artifact invariant violated: exhaustiveness site source had no pending diagnostic", .{});
         }
         unreachable;
     }
@@ -175,7 +167,7 @@ pub const Store = struct {
             return;
         }
         if (@import("builtin").mode == .Debug) {
-            std.debug.panic("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
+            base.invariant("checked artifact invariant violated: empirical exhaustiveness source had no pending diagnostic", .{});
         }
         unreachable;
     }
@@ -252,6 +244,7 @@ pub const Store = struct {
                     .row_label_conflict,
                     .polymorphic_value,
                     .polymorphic_var_annotation,
+                    .polymorphic_value_annotation,
                     .effectful_top_level,
                     .effectful_comptime_expression,
                     .effectful_expect,
@@ -259,7 +252,7 @@ pub const Store = struct {
                     .annotation_only_value,
                     .annotation_only_value_use,
                     .derived_method_value_use,
-                    .capturing_local_type_escape,
+                    .capturing_method,
                     .unsupported_generated_method,
                     .hosted_unboxed_function,
                     .hosted_function_not_effectful,
@@ -272,6 +265,7 @@ pub const Store = struct {
                     .comptime_crash,
                     .comptime_invalid_numeral,
                     .comptime_invalid_quote,
+                    .comptime_invalid_interpolation,
                     .comptime_expect_failed,
                     .comptime_eval_error,
                     .invalid_numeric_literal,

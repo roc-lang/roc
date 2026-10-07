@@ -97,24 +97,17 @@ pub const TypeAnno = union(enum) {
     pub fn pushToSExprTree(self: *const @This(), ir: *const ModuleEnv, tree: *SExprTree, type_anno_idx: TypeAnno.Idx) std.mem.Allocator.Error!void {
         switch (self.*) {
             .apply => |a| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-apply");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-apply", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(a.name));
 
                 switch (a.base) {
                     .builtin => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("builtin");
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(field_begin, field_attrs);
+                        const field_begin = try tree.beginNamedNode("builtin");
+                        try tree.endNodeWithoutChildren(field_begin);
                     },
                     .local => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("local");
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(field_begin, field_attrs);
+                        const field_begin = try tree.beginNamedNode("local");
+                        try tree.endNodeWithoutChildren(field_begin);
                     },
                     .external => |external| {
                         const module_idx_int = @intFromEnum(external.module_idx);
@@ -123,10 +116,8 @@ pub const TypeAnno = union(enum) {
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                            const field_begin = tree.beginNode();
-                            try tree.pushStaticAtom("builtin");
-                            const field_attrs = tree.beginNode();
-                            try tree.endNode(field_begin, field_attrs);
+                            const field_begin = try tree.beginNamedNode("builtin");
+                            try tree.endNodeWithoutChildren(field_begin);
                         } else {
                             try tree.pushStringPair("external-module", module_name);
                         }
@@ -155,48 +146,31 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .rigid_var => |tv| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-rigid-var");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-rigid-var", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(tv.name));
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .rigid_var_lookup => |rv_lookup| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-rigid-var-lookup");
+                const begin = try tree.beginNamedNode("ty-rigid-var-lookup");
                 try ir.store.getTypeAnno(rv_lookup.ref).pushToSExprTree(ir, tree, rv_lookup.ref);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .underscore => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-underscore");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-underscore", type_anno_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
             .lookup => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-lookup");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-lookup", type_anno_idx);
                 try tree.pushStringPair("name", ir.getIdentText(t.name));
 
                 switch (t.base) {
                     .builtin => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("builtin");
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(field_begin, field_attrs);
+                        const field_begin = try tree.beginNamedNode("builtin");
+                        try tree.endNodeWithoutChildren(field_begin);
                     },
                     .local => {
-                        const field_begin = tree.beginNode();
-                        try tree.pushStaticAtom("local");
-                        const field_attrs = tree.beginNode();
-                        try tree.endNode(field_begin, field_attrs);
+                        const field_begin = try tree.beginNamedNode("local");
+                        try tree.endNodeWithoutChildren(field_begin);
                     },
                     .external => |external| {
                         const module_idx_int = @intFromEnum(external.module_idx);
@@ -205,10 +179,8 @@ pub const TypeAnno = union(enum) {
                         const module_name = ir.common.strings.get(string_lit_idx);
                         // Special case: Builtin module is an implementation detail, print as (builtin)
                         if (std.mem.eql(u8, module_name, "Builtin") or CIR.Import.isCompilerBuiltinImportName(module_name)) {
-                            const field_begin = tree.beginNode();
-                            try tree.pushStaticAtom("builtin");
-                            const field_attrs = tree.beginNode();
-                            try tree.endNode(field_begin, field_attrs);
+                            const field_begin = try tree.beginNamedNode("builtin");
+                            try tree.endNodeWithoutChildren(field_begin);
                         } else {
                             try tree.pushStringPair("external-module", module_name);
                         }
@@ -228,14 +200,10 @@ pub const TypeAnno = union(enum) {
                     },
                 }
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
             .tag_union => |tu| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tag-union");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-tag-union", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const tags_slice = ir.store.sliceTypeAnnos(tu.tags);
@@ -250,8 +218,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tag => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tag-name");
+                const begin = try tree.beginNamedNode("ty-tag-name");
                 const region = ir.store.getTypeAnnoRegion(type_anno_idx);
 
                 try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
@@ -265,10 +232,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .tuple => |t| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-tuple");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-tuple", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const annos_slice = ir.store.sliceTypeAnnos(t.elems);
@@ -279,18 +243,14 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .record => |r| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-record");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-record", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 const fields_slice = ir.store.sliceAnnoRecordFields(r.fields);
                 for (fields_slice) |field_idx| {
                     const field = ir.store.getAnnoRecordField(field_idx);
 
-                    const field_begin = tree.beginNode();
-                    try tree.pushStaticAtom("field");
+                    const field_begin = try tree.beginNamedNode("field");
                     try tree.pushStringPair("field", ir.getIdentText(field.name));
                     if (field.is_optional) try tree.pushBoolPair("optional", true);
                     if (field.default_value != null) try tree.pushBoolPair("defaulted", true);
@@ -304,10 +264,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .@"fn" => |f| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-fn");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-fn", type_anno_idx);
                 try tree.pushBoolPair("effectful", f.effectful);
                 const attrs = tree.beginNode();
 
@@ -321,10 +278,7 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .parens => |p| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-parens");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-parens", type_anno_idx);
                 const attrs = tree.beginNode();
 
                 try ir.store.getTypeAnno(p.anno).pushToSExprTree(ir, tree, p.anno);
@@ -332,12 +286,8 @@ pub const TypeAnno = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("ty-malformed");
-                const region = ir.store.getTypeAnnoRegion(type_anno_idx);
-                try ir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                const begin = try ir.beginSExprNodeAt(tree, "ty-malformed", type_anno_idx);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -448,68 +398,17 @@ pub const TypeAnno = union(enum) {
         f64,
         dec,
 
-        /// Convert a builtin type to it's name
-        pub fn toBytes(self: @This()) []const u8 {
-            switch (self) {
-                .list => return "List",
-                .box => return "Box",
-                .num => return "Num",
-                .u8 => return "U8",
-                .u16 => return "U16",
-                .u32 => return "U32",
-                .u64 => return "U64",
-                .u128 => return "U128",
-                .i8 => return "I8",
-                .i16 => return "I16",
-                .i32 => return "I32",
-                .i64 => return "I64",
-                .i128 => return "I128",
-                .f32 => return "F32",
-                .f64 => return "F64",
-                .dec => return "Dec",
-            }
-        }
-
         /// Convert a type name string to the corresponding builtin type
         pub fn fromBytes(bytes: []const u8) ?@This() {
-            if (std.mem.eql(u8, bytes, "List")) return .list;
-            if (std.mem.eql(u8, bytes, "Box")) return .box;
-            if (std.mem.eql(u8, bytes, "U8")) return .u8;
-            if (std.mem.eql(u8, bytes, "U16")) return .u16;
-            if (std.mem.eql(u8, bytes, "U32")) return .u32;
-            if (std.mem.eql(u8, bytes, "U64")) return .u64;
-            if (std.mem.eql(u8, bytes, "U128")) return .u128;
-            if (std.mem.eql(u8, bytes, "I8")) return .i8;
-            if (std.mem.eql(u8, bytes, "I16")) return .i16;
-            if (std.mem.eql(u8, bytes, "I32")) return .i32;
-            if (std.mem.eql(u8, bytes, "I64")) return .i64;
-            if (std.mem.eql(u8, bytes, "I128")) return .i128;
-            if (std.mem.eql(u8, bytes, "F32")) return .f32;
-            if (std.mem.eql(u8, bytes, "F64")) return .f64;
-            if (std.mem.eql(u8, bytes, "Dec")) return .dec;
+            // A builtin's tag is its `BuiltinIndices` type field without the
+            // `_type` suffix, and its source name is the registry display name.
+            inline for (CIR.builtin_type_specs) |spec| {
+                const tag_name = spec.type_field[0 .. spec.type_field.len - "_type".len];
+                if (@hasField(@This(), tag_name) and std.mem.eql(u8, bytes, spec.display_name)) {
+                    return @field(@This(), tag_name);
+                }
+            }
             return null;
-        }
-
-        /// Check if an identifier index matches any builtin type name.
-        /// This is more efficient than fromBytes() as it compares indices directly.
-        pub fn isBuiltinTypeIdent(ident: base.Ident.Idx, idents: anytype) bool {
-            return ident.eql(idents.list) or
-                ident.eql(idents.box) or
-                ident.eql(idents.str) or
-                ident.eql(idents.num) or
-                ident.eql(idents.u8) or
-                ident.eql(idents.u16) or
-                ident.eql(idents.u32) or
-                ident.eql(idents.u64) or
-                ident.eql(idents.u128) or
-                ident.eql(idents.i8) or
-                ident.eql(idents.i16) or
-                ident.eql(idents.i32) or
-                ident.eql(idents.i64) or
-                ident.eql(idents.i128) or
-                ident.eql(idents.f32) or
-                ident.eql(idents.f64) or
-                ident.eql(idents.dec);
         }
     };
 };

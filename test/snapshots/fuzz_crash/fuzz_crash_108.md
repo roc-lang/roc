@@ -85,15 +85,20 @@ main! = |0| || "".P
 				(ty-record))))
 	(d-let
 		(p-assign (ident "main!"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-num (value "0")))
+			(e-lambda
+				(args)
+				(e-runtime-error (tag "undeclared_type"))))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
 		(patt (type "Str => {}"))
-		(patt (type "a -> (({}) -> Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]")))
+		(patt (type "a -> (({}) -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]")))
 	(expressions
 		(expr (type "Str => {}"))
-		(expr (type "a -> (({}) -> Error) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]"))))
+		(expr (type "a -> (({}) -> _ret) where [a.from_numeral : Numeral -> Try(a, [InvalidNumeral(Str)]), a.is_eq : a, a -> Bool]"))))
 ~~~

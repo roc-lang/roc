@@ -128,22 +128,12 @@ pub const Op = struct {
     pub const i32_load8_u: u8 = 0x2D;
     pub const i32_load16_s: u8 = 0x2E;
     pub const i32_load16_u: u8 = 0x2F;
-    pub const i64_load8_s: u8 = 0x30;
-    pub const i64_load8_u: u8 = 0x31;
-    pub const i64_load16_s: u8 = 0x32;
-    pub const i64_load16_u: u8 = 0x33;
-    pub const i64_load32_s: u8 = 0x34;
-    pub const i64_load32_u: u8 = 0x35;
     pub const i32_store: u8 = 0x36;
     pub const i64_store: u8 = 0x37;
     pub const f32_store: u8 = 0x38;
     pub const f64_store: u8 = 0x39;
     pub const i32_store8: u8 = 0x3A;
     pub const i32_store16: u8 = 0x3B;
-    pub const i64_store8: u8 = 0x3C;
-    pub const i64_store16: u8 = 0x3D;
-    pub const i64_store32: u8 = 0x3E;
-
     // Constants
     pub const i32_const: u8 = 0x41;
     pub const i64_const: u8 = 0x42;
@@ -178,7 +168,6 @@ pub const Op = struct {
 
     // f32 comparison
     pub const f32_eq: u8 = 0x5B;
-    pub const f32_ne: u8 = 0x5C;
     pub const f32_lt: u8 = 0x5D;
     pub const f32_gt: u8 = 0x5E;
     pub const f32_le: u8 = 0x5F;
@@ -186,7 +175,6 @@ pub const Op = struct {
 
     // f64 comparison
     pub const f64_eq: u8 = 0x61;
-    pub const f64_ne: u8 = 0x62;
     pub const f64_lt: u8 = 0x63;
     pub const f64_gt: u8 = 0x64;
     pub const f64_le: u8 = 0x65;
@@ -211,9 +199,6 @@ pub const Op = struct {
     pub const i32_shl: u8 = 0x74;
     pub const i32_shr_s: u8 = 0x75;
     pub const i32_shr_u: u8 = 0x76;
-    pub const i32_rotl: u8 = 0x77;
-    pub const i32_rotr: u8 = 0x78;
-
     // i64 unary
     pub const i64_clz: u8 = 0x79;
     pub const i64_ctz: u8 = 0x7A;
@@ -233,53 +218,32 @@ pub const Op = struct {
     pub const i64_shl: u8 = 0x86;
     pub const i64_shr_s: u8 = 0x87;
     pub const i64_shr_u: u8 = 0x88;
-    pub const i64_rotl: u8 = 0x89;
-    pub const i64_rotr: u8 = 0x8A;
-
     // f32 arithmetic
     pub const f32_abs: u8 = 0x8B;
     pub const f32_neg: u8 = 0x8C;
     pub const f32_ceil: u8 = 0x8D;
     pub const f32_floor: u8 = 0x8E;
     pub const f32_trunc: u8 = 0x8F;
-    pub const f32_nearest: u8 = 0x90;
     pub const f32_sqrt: u8 = 0x91;
     pub const f32_add: u8 = 0x92;
     pub const f32_sub: u8 = 0x93;
     pub const f32_mul: u8 = 0x94;
     pub const f32_div: u8 = 0x95;
-    pub const f32_min: u8 = 0x96;
-    pub const f32_max: u8 = 0x97;
-    pub const f32_copysign: u8 = 0x98;
-
     // f64 arithmetic
     pub const f64_abs: u8 = 0x99;
     pub const f64_neg: u8 = 0x9A;
     pub const f64_ceil: u8 = 0x9B;
     pub const f64_floor: u8 = 0x9C;
     pub const f64_trunc: u8 = 0x9D;
-    pub const f64_nearest: u8 = 0x9E;
     pub const f64_sqrt: u8 = 0x9F;
     pub const f64_add: u8 = 0xA0;
     pub const f64_sub: u8 = 0xA1;
     pub const f64_mul: u8 = 0xA2;
     pub const f64_div: u8 = 0xA3;
-    pub const f64_min: u8 = 0xA4;
-    pub const f64_max: u8 = 0xA5;
-    pub const f64_copysign: u8 = 0xA6;
-
     // Conversions
     pub const i32_wrap_i64: u8 = 0xA7;
-    pub const i32_trunc_f32_s: u8 = 0xA8;
-    pub const i32_trunc_f32_u: u8 = 0xA9;
-    pub const i32_trunc_f64_s: u8 = 0xAA;
-    pub const i32_trunc_f64_u: u8 = 0xAB;
     pub const i64_extend_i32_s: u8 = 0xAC;
     pub const i64_extend_i32_u: u8 = 0xAD;
-    pub const i64_trunc_f32_s: u8 = 0xAE;
-    pub const i64_trunc_f32_u: u8 = 0xAF;
-    pub const i64_trunc_f64_s: u8 = 0xB0;
-    pub const i64_trunc_f64_u: u8 = 0xB1;
     pub const f32_convert_i32_s: u8 = 0xB2;
     pub const f32_convert_i32_u: u8 = 0xB3;
     pub const f32_convert_i64_s: u8 = 0xB4;
@@ -896,12 +860,6 @@ pub fn findDefinedFunctionSymbolExact(self: *const Self, name: []const u8) Symbo
     return found orelse error.MissingSymbol;
 }
 
-/// Find exactly one defined function symbol by exact name and return its function index.
-pub fn findDefinedFunctionIndexExact(self: *const Self, name: []const u8) SymbolLookupError!u32 {
-    const symbol = try self.findDefinedFunctionSymbolExact(name);
-    return self.linking.symbol_table.items[symbol.raw()].index;
-}
-
 /// Find a symbol table index by exact symbol name and linking symbol kind.
 pub fn findSymbolByNameAndKind(self: *const Self, name: []const u8, kind: WasmLinking.SymKind) ?u32 {
     for (self.linking.symbol_table.items, 0..) |sym, i| {
@@ -1041,18 +999,6 @@ pub fn functionType(self: *const Self, function: FunctionIndex) u32 {
     return self.func_type_indices.items[local];
 }
 
-/// Assert that a function has the expected wasm type index.
-pub fn assertFunctionType(self: *const Self, function: FunctionIndex, expected_type_idx: u32) void {
-    if (self.functionType(function) == expected_type_idx) return;
-    if (@import("builtin").mode == .Debug) {
-        std.debug.panic(
-            "WasmModule invariant violated: function {d} has type {d}, expected {d}",
-            .{ function.raw(), self.functionType(function), expected_type_idx },
-        );
-    }
-    unreachable;
-}
-
 /// Set the body of a function. Takes a global function index (as returned by addFunction).
 pub fn setFunctionBody(self: *Self, global_func_idx: u32, body: []const u8) Allocator.Error!void {
     const local_idx = global_func_idx - self.importCount();
@@ -1077,20 +1023,6 @@ pub fn addExport(self: *Self, name: []const u8, kind: ExportKind, idx: u32) Allo
     });
 }
 
-/// Remove function exports whose names are link-time plumbing rather than
-/// part of the final wasm module's host-visible ABI.
-pub fn removeFunctionExports(self: *Self, names: []const []const u8) void {
-    var write_idx: usize = 0;
-    for (self.exports.items) |exp| {
-        if (exp.kind == .func and stringInSlice(exp.name, names)) {
-            continue;
-        }
-        self.exports.items[write_idx] = exp;
-        write_idx += 1;
-    }
-    self.exports.items.len = write_idx;
-}
-
 fn stringInSlice(needle: []const u8, haystack: []const []const u8) bool {
     for (haystack) |candidate| {
         if (std.mem.eql(u8, needle, candidate)) return true;
@@ -1103,17 +1035,6 @@ pub fn enableMemory(self: *Self, min_pages: u32) void {
     self.has_memory = true;
     self.memory_import = false;
     self.memory_min_pages = min_pages;
-}
-
-/// Ensure the module's memory minimum covers at least `byte_count` bytes.
-pub fn ensureMemoryMinBytes(self: *Self, byte_count: usize) void {
-    const page_size: usize = 65536;
-    const requested_pages: u32 = @intCast(@max(1, (byte_count + page_size - 1) / page_size));
-    self.has_memory = true;
-    self.memory_min_pages = @max(self.memory_min_pages, requested_pages);
-    if (self.has_stack_pointer and self.stack_pointer_init < self.memory_min_pages * @as(u32, 65536)) {
-        self.stack_pointer_init = self.memory_min_pages * @as(u32, 65536);
-    }
 }
 
 /// First byte after all statically assigned data addresses.
@@ -1421,145 +1342,18 @@ pub fn addTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     return table_idx;
 }
 
-/// Import a hosted function and add it to the funcref table.
-///
-/// Hosted functions use the RocCall ABI: (i32 roc_ops_ptr, i32 ret_ptr, i32 args_ptr) → void.
-/// The caller must provide the type index for this 3-arg signature (registered separately
-/// from the 2-arg RocOps callback type).
-///
-/// Returns the table index that can be used with `call_indirect` to invoke the function.
-pub fn addHostedFunctionToTable(self: *Self, module_name: []const u8, fn_name: []const u8, roc_call_type_idx: u32) Allocator.Error!u32 {
-    const func_idx = try self.addImport(module_name, fn_name, roc_call_type_idx);
-    return try self.addTableElement(func_idx);
-}
-
-/// Find an imported function's index by module and field name.
-/// Returns null if no matching import exists.
-pub fn findImportFuncIdx(self: *const Self, module_name: []const u8, field_name: []const u8) ?u32 {
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.module_name, module_name) and std.mem.eql(u8, imp.field_name, field_name)) {
-            return @intCast(i);
-        }
-    }
-    return null;
-}
-
-/// Find a function index by its resolved symbol/import name.
-pub fn findFunctionIdxByName(self: *const Self, name: []const u8) ?u32 {
-    if (self.linking.findSymbolByName(name, self.imports.items, self.global_imports.items, self.table_imports.items)) |sym_idx| {
-        const sym = self.linking.symbol_table.items[sym_idx];
-        if (sym.kind == .function) return sym.index;
-    }
-
-    for (self.imports.items, 0..) |imp, i| {
-        if (std.mem.eql(u8, imp.field_name, name)) return @intCast(i);
-    }
-
-    return null;
-}
-
-/// Find a defined function whose resolved name ends with `suffix`.
-/// This intentionally ignores undefined/imported symbols so host callback lookups
-/// do not accidentally bind raw platform imports like `roc_dbg`.
-pub fn findFunctionIdxBySuffix(self: *const Self, suffix: []const u8) ?u32 {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or sym.isUndefined()) continue;
-        const sym_name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse continue;
-        if (std.mem.endsWith(u8, sym_name, suffix)) return sym.index;
-    }
-    return null;
-}
-
 /// Find or append a function in the element section.
 pub fn ensureTableElement(self: *Self, func_idx: u32) Allocator.Error!u32 {
     return self.findTableIndex(func_idx) orelse try self.addTableElement(func_idx);
 }
 
-// --- Surgical Linking ---
-
 /// Dummy function body: unreachable + end. Inserted to maintain function index
-/// stability when an import is removed during surgical linking.
+/// stability when a dead import is removed.
 pub const DUMMY_FUNCTION = [3]u8{
     0x00, // zero local variable declarations
     Op.@"unreachable", // trap if called (means DCE was wrong)
     Op.end, // end of function body
 };
-
-/// Entry in the host-to-app linking map: maps an app function name
-/// (which the host imports) to its defined function index.
-pub const HostToAppEntry = struct {
-    name: []const u8,
-    fn_index: u32,
-};
-
-/// Perform surgical linking: for each (app_fn_name, app_fn_index) pair,
-/// remove the host's import for that name and redirect all call sites to
-/// the app-defined function at app_fn_index.
-///
-/// The last function import is swapped into the vacated slot so that only
-/// two symbols need relocation updates. A dummy function is prepended to
-/// func_type_indices to keep the total function count stable.
-pub fn linkHostToAppCalls(self: *Self, host_to_app_map: []const HostToAppEntry) Allocator.Error!void {
-    for (host_to_app_map) |entry| {
-        const app_fn_name = entry.name;
-        const app_fn_index = entry.fn_index;
-
-        // 1. Find the host import matching app_fn_name, and the last import (swap candidate).
-        //    Since self.imports only contains function imports, import_index == fn_index.
-        var host_fn_index: ?u32 = null;
-        var last_fn_index: u32 = 0;
-        for (self.imports.items, 0..) |imp, i| {
-            last_fn_index = @intCast(i);
-            if (std.mem.eql(u8, imp.field_name, app_fn_name)) {
-                host_fn_index = @intCast(i);
-            }
-        }
-
-        const host_idx = host_fn_index orelse {
-            // The host doesn't import this function—export the app's definition
-            // so it can be called from JS.
-            try self.exports.append(self.allocator, .{
-                .name = app_fn_name,
-                .kind = .func,
-                .idx = app_fn_index,
-            });
-            continue;
-        };
-
-        // 2. Swap: remove the last import and put it where the host import was.
-        //    This keeps all other import indices stable—only the host and swap
-        //    indices need relocation updates.
-        const swap_import = self.imports.items[last_fn_index];
-        self.imports.items.len -= 1;
-        if (last_fn_index != host_idx) {
-            self.imports.items[host_idx] = swap_import;
-        }
-
-        // 3. Update symbol table and apply relocations for the host function.
-        //    The host import (at host_idx) is now a defined app function at app_fn_index.
-        if (self.linking.findAndReindexImportedFn(host_idx, app_fn_index)) |sym_index| {
-            self.reloc_code.applyRelocsU32(self.code_bytes.items, sym_index, app_fn_index);
-        }
-
-        // 4. Update symbol table and apply relocations for the swapped function.
-        //    The last import (at last_fn_index) moved to host_idx.
-        if (last_fn_index != host_idx) {
-            if (self.linking.findAndReindexImportedFn(last_fn_index, host_idx)) |swap_sym_index| {
-                self.reloc_code.applyRelocsU32(self.code_bytes.items, swap_sym_index, host_idx);
-            }
-        }
-
-        // 5. Insert a dummy function to compensate for the removed import.
-        //    This keeps defined-function indices unchanged: import_count decreases
-        //    by 1, but one dummy is prepended to the code section, so the first
-        //    real defined function stays at the same global index.
-        self.dead_import_dummy_count += 1;
-        try self.func_type_indices.insert(self.allocator, 0, 0); // dummy uses type signature 0
-
-        // 6. Track the decreased import count.
-        self.import_fn_count -= 1;
-    }
-}
 
 // --- Phase 8a: Module Merging (Builtins) ---
 
@@ -2473,33 +2267,6 @@ pub fn resolveRelocations(self: *Self) RelocationError!void {
     try self.resolveDataRelocations();
 }
 
-/// Transfer function bodies added via setFunctionBody into the code_bytes
-/// representation. This makes app-generated functions compatible with
-/// linkHostToAppCalls, resolveCodeRelocations, eliminateDeadCode, and
-/// materializeFuncBodies.
-///
-/// Must be called after all addFunction/setFunctionBody calls are complete
-/// and before linkHostToAppCalls.
-pub fn transferAppFunctions(self: *Self) Allocator.Error!void {
-    const host_defined_count = self.function_offsets.items.len;
-    const total_defined_count = self.func_type_indices.items.len;
-
-    if (total_defined_count <= host_defined_count) return;
-
-    for (host_defined_count..total_defined_count) |i| {
-        if (i >= self.func_bodies.items.len) break;
-        const body = self.func_bodies.items[i].body;
-        if (body.len == 0) continue;
-
-        const fn_offset: u32 = @intCast(self.code_bytes.items.len);
-        try self.function_offsets.append(self.allocator, fn_offset);
-
-        // Write body length + body to code_bytes
-        try leb128WriteU32(self.allocator, &self.code_bytes, @intCast(body.len));
-        try self.code_bytes.appendSlice(self.allocator, body);
-    }
-}
-
 /// Convert code_bytes + function_offsets into func_bodies for encoding.
 ///
 /// After `resolveRelocations()` has patched all relocation sites, this method
@@ -3145,152 +2912,6 @@ fn traceLiveFunctions(
 
 // --- Phase 5: Memory, Table, and Stack Pointer Ownership ---
 
-/// Promote globally-visible, defined function symbols from the linking section
-/// to actual WASM exports. In relocatable objects, `export fn` in Zig generates
-/// symbols with `binding=global vis=default`, but no Export section exists.
-/// This must be called after preload so that the surgical linker pipeline can
-/// see and preserve these exports.
-pub fn exportGlobalSymbols(self: *Self) Allocator.Error!void {
-    for (self.linking.symbol_table.items) |sym| {
-        if (sym.kind != .function or sym.isUndefined() or sym.isLocal()) continue;
-        if ((sym.flags & WasmLinking.SymFlag.VISIBILITY_HIDDEN) != 0) continue;
-        const name = sym.name orelse continue;
-        // Skip roc-internal symbols (roc__p*, roc__num_*); entrypoints use
-        // the literal provides symbols and are exported like any host export.
-        if (std.mem.startsWith(u8, name, "roc__")) continue;
-        // Avoid duplicate exports.
-        var already_exported = false;
-        for (self.exports.items) |exp| {
-            if (exp.kind == .func and std.mem.eql(u8, exp.name, name)) {
-                already_exported = true;
-                break;
-            }
-        }
-        if (!already_exported) {
-            try self.addExport(name, .func, sym.index);
-        }
-    }
-}
-
-/// Prepare the explicit Wasm object ABI symbols for a final surgical link.
-///
-/// Memory and table ownership is already represented by module state. Imported
-/// `__stack_pointer`, `__memory_base`, `__table_base`, and table symbols must be
-/// promoted to their final definitions so relocations cannot keep object-file
-/// indices that do not exist in the encoded final module.
-pub fn prepareObjectAbiForFinalLink(self: *Self) (Allocator.Error || error{ UnexpectedGlobalImport, UnexpectedTableImport })!void {
-    // The parser separates function imports from memory/table/global imports.
-    // Non-function imports are NOT in self.imports, so import_fn_count is correct.
-    // Memory and table flags were set during parseImportSection.
-    //
-    // Assert the host module declared memory (required for any useful program).
-    std.debug.assert(self.has_memory);
-    // Note: has_table may not be set if the host doesn't use indirect calls yet.
-    // Table will be set during finalization if table_func_indices are populated.
-
-    for (self.global_imports.items, 0..) |imp, import_index| {
-        const is_stack = std.mem.eql(u8, imp.field_name, "__stack_pointer");
-        const is_base = std.mem.eql(u8, imp.field_name, "__memory_base") or
-            std.mem.eql(u8, imp.field_name, "__table_base");
-        if (!std.mem.eql(u8, imp.module_name, "env") or
-            imp.val_type != @intFromEnum(ValType.i32) or
-            !(is_stack or is_base) or
-            (is_stack and !imp.mutable))
-        {
-            return error.UnexpectedGlobalImport;
-        }
-
-        var has_symbol = false;
-        for (self.linking.symbol_table.items) |sym| {
-            if (sym.kind == .global and sym.isUndefined() and sym.index == import_index) {
-                has_symbol = true;
-                break;
-            }
-        }
-        if (!has_symbol) return error.UnexpectedGlobalImport;
-    }
-
-    for (self.table_imports.items, 0..) |imp, import_index| {
-        if (!std.mem.eql(u8, imp.module_name, "env") or
-            !std.mem.eql(u8, imp.field_name, "__indirect_function_table"))
-        {
-            return error.UnexpectedTableImport;
-        }
-
-        var has_symbol = false;
-        for (self.linking.symbol_table.items) |sym| {
-            if (sym.kind == .table and sym.isUndefined() and sym.index == import_index) {
-                has_symbol = true;
-                break;
-            }
-        }
-        if (!has_symbol) return error.UnexpectedTableImport;
-    }
-
-    var memory_base_index: ?u32 = null;
-    var memory_base_mutable: ?bool = null;
-    var table_base_index: ?u32 = null;
-    var table_base_mutable: ?bool = null;
-    for (self.linking.symbol_table.items) |*sym| {
-        if (sym.kind != .global or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
-            return error.UnexpectedGlobalImport;
-        if (sym.index >= self.global_imports.items.len or
-            !std.mem.eql(u8, self.global_imports.items[sym.index].field_name, name))
-        {
-            return error.UnexpectedGlobalImport;
-        }
-        const imported = self.global_imports.items[sym.index];
-
-        const final_index = if (std.mem.eql(u8, name, "__stack_pointer")) blk: {
-            self.enableStackPointer(self.stack_pointer_init);
-            break :blk 0;
-        } else if (std.mem.eql(u8, name, "__memory_base")) blk: {
-            if (memory_base_index == null) {
-                memory_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
-                memory_base_mutable = imported.mutable;
-            }
-            if (memory_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
-            break :blk memory_base_index.?;
-        } else if (std.mem.eql(u8, name, "__table_base")) blk: {
-            if (table_base_index == null) {
-                table_base_index = try self.addDefinedGlobal(@intFromEnum(ValType.i32), imported.mutable, 0);
-                table_base_mutable = imported.mutable;
-            }
-            if (table_base_mutable.? != imported.mutable) return error.UnexpectedGlobalImport;
-            break :blk table_base_index.?;
-        } else {
-            return error.UnexpectedGlobalImport;
-        };
-
-        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
-        sym.name = name;
-        sym.index = final_index;
-    }
-
-    for (self.linking.symbol_table.items) |*sym| {
-        if (sym.kind != .table or !sym.isUndefined()) continue;
-        const name = sym.resolveName(self.imports.items, self.global_imports.items, self.table_imports.items) orelse
-            return error.UnexpectedTableImport;
-        if (sym.index >= self.table_imports.items.len or
-            !std.mem.eql(u8, self.table_imports.items[sym.index].field_name, name) or
-            !std.mem.eql(u8, name, "__indirect_function_table"))
-        {
-            return error.UnexpectedTableImport;
-        }
-
-        sym.flags &= ~WasmLinking.SymFlag.UNDEFINED;
-        sym.flags |= WasmLinking.SymFlag.EXPLICIT_NAME;
-        sym.name = name;
-        sym.index = 0;
-    }
-
-    self.global_imports.clearRetainingCapacity();
-    self.import_global_count = 0;
-    self.table_imports.clearRetainingCapacity();
-}
-
 /// Memory settings used when finalizing a wasm module after code generation.
 pub const FinalMemoryConfig = struct {
     stack_bytes: u32,
@@ -3300,12 +2921,6 @@ pub const FinalMemoryConfig = struct {
     maximum_memory: ?usize = null,
     export_memory: bool = true,
 };
-
-/// Set the byte offset where this module's data segments begin.
-pub fn setDataBase(self: *Self, offset: u32) void {
-    std.debug.assert(self.data_segments.items.len == 0);
-    self.data_offset = offset;
-}
 
 /// Finalization step (called after all code generation and surgical linking,
 /// before encode):
@@ -5211,24 +4826,6 @@ test "function types match structurally rather than by table index" {
     try std.testing.expect(!module.funcTypeMatches(duplicate, &.{ .i32, .v128 }, &.{.i32}));
 }
 
-test "removeFunctionExports—removes only named function exports" {
-    const allocator = std.testing.allocator;
-    var module = init(allocator);
-    defer module.deinit();
-
-    try module.addExport("start", .func, 0);
-    try module.addExport("host_unused", .func, 1);
-    try module.addExport("memory", .memory, 0);
-
-    module.removeFunctionExports(&.{"host_unused"});
-
-    try std.testing.expectEqual(@as(usize, 2), module.exports.items.len);
-    try std.testing.expectEqualStrings("start", module.exports.items[0].name);
-    try std.testing.expectEqual(ExportKind.func, module.exports.items[0].kind);
-    try std.testing.expectEqualStrings("memory", module.exports.items[1].name);
-    try std.testing.expectEqual(ExportKind.memory, module.exports.items[1].kind);
-}
-
 test "preload—parses memory section" {
     const allocator = std.testing.allocator;
     const wasm_bytes = try buildTestRelocatableModule(allocator);
@@ -5260,13 +4857,13 @@ test "preload—symbol name resolution from imports" {
     try std.testing.expectEqual(@as(?u32, 0), found);
 }
 
-// --- Tests for linkHostToAppCalls ---
+// --- Import-bearing module fixture ---
 
-/// Build a WasmModule in memory for testing linkHostToAppCalls.
+/// Build a WasmModule in memory whose defined functions call imports.
 ///
 /// Function index space:
 ///   0: js_foo          (import, env)
-///   1: roc__main_exposed (import, env)—the app function to link
+///   1: roc__main_exposed (import, env)
 ///   2: js_bar          (import, env)
 ///   3: defined_0—body calls roc__main_exposed (fn 1)
 ///   4: defined_1—body calls js_bar (fn 2)
@@ -5346,206 +4943,6 @@ fn buildLinkingTestModule(allocator: Allocator) Allocator.Error!Self {
     });
 
     return module;
-}
-
-test "linkHostToAppCalls—single app function: import removed, dummy inserted" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: 3 imports, 2 defined, 0 dummies
-    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
-    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
-
-    // Link roc__main_exposed → app function at index 5
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: 2 imports, 3 func_type_indices (1 dummy + 2 original), 1 dummy
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
-}
-
-test "linkHostToAppCalls—verifies call instruction patched to app function index" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: fn3 calls fn 1 (roc__main_exposed)—LEB128 at code_bytes[3..8]
-    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[3..8]));
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: fn3's call should be patched to fn 5 (the app function)
-    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[3..8]));
-}
-
-test "linkHostToAppCalls—last import swapped into vacated slot" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // js_bar (was at index 2) should now be at index 1 (the vacated slot)
-    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("js_bar", module.imports.items[1].field_name);
-}
-
-test "linkHostToAppCalls—swap import's call sites updated to new index" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: fn4 calls fn 2 (js_bar)—LEB128 at code_bytes[12..17]
-    try std.testing.expectEqual(@as(u32, 2), decodePaddedU32(module.code_bytes.items[12..17]));
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: fn4's call should be patched to fn 1 (js_bar's new position)
-    try std.testing.expectEqual(@as(u32, 1), decodePaddedU32(module.code_bytes.items[12..17]));
-}
-
-test "linkHostToAppCalls—multiple app functions linked in sequence" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Link two app functions sequentially
-    try module.linkHostToAppCalls(&.{
-        .{ .name = "roc__main_exposed", .fn_index = 5 },
-        .{ .name = "js_foo", .fn_index = 6 },
-    });
-
-    // 2 imports removed → 1 remaining, 2 dummies
-    try std.testing.expectEqual(@as(usize, 1), module.imports.items.len);
-    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
-    try std.testing.expectEqual(@as(usize, 4), module.func_type_indices.items.len); // 2 dummies + 2 original
-}
-
-test "linkHostToAppCalls—dead_import_dummy_count incremented correctly" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try std.testing.expectEqual(@as(u32, 0), module.dead_import_dummy_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-    try std.testing.expectEqual(@as(u32, 1), module.dead_import_dummy_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "js_foo", .fn_index = 6 }});
-    try std.testing.expectEqual(@as(u32, 2), module.dead_import_dummy_count);
-}
-
-test "linkHostToAppCalls—func_type_indices has dummy signature at position 0" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: func_type_indices = [0, 0] (two defined functions, both type 0)
-    try std.testing.expectEqual(@as(usize, 2), module.func_type_indices.items.len);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: func_type_indices = [0, 0, 0]—dummy at position 0
-    try std.testing.expectEqual(@as(usize, 3), module.func_type_indices.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.func_type_indices.items[0]); // dummy type signature
-}
-
-test "linkHostToAppCalls—total function count unchanged after linking" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: 3 imports + 2 defined = 5 total
-    const total_before = module.imports.items.len + module.func_type_indices.items.len;
-    try std.testing.expectEqual(@as(usize, 5), total_before);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: 2 imports + 3 func_type_indices (1 dummy + 2 original) = 5 total
-    const total_after = module.imports.items.len + module.func_type_indices.items.len;
-    try std.testing.expectEqual(@as(usize, 5), total_after);
-}
-
-test "linkHostToAppCalls—unfound import exports app function instead" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    const exports_before = module.exports.items.len;
-
-    // Link a function name that doesn't exist in imports
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__nonexistent", .fn_index = 7 }});
-
-    // No imports removed, but an export was added
-    try std.testing.expectEqual(@as(usize, 3), module.imports.items.len);
-    try std.testing.expectEqual(exports_before + 1, module.exports.items.len);
-    const new_export = module.exports.items[module.exports.items.len - 1];
-    try std.testing.expectEqualStrings("roc__nonexistent", new_export.name);
-    try std.testing.expectEqual(ExportKind.func, new_export.kind);
-    try std.testing.expectEqual(@as(u32, 7), new_export.idx);
-}
-
-test "linkHostToAppCalls—import_fn_count decremented" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    try std.testing.expectEqual(@as(u32, 3), module.import_fn_count);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
-}
-
-test "linkHostToAppCalls—symbol table updated for linked function" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: sym 1 (roc__main_exposed) has index 1
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: sym 1 should now point to app function index 5
-    try std.testing.expectEqual(@as(u32, 5), module.linking.symbol_table.items[1].index);
-}
-
-test "linkHostToAppCalls—symbol table updated for swapped function" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Before: sym 2 (js_bar) has index 2
-    try std.testing.expectEqual(@as(u32, 2), module.linking.symbol_table.items[2].index);
-
-    try module.linkHostToAppCalls(&.{.{ .name = "roc__main_exposed", .fn_index = 5 }});
-
-    // After: sym 2 (js_bar) should now have index 1 (swapped into roc__main_exposed's slot)
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[2].index);
-}
-
-test "linkHostToAppCalls—linking last import is a no-op swap" {
-    const allocator = std.testing.allocator;
-    var module = try buildLinkingTestModule(allocator);
-    defer module.deinit();
-
-    // Link js_bar (the last import)—swap_fn_index == host_fn_index, no swap needed
-    try module.linkHostToAppCalls(&.{.{ .name = "js_bar", .fn_index = 5 }});
-
-    // js_bar removed, js_foo and roc__main_exposed remain
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqualStrings("js_foo", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("roc__main_exposed", module.imports.items[1].field_name);
-
-    // fn4's call should be patched from 2 to 5
-    try std.testing.expectEqual(@as(u32, 5), decodePaddedU32(module.code_bytes.items[12..17]));
-
-    // No swap relocation needed—sym 1 (roc__main_exposed) should be unchanged
-    try std.testing.expectEqual(@as(u32, 1), module.linking.symbol_table.items[1].index);
 }
 
 // --- Tests for loading a real relocatable host module ---
@@ -5647,69 +5044,11 @@ fn buildPhase5TestModule(allocator: Allocator) Allocator.Error!Self {
     return module;
 }
 
-test "setup—function imports survive object ABI preparation" {
-    const allocator = std.testing.allocator;
-    var module = try buildPhase5TestModule(allocator);
-    defer module.deinit();
-
-    try module.prepareObjectAbiForFinalLink();
-
-    // After setup, the imports array should only contain function imports
-    try std.testing.expectEqual(@as(usize, 2), module.imports.items.len);
-    try std.testing.expectEqualStrings("roc__main", module.imports.items[0].field_name);
-    try std.testing.expectEqualStrings("roc_panic", module.imports.items[1].field_name);
-
-    // Memory and table flags should still be set (they'll be defined sections)
-    try std.testing.expect(module.has_memory);
-    try std.testing.expect(module.has_table);
-}
-
-test "setup—object ABI globals become valid final global indices" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-    module.has_memory = true;
-
-    _ = try module.addGlobalImportWithSymbol("env", "__stack_pointer", .i32, true);
-    _ = try module.addGlobalImportWithSymbol("env", "__memory_base", .i32, true);
-    _ = try module.addGlobalImportWithSymbol("env", "__table_base", .i32, false);
-    const table_symbol = try module.addTableImportWithSymbol();
-
-    try module.prepareObjectAbiForFinalLink();
-
-    try std.testing.expect(module.has_stack_pointer);
-    try std.testing.expectEqual(@as(usize, 0), module.global_imports.items.len);
-    try std.testing.expectEqual(@as(u32, 0), module.import_global_count);
-    try std.testing.expectEqual(@as(usize, 0), module.table_imports.items.len);
-    try std.testing.expectEqual(@as(usize, 2), module.extra_globals.items.len);
-    for (module.linking.symbol_table.items[0..3], 0..) |sym, expected_index| {
-        try std.testing.expect(!sym.isUndefined());
-        try std.testing.expectEqual(@as(u32, @intCast(expected_index)), sym.index);
-    }
-    const table = module.linking.symbol_table.items[table_symbol.raw()];
-    try std.testing.expect(!table.isUndefined());
-    try std.testing.expectEqual(@as(u32, 0), table.index);
-}
-
-test "setup—object ABI preparation leaves function import count unchanged" {
-    const allocator = std.testing.allocator;
-    var module = try buildPhase5TestModule(allocator);
-    defer module.deinit();
-
-    const fn_count_before = module.import_fn_count;
-    try module.prepareObjectAbiForFinalLink();
-
-    // import_fn_count should be unchanged—it only counts function imports
-    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
-    try std.testing.expectEqual(@as(u32, 2), module.import_fn_count);
-}
-
 test "setup—__stack_pointer global defined with correct initial value" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024); // 1KB stack
 
     // __stack_pointer should be defined (not imported)
@@ -5723,8 +5062,6 @@ test "setup—memory section has correct minimum pages" {
     const allocator = std.testing.allocator;
     var module = try buildPhase5TestModule(allocator);
     defer module.deinit();
-
-    try module.prepareObjectAbiForFinalLink();
 
     // Data segment: 12 bytes at offset 1024 → data_end = 1036
     // data_offset is 1024 (init default), data_end = max(1024, 1036) = 1036
@@ -5751,7 +5088,6 @@ test "setup—table size matches element count after finalization" {
     try module.table_func_indices.append(allocator, 3); // another fn
     try module.table_func_indices.append(allocator, 4); // another fn
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Encode and verify the table section uses the correct size
@@ -5795,7 +5131,6 @@ test "setup—memory exported as 'memory'" {
     defer module.deinit();
 
     const exports_before = module.exports.items.len;
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(1024);
 
     // Should have one more export than before
@@ -5829,7 +5164,6 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     // Add table entries for encoding
     try module.table_func_indices.append(allocator, 2);
 
-    try module.prepareObjectAbiForFinalLink();
     try module.finalizeMemoryAndTable(4096);
 
     // Encode to final WASM binary
@@ -5860,26 +5194,6 @@ test "setup—finalized module encodes and re-parses as valid WASM" {
     try std.testing.expectEqual(@as(u32, 1), decoded.preloaded_defined_global_count);
 }
 
-test "phase5—real host object ABI preparation preserves function imports" {
-    const allocator = std.testing.allocator;
-    const host_bytes = @import("wasm_host_fixture").host_wasm;
-
-    var module = try preload(allocator, host_bytes, .relocatable_for_merge);
-    defer module.deinit();
-
-    const fn_count_before = module.import_fn_count;
-    const imports_before = module.imports.items.len;
-
-    try module.prepareObjectAbiForFinalLink();
-
-    // Function imports should be completely unchanged
-    try std.testing.expectEqual(fn_count_before, module.import_fn_count);
-    try std.testing.expectEqual(imports_before, module.imports.items.len);
-
-    // Memory flag should be set (host imports memory)
-    try std.testing.expect(module.has_memory);
-}
-
 test "phase5—real host module: full setup and finalization produces valid WASM" {
     const allocator = std.testing.allocator;
     const host_bytes = @import("wasm_host_fixture").host_wasm;
@@ -5888,7 +5202,6 @@ test "phase5—real host module: full setup and finalization produces valid WASM
     defer module.deinit();
 
     // Phase 5 setup
-    try module.prepareObjectAbiForFinalLink();
 
     // Phase 5 finalization with 64KB stack
     try module.finalizeMemoryAndTable(65536);
@@ -5931,29 +5244,6 @@ test "call_indirect—roc_alloc uses 2-arg callback type, not RocCall type" {
     // Verify the import's type index is the 2-arg type, not the 3-arg type
     try std.testing.expectEqual(roc_ops_type, module.imports.items[roc_alloc_idx].type_idx);
     try std.testing.expect(module.imports.items[roc_alloc_idx].type_idx != roc_call_type);
-}
-
-test "call_indirect—hosted function uses 3-arg RocCall type" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    // Register both type signatures
-    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-
-    module.enableTable();
-
-    // Add a hosted function using the convenience method
-    const table_idx = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
-
-    // The hosted function import should use the 3-arg type
-    try std.testing.expectEqual(roc_call_type, module.imports.items[0].type_idx);
-    try std.testing.expect(module.imports.items[0].type_idx != roc_ops_type);
-
-    // It should have a valid table entry
-    try std.testing.expectEqual(@as(u32, 0), table_idx);
-    try std.testing.expectEqual(@as(u32, 0), module.table_func_indices.items[0]);
 }
 
 test "call_indirect—mismatched type index would trap (validate type separation)" {
@@ -6033,66 +5323,6 @@ test "function table—all RocOps functions have valid table entries after linki
     for (module.imports.items) |import| {
         try std.testing.expectEqual(roc_ops_type, import.type_idx);
     }
-}
-
-test "function table—hosted functions added to table with correct indices" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const roc_ops_type = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    const roc_call_type = try module.addFuncType(&.{ .i32, .i32, .i32 }, &.{});
-    module.enableTable();
-
-    // Add RocOps callbacks first (as the codegen does)
-    const roc_alloc_idx = try module.addImport("env", shim_symbols.roc_alloc, roc_ops_type);
-    _ = try module.addTableElement(roc_alloc_idx);
-    const roc_dealloc_idx = try module.addImport("env", shim_symbols.roc_dealloc, roc_ops_type);
-    _ = try module.addTableElement(roc_dealloc_idx);
-
-    // Now add hosted functions—they follow the RocOps entries in the table
-    const hosted_0_table = try module.addHostedFunctionToTable("env", "hosted_fn_0", roc_call_type);
-    const hosted_1_table = try module.addHostedFunctionToTable("env", "hosted_fn_1", roc_call_type);
-    const hosted_2_table = try module.addHostedFunctionToTable("env", "hosted_fn_2", roc_call_type);
-
-    // Hosted functions follow RocOps entries (indices 0, 1 are alloc/dealloc)
-    try std.testing.expectEqual(@as(u32, 2), hosted_0_table);
-    try std.testing.expectEqual(@as(u32, 3), hosted_1_table);
-    try std.testing.expectEqual(@as(u32, 4), hosted_2_table);
-
-    // Total table size: 2 RocOps + 3 hosted = 5
-    try std.testing.expectEqual(@as(usize, 5), module.table_func_indices.items.len);
-
-    // Verify hosted function imports use the 3-arg type
-    // Imports: [roc_alloc, roc_dealloc, hosted_fn_0, hosted_fn_1, hosted_fn_2]
-    try std.testing.expectEqual(roc_ops_type, module.imports.items[0].type_idx);
-    try std.testing.expectEqual(roc_ops_type, module.imports.items[1].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[2].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[3].type_idx);
-    try std.testing.expectEqual(roc_call_type, module.imports.items[4].type_idx);
-
-    // Verify table entries point to correct function indices
-    try std.testing.expectEqual(@as(u32, 2), module.table_func_indices.items[2]); // hosted_fn_0
-    try std.testing.expectEqual(@as(u32, 3), module.table_func_indices.items[3]); // hosted_fn_1
-    try std.testing.expectEqual(@as(u32, 4), module.table_func_indices.items[4]); // hosted_fn_2
-}
-
-test "findFunctionIdxBySuffix—ignores imported symbols and finds defined host callback" {
-    const allocator = std.testing.allocator;
-    var module = Self.init(allocator);
-    defer module.deinit();
-
-    const type_idx = try module.addFuncType(&.{ .i32, .i32 }, &.{});
-    _ = try module.addImport("env", shim_symbols.roc_dbg, type_idx);
-    module.import_fn_count = 1;
-
-    const callback_idx = try module.addFunction(type_idx);
-    try module.linking.symbol_table.appendSlice(allocator, &.{
-        .{ .kind = .function, .flags = WasmLinking.SymFlag.UNDEFINED, .name = null, .index = 0 },
-        .{ .kind = .function, .flags = 0, .name = "host.roc_dbg", .index = callback_idx },
-    });
-
-    try std.testing.expectEqual(callback_idx, module.findFunctionIdxBySuffix(shim_symbols.roc_dbg).?);
 }
 
 test "ensureTableElement—reuses existing table entry" {
@@ -8000,7 +7230,7 @@ test "eliminateDeadCode—function indices unchanged after elimination" {
 
 /// Build a module simulating the post-surgical-linking state:
 /// - Has code_bytes and function_offsets (from preload)
-/// - Has dead_import_dummy_count > 0 (from linkHostToAppCalls)
+/// - Has dead_import_dummy_count > 0
 /// - Has linking and reloc sections (from preload, should NOT appear in output)
 /// - Has memory, exports, and data segments
 fn buildEncodeTestModule(allocator: Allocator) Allocator.Error!Self {

@@ -315,10 +315,11 @@ test "Discarded unpinned arithmetic specialization validates the default method 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
 
-    // The bare use defaults f's arithmetic receiver to Dec. Dec.plus cannot
-    // discharge the resulting Dec, U64 -> Dec constraint, so checking owns
+    // The bare use materializes the default for f's arithmetic receiver, whose
+    // `plus` cannot discharge the `a, U64 -> a` constraint, so checking owns
     // the diagnostic instead of publishing incompatible dispatch evidence.
-    try test_env.assertOneTypeError("Type Mismatch");
+    // Nothing determines that receiver, so it is reported as undetermined.
+    try test_env.assertOneTypeError("Type Not Determined");
 }
 
 test "qualified literal suffix follows a re-exported alias to its declaring module" {

@@ -27,6 +27,7 @@
 //! set.
 
 const std = @import("std");
+const invariant = @import("base").invariant;
 const collections = @import("collections");
 const core = @import("lir_core");
 const BodyClone = @import("body_clone.zig");
@@ -135,7 +136,6 @@ const Pass = struct {
                 .dec_literal,
                 .boxy_dynamic_num_literal,
                 .boxy_dynamic_frac_literal,
-                .null_ptr,
                 .proc_ref,
                 => self.markOther(s.target),
             },
@@ -150,6 +150,8 @@ const Pass = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_low_level,
             .assign_list,
@@ -158,23 +160,17 @@ const Pass = struct {
             .set_local,
             => |s| self.markOther(s.target),
 
-            .assign_call => |s| {
+            inline .assign_call, .assign_call_erased => |s| {
                 self.markOther(s.target);
                 self.markOtherOpt(s.out_desc);
             },
-            .assign_call_erased => |s| {
-                self.markOther(s.target);
-                self.markOtherOpt(s.out_desc);
-            },
-            .assign_call_dict => |s| self.markOther(s.target),
-            .assign_packed_erased_fn => |s| self.markOther(s.target),
+            inline .assign_call_dict, .assign_packed_erased_fn => |s| self.markOther(s.target),
             .assign_boxy_tag_payload => |s| {
                 self.markOther(s.target);
                 self.markOtherOpt(s.target_desc);
             },
 
-            .store_struct => |s| self.markOther(s.dest),
-            .store_tag => |s| self.markOther(s.dest),
+            inline .store_struct, .store_tag => |s| self.markOther(s.dest),
 
             .join => |s| {
                 self.markOtherSpan(s.params);
@@ -302,9 +298,7 @@ fn anyStaticLiteral(store: *const LirStore) bool {
 /// statement after it; null for every other statement.
 fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
     return switch (stmt) {
-        .incref => |s| .{ s.value, s.next },
-        .decref => |s| .{ s.value, s.next },
-        .decref_if_initialized => |s| .{ s.value, s.next },
+        inline .incref, .decref, .decref_if_initialized => |s| .{ s.value, s.next },
         .init_uninitialized,
         .boxy_tag_match,
         .str_match,
@@ -325,6 +319,8 @@ fn referenceCount(stmt: LIR.CFStmt) ?struct { LocalId, LIR.CFStmtId } {
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
+        .assign_boxy_eq,
+        .assign_boxy_hash,
         .assign_boxy_tag,
         .assign_boxy_tag_payload,
         .assign_call_dict,
@@ -367,7 +363,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
         while (work.pop()) |stmt_id| {
             if (visited.isSet(@intFromEnum(stmt_id))) continue;
             visited.set(@intFromEnum(stmt_id));
-            try Body.appendSuccessorsWithAllocator(store, &work, stmt_id, gpa);
+            try Body.appendSuccessors(store, &work, stmt_id, gpa);
             const value, _ = referenceCount(store.getCFStmt(stmt_id)) orelse continue;
             if (immortal.contains(value)) immortalInvariant("a program without static-literal shapes counted references on an immortal local");
         }
@@ -376,7 +372,7 @@ fn verifyNothingToElide(gpa: Allocator, store: *const LirStore) Allocator.Error!
 
 fn immortalInvariant(comptime message: []const u8) noreturn {
     if (@import("builtin").mode == .Debug) {
-        @panic("immortal locals invariant violated: " ++ message);
+        invariant("{s}", .{"immortal locals invariant violated: " ++ message});
     }
     unreachable;
 }
