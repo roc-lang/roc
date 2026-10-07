@@ -245,6 +245,100 @@ pub const Module = struct {
         return self.module_idx;
     }
 
+    /// POLICY: a type declared in a function body may name that function's type
+    /// variables (and those of the functions around it) in its backing
+    /// (design.md "Local Type Declarations"). Each application of the type stands
+    /// for one instantiation of them, so checked types carry them as implicit
+    /// arguments after the declared ones, and the declaration takes them as
+    /// implicit formals: two specializations of the function give the type two
+    /// distinct checked types. The variables are the rigids the declaration's
+    /// backing names other than its own formals, including those of other local
+    /// declarations it reaches, in the order a walk of the backings first meets
+    /// them.
+    pub fn nominalDeclarationImplicitFormals(
+        self: @This(),
+        allocator: Allocator,
+        statement_idx: CIR.Statement.Idx,
+    ) Allocator.Error![]const Var {
+        const types_store = self.typeStoreConst();
+        const self_identity = self.moduleEnvConst().selfModuleIdentity();
+        var out: std.ArrayListUnmanaged(Var) = .empty;
+        errdefer out.deinit(allocator);
+        var decls: std.ArrayListUnmanaged(types.NominalDecl.Idx) = .empty;
+        defer decls.deinit(allocator);
+        var seen_decls: std.AutoHashMapUnmanaged(types.NominalDecl.Idx, void) = .empty;
+        defer seen_decls.deinit(allocator);
+        var pending: std.ArrayListUnmanaged(Var) = .empty;
+        defer pending.deinit(allocator);
+        var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+        defer visited.deinit(allocator);
+
+        const root = types_store.resolveVar(ModuleEnv.varFrom(statement_idx));
+        if (root.desc.content != .structure or root.desc.content.structure != .nominal_type) return &.{};
+        const root_decl = types_store.lookupNominalDecl(root.desc.content.structure.nominal_type) orelse return &.{};
+        try decls.append(allocator, root_decl);
+        try seen_decls.put(allocator, root_decl, {});
+
+        var decl_index: usize = 0;
+        while (decl_index < decls.items.len) : (decl_index += 1) {
+            const decl = types_store.getNominalDecl(decls.items[decl_index]);
+            if (!decl.isValid()) continue;
+            const formals = types_store.sliceVars(decl.formals);
+            visited.clearRetainingCapacity();
+            pending.clearRetainingCapacity();
+            try pending.append(allocator, decl.backing);
+            while (pending.pop()) |current| {
+                const resolved = types_store.resolveVar(current);
+                if ((try visited.getOrPut(allocator, resolved.var_)).found_existing) continue;
+                switch (resolved.desc.content) {
+                    .rigid => {
+                        var is_formal = false;
+                        for (formals) |formal| {
+                            if (types_store.resolveVar(formal).var_ == resolved.var_) is_formal = true;
+                        }
+                        if (is_formal) continue;
+                        for (out.items) |known| {
+                            if (known == resolved.var_) break;
+                        } else try out.append(allocator, resolved.var_);
+                    },
+                    .flex, .err, .field_presence => {},
+                    .alias => |alias| {
+                        try pending.appendSlice(allocator, types_store.sliceAliasArgs(alias));
+                        try pending.append(allocator, types_store.getAliasBackingVar(alias));
+                    },
+                    .structure => |flat| switch (flat) {
+                        .empty_record, .empty_tag_union => {},
+                        .nominal_type => |nominal| {
+                            try pending.appendSlice(allocator, types_store.sliceNominalArgs(nominal));
+                            if (nominal.origin_module != self_identity) continue;
+                            const nested = types_store.lookupNominalDecl(nominal) orelse continue;
+                            if ((try seen_decls.getOrPut(allocator, nested)).found_existing) continue;
+                            try decls.append(allocator, nested);
+                        },
+                        .fn_pure, .fn_effectful, .fn_unbound => |func| {
+                            try pending.appendSlice(allocator, types_store.sliceVars(func.args));
+                            try pending.append(allocator, func.ret);
+                        },
+                        .tuple => |tuple| try pending.appendSlice(allocator, types_store.sliceVars(tuple.elems)),
+                        .record => |record| {
+                            for (0..record.fields.len()) |offset| {
+                                try pending.append(allocator, types_store.getRecordFieldAt(record.fields, @intCast(offset)).presence.var_);
+                            }
+                            try pending.append(allocator, record.ext);
+                        },
+                        .tag_union => |tag_union| {
+                            for (0..tag_union.tags.len()) |offset| {
+                                try pending.appendSlice(allocator, types_store.sliceVars(types_store.getTagAt(tag_union.tags, @intCast(offset)).args));
+                            }
+                            try pending.append(allocator, tag_union.ext);
+                        },
+                    },
+                }
+            }
+        }
+        return try out.toOwnedSlice(allocator);
+    }
+
     pub fn moduleEnvConst(self: @This()) *const ModuleEnv {
         return self.data_store.env;
     }

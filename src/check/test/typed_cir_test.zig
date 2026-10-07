@@ -64,3 +64,61 @@ test "published typed CIR survives checker teardown" {
     try std.testing.expect(module.evaluationOrder() != null);
     try std.testing.expectEqual(expected_scc_count, module.evaluationOrder().?.sccs.len);
 }
+
+test "a type declared in a function body takes the function's variables its backing names as implicit formals" {
+    var test_env = try TestEnv.init("Test",
+        \\f : a, b -> a
+        \\f = |x, _y| {
+        \\    Plain := { n : U8 }
+        \\    Inner(c) := { v : a, c : c }
+        \\    Outer := { inner : Inner(U8), more : List(b) }
+        \\    _p = Plain.{ n: 1 }
+        \\    _o = Outer.{ inner: Inner.{ v: x, c: 2 }, more: [] }
+        \\    x
+        \\}
+    );
+    defer test_env.deinit();
+    try test_env.assertNoErrors();
+    const env = test_env.module_env;
+
+    const source_modules = [_]TypedCIR.Modules.SourceModule{
+        test_env.takePublishedSourceModule(),
+        .{ .precompiled = test_env.builtin_module.env },
+    };
+    var modules = try TypedCIR.Modules.init(std.testing.allocator, &source_modules);
+    defer modules.deinit();
+    const module = modules.module(0);
+
+    var seen: usize = 0;
+    for (env.store.sliceStatements(env.all_statements)) |statement_idx| {
+        const statement = env.store.getStatement(statement_idx);
+        if (statement != .s_nominal_decl) continue;
+        const header = env.store.getTypeHeader(statement.s_nominal_decl.header);
+        const name = env.getIdentStoreConst().getText(header.relative_name);
+        const implicit = try module.nominalDeclarationImplicitFormals(std.testing.allocator, statement_idx);
+        defer std.testing.allocator.free(implicit);
+        var names: [2][]const u8 = undefined;
+        try std.testing.expect(implicit.len <= names.len);
+        for (implicit, 0..) |var_, index| {
+            const content = env.types.resolveVar(var_).desc.content;
+            try std.testing.expect(content == .rigid);
+            names[index] = env.getIdentStoreConst().getText(content.rigid.name);
+        }
+        if (std.mem.endsWith(u8, name, "Plain")) {
+            try std.testing.expectEqual(@as(usize, 0), implicit.len);
+        } else if (std.mem.endsWith(u8, name, "Inner")) {
+            // Its own formal `c` is not implicit.
+            try std.testing.expectEqual(@as(usize, 1), implicit.len);
+            try std.testing.expectEqualStrings("a", names[0]);
+        } else if (std.mem.endsWith(u8, name, "Outer")) {
+            // `a` through `Inner`, and `b`.
+            try std.testing.expectEqual(@as(usize, 2), implicit.len);
+            try std.testing.expect(!std.mem.eql(u8, names[0], names[1]));
+            for (names) |implicit_name| {
+                try std.testing.expect(std.mem.eql(u8, implicit_name, "a") or std.mem.eql(u8, implicit_name, "b"));
+            }
+        } else continue;
+        seen += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+}

@@ -15936,6 +15936,16 @@ const Builder = struct {
             });
             return false;
         }
+        // An inspect slot's checked evidence covers exactly its method's
+        // checked requirements, the worker's body dictionaries. A signature
+        // dictionary belongs to a type variable of the inspected value: one of
+        // the function its owner is declared in, carried as an implicit type
+        // argument, whose dictionary the frame building the inspected value's
+        // descriptor supplies.
+        if (state.frame_bound and state.currentParam() < state.body_param_start) {
+            try self.continueDictionaryParam(machine, state, .{});
+            return false;
+        }
         if (param.evidence_index) |index| state.next_evidence = index;
         const evidence_source = try self.beginEvidenceDictionarySource(
             machine,

@@ -9145,11 +9145,13 @@ inspected value's type arguments, as the instance's substitution leaves them
 free.
 
 **Types declared in function bodies.** A type declared in a function body may
-name that function's type variables in its backing. Every application shares
-them: opening the backing substitutes only the declaration's formals and keeps
-every other variable (`Instantiator.RigidBehavior.substitute_rigids_sharing`,
-`CheckedTypeSubstitution.shares_unsubstituted_variables`), and inspection's
-instance of such a type's method shares the enclosing definitions' variables
+name that function's type variables in its backing (Local Type Declarations).
+Every application shares them: opening the backing substitutes only the
+declaration's formals and keeps every other variable
+(`Instantiator.RigidBehavior.substitute_rigids_sharing`,
+`CheckedTypeSubstitution.shares_unsubstituted_variables`), checked types carry
+them as the type's implicit arguments, and inspection's instance of such a
+type's method shares the enclosing definitions' variables
 (`localTypeEnclosingVars`) rather than copying them. A requirement the instance
 places on one of those variables is the enclosing function's own, supplied by
 its `where` clause; it settles a decision as a concrete receiver does, and the
@@ -9158,9 +9160,16 @@ decision records that it reads the enclosing function
 inspecting the value holds that function's evidence, so the decision's
 evidence names such a requirement `from_callable`, and Boxy supplies its
 dictionary from the frame that builds the inspected value's descriptor
-(`BoxyTypeDesc.inspect_hidden_dicts`); a call that supplies an inspect term of
-such a type binds the callee's dictionaries and descriptors from its own
-hidden arguments while describing the term. A method that names the enclosing
+(`BoxyTypeDesc.inspect_hidden_dicts`), for a requirement of the method's
+checked scheme and for an implicit argument the method's worker takes in its
+signature alike: the checked evidence of the use covers exactly the scheme's
+requirements. A call that supplies an inspect term of such a type binds the
+callee's dictionaries and descriptors from its own hidden arguments while
+describing the term. A decision names those variables as the type's implicit
+arguments and holds at every instantiation of them, so Monotype matches it
+against a concrete inspected type with them as open slots
+(`TypeMatchMode.declared_variable_slots_match_any`) once no decision matches
+exactly. A method that names the enclosing
 function's variables only through its owner is promoted like any other
 context-free local function; one that names them in its own type is a local
 procedure whose declaration context is those variables.
@@ -12698,6 +12707,44 @@ row or primitive never gives an uninhabited source a value. This includes the
 
 If Monotype lowering cannot construct a closed monomorphic type from checked
 data, that is a compiler bug.
+
+### Local Type Declarations
+
+A type declared in a function body may name, in its backing, the type
+variables of the function it is declared in (and of the functions around that
+one). The source type `W` in
+
+```roc
+f : a -> a
+f = |x| {
+    W := { v : a }
+    ...
+}
+```
+
+has no arguments, but each instantiation of `f` gives it a different backing:
+`W` inside `f(1.I8)` holds an `I8`, inside `f("q")` a `Str`. Checking treats
+those variables as fixed within the body, which every application of `W`
+shares (opening the backing substitutes only the declaration's formals).
+Checked output makes the dependence explicit: the declaration takes one
+*implicit formal* per enclosing variable its backing names, after its declared
+formals, and every application of the type passes those variables as implicit
+arguments after its declared ones
+(`TypedCIR.Module.nominalDeclarationImplicitFormals`). The variables are the
+rigids the backing names other than the declaration's own formals, including
+those of other local declarations it reaches, in the order a walk of the
+backings first meets them. Each implicit formal is a distinct checked variable,
+and the declaration's backing is written over it, so a declaration's formals
+are always distinct from the variables its applications pass.
+
+Every later stage therefore sees `W(I8)` and `W(Str)` as distinct types and
+instantiates the backing like any nominal's: a generic function or method
+given a `W` is specialized per instantiation of `f`, and a value of `W` never
+carries one instantiation's backing into another's. A source-level view of the
+type, such as the classification of an unconditional inspect override (its
+instance must take the owner over distinct unconstrained variables), reads
+only the declared arguments; the implicit ones are the enclosing function's
+variables, whose requirements are that function's own.
 
 ### Row, Nominal, Alias, And Opaque Authority
 

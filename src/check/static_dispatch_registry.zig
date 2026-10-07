@@ -3108,13 +3108,25 @@ fn inspectOverrideCallableType(
 ) Allocator.Error!?CheckedTypeId {
     const instance_var = module.moduleEnvConst().inspectOverrideInstance(def_idx) orelse return null;
     const instance_ty = try checked_types.publishMethodCallableType(allocator, module, names, instance_var);
-    return if (isInspectOverrideCallable(checked_types, owner, instance_ty)) instance_ty else null;
+    // Methods are declared in their owner's module.
+    const implicit_args_len = switch (owner) {
+        .nominal => |nominal| if (nominal.source_decl) |statement| blk: {
+            const implicit = try module.nominalDeclarationImplicitFormals(allocator, @enumFromInt(statement));
+            defer allocator.free(implicit);
+            break :blk implicit.len;
+        } else 0,
+        .builtin => 0,
+    };
+    return if (isInspectOverrideCallable(checked_types, owner, instance_ty, implicit_args_len)) instance_ty else null;
 }
 
 /// Whether a `to_inspect` instance's type is exactly `T -> Str`, where `T` is
 /// `owner` applied to distinct unconstrained type variables. Aliases are
-/// transparent names for the type they abbreviate.
-fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callable_ty: CheckedTypeId) bool {
+/// transparent names for the type they abbreviate. The last
+/// `implicit_args_len` arguments are the type variables of the functions
+/// around a type declared in a function body, which the type carries
+/// implicitly; their requirements are those functions' own.
+fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callable_ty: CheckedTypeId, implicit_args_len: usize) bool {
     const store = checked_types.store;
     const callable = store.payload(checkedTypeThroughAliases(checked_types, callable_ty));
     if (std.meta.activeTag(callable) != .function) return false;
@@ -3131,7 +3143,9 @@ fn isInspectOverrideCallable(checked_types: anytype, owner: MethodOwner, callabl
 
     // Checked type variables carry identity, so two occurrences of one
     // variable share a root and distinct variables never do.
-    const type_args = store.payload(arg_ty).nominal.args;
+    const all_args = store.payload(arg_ty).nominal.args;
+    if (implicit_args_len > all_args.len) return false;
+    const type_args = all_args[0 .. all_args.len - implicit_args_len];
     for (type_args, 0..) |type_arg, index| {
         const variable = switch (store.payload(type_arg)) {
             .flex, .rigid => |variable| variable,

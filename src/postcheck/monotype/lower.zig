@@ -20251,12 +20251,21 @@ const BodyContext = struct {
     /// concrete type `value_ty`. Every concrete type inspection reaches was
     /// decided by the module whose checking reached it (design.md "Inspect
     /// Overrides").
+    ///
+    /// A decision about a type declared in a function body may name that
+    /// function's type variables as the type's implicit arguments; it holds
+    /// at every instantiation of them, since the function's own requirements
+    /// supply what the instance needs of them. Such a decision is matched with
+    /// those variables as open slots, once no decision matches exactly.
     fn conditionalInspectDecision(self: *BodyContext, value_ty: Type.TypeId) Allocator.Error!bool {
-        for (self.builder.moduleViews()) |*view_data| {
-            const view: ModuleView = view_data;
-            for (view.static_dispatch_plans.inspect_type_decisions) |decision| {
-                const decided = try self.lowerTypeFromView(view, decision.dispatcher_ty);
-                if (try self.typeStore().typeEql(self.nameStore(), decided, value_ty)) return decision.callable_ty != null;
+        for ([_]Type.TypeMatchMode{ .exact, .declared_variable_slots_match_any }) |mode| {
+            for (self.builder.moduleViews()) |*view_data| {
+                const view: ModuleView = view_data;
+                for (view.static_dispatch_plans.inspect_type_decisions) |decision| {
+                    if (mode != .exact and !try checkedTypeNamesVariables(self.builder.allocator, view, decision.dispatcher_ty)) continue;
+                    const decided = try self.lowerTypeFromView(view, decision.dispatcher_ty);
+                    if (try self.typeStore().typeMatches(self.nameStore(), decided, value_ty, mode)) return decision.callable_ty != null;
+                }
             }
         }
         Common.invariant("inspection reached a concrete type checking did not decide");
@@ -66575,6 +66584,38 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
     };
+}
+
+/// Whether the checked type `root` names a type variable.
+fn checkedTypeNamesVariables(allocator: Allocator, view: ModuleView, root: checked.CheckedTypeId) Allocator.Error!bool {
+    var pending: std.ArrayListUnmanaged(checked.CheckedTypeId) = .empty;
+    defer pending.deinit(allocator);
+    var visited: std.AutoHashMapUnmanaged(checked.CheckedTypeId, void) = .empty;
+    defer visited.deinit(allocator);
+    try pending.append(allocator, root);
+    while (pending.pop()) |current| {
+        if ((try visited.getOrPut(allocator, current)).found_existing) continue;
+        switch (view.types.payload(current)) {
+            .flex, .rigid => return true,
+            .pending, .err, .empty_record, .empty_tag_union => {},
+            .alias => |alias| try pending.append(allocator, alias.backing),
+            .nominal => |nominal| try pending.appendSlice(allocator, nominal.args),
+            .tuple => |items| try pending.appendSlice(allocator, items),
+            .function => |function| {
+                try pending.appendSlice(allocator, function.args);
+                try pending.append(allocator, function.ret);
+            },
+            .record => |record| {
+                for (record.fields) |field| try pending.append(allocator, field.ty);
+                try pending.append(allocator, record.ext);
+            },
+            .tag_union => |tag_union| {
+                for (tag_union.tags) |tag| try pending.appendSlice(allocator, tag.argsSlice(view.types));
+                try pending.append(allocator, tag_union.ext);
+            },
+        }
+    }
+    return false;
 }
 
 fn moduleViewIdentityMatches(view: ModuleView, origin_hash: *const [32]u8) bool {

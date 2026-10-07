@@ -6067,8 +6067,17 @@ fn appendCheckedNominalDeclarationFromStatement(
     const header = module_env.store.getTypeHeader(header_idx);
     const header_args = module_env.store.sliceTypeAnnos(header.args);
 
-    const formal_args = if (header_args.len == 0) &.{} else blk: {
-        const out = try allocator.alloc(CheckedTypeId, header_args.len);
+    // The declared formals, then the implicit ones: one distinct variable
+    // for each variable of the functions around the declaration that its
+    // backing names. Every application passes those variables to them.
+    const implicit_vars = active.scratch.?.local_nominal_declarations.implicitFormals(statement_idx);
+    const enclosing_roots = try allocator.alloc(CheckedTypeId, implicit_vars.len);
+    defer allocator.free(enclosing_roots);
+    for (implicit_vars, enclosing_roots) |implicit, *root| {
+        root.* = try appendCheckedTypeRoot(allocator, module, names, imports, store, active, implicit);
+    }
+    const formal_args = if (header_args.len + implicit_vars.len == 0) &.{} else blk: {
+        const out = try allocator.alloc(CheckedTypeId, header_args.len + implicit_vars.len);
         errdefer allocator.free(out);
         for (header_args, 0..) |arg_anno, i| {
             out[i] = try appendCheckedTypeRoot(
@@ -6081,15 +6090,24 @@ fn appendCheckedNominalDeclarationFromStatement(
                 ModuleEnv.varFrom(arg_anno),
             );
         }
+        // A clone that substitutes nothing mints a distinct copy of each
+        // variable it reaches.
+        var minting = CheckedTypeSubstitution.init(allocator, names, store, &.{}, &.{});
+        defer minting.deinit();
+        for (enclosing_roots, header_args.len..) |enclosing, i| {
+            out[i] = try store.cloneCheckedTypeRootSubstituting(allocator, enclosing, &minting);
+        }
         break :blk out;
     };
+    const implicit_formal_roots = try allocator.dupe(CheckedTypeId, formal_args[header_args.len..]);
+    defer allocator.free(implicit_formal_roots);
     var formal_args_owned = formal_args.len != 0;
     errdefer if (formal_args_owned) allocator.free(formal_args);
 
     const declaration_formals = if (header_args.len == 0) &.{} else blk: {
         const out = try allocator.alloc(DeclarationFormal, header_args.len);
         errdefer allocator.free(out);
-        for (header_args, formal_args, 0..) |arg_anno, formal_arg, i| {
+        for (header_args, formal_args[0..header_args.len], 0..) |arg_anno, formal_arg, i| {
             const arg = module_env.store.getTypeAnno(arg_anno);
             out[i] = .{
                 .name = switch (arg) {
@@ -6127,7 +6145,7 @@ fn appendCheckedNominalDeclarationFromStatement(
     );
     defer if (declared_record_fields.len != 0) allocator.free(declared_record_fields);
 
-    const backing = try appendCheckedTypeRootFromDeclarationAnno(
+    const enclosing_backing = try appendCheckedTypeRootFromDeclarationAnno(
         allocator,
         module,
         names,
@@ -6138,6 +6156,21 @@ fn appendCheckedNominalDeclarationFromStatement(
         declaration_formals,
         anno_idx,
     );
+    // The backing over the implicit formals in place of the variables they
+    // stand for; the declared formals and every other variable stay.
+    var implicit_substitution = CheckedTypeSubstitution.init(allocator, names, store, enclosing_roots, implicit_formal_roots);
+    defer implicit_substitution.deinit();
+    implicit_substitution.shares_unsubstituted_variables = true;
+    const backing = if (implicit_vars.len == 0)
+        enclosing_backing
+    else
+        try store.cloneCheckedTypeRootSubstituting(allocator, enclosing_backing, &implicit_substitution);
+    if (implicit_vars.len != 0) {
+        for (@constCast(declared_record_fields)) |*field| switch (field.*) {
+            .named => {},
+            .padding => |ty| field.* = .{ .padding = try store.cloneCheckedTypeRootSubstituting(allocator, ty, &implicit_substitution) },
+        };
+    }
     const padding_field_types = try paddingFieldTypesFromDeclaredRecordFields(allocator, declared_record_fields);
     var padding_field_types_owned = padding_field_types.len != 0;
     errdefer if (padding_field_types_owned) allocator.free(padding_field_types);
@@ -8728,6 +8761,15 @@ const CheckedTypePublisher = struct {
         build: CheckedTypePayloadBuild = .pending,
     };
 
+    /// The implicit arguments of a nominal application: the variables of
+    /// the functions around its declaration that its backing names
+    /// (`TypedCIR.Module.nominalDeclarationImplicitFormals`).
+    fn implicitNominalArgs(self: *const CheckedTypePublisher, nominal: types.NominalType) []const Var {
+        if (nominal.origin_module != self.module.moduleEnvConst().selfModuleIdentity()) return &.{};
+        const statement = nominal.sourceDeclOptional() orelse return &.{};
+        return self.active.scratch.?.local_nominal_declarations.implicitFormals(@enumFromInt(statement));
+    }
+
     fn stepPayload(self: *CheckedTypePublisher, frame: *Frame, task: *PayloadTask, input: ?Result) Allocator.Error!Step {
         const module = self.module;
         const type_store = module.typeStoreConst();
@@ -8839,7 +8881,22 @@ const CheckedTypePublisher = struct {
                         };
                         return rangeStep(type_store.sliceNominalArgs(nominal));
                     },
-                    else => task.build.nominal.args = input.?.get(.ids),
+                    1 => {
+                        task.build.nominal.args = input.?.get(.ids);
+                        const implicit = self.implicitNominalArgs(nominal);
+                        if (implicit.len != 0) return rangeStep(implicit);
+                    },
+                    else => {
+                        // The declared arguments, then the implicit ones.
+                        const implicit_ids = input.?.get(.ids);
+                        defer if (implicit_ids.len != 0) self.allocator.free(implicit_ids);
+                        const declared = task.build.nominal.args;
+                        const all = try self.allocator.alloc(CheckedTypeId, declared.len + implicit_ids.len);
+                        @memcpy(all[0..declared.len], declared);
+                        @memcpy(all[declared.len..], implicit_ids);
+                        if (declared.len != 0) self.allocator.free(declared);
+                        task.build.nominal.args = all;
+                    },
                 },
                 .fn_pure, .fn_unbound => |func| if (stepFunction(task, cursor, input, type_store, .pure, func)) |step| return step,
                 .fn_effectful => |func| if (stepFunction(task, cursor, input, type_store, .effectful, func)) |step| return step,
@@ -10531,10 +10588,20 @@ fn importedNominalDeclarationRefForSourceNominal(
 /// declarations `appendCheckedNominalDeclarationFromStatement` publishes.
 const LocalNominalDeclarationIds = struct {
     ids: std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId),
+    /// For each type declared in a function body whose backing names type
+    /// variables of the functions around it, those variables in a fixed
+    /// order: the declaration's implicit formals (`implicitFormals`).
+    enclosing_vars: std.AutoHashMap(CIR.Statement.Idx, []const Var),
 
     fn init(allocator: Allocator, module: TypedCIR.Module) Allocator.Error!LocalNominalDeclarationIds {
         var ids = std.AutoHashMap(CIR.Statement.Idx, CheckedNominalDeclarationId).init(allocator);
         errdefer ids.deinit();
+        var enclosing_vars = std.AutoHashMap(CIR.Statement.Idx, []const Var).init(allocator);
+        errdefer {
+            var values = enclosing_vars.valueIterator();
+            while (values.next()) |vars| allocator.free(vars.*);
+            enclosing_vars.deinit();
+        }
         var next_id: u32 = 0;
         const module_env = module.moduleEnvConst();
         for (module_env.store.sliceStatements(module_env.all_statements)) |candidate| {
@@ -10544,12 +10611,26 @@ const LocalNominalDeclarationIds = struct {
             if (!localNominalDeclarationIsValid(module, candidate)) continue;
             try ids.put(candidate, @enumFromInt(next_id));
             next_id += 1;
+            const vars = try module.nominalDeclarationImplicitFormals(allocator, candidate);
+            if (vars.len == 0) continue;
+            errdefer allocator.free(vars);
+            try enclosing_vars.put(candidate, vars);
         }
-        return .{ .ids = ids };
+        return .{ .ids = ids, .enclosing_vars = enclosing_vars };
     }
 
     fn deinit(self: *LocalNominalDeclarationIds) void {
+        var values = self.enclosing_vars.valueIterator();
+        while (values.next()) |vars| self.ids.allocator.free(vars.*);
+        self.enclosing_vars.deinit();
         self.ids.deinit();
+    }
+
+    /// The implicit formals of this module's nominal declaration
+    /// `statement_idx`: empty unless it is declared in a function body and
+    /// names type variables of the functions around it.
+    fn implicitFormals(self: *const LocalNominalDeclarationIds, statement_idx: CIR.Statement.Idx) []const Var {
+        return self.enclosing_vars.get(statement_idx) orelse &.{};
     }
 
     fn get(self: *const LocalNominalDeclarationIds, statement_idx: CIR.Statement.Idx) CheckedNominalDeclarationId {
@@ -34456,7 +34537,9 @@ pub const CheckedModuleArtifact = struct {
     // Version 107 keys each context-free checked type subtree by its own key,
     // records which checked type roots are composable, and encodes keys with
     // one-byte tags and varint integers.
-    const serialized_layout_version: u32 = 107;
+    // Version 108 gives a type declared in a function body implicit formals for
+    // the enclosing type variables its backing names.
+    const serialized_layout_version: u32 = 108;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -40769,8 +40852,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x33, 0xE1, 0x1C, 0x58, 0xF9, 0xAD, 0xAA, 0xEF, 0xB5, 0x3B, 0x8E, 0x89, 0xDC, 0xC8, 0xBC, 0x2E,
-        0x57, 0xC0, 0x88, 0x1B, 0x7C, 0x71, 0x86, 0xA8, 0x0D, 0xBD, 0x35, 0x50, 0xF3, 0x23, 0x2F, 0x8D,
+        0x04, 0x82, 0x67, 0x01, 0x65, 0x51, 0x51, 0x58, 0xF5, 0xCF, 0x8F, 0xB3, 0x95, 0xCA, 0xA0, 0xBA,
+        0x8E, 0x6D, 0x58, 0x7B, 0x28, 0xB6, 0xC6, 0xB0, 0xCA, 0xE5, 0x88, 0xE5, 0xEF, 0xD9, 0x38, 0xC4,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }
