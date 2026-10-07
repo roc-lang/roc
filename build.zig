@@ -6787,7 +6787,7 @@ fn addMainExe(
     exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
     exe.root_module.addAnonymousImport("embedded_digests", .{ .root_source_file = embedded_digests_source });
 
-    const llvm_paths_exe = llvmPaths(b, target, dependency_source) orelse return null;
+    const llvm_paths_exe = llvmPaths(b, target, dependency_source);
     exe.root_module.addLibraryPath(llvm_paths_exe.lib);
     exe.root_module.addIncludePath(llvm_paths_exe.include);
     if (use_bundled_deps) {
@@ -6929,7 +6929,7 @@ fn addLlvmLinkSupportToStep(
     llvm_codegen_module: *std.Build.Module,
     zstd: *Dependency,
 ) !bool {
-    const llvm_paths = llvmPaths(b, target, dependency_source) orelse return false;
+    const llvm_paths = llvmPaths(b, target, dependency_source);
     if (b.graph.host.result.os.tag == .windows) {
         if (windows_llvm_link_chain) |previous| step.step.dependOn(previous);
         windows_llvm_link_chain = &step.step;
@@ -7008,7 +7008,7 @@ const LlvmPaths = struct {
     lib: std.Build.LazyPath,
 };
 
-fn llvmPaths(b: *std.Build, target: ResolvedTarget, source: DependencySource) ?LlvmPaths {
+fn llvmPaths(b: *std.Build, target: ResolvedTarget, source: DependencySource) LlvmPaths {
     switch (source) {
         .local_bundle, .custom_llvm => |path| {
             const root = b.graph.cwdRelativePath(path);
@@ -7631,7 +7631,7 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
             }
         },
         .system_llvm => {
-            const paths = llvmPaths(b, b.graph.host, source) orelse return null;
+            const paths = llvmPaths(b, b.graph.host, source);
             _ = dependency_inputs.addCopyDirectory(paths.include, "include", .{});
             _ = dependency_inputs.addCopyDirectory(paths.lib, "lib", .{});
             has_dependency_inputs = true;
