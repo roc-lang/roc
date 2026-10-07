@@ -172,6 +172,10 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
         }
     }
 
+    // Zig 0.17's build configurer cannot export a temp directory to Run steps,
+    // and CI runners do not always set one, so fall back to the POSIX default.
+    if (comptime @import("builtin").os.tag != .windows) return allocator.dupe(u8, "/tmp");
+
     return error.TempDirUnavailable;
 }
 
