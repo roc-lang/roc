@@ -65,8 +65,12 @@ Known limits and findings that are not fixed here:
   one, on both the upgraded compiler and the pre-upgrade nightly.
 * Default self-hosted x86_64 coverage remains excluded: libdw 0.190, 0.194 and
   0.195 reproduce nine or ten compile-unit failures and zero Roc coverage.
-* Default compiler CI still depends on publishing compatible bootstrap bundles;
-  the eight published URLs and hashes remain on LLVM 21.
+* The eight dependency pins now point at roc-bootstrap's `zig-0.17.0` release
+  (source `65b0d44b8d`, LLVM 22.1.8). That release's archives match its
+  `SHA256SUMS`, their build-provenance attestations verify, and a fresh Zig fetch
+  of each pinned URL reproduces the recorded package hash. The validation above
+  used a local bundle; default compiler CI is the first run against the published
+  archives.
 
 ## Earlier full local validation (frozen `73cb`)
 
