@@ -111,7 +111,11 @@ const builtin_roc_path = "src/build/roc/Builtin.roc";
 /// Where to write debug files when a block fails.
 const debug_dir = "test/echo";
 /// Path to the compiled roc binary used for reproducing failures.
-const roc_binary = @import("fixture_options").roc_binary_path;
+const roc_binary = blk: {
+    const options = @import("fixture_options");
+    if (std.fs.path.isAbsolute(options.roc_binary_build_path)) break :blk options.roc_binary_build_path;
+    break :blk options.build_root ++ "/" ++ options.roc_binary_build_path;
+};
 
 test "numeric arithmetic API uses method-aligned names" {
     const allocator = base.defaultGpa();

@@ -2166,7 +2166,10 @@ pub fn build(b: *std.Build) void {
     roc_exe.root_module.addImport("compiler_version", compiler_version_module);
     const fixture_roc = executableRuntimePath(b, roc_exe, strip_macho_exports_tool);
     const fixture_options = b.addOptions();
-    fixture_options.addOptionPathUntracked("roc_binary_path", fixture_roc);
+    // Zig resolves this path against the build runner's directory. Tests run
+    // in prepared fixture roots, so they also need the absolute build root.
+    fixture_options.addOptionPathUntracked("roc_binary_build_path", fixture_roc);
+    fixture_options.addOption([]const u8, "build_root", b.root.joinString(b.allocator, "") catch @panic("OOM"));
     roc_modules.addAll(roc_exe);
     const roc_install_step = install_and_run(b, no_bin, roc_exe, strip_macho_exports_tool, build_roc_step, run_roc_step, run_args);
 
