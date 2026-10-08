@@ -855,6 +855,45 @@ pub fn assertOneTypeErrorHighlightsWithin(self: *TestEnv, expected_title: []cons
     }
 }
 
+/// Assert that checking produced a single problem (error or warning) with the
+/// expected title, and that its rendered message contains `expected_substring`.
+pub fn assertOneTypeProblemMsgContains(self: *TestEnv, expected_title: []const u8, expected_substring: []const u8) TestEnvError!void {
+    try self.assertNoParseProblems();
+
+    try testing.expectEqual(1, self.checker.problems.problems.items.len);
+    const problem = self.checker.problems.problems.items[0];
+
+    var report_builder = try self.initReportBuilder();
+    defer report_builder.deinit();
+
+    var report = try report_builder.build(problem);
+    defer report.deinit();
+
+    try testing.expectEqualStrings(expected_title, report.title);
+
+    var report_buf = try std.array_list.Managed(u8).initCapacity(self.gpa, 256);
+    defer report_buf.deinit();
+
+    try renderReportToMarkdownBuffer(&report_buf, &report);
+
+    const rendered = report_buf.items;
+    const contains = if (expected_substring.len > rendered.len) false else for (0..rendered.len - expected_substring.len + 1) |start| {
+        if (bytesEqual(rendered[start..][0..expected_substring.len], expected_substring)) break true;
+    } else false;
+    if (!contains) {
+        std.debug.print("expected the report to contain:\n{s}\nbut it was:\n{s}\n", .{ expected_substring, report_buf.items });
+        return error.TestUnexpectedResult;
+    }
+}
+
+fn bytesEqual(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (x != y) return false;
+    }
+    return true;
+}
+
 /// Assert that there was a single type error when checking the input. Assert
 /// that the title of the type error matches the expected title.
 pub fn assertOneTypeErrorMsg(self: *TestEnv, expected: []const u8) TestEnvError!void {

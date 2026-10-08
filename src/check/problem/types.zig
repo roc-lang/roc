@@ -132,6 +132,7 @@ pub const Problem = union(enum) {
     unmatchable_pattern: UnmatchablePattern,
     match_alt_binder_missing: MatchAltBinderMissing,
     unreachable_code: UnreachableCode,
+    discarded_var_update: DiscardedVarUpdate,
     comptime_unused_branch: ComptimeUnusedBranch,
     comptime_condition: ComptimeCondition,
     derived_parser_error_row: DerivedParserErrorRow,
@@ -736,6 +737,15 @@ pub const MatchAltBinderMissing = struct {
 /// Code that appears after an expression or statement that never returns.
 pub const UnreachableCode = struct {
     region: base.Region,
+};
+
+/// A statement that calls a method on a `var` and discards the result, which
+/// could have been assigned back to that `var` (e.g. `$acc.append(e)`).
+pub const DiscardedVarUpdate = struct {
+    /// The discarded method call.
+    expr_region: base.Region,
+    /// The `var` the method was called on.
+    var_ident: Ident.Idx,
 };
 
 // static dispatch //

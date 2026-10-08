@@ -168,33 +168,35 @@ NO CHANGE
 				(e-block
 					(s-reassign
 						(p-var-assign (ident "sum_"))
-						(e-dispatch-call (method "plus") (constraint-fn-var 345)
+						(e-dispatch-call (method "plus") (constraint-fn-var 347)
 							(receiver
 								(e-lookup-local
 									(p-var-assign (ident "sum_"))))
 							(args
 								(e-lookup-local
 									(p-assign (ident "n"))))))
-					(e-if
-						(if-branches
-							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 348)
-									(receiver
-										(e-lookup-local
-											(p-assign (ident "n"))))
-									(args
-										(e-lookup-local
-											(p-var-assign (ident "max_")))))
+					(s-expr
+						(e-if
+							(if-branches
+								(if-branch
+									(e-dispatch-call (method "is_gt") (constraint-fn-var 350)
+										(receiver
+											(e-lookup-local
+												(p-assign (ident "n"))))
+										(args
+											(e-lookup-local
+												(p-var-assign (ident "max_")))))
+									(e-block
+										(s-reassign
+											(p-var-assign (ident "max_"))
+											(e-lookup-local
+												(p-assign (ident "n"))))
+										(e-empty_record))))
+							(if-else
 								(e-block
-									(s-reassign
-										(p-var-assign (ident "max_"))
-										(e-lookup-local
-											(p-assign (ident "n"))))
-									(e-empty_record))))
-						(if-else
-							(e-block
-								(e-empty_record))))))
-			(e-dispatch-call (method "plus") (constraint-fn-var 353)
+									(e-empty_record)))))
+					(e-empty_record)))
+			(e-dispatch-call (method "plus") (constraint-fn-var 356)
 				(receiver
 					(e-lookup-local
 						(p-var-assign (ident "sum_"))))

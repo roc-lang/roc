@@ -27376,6 +27376,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
         },
         .s_for => {
             if (try self.resumeForLoop(&statement.kind.for_, env)) |request| return request;
+            self.assertLoopBodyHasNoFinalExpr(statement.kind.for_.body);
             // Every `for!` pulls its items with the effectful `next!`.
             if (statement.kind.for_.kind == .stream) block_state.does_fx = true;
             const for_region = self.cir.store.getStatementRegion(stmt_idx);
@@ -27397,6 +27398,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 // }
                 return .{ .expr = while_stmt.body, .expected = statement_expected.guardHoistSelection() };
             }
+            self.assertLoopBodyHasNoFinalExpr(while_stmt.body);
             if (stmt == .s_infinite_loop) {
                 try self.unifyWith(stmt_var, .{ .flex = Flex.init() }, env);
                 block_state.diverges = true;
@@ -27427,6 +27429,14 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             // rejection owns the diagnostic and retires the expression and
             // the statement without poisoning that class.
             const empty_rec = try self.freshFromContent(.{ .structure = .empty_record }, env, stmt_region);
+            if (try self.discardedVarUpdate(expr.expr, empty_rec)) |var_ident| {
+                _ = try self.problems.appendProblem(self.gpa, .{ .discarded_var_update = .{
+                    .expr_region = self.cir.store.getExprRegion(expr.expr),
+                    .var_ident = var_ident,
+                } });
+                _ = try self.unify(stmt_var, empty_rec, env);
+                return null;
+            }
             const statement_result = try self.unifyOwnedRelation(empty_rec, expr_var, env, .statement_value, .construction);
             if (statement_result.isProblem()) {
                 try self.markErroneousValueExpr(expr.expr);
@@ -27505,6 +27515,40 @@ const ForLoopCheck = struct {
     valid_pattern: bool = false,
     phase: enum { start, iterable, body } = .start,
 };
+
+/// design.md "Discarded Var Update": a statement written as a method call on
+/// a `var` binding, whose value is not `{}` but could be assigned back to that
+/// binding, discards an updated copy of it. The statement is accepted with a
+/// warning, and its value is discarded. Returns the binding's name when the
+/// rule applies.
+fn discardedVarUpdate(self: *Self, expr_idx: CIR.Expr.Idx, empty_rec: Var) std.mem.Allocator.Error!?Ident.Idx {
+    const expr = self.cir.store.getExpr(expr_idx);
+    const receiver = if (expr == .e_method_call)
+        expr.e_method_call.receiver
+    else if (expr == .e_dispatch_call and expr.e_dispatch_call.surface_origin == .method_call)
+        expr.e_dispatch_call.receiver
+    else
+        return null;
+    const receiver_expr = self.cir.store.getExpr(receiver);
+    if (receiver_expr != .e_lookup_local) return null;
+    const binding = receiver_expr.e_lookup_local.pattern_idx;
+    const binding_pattern = self.cir.store.getPattern(binding);
+    if (binding_pattern != .var_assign) return null;
+
+    const expr_var = ModuleEnv.varFrom(expr_idx);
+    if (try self.probeCanUseAs(empty_rec, expr_var)) return null;
+    if (!try self.probeCanUseAs(ModuleEnv.varFrom(binding), expr_var)) return null;
+    return binding_pattern.var_assign.ident;
+}
+
+/// Canonicalization gives a loop body no final expression: the body is a block
+/// of statements whose final expression is `{}`.
+fn assertLoopBodyHasNoFinalExpr(self: *const Self, body: CIR.Expr.Idx) void {
+    const body_expr = self.cir.store.getExpr(body);
+    const final_is_empty_record = body_expr == .e_block and
+        self.cir.store.getExpr(body_expr.e_block.final_expr) == .e_empty_record;
+    if (!final_is_empty_record) base.invariant("check invariant violated: loop body has a final expression", .{});
+}
 
 fn startForLoop(self: *Self, state: *ForLoopCheck, env: *Env) std.mem.Allocator.Error!ExprChildRequest {
     std.debug.assert(state.phase == .start);
@@ -27605,9 +27649,9 @@ fn resumeForExprCheck(self: *Self, task: *ExprTask, state: *ForLoopCheck, env: *
         // Every `for!` pulls its items with the effectful `next!`.
         if (state.kind == .stream) task.does_fx = true;
 
-        // Like cor, loop bodies are ordinary expressions whose final value is
-        // discarded by the loop construct itself. The loop expression still
-        // evaluates to {}, but the body is not required to produce {}.
+        // A loop body only includes statements, so each of its expressions
+        // was checked as a statement, and the loop evaluates to {}.
+        self.assertLoopBodyHasNoFinalExpr(state.body);
         try self.unifyWith(frame.expr_var, .{ .structure = .empty_record }, env);
         return .done;
     }

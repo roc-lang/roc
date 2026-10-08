@@ -18,6 +18,11 @@ Here, `1..<5` is a [range](numbers#ranges), which describes the numbers from 1 u
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 
+That includes the last line of the body. If a line in a loop body produces a
+value that nothing uses, like `f()` where `f` returns `Bool`, that's a compile-time
+error, just as it would be anywhere else in a block. (If you don't need the value,
+you can ignore it with `_ = f()`.)
+
 ### Iterating over types that have `iter`
 
 `for` can also be used on types that have an
