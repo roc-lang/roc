@@ -8113,7 +8113,16 @@ pub fn canonicalizeExpr(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
-    return self.runExprKernel(ast_expr_idx);
+    return self.runExprKernel(.{ .idx = ast_expr_idx, .target = .return_value });
+}
+
+/// Canonicalize a loop body. A loop body only includes statements, so the
+/// resulting block's final expression is always `{}`.
+fn canonicalizeLoopBody(
+    self: *Self,
+    ast_expr_idx: AST.Expr.Idx,
+) std.mem.Allocator.Error!CanonicalizedExpr {
+    return self.runExprKernel(.{ .idx = ast_expr_idx, .target = .return_value, .loop_body = true });
 }
 
 fn canonicalizedMalformedExpr(self: *Self, diagnostic: Diagnostic) std.mem.Allocator.Error!CanonicalizedExpr {
@@ -10926,7 +10935,7 @@ fn canonicalizeStandaloneWhileStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExpr(while_stmt.body);
+    const body = try self.canonicalizeLoopBody(while_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVar(captures_top, fv);
@@ -11329,7 +11338,7 @@ fn canonicalizeStandaloneForStatement(
     defer self.loop_depth -= 1;
 
     const body_free_vars_start = self.scratch_free_vars.top();
-    const body = try self.canonicalizeExpr(for_stmt.body);
+    const body = try self.canonicalizeLoopBody(for_stmt.body);
     const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(body.free_vars);
     for (body_free_vars_slice) |fv| {
         try self.appendPropagatedFreeVarExcludingBound(captures_top, for_bound_vars_top, fv);
@@ -11354,7 +11363,7 @@ fn canonicalizeStandaloneForStatement(
 
 fn runExprKernel(
     self: *Self,
-    ast_expr_idx: AST.Expr.Idx,
+    root: ExprParseWork,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -11380,7 +11389,7 @@ fn runExprKernel(
     defer child_slots.deinit(frame_allocator);
     var current_result_target: ExprResultTarget = .return_value;
 
-    try stacks.pushParse(frame_allocator, .{ .idx = ast_expr_idx, .target = .return_value });
+    try stacks.pushParse(frame_allocator, root);
 
     expr_kernel_loop: switch (ExprKernelLabel.dispatch) {
         .dispatch => {
@@ -11393,6 +11402,16 @@ fn runExprKernel(
             const idx = parse_work.idx;
             current_result_target = parse_work.target;
             const expr = self.parse_ir.store.getExpr(idx);
+            if (parse_work.loop_body and expr != .block) {
+                // A loop body written as a single expression is that one
+                // statement, in a block whose final expression is `{}`.
+                try stacks.pushFinishLoopBodyStmt(frame_allocator, .{
+                    .region = self.parse_ir.tokenizedRegionToRegion(expr.to_tokenized_region()),
+                    .result_start = child_slots.items.len,
+                });
+                try stacks.pushParse(frame_allocator, .{ .idx = idx, .target = .scratch });
+                continue :expr_kernel_loop .dispatch;
+            }
             switch (expr) {
                 .int => |e| {
                     const region = self.parse_ir.tokenizedRegionToRegion(e.region);
@@ -12119,6 +12138,7 @@ fn runExprKernel(
                         .result_start = child_slots.items.len,
                         .saved_defining_bound_vars = saved_defining_bound_vars,
                         .saved_stmt_pos = saved_stmt_pos,
+                        .statements_only = parse_work.loop_body,
                     };
                     try stacks.pushBlockNext(frame_allocator, .{
                         .block = work,
@@ -12559,7 +12579,7 @@ fn runExprKernel(
             const next = state.next + 1;
             const is_last = state.next == work.stmt_idxs.len - 1;
 
-            if (is_last and (ast_stmt == .expr or ast_stmt == .dbg or ast_stmt == .@"return" or ast_stmt == .crash)) {
+            if (is_last and !work.statements_only and (ast_stmt == .expr or ast_stmt == .dbg or ast_stmt == .@"return" or ast_stmt == .crash)) {
                 switch (ast_stmt) {
                     .expr => |expr_stmt| {
                         try stacks.pushFinishBlockFinalExpr(frame_allocator, .{
@@ -12893,6 +12913,25 @@ fn runExprKernel(
 
             continue :expr_kernel_loop .dispatch;
         },
+        .finish_loop_body_stmt => {
+            const state = stacks.takeFinishLoopBodyStmt();
+            const expr = child_slots.items[state.result_start].expr;
+            child_slots.shrinkRetainingCapacity(state.result_start);
+            const stmt_idx = try self.env.addStatement(Statement{ .s_expr = .{
+                .expr = expr.idx,
+            } }, state.region);
+            const stmt_start = self.env.store.scratch.?.statements.top();
+            try self.env.store.addScratchStatement(stmt_idx);
+            const stmts = try self.env.store.statementSpanFrom(stmt_start);
+            const final_expr = try self.env.addExpr(CIR.Expr{ .e_empty_record = .{} }, state.region);
+            const block_idx = try self.env.addExpr(CIR.Expr{ .e_block = .{
+                .stmts = stmts,
+                .final_expr = final_expr,
+            } }, state.region);
+            try storeExprKernelOutput(&last_expr, &child_slots, frame_allocator, current_result_target, CanonicalizedExpr{ .idx = block_idx, .free_vars = expr.free_vars });
+
+            continue :expr_kernel_loop .dispatch;
+        },
         .finish_block_final_expr => {
             const state = stacks.takeFinishBlockFinalExpr();
             const result_start = child_slots.items.len - 1;
@@ -13102,7 +13141,7 @@ fn runExprKernel(
                 .captures_top = state.captures_top,
                 .body_free_vars_start = body_free_vars_start,
             });
-            try stacks.pushParse(frame_allocator, .{ .idx = state.body_ast, .target = .scratch });
+            try stacks.pushParse(frame_allocator, .{ .idx = state.body_ast, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -13177,7 +13216,7 @@ fn runExprKernel(
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
                 .saved_stmt_pos = state.saved_stmt_pos,
             });
-            try stacks.pushParse(frame_allocator, .{ .idx = state.ast_body, .target = .scratch });
+            try stacks.pushParse(frame_allocator, .{ .idx = state.ast_body, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -14303,7 +14342,7 @@ fn runExprKernel(
                 .saved_defining_bound_vars = state.saved_defining_bound_vars,
                 .saved_stmt_pos = state.saved_stmt_pos,
             });
-            try stacks.pushParse(frame_allocator, .{ .idx = state.ast_body, .target = .scratch });
+            try stacks.pushParse(frame_allocator, .{ .idx = state.ast_body, .target = .scratch, .loop_body = true });
 
             continue :expr_kernel_loop .dispatch;
         },
@@ -16776,6 +16815,7 @@ const ExprKernelLabel = enum {
     finish_block,
     finish_block_expr_stmt,
     finish_block_final_expr,
+    finish_loop_body_stmt,
     finish_block_dbg_stmt,
     finish_block_crash_stmt,
     finish_block_expect_stmt,
@@ -16831,6 +16871,9 @@ const ExprResultTarget = enum {
 const ExprParseWork = struct {
     idx: AST.Expr.Idx,
     target: ExprResultTarget,
+    /// The expression is a loop body, which only includes statements: every
+    /// line of it, including the last, is canonicalized as a statement.
+    loop_body: bool = false,
 };
 
 const ExprChildSlot = struct {
@@ -16881,6 +16924,11 @@ const ExprFinishBlockExprStmtWork = struct {
 
 const ExprFinishBlockFinalExprWork = struct {
     block: BlockState,
+};
+
+const ExprFinishLoopBodyStmtWork = struct {
+    region: Region,
+    result_start: usize,
 };
 
 const ExprFinishBlockDbgStmtWork = struct {
@@ -17263,6 +17311,7 @@ const ExprKernelWork = struct {
     finish_block: std.ArrayList(ExprFinishBlockWork) = .empty,
     finish_block_expr_stmt: std.ArrayList(ExprFinishBlockExprStmtWork) = .empty,
     finish_block_final_expr: std.ArrayList(ExprFinishBlockFinalExprWork) = .empty,
+    finish_loop_body_stmt: std.ArrayList(ExprFinishLoopBodyStmtWork) = .empty,
     finish_block_dbg_stmt: std.ArrayList(ExprFinishBlockDbgStmtWork) = .empty,
     finish_block_crash_stmt: std.ArrayList(ExprFinishBlockCrashStmtWork) = .empty,
     finish_block_expect_stmt: std.ArrayList(ExprFinishBlockExpectStmtWork) = .empty,
@@ -17322,6 +17371,7 @@ const ExprKernelWork = struct {
             .finish_block => _ = self.takeFinishBlock(),
             .finish_block_expr_stmt => _ = self.takeFinishBlockExprStmt(),
             .finish_block_final_expr => _ = self.takeFinishBlockFinalExpr(),
+            .finish_loop_body_stmt => _ = self.takeFinishLoopBodyStmt(),
             .finish_block_dbg_stmt => _ = self.takeFinishBlockDbgStmt(),
             .finish_block_crash_stmt => _ = self.takeFinishBlockCrashStmt(),
             .finish_block_expect_stmt => _ = self.takeFinishBlockExpectStmt(),
@@ -17401,6 +17451,7 @@ const ExprKernelWork = struct {
                 .finish_block,
                 .finish_block_expr_stmt,
                 .finish_block_final_expr,
+                .finish_loop_body_stmt,
                 .finish_block_dbg_stmt,
                 .finish_block_crash_stmt,
                 .finish_block_expect_stmt,
@@ -17523,6 +17574,12 @@ const ExprKernelWork = struct {
         try self.finish_block_final_expr.append(allocator, item);
         errdefer _ = self.finish_block_final_expr.pop();
         try self.pushLabel(allocator, .finish_block_final_expr, self.current_target);
+    }
+
+    inline fn pushFinishLoopBodyStmt(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishLoopBodyStmtWork) std.mem.Allocator.Error!void {
+        try self.finish_loop_body_stmt.append(allocator, item);
+        errdefer _ = self.finish_loop_body_stmt.pop();
+        try self.pushLabel(allocator, .finish_loop_body_stmt, self.current_target);
     }
 
     inline fn pushFinishBlockDbgStmt(self: *ExprKernelWork, allocator: std.mem.Allocator, item: ExprFinishBlockDbgStmtWork) std.mem.Allocator.Error!void {
@@ -17841,6 +17898,10 @@ const ExprKernelWork = struct {
         return self.finish_block_final_expr.pop() orelse unreachable;
     }
 
+    inline fn takeFinishLoopBodyStmt(self: *ExprKernelWork) ExprFinishLoopBodyStmtWork {
+        return self.finish_loop_body_stmt.pop() orelse unreachable;
+    }
+
     inline fn takeFinishBlockDbgStmt(self: *ExprKernelWork) ExprFinishBlockDbgStmtWork {
         return self.finish_block_dbg_stmt.pop() orelse unreachable;
     }
@@ -18058,6 +18119,8 @@ const BlockStateData = struct {
     result_start: usize,
     saved_defining_bound_vars: ?DataSpan,
     saved_stmt_pos: bool,
+    /// A loop body has no final expression; its last line is a statement too.
+    statements_only: bool,
 };
 
 /// Converts an AST pattern into a canonical pattern, introducing identifiers into scope.

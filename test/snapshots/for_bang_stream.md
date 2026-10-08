@@ -358,7 +358,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 393)
+							(e-dispatch-call (method "plus") (constraint-fn-var 395)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))
@@ -383,9 +383,10 @@ top_level = {
 				(e-lookup-local
 					(p-assign (ident "s")))
 				(e-block
-					(e-dbg
+					(s-dbg
 						(e-lookup-local
-							(p-assign (ident "word")))))))
+							(p-assign (ident "word"))))
+					(e-empty_record))))
 		(annotation
 			(ty-fn (effectful true)
 				(ty-apply (name "Stream") (builtin)
@@ -415,7 +416,7 @@ top_level = {
 					(e-block
 						(s-reassign
 							(p-var-assign (ident "$total"))
-							(e-dispatch-call (method "plus") (constraint-fn-var 527)
+							(e-dispatch-call (method "plus") (constraint-fn-var 529)
 								(receiver
 									(e-lookup-local
 										(p-var-assign (ident "$total"))))

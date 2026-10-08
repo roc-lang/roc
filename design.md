@@ -3021,7 +3021,12 @@ An expression statement is such a consumer of its expression's value: the
 `{}` demand is owned by the statement, and a call's result class is its
 callee's return slot, which a monomorphic callee shares with every other use.
 A rejected statement value retires the expression and marks the statement
-erroneous; the call and its callee keep their solved types.
+erroneous; the call and its callee keep their solved types. The one exception
+is Discarded Var Update (see Solver-Mutating Rewrites).
+A loop body has no final expression: canonicalization makes every line of a
+`for` or `while` body a statement, including the last, so the body is a block
+whose final expression is `{}`, and each of its expression statements owns its
+`{}` demand like any other. The checker asserts this shape for every loop body.
 A `Bool` demand is the same kind of consumer: an `if` or `while` condition and
 an `expect` body each own the `Bool` relation on a value they only consult, so
 a rejection retires that operand, and a rejected match guard retires its match.
@@ -11102,6 +11107,28 @@ destructure is IMPLEMENTED); SETTING an optional field in an update
 the SET side of this section's typing frame, realized by the kind-flexible
 update probe (see the record-update bullet in Field Kinds).
 
+### Discarded Var Update
+
+An expression statement written as a method call on a `var` binding
+(`$acc.append(e)`: an `e_method_call`, or an `e_dispatch_call` whose surface
+origin is a method call, whose receiver is a lookup of a `var_assign` pattern)
+discards an updated copy of that binding when its value is not `{}` but could
+be assigned back to the binding. Such a statement is accepted with a
+`discarded_var_update` warning that suggests the reassignment, and its value
+is discarded at runtime. The statement does not relate its value to `{}` or to
+the binding; its own type is `{}`. Every other expression statement whose value
+is not `{}` is rejected as before.
+
+`Check.discardedVarUpdate` decides it with two read-only `probeCanUseAs`
+probes, both rolled back: the statement's `{}` relation must fail, and relating
+the value to the binding's type (the relation `$acc = $acc.append(e)` would
+run) must succeed. Only the statement's own type and the problem store are
+written. Accepted and rejected sides are pinned in
+`src/check/test/issue_12128_test.zig`: the warning for a discarded `append` in
+and outside a loop; errors for a discarded value of another type on a `var`
+(`$items.len()`), the same call on an immutable binding, and an operator on a
+`var` (`$count + n`).
+
 ### Rewrite Inventory
 
 - `finishAliasDeclarationParameters`—mechanism: completes an in-progress
@@ -11437,7 +11464,8 @@ signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
 witness-asserted against the probe it pre-filters in safety builds;
 `probeCanUseAs`/`tryErrorRowNeedsUseSiteWidening` are the gating probes for
-Hosted Try Question Widening.
+Hosted Try Question Widening, and `probeCanUseAs` is the gating probe for
+Discarded Var Update (`discardedVarUpdate`, above).
 
 ## Runtime Lowering Strategy
 
