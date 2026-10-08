@@ -1230,6 +1230,60 @@ test "TestEnv allocation tracking" {
     try std.testing.expectEqual(@as(usize, 0), test_env.getAllocationCount());
 }
 
+// The allocation size guards are written as comparisons rather than
+// `@mulWithOverflow`/`@addWithOverflow` so they fold away when the sizes are
+// known (see `checkedByteCount`). These tests hold the comparisons to exactly
+// the intrinsics' answer, because that equivalence is the whole safety claim:
+// a size that wraps `usize` must be rejected, not turned into a tiny
+// allocation the next write runs off the end of.
+test "byteCountOverflows agrees with the multiply overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const widths = [_]usize{ 0, 1, 2, 3, 8, 16, 24, 4096, max / 2, max };
+    const counts = [_]usize{ 0, 1, 2, 3, 7, 8, 1000, max / 4096, max / 2, max - 1, max };
+    for (widths) |width| {
+        for (counts) |count| {
+            const expected = @mulWithOverflow(count, width)[1] != 0;
+            try std.testing.expectEqual(expected, byteCountOverflows(count, width));
+        }
+    }
+}
+
+test "allocLenOverflows agrees with the add overflow intrinsic" {
+    const max = std.math.maxInt(usize);
+    const headers = [_]usize{ 0, 1, 8, 16, 24, max / 2, max };
+    const sizes = [_]usize{ 0, 1, 8, 1000, max / 2, max - 24, max - 1, max };
+    for (headers) |header| {
+        for (sizes) |size| {
+            const expected = @addWithOverflow(size, header)[1] != 0;
+            try std.testing.expectEqual(expected, allocLenOverflows(size, header));
+        }
+    }
+}
+
+test "checked size helpers return exact values at the largest safe input" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+    const max = std.math.maxInt(usize);
+
+    // The largest count that still fits must be allowed through untouched: an
+    // off-by-one in the guard would crash here instead of returning.
+    for ([_]usize{ 1, 2, 3, 8, 4096 }) |width| {
+        const largest_safe = max / width;
+        try std.testing.expect(!byteCountOverflows(largest_safe, width));
+        try std.testing.expectEqual(largest_safe * width, checkedByteCount(largest_safe, width, ops));
+    }
+
+    // A zero element width can never overflow, whatever the count.
+    try std.testing.expectEqual(@as(usize, 0), checkedByteCount(max, 0, ops));
+
+    for ([_]usize{ 0, 8, 16, 24 }) |header| {
+        const largest_safe = max - header;
+        try std.testing.expect(!allocLenOverflows(largest_safe, header));
+        try std.testing.expectEqual(max, checkedAllocLen(largest_safe, header, ops));
+    }
+}
+
 test "allocateWithRefcount basic functionality" {
     var test_env = TestEnv.init(std.testing.allocator);
     defer test_env.deinit();
