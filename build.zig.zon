@@ -93,8 +93,8 @@
         // which is already the natural SSE2 lowering. A lower `-Dcpu` costs it
         // nothing.
         .bytebox = .{
-            .url = "https://github.com/lukewilliamboswell/bytebox/archive/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87.tar.gz",
-            .hash = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN",
+            .url = "https://github.com/lukewilliamboswell/bytebox/archive/a47174a91c2b03fe9f7982ca914633a15123b017.tar.gz",
+            .hash = "bytebox-0.0.1-SXc2sdymDwDisdVtvnk6RwklNLD8_0tN9QeOk-beQvJB",
         },
         // Used for `roc bundle`, `roc unbundle`, and downloading .tar.zst bundles.
         //
