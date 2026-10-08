@@ -2045,6 +2045,19 @@ pub fn build(b: *std.Build) void {
             .optimize = .debug,
         }),
     });
+    // Each MiniCI shard runs this from the build artifact before any `zig`
+    // command, so it is installed with the other tools. It hashes every file
+    // the cache refers to, which is why it is not a debug build.
+    const restamp_zig_cache_exe = b.addExecutable(.{
+        .name = "restamp-zig-cache",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/restamp_zig_cache.zig"),
+            .target = b.graph.host,
+            .optimize = .safe,
+        }),
+    });
+    build_check_tools_step.dependOn(&b.addInstallArtifact(restamp_zig_cache_exe, .{}).step);
+
     const source_bidi_module = b.createModule(.{
         .root_source_file = b.path("src/base/bidi.zig"),
         .target = b.graph.host,
@@ -4339,6 +4352,22 @@ pub fn build(b: *std.Build) void {
         .step_suffix = "tidy-unit",
         .description = "Run tidy Zig unit tests",
         .compile = tidy_unit_test,
+    });
+
+    // ci/restamp_zig_cache.zig is an executable root too.
+    const restamp_zig_cache_test = b.addTest(.{
+        .name = "restamp_zig_cache",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/restamp_zig_cache.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "restamp-zig-cache",
+        .description = "Run Zig cache re-stamping tool unit tests",
+        .compile = restamp_zig_cache_test,
     });
 
     // LLVM backend aggregator test: src/backend/llvm/mod.zig is not the root of

@@ -185,6 +185,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: zig build run-test-zig-tidy-unit
 
+      # Not a MiniCI job; covers ci/restamp_zig_cache.zig itself.
+      - name: Run Zig cache re-stamping unit tests
+        if: ${{ !cancelled() }}
+        run: zig build run-test-zig-restamp-zig-cache
+
       # Uses real generated compiler options and an empty dependency bundle;
       # no Roc CLI compilation or published LLVM bundle is needed.
       - name: Check compiler artifact identities
@@ -500,6 +505,18 @@ jobs:
           set -euo pipefail
           zstd -dc minici-build.tar.zst | tar -xf -
           rm minici-build.tar.zst
+
+      # Every file here is new to this machine: the sources come from a fresh
+      # checkout and the cache from the archive above, so nothing has the inode
+      # or mtime the cache recorded. Zig 0.17.0 counts that as a miss for C
+      # sources and linked artifacts even when the contents are identical, and
+      # would recompile every binary this shard runs. The tool records the new
+      # stat for each entry whose contents still match; it ships in the build
+      # artifact so it can run before the first `zig` command. See
+      # ci/restamp_zig_cache.zig.
+      - name: Re-stamp the restored Zig cache
+        shell: bash
+        run: ./zig-out/bin/restamp-zig-cache
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown
