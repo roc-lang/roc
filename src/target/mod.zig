@@ -26,6 +26,7 @@ pub fn classifyCpuArch(arch: std.Target.Cpu.Arch) CpuArchClass {
         .bpfeb,
         .bpfel,
         .csky,
+        .ez80,
         .hexagon,
         .hppa,
         .hppa64,
@@ -35,6 +36,7 @@ pub fn classifyCpuArch(arch: std.Target.Cpu.Arch) CpuArchClass {
         .loongarch32,
         .loongarch64,
         .m68k,
+        .m88k,
         .microblaze,
         .microblazeel,
         .mips,
@@ -61,6 +63,7 @@ pub fn classifyCpuArch(arch: std.Target.Cpu.Arch) CpuArchClass {
         .sparc64,
         .spirv32,
         .spirv64,
+        .spork8,
         .thumb,
         .thumbeb,
         .ve,
@@ -106,6 +109,12 @@ pub fn classifyOs(os: std.Target.Os.Tag) OsClass {
         .visionos,
         .watchos,
         .uefi,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .@"3ds",
         .ps3,
         .ps4,
@@ -140,6 +149,8 @@ fn classifyAbi(abi: std.Target.Abi) AbiClass {
         .gnusf,
         .eabi,
         .eabihf,
+        .abin32,
+        .x32,
         .ilp32,
         .android,
         .androideabi,
@@ -153,6 +164,7 @@ fn classifyAbi(abi: std.Target.Abi) AbiClass {
         .simulator,
         .ohos,
         .ohoseabi,
+        .call0,
         => .other,
     };
 }
@@ -375,6 +387,8 @@ pub fn windowsAbiFromStd(abi: std.Target.Abi) ?WindowsAbi {
         .gnux32,
         .eabi,
         .eabihf,
+        .abin32,
+        .x32,
         .ilp32,
         .android,
         .androideabi,
@@ -390,6 +404,7 @@ pub fn windowsAbiFromStd(abi: std.Target.Abi) ?WindowsAbi {
         .simulator,
         .ohos,
         .ohoseabi,
+        .call0,
         => null,
     };
 }
@@ -471,7 +486,7 @@ pub const RocTarget = enum {
         }
         var lines: [families.len][]const u8 = undefined;
         for (families, names, &lines) |target_family, family_names, *line| {
-            line.* = "  " ++ family_names ++ " " ** (width - family_names.len) ++ "  - " ++ target_family.description();
+            line.* = "  " ++ family_names ++ &@as([width - family_names.len]u8, @splat(' ')) ++ "  - " ++ target_family.description();
         }
         break :roster lines;
     };
@@ -479,9 +494,9 @@ pub const RocTarget = enum {
     /// Parse target from string (e.g., "arm64mac", "x64musl")
     pub fn fromString(str: []const u8) ?RocTarget {
         const enum_info = @typeInfo(RocTarget);
-        inline for (enum_info.@"enum".fields) |field| {
-            if (std.mem.eql(u8, str, field.name)) {
-                return @enumFromInt(field.value);
+        inline for (enum_info.@"enum".field_names, enum_info.@"enum".field_values) |field_name, field_value| {
+            if (std.mem.eql(u8, str, field_name)) {
+                return @fromBackingInt(@intCast(field_value));
             }
         }
         return null;
@@ -794,12 +809,12 @@ pub const RocTarget = enum {
                         .sse2,
                         .x87,
                     }) |feature| {
-                        baseline.addFeature(@intFromEnum(feature));
+                        baseline.addFeature(@backingInt(feature));
                     }
                 },
                 // Advanced SIMD and floating point are mandatory in the
                 // application profile Roc targets at Armv8.0-A.
-                .aarch64, .aarch64_be => baseline.addFeature(@intFromEnum(std.Target.aarch64.Feature.neon)),
+                .aarch64, .aarch64_be => baseline.addFeature(@backingInt(std.Target.aarch64.Feature.neon)),
                 .wasm32 => {},
                 .arm, .other => unreachable,
             }
@@ -829,7 +844,7 @@ pub const RocTarget = enum {
                     .aes,
                     .pclmul,
                 }) |feature| {
-                    contract.instruction_features.addFeature(@intFromEnum(feature));
+                    contract.instruction_features.addFeature(@backingInt(feature));
                 }
             },
             .aarch64, .aarch64_be => {
@@ -837,12 +852,12 @@ pub const RocTarget = enum {
                 // AES and SHA-256 are the Armv8 Cryptographic Extension,
                 // which CPUs implement together.
                 if (self.toOsTag() != .macos) {
-                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.aes));
-                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.sha2));
-                    contract.instruction_features.addFeature(@intFromEnum(std.Target.aarch64.Feature.dotprod));
+                    contract.instruction_features.addFeature(@backingInt(std.Target.aarch64.Feature.aes));
+                    contract.instruction_features.addFeature(@backingInt(std.Target.aarch64.Feature.sha2));
+                    contract.instruction_features.addFeature(@backingInt(std.Target.aarch64.Feature.dotprod));
                 }
             },
-            .wasm32 => contract.instruction_features.addFeature(@intFromEnum(std.Target.wasm.Feature.simd128)),
+            .wasm32 => contract.instruction_features.addFeature(@backingInt(std.Target.wasm.Feature.simd128)),
             .arm, .other => {},
         }
 
@@ -1178,10 +1193,10 @@ test "x86 scheduling model cannot silently raise the instruction floor" {
     const query = RocTarget.x64musl.llvmTargetQuery();
     try std.testing.expectEqual(&std.Target.x86.cpu.x86_64_v3, query.cpu_model.explicit);
 
-    const tuning_feature = @intFromEnum(std.Target.x86.Feature.false_deps_lzcnt_tzcnt);
+    const tuning_feature = @backingInt(std.Target.x86.Feature.false_deps_lzcnt_tzcnt);
     try std.testing.expect(query.cpu_features_sub.isEnabled(tuning_feature));
     try std.testing.expect(!RocTarget.x64musl.llvmTargetFeatures().isEnabled(tuning_feature));
-    try std.testing.expect(RocTarget.x64musl.llvmTargetFeatures().isEnabled(@intFromEnum(std.Target.x86.Feature.avx2)));
+    try std.testing.expect(RocTarget.x64musl.llvmTargetFeatures().isEnabled(@backingInt(std.Target.x86.Feature.avx2)));
 }
 
 test "arm64 keeps its floor at Armv8.0 plus the builtins' extensions" {
@@ -1190,9 +1205,9 @@ test "arm64 keeps its floor at Armv8.0 plus the builtins' extensions" {
     const query = RocTarget.arm64musl.llvmTargetQuery();
     try std.testing.expectEqual(&std.Target.aarch64.cpu.generic, query.cpu_model.explicit);
 
-    const aes = @intFromEnum(std.Target.aarch64.Feature.aes);
-    const sha2 = @intFromEnum(std.Target.aarch64.Feature.sha2);
-    const dotprod = @intFromEnum(std.Target.aarch64.Feature.dotprod);
+    const aes = @backingInt(std.Target.aarch64.Feature.aes);
+    const sha2 = @backingInt(std.Target.aarch64.Feature.sha2);
+    const dotprod = @backingInt(std.Target.aarch64.Feature.dotprod);
     try std.testing.expect(query.cpu_features_add.isEnabled(aes));
     try std.testing.expect(query.cpu_features_add.isEnabled(sha2));
     try std.testing.expect(query.cpu_features_add.isEnabled(dotprod));
@@ -1206,7 +1221,7 @@ test "arm64 keeps its floor at Armv8.0 plus the builtins' extensions" {
     try std.testing.expect(query.cpu_features_add.eql(expected));
 
     // Zig's generic model currently names ETE, but it is not part of Armv8.0-A.
-    const ete = @intFromEnum(std.Target.aarch64.Feature.ete);
+    const ete = @backingInt(std.Target.aarch64.Feature.ete);
     try std.testing.expect(query.cpu_features_sub.isEnabled(ete));
     try std.testing.expect(!RocTarget.arm64musl.llvmTargetFeatures().isEnabled(ete));
 }

@@ -85,7 +85,7 @@ pub const Report = struct {
 /// Intern worker-required layouts before freezing the phase's shared store.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc = store.getProcSpec(@enumFromInt(index));
+        const proc = store.getProcSpec(@fromBackingInt(@intCast(index)));
         // Only a procedure that calls itself can be rewritten to thread a
         // pointer to its result.
         if (proc.body != null and proc.hosted == null and proc.abi == .roc and proc.shapes.self_call and
@@ -112,7 +112,7 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         if (try runProc(store, layouts, proc_id, store.allocator)) |report| {
             reportProc(store, layouts, proc_id, report);
         }
@@ -151,7 +151,7 @@ fn transformProc(
         tail_site = store.getCFStmt(id).assign_call.tail_call.?.next;
     }
     if (construct_count == 0 and tail_count == 0) return null;
-    if (builtin.mode == .Debug) detection.assertRewrittenStmtsUnshared();
+    if (builtin.mode == .debug) detection.assertRewrittenStmtsUnshared();
 
     if (construct_count > 0) {
         var transform = Transform.init(scratch.gpa, store, layouts, proc_id, &detection);
@@ -175,7 +175,7 @@ pub fn reportProc(store: *const LirStore, layouts: *const layout_mod.Store, proc
         const transformed = store.getProcSpec(proc_id);
         debugPrint("{s}: proc p{d} ({d} construct sites, {d} tail calls)\n", .{
             @tagName(transformed.tail_transform),
-            @intFromEnum(proc_id),
+            @backingInt(proc_id),
             report.construct_count,
             report.tail_count,
         });
@@ -510,7 +510,7 @@ const Detection = struct {
             if (stmt == .join) {
                 const s = stmt.join;
                 try self.joins.put(s.id, .{ .params = s.params, .body = s.body });
-                self.max_join_id = @max(self.max_join_id, @intFromEnum(s.id));
+                self.max_join_id = @max(self.max_join_id, @backingInt(s.id));
             } else if (stmt == .ret) {
                 try self.scratch.rets.append(gpa, item.stmt);
             }
@@ -1038,7 +1038,7 @@ const Transform = struct {
             .join_id = if (store.getProcSpec(proc_id).tail_calls) |sites|
                 sites.loop
             else
-                @enumFromInt(detection.max_join_id + 1),
+                @fromBackingInt(@intCast(detection.max_join_id + 1)),
         };
     }
 
@@ -1414,15 +1414,15 @@ const Transform = struct {
     fn rebuildFrameLocals(self: *Transform) ResourceError!LIR.LocalSpan {
         const old_span = self.store.getProcSpec(self.proc_id).frame_locals;
         const old = self.store.getLocalSpan(old_span);
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             var previous: ?LocalId = null;
             for (0..old.len) |index| {
                 const local = GuardedList.at(old, index);
-                if (previous) |prev| std.debug.assert(@intFromEnum(prev) < @intFromEnum(local));
+                if (previous) |prev| std.debug.assert(@backingInt(prev) < @backingInt(local));
                 previous = local;
             }
             for (self.new_locals.items) |local| {
-                if (previous) |prev| std.debug.assert(@intFromEnum(prev) < @intFromEnum(local));
+                if (previous) |prev| std.debug.assert(@backingInt(prev) < @backingInt(local));
                 previous = local;
             }
         }

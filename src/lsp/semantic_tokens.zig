@@ -67,14 +67,14 @@ pub const SemanticToken = struct {
 /// projects each category onto the LSP `SemanticType` index it corresponds to.
 pub fn tokenTagToSemanticType(tag: Token.Tag) ?u32 {
     return switch (tag.highlightCategory()) {
-        .keyword => @intFromEnum(SemanticType.keyword),
-        .type => @intFromEnum(SemanticType.type),
-        .variable => @intFromEnum(SemanticType.variable),
-        .field => @intFromEnum(SemanticType.property),
-        .tag => @intFromEnum(SemanticType.enumMember),
-        .number => @intFromEnum(SemanticType.number),
-        .string => @intFromEnum(SemanticType.string),
-        .operator => @intFromEnum(SemanticType.operator),
+        .keyword => @backingInt(SemanticType.keyword),
+        .type => @backingInt(SemanticType.type),
+        .variable => @backingInt(SemanticType.variable),
+        .field => @backingInt(SemanticType.property),
+        .tag => @backingInt(SemanticType.enumMember),
+        .number => @backingInt(SemanticType.number),
+        .string => @backingInt(SemanticType.string),
+        .operator => @backingInt(SemanticType.operator),
 
         // Brackets, structural punctuation, and non-highlighted tokens carry no
         // semantic-token type.
@@ -93,7 +93,7 @@ fn tokenSemanticTypeAt(tags: []const Token.Tag, token_index: usize) ?u32 {
         token_index + 1 < tags.len and
         tags[token_index + 1] == .NoSpaceOpenRound)
     {
-        return @intFromEnum(SemanticType.function);
+        return @backingInt(SemanticType.function);
     }
 
     return tokenTagToSemanticType(tag);
@@ -506,7 +506,7 @@ const CheckedClassifier = struct {
             .e_lookup_associated => |lookup| self.setLastIdent(region, lookup.item_ident, self.exprClass(expr_idx)),
             .e_lookup_associated_resolved => |lookup| self.setLastIdent(region, lookup.source_ident, self.exprClass(expr_idx)),
             .e_lookup_required => |lookup| {
-                const required = self.module_env.requires_types.items.items[@intFromEnum(lookup.requires_idx)];
+                const required = self.module_env.requires_types.items.items[@backingInt(lookup.requires_idx)];
                 self.setIdent(region, required.ident, self.exprClass(expr_idx));
             },
             .e_tag => |tag| self.setIdent(region, tag.name, .enum_member),
@@ -525,7 +525,7 @@ const CheckedClassifier = struct {
                 var segment_idx = access.segments.start;
                 var remaining = access.segments.len;
                 while (remaining > 0) : ({
-                    segment_idx = @enumFromInt(@intFromEnum(segment_idx) + 1);
+                    segment_idx = @fromBackingInt(@intCast(@backingInt(segment_idx) + 1));
                     remaining -= 1;
                 }) {
                     const segment = self.module_env.store.getFieldAccessSegment(segment_idx);
@@ -688,12 +688,12 @@ fn emitTokens(
         const is_suffix = class == .default and isDotUpperIdent(tag) and follows_number;
 
         const semantic_type: u32 = if (class.semanticType()) |semantic|
-            @intFromEnum(semantic)
+            @backingInt(semantic)
         else if (tag == .OpColon or tag == .OpBar)
             // A colon or a lambda bar delimits; it does not operate on anything.
             continue
         else if (is_suffix)
-            @intFromEnum(SemanticType.number)
+            @backingInt(SemanticType.number)
         else
             tokenSemanticTypeAt(tags, token_index) orelse continue;
 

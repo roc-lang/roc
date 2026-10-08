@@ -4,7 +4,7 @@ If you run into any problems getting Roc built from source, please ask for help 
 
 ## Recommended way
 
-[Download zig 0.16.0](https://ziglang.org/download/) and add it to your PATH.
+[Download Zig 0.17.0](https://ziglang.org/download/) and add it to your PATH.
 [Search "Setting up PATH"](https://ziglang.org/learn/getting-started/) for more details.
 
 Do a test run with
@@ -21,6 +21,99 @@ nix develop ./src
 buildcmd
 ./zig-out/bin/roc version
 ```
+
+The Nix dependency farm supplies ordinary compiler dependencies by default.
+The package build does not declare fuzz steps. `zig build --system` activates
+every supplied package, including its build script, so the three AFL entries
+are an explicit opt-in: pass `includeFuzzingDependencies = true` when calling
+`build.zig.zon.nix`. Their pins are retained, but the bundled AFL wrapper still
+uses removed Zig build APIs and needs a separate migration before this
+optional farm can configure with Zig 0.17. System AFL builds use `afl_kit`'s C
+adapter and an installed AFL compiler; they do not build the bundled wrapper.
+
+## Local dependency bundles and caching
+
+A compatible roc-bootstrap bundle contains `include/` and `lib/` for the
+compiler's target, including LLVM 22, LLD, and Binaryen. Build against a local
+bundle with:
+
+```sh
+zig build roc -Droc-deps-path=/path/to/bundle
+```
+
+This option uses the same LLVM/LLD/Binaryen configuration as a downloaded
+bundle. It cannot be combined with `-Dllvm-path` or `-Dsystem-llvm`, which select
+legacy LLVM dependency modes. Bundle headers and libraries at mutable paths
+participate by content in the cache identity. Verified immutable Nix bundles
+use their full store path to avoid copying and hashing several gigabytes of
+libraries. A stable store path reuses the identity; reassembling identical
+headers and libraries at a different store path conservatively invalidates it,
+including when only bundle metadata changed.
+
+The displayed Git version is separate from application-cache compatibility.
+Compatibility tracks compiler/runtime/vendor sources, the build recipe and
+pinned dependency manifest, the exact Zig executable and library tree, semantic
+options, and each compiler executable's actual mode, target, and CPU features.
+Dirty production edits invalidate cached applications without changing `HEAD`.
+Ordinary compiler builds preserve other compiler builds' application caches.
+Generated compiler embedding assets live in Zig's cache.
+The complete Zig library and mutable dependency contents have independent
+cached digest stages. Production edits reuse those unchanged large input trees;
+the final compatibility identity includes their declared content digests.
+
+Deleting an installed executable under `zig-out/` restores it from the cached
+compile. Files inside Zig's local cache must remain together with their cache
+manifests: cached Run, WriteFiles, and Options steps do not recover individually
+deleted generated files. If those internal files are missing, rebuild with a
+fresh `--cache-dir /new/cache/path` or discard the affected local cache.
+
+Integration tests prepare their fixture trees and generated host libraries in
+Zig's cache, then run in private temporary copies. Concurrent build modes and
+cache directories therefore do not overwrite the checkout's hosts or each
+other's generated test executables. Test runners use absolute paths to their
+compiler and prebuilt applications. `build-test-hosts` only builds the cached
+hosts. For manual commands against checkout fixtures, publish them explicitly:
+
+```sh
+zig build update-test-fixtures
+```
+
+Dedicated audited `src/*/test/` directories are excluded from the production
+source identity. Inline tests, test helpers outside those directories, vendored
+tests, and Zig library tests remain conservatively included: editing them may
+invalidate application caches. Changes to `build.zig` also invalidate identity,
+even when an edit only affects a build comment or a test leaf.
+
+Runtime filters preserve the compiled test binary and select matching tests:
+
+```sh
+zig build run-test-zig-minici -- --test-filter "parseMiniArgs"
+```
+
+Use repeatable `-Dtest-filter="pattern"` options when the filter should also
+limit test compilation. The build-input identity regression check uses a small
+Debug test binary and checks production/test-only edits at unchanged `HEAD`:
+
+```sh
+python3 ci/test_build_identity.py /path/to/zig
+python3 ci/test_fixture_isolation.py /path/to/zig
+python3 ci/test_build_cache.py /path/to/zig
+python3 ci/test_compiler_artifact_identity.py /path/to/zig
+```
+
+The last check builds the Debug builtin compiler in a private source snapshot.
+It compares three independently executed bakes, verifies reuse after version,
+documentation and dedicated test changes, and verifies invalidation after a
+production edit while reusing the Zig library and dependency copies and digests.
+A controlled dependency header edit rebuilds only its input stage and invalidates
+the compiler and bakes; restoration reuses the original results. The check also
+changes the surrounding build mode and target, including a native ABI, while
+preserving the Debug host bake graph. Pass `--work-dir /new/path` to preserve its
+graph logs and artifact identities for review.
+
+The artifact identity check imports the actual generated compiler options into
+small objects. It verifies mode, target, CPU features and complete OS version
+ranges, including kernel bounds, glibc versions and Android API levels.
 
 ## CPU requirements
 

@@ -77,7 +77,7 @@ const Inventory = struct {
 
     fn collect(self: *Inventory) ResourceError!void {
         for (self.roots) |root| {
-            self.escapes[@intFromEnum(root)] = true;
+            self.escapes[@backingInt(root)] = true;
             try self.markReachable(root);
         }
 
@@ -91,17 +91,17 @@ const Inventory = struct {
                 const stmt = self.store.getCFStmt(stmt_id);
                 if (stmt == .assign_call) {
                     const call = stmt.assign_call;
-                    const callee_index = @intFromEnum(call.proc);
+                    const callee_index = @backingInt(call.proc);
                     self.direct_calls[callee_index] += 1;
                     self.unique_site[callee_index] = .{ .caller = caller, .stmt = stmt_id };
                     try self.markReachable(call.proc);
                 } else if (stmt == .assign_packed_erased_fn) {
                     const packed_fn = stmt.assign_packed_erased_fn;
-                    self.escapes[@intFromEnum(packed_fn.proc)] = true;
+                    self.escapes[@backingInt(packed_fn.proc)] = true;
                     try self.markReachable(packed_fn.proc);
                 } else if (stmt == .assign_literal and stmt.assign_literal.value == .proc_ref) {
                     const proc = stmt.assign_literal.value.proc_ref;
-                    self.escapes[@intFromEnum(proc)] = true;
+                    self.escapes[@backingInt(proc)] = true;
                     try self.markReachable(proc);
                 }
             }
@@ -109,7 +109,7 @@ const Inventory = struct {
     }
 
     fn markReachable(self: *Inventory, proc: LIR.LirProcSpecId) ResourceError!void {
-        const index = @intFromEnum(proc);
+        const index = @backingInt(proc);
         if (self.reachable[index]) return;
         self.reachable[index] = true;
         try self.proc_queue.append(self.allocator, proc);
@@ -125,7 +125,7 @@ const Inventory = struct {
             const site = self.unique_site[callee_index] orelse continue;
             if (!self.store.getProcSpec(site.caller).iterator_fusion_scope) continue;
             const stmt = self.store.getCFStmt(site.stmt);
-            if (stmt != .assign_call or @intFromEnum(stmt.assign_call.proc) != callee_index) continue;
+            if (stmt != .assign_call or @backingInt(stmt.assign_call.proc) != callee_index) continue;
             if (!eligibleCall(self.store, layouts, stmt.assign_call)) continue;
             candidate[callee_index] = true;
         }
@@ -136,7 +136,7 @@ const Inventory = struct {
         for (candidate, 0..) |is_candidate, callee_index| {
             if (!is_candidate) continue;
             const site = self.unique_site[callee_index].?;
-            if (candidate[@intFromEnum(site.caller)]) continue;
+            if (candidate[@backingInt(site.caller)]) continue;
             try sites.append(self.allocator, site);
         }
     }

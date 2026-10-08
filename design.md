@@ -2131,6 +2131,20 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Redundant explicit returns
+
+Parsing records which explicit returns occupy function result positions. Each
+lambda body starts such a position; a block propagates it to its last expression
+or return, grouping parentheses preserve it, and an `if` with an `else` or
+a `match` propagates it to its branch bodies. A return's operand also occupies
+that position. Bindings, operands of other expressions, conditions, guards,
+loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
+Canonicalization consumes this inventory to warn on redundant returns, and
+formatting consumes the same inventory to remove their keywords while preserving
+comments and adding parentheses where a bare identifier would otherwise parse
+as a punned record. Explicit early returns retain their control-flow meaning in
+CIR.
+
 ### Bidirectional source controls
 
 Literal Unicode Bidi_Control characters (U+061C, U+200E–U+200F,
@@ -4051,6 +4065,41 @@ another lambda's constraints, by construction. Rank bookkeeping is therefore
 strictly stack-shaped: unification only ever runs while the frame owning its
 vars is active, and `addVarToRank`'s debug guard is a regression tripwire
 rather than a reachable condition.
+
+### Predeclared Scheme Uses
+
+A use that instantiates a predeclared scheme is typed before the binding's
+own scheme is final, and the two need not agree: the body may solve a slot
+of its own copy of the annotation that the predeclared scheme leaves free.
+Rigids cannot be solved, but an implicitly opened output row (Polarity) is
+an ordinary bounded extension, so a body that returns a value from a closed
+source closes it, and one that forwards another row joins it with that row.
+A recursive call to `f : [A] -> [A]` whose body returns its parameter is
+typed against `[A] -> [A, ..r]` and may widen its result to `[A, B]`, while
+the final scheme of `f` is the closed `[A] -> [A]` that rejects the same
+widening from every other caller. Accepting it would hand Monotype a
+recursive request that the in-progress specialization cannot join.
+
+Every such use is therefore related to its binding's final scheme.
+The relation runs in the boundary that outputs the scheme (a group or
+RHS generalization boundary, after its final dispatch and replay round and
+before it generalizes) for uses made while the body was in flight, and at
+once for a use made after scheme output. The two generations of the
+annotation enumerate the same identity slots (`PredeclaredSlots`), so the
+relation is slot-wise and needs no structural matching: each body slot the
+scheme will quantify stands for the use's copy of the first slot that
+reaches it, a slot the scheme will not quantify is shared, and a slot the
+body closed must be closed in the use's copy too. Each copy is unified
+with that image. A relation can pin a receiver, so the boundary runs
+another round after relating any use.
+
+A rejected relation is a Type Mismatch at the use, naming the use's type
+and the definition's final one; the use becomes a runtime error and the
+definition keeps its scheme, as for any other rejected use. A body slot
+solved to anything other than a variable, a closed row, or a row's
+extension is an invariant violation, since the annotation's rigids and
+bounded rows admit nothing else, and a use still unrelated when the module
+finishes checking is one too.
 
 ### Value Bindings Generalize By Expression
 
@@ -14244,6 +14293,23 @@ lands inside the checked module data's evidence tables. In debug builds—
 where the boundary verifiers run—a missing or corrupt record is a compiler
 bug reported at the boundary, not a lowering panic.
 
+**Target substitutions.** A direct evidence node either carries the checked
+substitution of its target's scheme or says the substitution derives from its
+callable (`derived_from_callable`). A dispatch edge that checking discharged by
+selecting a target records that instantiation, so its node carries the full
+substitution; such an edge with a polymorphic target and no record is a
+compiler bug reported when checking outputs the module. Checking instantiates nothing for these
+targets, so their nodes derive the substitution from the callable:
+- a target reached through an exact procedure alias, whose edge instantiated
+  the alias's scheme;
+- the numeric default owner checking selects for a dispatcher no edge pins;
+- the target checking resolves for a literal conversion that it left
+  to each specialization;
+- a literal conversion on a builtin number or `Str`, which checking discharges
+  as a primitive with no callable.
+
+Monotype instantiates such a target's scheme at the dispatch's callable.
+
 **Evidence params.** Every type scheme with dispatch requirements has one
 deterministic ordered list of (dispatcher var, constraint) pairs—
 its evidence params—enumerated purely from the scheme's type structure
@@ -14257,7 +14323,15 @@ scheme. Repeated declarative constraints share one callable type, while
 independently inferred dot-method calls retain separate callable relations so a
 rank-1 method scheme can be instantiated independently at each use. Operators
 and literal conversions retain one numeric/defaulting relation per method
-identity. Same-name relations must agree on fixed outer function properties:
+identity. A relation folded into a retained one selects no target of its own,
+yet its dispatch site still outputs a plan. The unifier journals each fold as
+an exact (dropped, retained) pair of raw constraint function vars, and checking
+outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
+to the relation on its merge chain whose target was selected. Checked
+module output keys the folded dispatch's evidence to that relation's
+dispatch-target record. It never matches records by union-find root, because
+unrelated dispatches whose callables later unify would then share a record.
+Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;

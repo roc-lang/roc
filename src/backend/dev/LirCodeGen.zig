@@ -105,44 +105,44 @@ fn srcBits(op: lir.LowLevel) u8 {
 }
 
 fn narrowEnum(comptime Narrow: type, wide: anytype) Narrow {
-    const raw = @intFromEnum(wide);
-    inline for (@typeInfo(Narrow).@"enum".fields) |field| {
-        if (raw == field.value) return @enumFromInt(field.value);
+    const raw = @backingInt(wide);
+    inline for (@typeInfo(Narrow).@"enum".field_values) |field_value| {
+        if (raw == field_value) return @fromBackingInt(@intCast(field_value));
     }
     unreachable;
 }
 
 const IntBinOp = enum(u16) {
-    num_plus = @intFromEnum(lir.LowLevel.num_plus),
-    num_minus = @intFromEnum(lir.LowLevel.num_minus),
-    num_times = @intFromEnum(lir.LowLevel.num_times),
-    num_div_by = @intFromEnum(lir.LowLevel.num_div_by),
-    num_div_trunc_by = @intFromEnum(lir.LowLevel.num_div_trunc_by),
-    num_rem_by = @intFromEnum(lir.LowLevel.num_rem_by),
-    num_mod_by = @intFromEnum(lir.LowLevel.num_mod_by),
-    num_shift_left_by = @intFromEnum(lir.LowLevel.num_shift_left_by),
-    num_shift_right_by = @intFromEnum(lir.LowLevel.num_shift_right_by),
-    num_shift_right_zf_by = @intFromEnum(lir.LowLevel.num_shift_right_zf_by),
-    num_bitwise_and = @intFromEnum(lir.LowLevel.num_bitwise_and),
-    num_bitwise_or = @intFromEnum(lir.LowLevel.num_bitwise_or),
-    num_bitwise_xor = @intFromEnum(lir.LowLevel.num_bitwise_xor),
-    num_is_eq = @intFromEnum(lir.LowLevel.num_is_eq),
-    num_is_gt = @intFromEnum(lir.LowLevel.num_is_gt),
-    num_is_gte = @intFromEnum(lir.LowLevel.num_is_gte),
-    num_is_lt = @intFromEnum(lir.LowLevel.num_is_lt),
-    num_is_lte = @intFromEnum(lir.LowLevel.num_is_lte),
+    num_plus = @backingInt(lir.LowLevel.num_plus),
+    num_minus = @backingInt(lir.LowLevel.num_minus),
+    num_times = @backingInt(lir.LowLevel.num_times),
+    num_div_by = @backingInt(lir.LowLevel.num_div_by),
+    num_div_trunc_by = @backingInt(lir.LowLevel.num_div_trunc_by),
+    num_rem_by = @backingInt(lir.LowLevel.num_rem_by),
+    num_mod_by = @backingInt(lir.LowLevel.num_mod_by),
+    num_shift_left_by = @backingInt(lir.LowLevel.num_shift_left_by),
+    num_shift_right_by = @backingInt(lir.LowLevel.num_shift_right_by),
+    num_shift_right_zf_by = @backingInt(lir.LowLevel.num_shift_right_zf_by),
+    num_bitwise_and = @backingInt(lir.LowLevel.num_bitwise_and),
+    num_bitwise_or = @backingInt(lir.LowLevel.num_bitwise_or),
+    num_bitwise_xor = @backingInt(lir.LowLevel.num_bitwise_xor),
+    num_is_eq = @backingInt(lir.LowLevel.num_is_eq),
+    num_is_gt = @backingInt(lir.LowLevel.num_is_gt),
+    num_is_gte = @backingInt(lir.LowLevel.num_is_gte),
+    num_is_lt = @backingInt(lir.LowLevel.num_is_lt),
+    num_is_lte = @backingInt(lir.LowLevel.num_is_lte),
 };
 
 const BitCountOp = enum(u16) {
-    num_count_one_bits = @intFromEnum(lir.LowLevel.num_count_one_bits),
-    num_count_leading_zero_bits = @intFromEnum(lir.LowLevel.num_count_leading_zero_bits),
-    num_count_trailing_zero_bits = @intFromEnum(lir.LowLevel.num_count_trailing_zero_bits),
+    num_count_one_bits = @backingInt(lir.LowLevel.num_count_one_bits),
+    num_count_leading_zero_bits = @backingInt(lir.LowLevel.num_count_leading_zero_bits),
+    num_count_trailing_zero_bits = @backingInt(lir.LowLevel.num_count_trailing_zero_bits),
 };
 
 /// `host_drop` names a generated adapter's signature, not an operation the
 /// backend performs, so an RC statement can never carry it.
 fn hostDropInRcStatement() noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant("Dev/codegen invariant violated: RC statement used a host-shaped drop adapter", .{});
     }
     unreachable;
@@ -164,7 +164,7 @@ const RcHelperVariant = struct {
     /// `RcHelperKey.encode` occupies bits 0..33, so the atomicity bit is
     /// placed above it.
     fn encode(self: RcHelperVariant) u64 {
-        return (@as(u64, @intFromEnum(self.atomicity)) << 34) | self.key.encode();
+        return (@as(u64, @backingInt(self.atomicity)) << 34) | self.key.encode();
     }
 };
 
@@ -175,7 +175,7 @@ pub fn staticDataRcHelperKey(key: RcHelperKey) u64 {
 
 fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
     return (@as(u64, 1) << 63) |
-        (@as(u64, @intCast(@intFromEnum(capture_layout))) << 32) |
+        (@as(u64, @intCast(@backingInt(capture_layout))) << 32) |
         @as(u64, desc_field_offset);
 }
 
@@ -185,14 +185,14 @@ fn boxyCaptureDropKey(capture_layout: layout.Idx, desc_field_offset: u32) u64 {
 /// by its capture layout's digest and descriptor field offset.
 pub fn compiledRcHelperSymbolName(allocator: std.mem.Allocator, layout_store: *const layout.Store, cache_key: u64) std.mem.Allocator.Error![]u8 {
     if ((cache_key >> 63) != 0) {
-        const capture_layout: layout.Idx = @enumFromInt(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff)));
+        const capture_layout: layout.Idx = @fromBackingInt(@intCast(@as(u32, @intCast((cache_key >> 32) & 0x7fff_ffff))));
         const desc_field_offset: u32 = @truncate(cache_key);
         const hex = layout.digestSymbolHex(try layout_store.contentDigest(capture_layout));
         return std.fmt.allocPrint(allocator, "roc__rc_boxy_capture_drop_{s}_{d}", .{ &hex, desc_field_offset });
     }
     const variant = RcHelperVariant{
         .key = RcHelperKey.decode(cache_key & 0x3_ffff_ffff),
-        .atomicity = @enumFromInt(@as(u1, @intCast((cache_key >> 34) & 1))),
+        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((cache_key >> 34) & 1)))),
     };
     return layout.rc_helper.symbolName(allocator, layout_store, variant.key, switch (variant.atomicity) {
         .atomic => .atomic,
@@ -216,7 +216,7 @@ const BuiltinListAbi = struct {
 /// 0 says argument 0's runtime uniqueness check is redundant, `.Immutable`
 /// (checked) otherwise.
 fn updateModeImmForArg0(unique_args: u64) i64 {
-    return @intFromEnum(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+    return @backingInt(if ((unique_args & 1) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
 /// Destination width in bits for a Dec-to-integer truncating conversion, or
@@ -245,7 +245,7 @@ fn decToIntTruncBits(op: lir.LowLevel) ?u8 {
 }
 
 fn updateModeImmForArg1(unique_args: u64) i64 {
-    return @intFromEnum(if ((unique_args & 2) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
+    return @backingInt(if ((unique_args & 2) != 0) builtins.utils.UpdateMode.InPlace else builtins.utils.UpdateMode.Immutable);
 }
 
 fn builtinInternalListAbi(ls: *const LayoutStore, comptime _: []const u8, list_layout_idx: layout.Idx) BuiltinListAbi {
@@ -448,8 +448,8 @@ pub const BoxyBuiltinFn = enum {
     /// must match a `pub fn` in `src/eval/boxy_abi.zig`.
     /// The wrapper whose C symbol is `name`, or null.
     pub fn fromSymbolName(name: []const u8) ?BoxyBuiltinFn {
-        inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
-            const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+        inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
+            const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
             if (std.mem.eql(u8, name, comptime boxy_fn.symbolName())) return boxy_fn;
         }
         return null;
@@ -564,10 +564,10 @@ pub const BoxyBuiltinFn = enum {
 };
 
 /// Number of boxy runtime C-ABI wrappers the dev backend can call.
-pub const boxy_builtin_fn_count = @typeInfo(BoxyBuiltinFn).@"enum".fields.len;
+pub const boxy_builtin_fn_count = @typeInfo(BoxyBuiltinFn).@"enum".field_names.len;
 
 /// Native addresses of the boxy runtime C-ABI wrappers, indexed by
-/// `@intFromEnum(BoxyBuiltinFn)`. In-process (native execution) callers supply
+/// `@backingInt(BoxyBuiltinFn)`. In-process (native execution) callers supply
 /// this so the dev backend can call the wrappers by absolute address; `eval`
 /// populates it because the `backend` module cannot reference `eval.boxy_abi`
 /// directly.
@@ -599,7 +599,7 @@ fn wrapStrConcat(out: *RocStr, a_bytes: ?[*]u8, a_len: usize, a_cap: usize, b_by
     const a = RocStr{ .bytes = a_bytes, .length = a_len, .capacity_or_alloc_ptr = a_cap };
     const b = RocStr{ .bytes = b_bytes, .length = b_len, .capacity_or_alloc_ptr = b_cap };
 
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const debugAssertValidStr = struct {
             fn check(label: []const u8, s: RocStr) void {
                 if (s.isSmallStr()) return;
@@ -1960,11 +1960,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // Remove roc_ops and result_ptr registers from callee_saved_available
             // so the register allocator never uses them as temporaries.
             if (comptime target.toCpuArch() == .aarch64) {
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X20));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X19));
             } else {
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.R12));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX));
             }
 
             const root_proc = try self.compiledProcForId(root_proc_id);
@@ -2076,35 +2076,35 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.codegen.free_general &= ~@as(u32, 0b11);
                 // Reserve X19 (result pointer) and X20 (RocOps pointer) - both callee-saved
                 // Must mark as used so they get saved/restored in prologue/epilogue
-                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x19_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit);
-                self.codegen.callee_saved_used |= @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                self.codegen.callee_saved_used |= @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
+                self.codegen.callee_saved_used |= @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
             } else if (comptime target.isWindows()) {
                 // Windows x64: Clear RCX and RDX from the free register mask
-                const rcx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RCX);
-                const rdx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDX);
+                const rcx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RCX);
+                const rdx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RDX);
                 self.codegen.free_general &= ~(rcx_bit | rdx_bit);
                 // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
                 // Must mark as used so they get saved/restored in prologue/epilogue
-                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
             } else {
                 // System V (Linux, macOS): Clear RDI and RSI from the free register mask
-                const rdi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RDI);
-                const rsi_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RSI);
+                const rdi_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RDI);
+                const rsi_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RSI);
                 self.codegen.free_general &= ~(rdi_bit | rsi_bit);
                 // Reserve RBX (result pointer) and R12 (RocOps pointer) - both callee-saved
                 // Must mark as used so they get saved/restored in prologue/epilogue
-                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                self.codegen.callee_saved_used |= @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                self.codegen.callee_saved_used |= @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
             }
         }
 
@@ -2117,7 +2117,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn localKey(local: LocalId) u32 {
-            return @intFromEnum(local);
+            return @backingInt(local);
         }
 
         fn valueLayout(self: *Self, local: LocalId) layout.Idx {
@@ -2351,13 +2351,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // Generate element value
                     const elem_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const ret_layout_val = ls.getLayout(ll.ret_layout);
-                    if (builtin.mode == .Debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
+                    if (builtin.mode == .debug and ret_layout_val.tag != .list and ret_layout_val.tag != .list_of_zst) {
                         base.invariant(
                             "LIR/codegen invariant violated: list_append ret_layout must be list/list_of_zst, got {s}",
                             .{@tagName(ret_layout_val.tag)},
                         );
                     }
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         const list_layout_idx = self.valueLayout(GuardedList.at(args, 0));
                         const list_layout_val = ls.getLayout(list_layout_idx);
                         switch (list_layout_val.tag) {
@@ -2552,7 +2552,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .tag_union,
                         .ptr,
                         => {
-                            if (builtin.mode == .Debug) {
+                            if (builtin.mode == .debug) {
                                 base.invariant(
                                     "LIR/codegen invariant violated: list_get argument must have list/list_of_zst layout, got {s}",
                                     .{@tagName(list_layout_val.tag)},
@@ -2562,7 +2562,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
                     };
 
-                    if (builtin.mode == .Debug and ll.ret_layout != list_elem_layout) {
+                    if (builtin.mode == .debug and ll.ret_layout != list_elem_layout) {
                         const ret_layout_val = ls.getLayout(ll.ret_layout);
                         const elem_layout_val = ls.getLayout(list_elem_layout);
                         const ret_list_like = ret_layout_val.tag == .list or ret_layout_val.tag == .list_of_zst;
@@ -2573,7 +2573,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         if (!(ret_list_like and elem_list_like) and !(ret_box_like and elem_box_like)) {
                             base.invariant(
                                 "LIR/codegen invariant violated: list_get_unsafe ret/elem layout mismatch (ret={d} {s}, elem={d} {s})",
-                                .{ @intFromEnum(ll.ret_layout), @tagName(ret_layout_val.tag), @intFromEnum(list_elem_layout), @tagName(elem_layout_val.tag) },
+                                .{ @backingInt(ll.ret_layout), @tagName(ret_layout_val.tag), @backingInt(list_elem_layout), @tagName(elem_layout_val.tag) },
                             );
                         }
                     }
@@ -2833,7 +2833,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addThreeWordMemArg(base_reg, list_a_off);
                         try builder.addThreeWordMemArg(base_reg, list_b_off);
                         try addListElemAbiArgs(&builder, list_abi);
-                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(@intCast(ll.unique_args & 0b11));
 
@@ -3094,7 +3094,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
@@ -3820,7 +3820,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_concat => {
                     if (args.len != 2) unreachable;
                     const a_loc, const b_loc = try self.emitValueLocals(2, args);
-                    if (builtin.mode == .Debug and (a_loc != .stack_str or b_loc != .stack_str)) {
+                    if (builtin.mode == .debug and (a_loc != .stack_str or b_loc != .stack_str)) {
                         base.invariant(
                             "LIR/codegen invariant violated: str_concat expects stack_str args, got lhs={s} rhs={s}",
                             .{ @tagName(a_loc), @tagName(b_loc) },
@@ -4218,13 +4218,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         const tag_size = tu_data.size.get(self.layout_store.targetUsize());
                         const disc_offset = tu_data.discriminant_offset.get(self.layout_store.targetUsize());
                         const disc_size = tu_data.discriminant_size;
-                        if (builtin.mode == .Debug and resolved_index_size != 8) {
+                        if (builtin.mode == .debug and resolved_index_size != 8) {
                             base.invariant(
                                 "LIR/codegen invariant violated: str_from_utf8 index size {d} != 8",
                                 .{resolved_index_size},
                             );
                         }
-                        if (builtin.mode == .Debug and resolved_problem_size != 1) {
+                        if (builtin.mode == .debug and resolved_problem_size != 1) {
                             base.invariant(
                                 "LIR/codegen invariant violated: str_from_utf8 problem size {d} != 1",
                                 .{resolved_problem_size},
@@ -4336,7 +4336,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                         try builder.addLeaArg(base_reg, result_offset + value_field_offset);
-                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
@@ -4405,7 +4405,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addMemArg(base_reg, index_off);
                         try builder.addLeaArg(base_reg, elem_off);
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
@@ -4424,7 +4424,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
                         try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
                         if (ll.op == .list_set_in_place_unsafe) {
-                            try builder.addImmArg(@intFromEnum(builtins.utils.UpdateMode.InPlace));
+                            try builder.addImmArg(@backingInt(builtins.utils.UpdateMode.InPlace));
                         } else {
                             try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                         }
@@ -4465,7 +4465,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try addListElemAbiArgs(&builder, list_abi);
                         try builder.addMemArg(base_reg, index_1_off);
                         try builder.addMemArg(base_reg, index_2_off);
-                        try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                        try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                         try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                         try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
 
@@ -4746,7 +4746,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const lhs_layout = self.valueLayout(GuardedList.at(args, 0));
                     const rhs_layout = self.valueLayout(GuardedList.at(args, 1));
                     if (lhs_layout != rhs_layout) {
-                        if (builtin.mode == .Debug) {
+                        if (builtin.mode == .debug) {
                             base.invariant(
                                 "LIR/codegen invariant violated: num_abs_diff argument layouts differ: lhs={s} rhs={s}",
                                 .{ @tagName(lhs_layout), @tagName(rhs_layout) },
@@ -4833,7 +4833,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const is_float = operand_layout == .f32 or operand_layout == .f64;
                     const is_i128_op = operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128;
                     if (is_float and CheckedArithmetic.classify(ll.op) != null) {
-                        if (builtin.mode == .Debug) {
+                        if (builtin.mode == .debug) {
                             base.invariant(
                                 "LIR/codegen invariant violated: checked integer op {s} used float layout {s}",
                                 .{ @tagName(ll.op), @tagName(operand_layout) },
@@ -6059,9 +6059,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateSimdRearrange(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const RearrangeOp = enum(u16) {
-                simd_even_lanes = @intFromEnum(lir.LowLevel.simd_even_lanes),
-                simd_odd_lanes = @intFromEnum(lir.LowLevel.simd_odd_lanes),
-                simd_reverse_lanes = @intFromEnum(lir.LowLevel.simd_reverse_lanes),
+                simd_even_lanes = @backingInt(lir.LowLevel.simd_even_lanes),
+                simd_odd_lanes = @backingInt(lir.LowLevel.simd_odd_lanes),
+                simd_reverse_lanes = @backingInt(lir.LowLevel.simd_reverse_lanes),
             };
             const op = narrowEnum(RearrangeOp, ll.op);
             const lhs_local = GuardedList.at(args, 0);
@@ -6244,11 +6244,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateSimdMultiply(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const MultiplyOp = enum(u16) {
-                simd_mul_wrap = @intFromEnum(lir.LowLevel.simd_mul_wrap),
-                simd_mul_high = @intFromEnum(lir.LowLevel.simd_mul_high),
-                simd_mul_q15_sat = @intFromEnum(lir.LowLevel.simd_mul_q15_sat),
-                simd_mul_wide_lo = @intFromEnum(lir.LowLevel.simd_mul_wide_lo),
-                simd_mul_wide_hi = @intFromEnum(lir.LowLevel.simd_mul_wide_hi),
+                simd_mul_wrap = @backingInt(lir.LowLevel.simd_mul_wrap),
+                simd_mul_high = @backingInt(lir.LowLevel.simd_mul_high),
+                simd_mul_q15_sat = @backingInt(lir.LowLevel.simd_mul_q15_sat),
+                simd_mul_wide_lo = @backingInt(lir.LowLevel.simd_mul_wide_lo),
+                simd_mul_wide_hi = @backingInt(lir.LowLevel.simd_mul_wide_hi),
             };
             const op = narrowEnum(MultiplyOp, ll.op);
             const lhs_local = GuardedList.at(args, 0);
@@ -6341,11 +6341,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateSimdWidthChange(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const WidthChangeOp = enum(u16) {
-                simd_widen_lo = @intFromEnum(lir.LowLevel.simd_widen_lo),
-                simd_widen_hi = @intFromEnum(lir.LowLevel.simd_widen_hi),
-                simd_pairwise_add_widen = @intFromEnum(lir.LowLevel.simd_pairwise_add_widen),
-                simd_narrow_wrap = @intFromEnum(lir.LowLevel.simd_narrow_wrap),
-                simd_narrow_sat = @intFromEnum(lir.LowLevel.simd_narrow_sat),
+                simd_widen_lo = @backingInt(lir.LowLevel.simd_widen_lo),
+                simd_widen_hi = @backingInt(lir.LowLevel.simd_widen_hi),
+                simd_pairwise_add_widen = @backingInt(lir.LowLevel.simd_pairwise_add_widen),
+                simd_narrow_wrap = @backingInt(lir.LowLevel.simd_narrow_wrap),
+                simd_narrow_sat = @backingInt(lir.LowLevel.simd_narrow_sat),
             };
             const op = narrowEnum(WidthChangeOp, ll.op);
             const lhs_local = GuardedList.at(args, 0);
@@ -6470,9 +6470,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateSimdDot(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const DotOp = enum(u16) {
-                simd_dot_pairs = @intFromEnum(lir.LowLevel.simd_dot_pairs),
-                simd_dot_pairs_sat = @intFromEnum(lir.LowLevel.simd_dot_pairs_sat),
-                simd_sad = @intFromEnum(lir.LowLevel.simd_sad),
+                simd_dot_pairs = @backingInt(lir.LowLevel.simd_dot_pairs),
+                simd_dot_pairs_sat = @backingInt(lir.LowLevel.simd_dot_pairs_sat),
+                simd_sad = @backingInt(lir.LowLevel.simd_sad),
             };
             const op = narrowEnum(DotOp, ll.op);
             const lhs_local = GuardedList.at(args, 0);
@@ -7575,8 +7575,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, result_offset);
             try builder.addImmArg(op_index);
-            try builder.addImmArg(@intFromEnum(arg_kind));
-            try builder.addImmArg(@intFromEnum(ret_kind));
+            try builder.addImmArg(@backingInt(arg_kind));
+            try builder.addImmArg(@backingInt(ret_kind));
             try builder.addLeaArg(frame_ptr, args_offset);
             try self.callBuiltin(&builder, .simd_eval);
 
@@ -7681,7 +7681,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     // and emitting it in the legacy encoding would produce a
                     // binary that still requires SSSE3 or later. Fail rather
                     // than encode it.
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "baseline codegen invariant violated: SIMD op needs an opcode above the x86-64 baseline",
                             .{},
@@ -7718,26 +7718,26 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             protected_mask: u32,
         ) Allocator.Error!void {
             const BasicSimdOp = enum(u16) {
-                simd_add_wrap = @intFromEnum(lir.LowLevel.simd_add_wrap),
-                simd_sub_wrap = @intFromEnum(lir.LowLevel.simd_sub_wrap),
-                simd_add_sat = @intFromEnum(lir.LowLevel.simd_add_sat),
-                simd_sub_sat = @intFromEnum(lir.LowLevel.simd_sub_sat),
-                simd_neg_wrap = @intFromEnum(lir.LowLevel.simd_neg_wrap),
-                simd_abs_wrap = @intFromEnum(lir.LowLevel.simd_abs_wrap),
-                simd_min = @intFromEnum(lir.LowLevel.simd_min),
-                simd_max = @intFromEnum(lir.LowLevel.simd_max),
-                simd_abs_diff = @intFromEnum(lir.LowLevel.simd_abs_diff),
-                simd_avg_rounded = @intFromEnum(lir.LowLevel.simd_avg_rounded),
-                simd_and = @intFromEnum(lir.LowLevel.simd_and),
-                simd_or = @intFromEnum(lir.LowLevel.simd_or),
-                simd_xor = @intFromEnum(lir.LowLevel.simd_xor),
-                simd_not = @intFromEnum(lir.LowLevel.simd_not),
-                simd_bit_select = @intFromEnum(lir.LowLevel.simd_bit_select),
-                simd_eq_lanes = @intFromEnum(lir.LowLevel.simd_eq_lanes),
-                simd_gt_lanes = @intFromEnum(lir.LowLevel.simd_gt_lanes),
-                simd_gte_lanes = @intFromEnum(lir.LowLevel.simd_gte_lanes),
-                simd_interleave_lo = @intFromEnum(lir.LowLevel.simd_interleave_lo),
-                simd_interleave_hi = @intFromEnum(lir.LowLevel.simd_interleave_hi),
+                simd_add_wrap = @backingInt(lir.LowLevel.simd_add_wrap),
+                simd_sub_wrap = @backingInt(lir.LowLevel.simd_sub_wrap),
+                simd_add_sat = @backingInt(lir.LowLevel.simd_add_sat),
+                simd_sub_sat = @backingInt(lir.LowLevel.simd_sub_sat),
+                simd_neg_wrap = @backingInt(lir.LowLevel.simd_neg_wrap),
+                simd_abs_wrap = @backingInt(lir.LowLevel.simd_abs_wrap),
+                simd_min = @backingInt(lir.LowLevel.simd_min),
+                simd_max = @backingInt(lir.LowLevel.simd_max),
+                simd_abs_diff = @backingInt(lir.LowLevel.simd_abs_diff),
+                simd_avg_rounded = @backingInt(lir.LowLevel.simd_avg_rounded),
+                simd_and = @backingInt(lir.LowLevel.simd_and),
+                simd_or = @backingInt(lir.LowLevel.simd_or),
+                simd_xor = @backingInt(lir.LowLevel.simd_xor),
+                simd_not = @backingInt(lir.LowLevel.simd_not),
+                simd_bit_select = @backingInt(lir.LowLevel.simd_bit_select),
+                simd_eq_lanes = @backingInt(lir.LowLevel.simd_eq_lanes),
+                simd_gt_lanes = @backingInt(lir.LowLevel.simd_gt_lanes),
+                simd_gte_lanes = @backingInt(lir.LowLevel.simd_gte_lanes),
+                simd_interleave_lo = @backingInt(lir.LowLevel.simd_interleave_lo),
+                simd_interleave_hi = @backingInt(lir.LowLevel.simd_interleave_hi),
             };
             const basic_op = narrowEnum(BasicSimdOp, op);
             if (comptime target.toCpuArch() == .x86_64) {
@@ -7999,7 +7999,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addRegArg(vector.high);
             try builder.addThreeWordMemArg(frame_ptr, list_offset);
             try builder.addRegArg(index_reg);
-            try builder.addImmArg(@intFromEnum(builtins.utils.UpdateMode.Immutable));
+            try builder.addImmArg(@backingInt(builtins.utils.UpdateMode.Immutable));
             try self.callBuiltin(&builder, .simd_store_16);
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
@@ -8023,24 +8023,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn generateHasherLowLevel(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const HasherOp = enum(u16) {
-                dict_pseudo_seed = @intFromEnum(lir.LowLevel.dict_pseudo_seed),
-                hasher_finish = @intFromEnum(lir.LowLevel.hasher_finish),
-                hasher_write_bool = @intFromEnum(lir.LowLevel.hasher_write_bool),
-                hasher_write_u8 = @intFromEnum(lir.LowLevel.hasher_write_u8),
-                hasher_write_u16 = @intFromEnum(lir.LowLevel.hasher_write_u16),
-                hasher_write_u32 = @intFromEnum(lir.LowLevel.hasher_write_u32),
-                hasher_write_u64 = @intFromEnum(lir.LowLevel.hasher_write_u64),
-                hasher_write_i8 = @intFromEnum(lir.LowLevel.hasher_write_i8),
-                hasher_write_i16 = @intFromEnum(lir.LowLevel.hasher_write_i16),
-                hasher_write_i32 = @intFromEnum(lir.LowLevel.hasher_write_i32),
-                hasher_write_i64 = @intFromEnum(lir.LowLevel.hasher_write_i64),
-                hasher_write_f32 = @intFromEnum(lir.LowLevel.hasher_write_f32),
-                hasher_write_f64 = @intFromEnum(lir.LowLevel.hasher_write_f64),
-                hasher_write_u128 = @intFromEnum(lir.LowLevel.hasher_write_u128),
-                hasher_write_i128 = @intFromEnum(lir.LowLevel.hasher_write_i128),
-                hasher_write_dec = @intFromEnum(lir.LowLevel.hasher_write_dec),
-                hasher_write_bytes = @intFromEnum(lir.LowLevel.hasher_write_bytes),
-                hasher_write_str = @intFromEnum(lir.LowLevel.hasher_write_str),
+                dict_pseudo_seed = @backingInt(lir.LowLevel.dict_pseudo_seed),
+                hasher_finish = @backingInt(lir.LowLevel.hasher_finish),
+                hasher_write_bool = @backingInt(lir.LowLevel.hasher_write_bool),
+                hasher_write_u8 = @backingInt(lir.LowLevel.hasher_write_u8),
+                hasher_write_u16 = @backingInt(lir.LowLevel.hasher_write_u16),
+                hasher_write_u32 = @backingInt(lir.LowLevel.hasher_write_u32),
+                hasher_write_u64 = @backingInt(lir.LowLevel.hasher_write_u64),
+                hasher_write_i8 = @backingInt(lir.LowLevel.hasher_write_i8),
+                hasher_write_i16 = @backingInt(lir.LowLevel.hasher_write_i16),
+                hasher_write_i32 = @backingInt(lir.LowLevel.hasher_write_i32),
+                hasher_write_i64 = @backingInt(lir.LowLevel.hasher_write_i64),
+                hasher_write_f32 = @backingInt(lir.LowLevel.hasher_write_f32),
+                hasher_write_f64 = @backingInt(lir.LowLevel.hasher_write_f64),
+                hasher_write_u128 = @backingInt(lir.LowLevel.hasher_write_u128),
+                hasher_write_i128 = @backingInt(lir.LowLevel.hasher_write_i128),
+                hasher_write_dec = @backingInt(lir.LowLevel.hasher_write_dec),
+                hasher_write_bytes = @backingInt(lir.LowLevel.hasher_write_bytes),
+                hasher_write_str = @backingInt(lir.LowLevel.hasher_write_str),
             };
             switch (narrowEnum(HasherOp, ll.op)) {
                 .dict_pseudo_seed => {
@@ -8076,7 +8076,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const seed_reg = try self.hasherStateReg(GuardedList.at(args, 0));
                     const value_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const value_reg = try self.ensureInGeneralReg(value_loc);
-                    return try self.callHasherWriteU64(seed_reg, value_reg, @intFromEnum(lir.hasherDomain(ll.op)), lir.hasherU64Width(ll.op));
+                    return try self.callHasherWriteU64(seed_reg, value_reg, @backingInt(lir.hasherDomain(ll.op)), lir.hasherU64Width(ll.op));
                 },
                 .hasher_write_f32 => {
                     if (args.len != 2) unreachable;
@@ -8100,7 +8100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const seed_reg = try self.hasherStateReg(GuardedList.at(args, 0));
                     const value_loc = try self.emitValueLocal(GuardedList.at(args, 1));
                     const parts = try self.getI128Parts(value_loc, if (ll.op == .hasher_write_u128) .unsigned else .signed);
-                    return try self.callHasherWriteU128(seed_reg, parts, @intFromEnum(lir.hasherDomain(ll.op)));
+                    return try self.callHasherWriteU128(seed_reg, parts, @backingInt(lir.hasherDomain(ll.op)));
                 },
                 .hasher_write_bytes => {
                     if (args.len != 2) unreachable;
@@ -8110,7 +8110,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
                     try builder.addRegArg(seed_reg);
-                    try builder.addImmArg(@intCast(@intFromEnum(builtins.hash.HasherDomain.bytes)));
+                    try builder.addImmArg(@intCast(@backingInt(builtins.hash.HasherDomain.bytes)));
                     try builder.addMemArg(frame_ptr, list_off);
                     try builder.addMemArg(frame_ptr, list_off + 8);
                     try self.callBuiltin(&builder, LowLevelBuiltins.hasherOp(.hasher_write_bytes));
@@ -8136,14 +8136,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn generateCryptoLowLevel(self: *Self, ll: anytype, args: anytype) Allocator.Error!ValueLocation {
             const Arity = enum { zero, one, two };
             const CryptoOp = enum(u16) {
-                crypto_sha256_hash_bytes = @intFromEnum(lir.LowLevel.crypto_sha256_hash_bytes),
-                crypto_sha256_hasher_finish = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_finish),
-                crypto_blake3_hash_bytes = @intFromEnum(lir.LowLevel.crypto_blake3_hash_bytes),
-                crypto_blake3_hasher_finish = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_finish),
-                crypto_sha256_hasher_empty = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_empty),
-                crypto_blake3_hasher_empty = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_empty),
-                crypto_sha256_hasher_write = @intFromEnum(lir.LowLevel.crypto_sha256_hasher_write),
-                crypto_blake3_hasher_write = @intFromEnum(lir.LowLevel.crypto_blake3_hasher_write),
+                crypto_sha256_hash_bytes = @backingInt(lir.LowLevel.crypto_sha256_hash_bytes),
+                crypto_sha256_hasher_finish = @backingInt(lir.LowLevel.crypto_sha256_hasher_finish),
+                crypto_blake3_hash_bytes = @backingInt(lir.LowLevel.crypto_blake3_hash_bytes),
+                crypto_blake3_hasher_finish = @backingInt(lir.LowLevel.crypto_blake3_hasher_finish),
+                crypto_sha256_hasher_empty = @backingInt(lir.LowLevel.crypto_sha256_hasher_empty),
+                crypto_blake3_hasher_empty = @backingInt(lir.LowLevel.crypto_blake3_hasher_empty),
+                crypto_sha256_hasher_write = @backingInt(lir.LowLevel.crypto_sha256_hasher_write),
+                crypto_blake3_hasher_write = @backingInt(lir.LowLevel.crypto_blake3_hasher_write),
             };
             const arity: Arity = switch (narrowEnum(CryptoOp, ll.op)) {
                 .crypto_sha256_hash_bytes,
@@ -8607,7 +8607,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, start_slot);
                 try builder.addMemArg(frame_ptr, len_slot);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_sublist);
@@ -8646,7 +8646,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // For { start : U64, len : U64 }, that means index 0 = len and index 1 = start.
             const len_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 0));
             const start_field_off: i32 = @intCast(ls.getStructFieldOffsetByOriginalIndex(record_idx, 1));
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 const sorted_fields = ls.struct_fields.sliceRange(ls.getStructData(record_idx).getFields());
                 if (sorted_fields.len != 2) {
                     base.invariant(
@@ -8699,7 +8699,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, record_off + start_field_off);
                 try builder.addMemArg(frame_ptr, record_off + len_field_off);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_sublist);
@@ -8742,7 +8742,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try addListElemAbiArgs(&builder, list_abi);
                 try builder.addImmArg(0);
                 try builder.addImmArg(0);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_sublist);
@@ -8785,7 +8785,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
                 try addListElemAbiArgs(&builder, list_abi);
                 try builder.addMemArg(frame_ptr, index_off);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_drop_at);
@@ -9065,7 +9065,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(base_reg, result_offset);
                 try builder.addThreeWordMemArg(base_reg, list_off);
                 try addListElemAbiArgs(&builder, list_abi);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(base_reg, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_reverse);
@@ -9114,7 +9114,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(1);
                 try builder.addImmArg(0);
                 try builder.addImmArg(0);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_sort_with);
@@ -9129,7 +9129,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addMemArg(frame_ptr, callable_off);
             try addListElemAbiArgs(&builder, list_abi);
             try addListElemRcArgs(&builder, list_abi, elem_incref_reg, elem_decref_reg);
-            try builder.addImmArg(@intFromEnum(list_abi.elem_layout_idx orelse unreachable));
+            try builder.addImmArg(@backingInt(list_abi.elem_layout_idx orelse unreachable));
             try builder.addImmArg(0);
             try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
             try self.callBoxyBuiltin(&builder, .list_sort_with);
@@ -9160,7 +9160,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addImmArg(@intCast(list_abi.alignment_bytes));
                 try builder.addMemArg(frame_ptr, spare_off);
                 try builder.addImmArg(@intCast(list_abi.elem_size_align.size));
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, boxy_fn);
@@ -9205,7 +9205,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try builder.addLeaArg(frame_ptr, result_offset);
                 try builder.addThreeWordMemArg(frame_ptr, list_off);
                 try addListElemAbiArgs(&builder, list_abi);
-                try builder.addImmArg(@intFromEnum(boxy_elem.elem_layout));
+                try builder.addImmArg(@backingInt(boxy_elem.elem_layout));
                 try builder.addMemArg(frame_ptr, boxy_elem.desc_slot);
                 try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
                 try self.callBoxyBuiltin(&builder, .list_release_excess_capacity);
@@ -9258,12 +9258,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn nativeStaticDataAddress(self: *const Self, id: lir.LIR.StaticDataId) usize {
-            const index: usize = @intFromEnum(id);
+            const index: usize = @backingInt(id);
             if (index < self.native_static_data.len) return self.native_static_data[index];
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "Dev/codegen invariant violated: static data value {d} has no native address",
-                    .{@intFromEnum(id)},
+                    .{@backingInt(id)},
                 );
             }
             unreachable;
@@ -9281,10 +9281,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 base.invariant(
                     "generateLookup: missing local location for local={d} layout={d} current_proc={d} current_stmt={d} current_stmt_tag={s}",
                     .{
-                        @intFromEnum(local),
-                        @intFromEnum(layout_idx),
+                        @backingInt(local),
+                        @backingInt(layout_idx),
                         if (self.current_proc_name) |sym| sym.raw() else std.math.maxInt(u64),
-                        if (self.current_stmt_id) |stmt_id| @intFromEnum(stmt_id) else std.math.maxInt(u32),
+                        if (self.current_stmt_id) |stmt_id| @backingInt(stmt_id) else std.math.maxInt(u32),
                         if (self.current_stmt_id) |stmt_id|
                             @tagName(self.store.getCFStmt(stmt_id))
                         else
@@ -9379,7 +9379,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             local: LocalId,
             stable_loc: ValueLocation,
         ) Allocator.Error!void {
-            if (comptime builtin.mode != .Debug) return;
+            if (comptime builtin.mode != .debug) return;
 
             const local_layout = self.localLayout(local);
             const layout_val = self.layout_store.getLayout(local_layout);
@@ -9400,7 +9400,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .noreturn,
                 => base.invariant(
                     "LIR/codegen invariant violated: box local {d} did not lower to a stack stable location",
-                    .{@intFromEnum(local)},
+                    .{@backingInt(local)},
                 ),
             };
 
@@ -9429,7 +9429,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             local: LocalId,
             stable_loc: ValueLocation,
         ) Allocator.Error!void {
-            if (comptime builtin.mode != .Debug) return;
+            if (comptime builtin.mode != .debug) return;
 
             const runtime_layout = self.runtimeRepresentationLayoutIdx(self.localLayout(local));
             if (runtime_layout != .str) return;
@@ -9449,7 +9449,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .noreturn,
                 => base.invariant(
                     "LIR/codegen invariant violated: str local {d} did not lower to a stack_str stable location",
-                    .{@intFromEnum(local)},
+                    .{@backingInt(local)},
                 ),
             };
 
@@ -9540,17 +9540,17 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             const identity = self.current_proc_identity orelse
-                base.invariant("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@intFromEnum(local)});
+                base.invariant("LIR/codegen invariant violated: Debug check on local {d} outside a proc", .{@backingInt(local)});
             const frame = self.store.getLocalSpan(self.current_proc_frame_locals);
             var frame_index: u32 = std.math.maxInt(u32);
             var low: usize = 0;
             var high: usize = GuardedList.borrowLen(frame);
             while (low < high) {
                 const middle = low + (high - low) / 2;
-                const candidate = @intFromEnum(GuardedList.at(frame, middle));
-                if (candidate < @intFromEnum(local)) {
+                const candidate = @backingInt(GuardedList.at(frame, middle));
+                if (candidate < @backingInt(local)) {
                     low = middle + 1;
-                } else if (candidate > @intFromEnum(local)) {
+                } else if (candidate > @backingInt(local)) {
                     high = middle;
                 } else {
                     frame_index = @intCast(middle);
@@ -9559,8 +9559,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intFromEnum(kind));
-            try builder.addImmArg(@intFromEnum(reason));
+            try builder.addImmArg(@backingInt(kind));
+            try builder.addImmArg(@backingInt(reason));
             try builder.addImmArg(frame_index);
             try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[0..8], .big)));
             try builder.addImmArg(@bitCast(std.mem.readInt(u64, identity.bytes[8..16], .big)));
@@ -9621,7 +9621,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             .i128, .dec => .signed,
                             .bool, .str, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .opaque_ptr, .zst, .f32, .f64, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
                                 "LirCodeGen invariant violated: stack_i128 stable location used for non-wide layout {d}",
-                                .{@intFromEnum(runtime_layout_idx)},
+                                .{@backingInt(runtime_layout_idx)},
                             ),
                         },
                     );
@@ -10442,7 +10442,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u64 => try self.emitSetCond(flag_reg, if (operation == .add) condUnsignedAddOverflow() else condUnsignedSubOverflow()),
                 .i64 => try self.emitSetCond(flag_reg, condOverflow()),
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
-                    if (builtin.mode == .Debug) std.debug.assert(!is_unsigned or operand_layout == .u128);
+                    if (builtin.mode == .debug) std.debug.assert(!is_unsigned or operand_layout == .u128);
                     unreachable;
                 },
             }
@@ -10555,7 +10555,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     unreachable, message),
                 .i64 => try self.emitCrashOnCond(condOverflow(), message),
                 .bool, .str, .u128, .i128, .f32, .f64, .dec, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         std.debug.assert(!is_unsigned or operand_layout == .u128);
                     }
                 },
@@ -11904,7 +11904,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             operand_layout: layout.Idx,
             op: lir.LowLevel,
         ) Allocator.Error!void {
-            if (builtin.mode == .Debug and operand_layout == .dec) {
+            if (builtin.mode == .debug and operand_layout == .dec) {
                 base.invariant(
                     "LirCodeGen invariant violated: decimal layout reached i128 shift lowering",
                     .{},
@@ -12426,8 +12426,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 list_finish: *EqListState,
             };
 
-            var sfa = std.heap.stackFallback(32 * @sizeOf(EqWork), self.allocator);
-            const wa = sfa.get();
+            var sfa_buffer: [32 * @sizeOf(EqWork)]u8 align(@alignOf(usize)) = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const wa = sfa.allocator();
             var work = std.ArrayList(EqWork).empty;
             defer work.deinit(wa);
 
@@ -13173,7 +13174,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .u8, .u16, .u32, .u64, .u128 => false,
                 .f32, .f64 => return self.generateFloatAbs(val_loc, operand_layout),
                 .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: num_abs unsupported operand layout {s}",
                             .{@tagName(operand_layout)},
@@ -13627,19 +13628,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expected_layout: layout.Idx,
             comptime site: []const u8,
         ) ValueLocation {
-            if (builtin.mode == .Debug and actual_layout != expected_layout) {
+            if (builtin.mode == .debug and actual_layout != expected_layout) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
-                const stmt_id: u32 = if (self.current_stmt_id) |current| @intFromEnum(current) else std.math.maxInt(u32);
+                const stmt_id: u32 = if (self.current_stmt_id) |current| @backingInt(current) else std.math.maxInt(u32);
                 const stmt = if (self.current_stmt_id) |current| self.store.getCFStmt(current) else null;
                 base.invariant(
                     "Dev/codegen invariant violated at {s} stmt {}: actual layout {} ({s}) did not match expected layout {} ({s}); stmt={any}",
                     .{
                         site,
                         stmt_id,
-                        @intFromEnum(actual_layout),
+                        @backingInt(actual_layout),
                         @tagName(actual_layout_val.tag),
-                        @intFromEnum(expected_layout),
+                        @backingInt(expected_layout),
                         @tagName(expected_layout_val.tag),
                         stmt,
                     },
@@ -13797,7 +13798,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expected_layout: layout.Idx,
             comptime site: []const u8,
         ) Allocator.Error!ValueLocation {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 const actual_is_box = actual_layout_val.tag == .box or actual_layout_val.tag == .box_of_zst or actual_layout_val.tag == .erased_box;
@@ -13815,9 +13816,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         "LIR/codegen invariant violated at {s}: explicit nominal reinterpret expected non-list layouts on the same side of layout boxing, got actual={} ({s}) expected={} ({s})",
                         .{
                             site,
-                            @intFromEnum(actual_layout),
+                            @backingInt(actual_layout),
                             @tagName(actual_layout_val.tag),
-                            @intFromEnum(expected_layout),
+                            @backingInt(expected_layout),
                             @tagName(expected_layout_val.tag),
                         },
                     );
@@ -13860,7 +13861,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             expected_layout: layout.Idx,
             comptime site: []const u8,
         ) ValueLocation {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 const actual_layout_val = self.layout_store.getLayout(actual_layout);
                 const expected_layout_val = self.layout_store.getLayout(expected_layout);
                 const actual_is_list = actual_layout_val.tag == .list or actual_layout_val.tag == .list_of_zst;
@@ -13868,7 +13869,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (!actual_is_list or !expected_is_list) {
                     base.invariant(
                         "LIR/codegen invariant violated at {s}: explicit list reinterpret expected list layouts, got actual={} expected={}",
-                        .{ site, @intFromEnum(actual_layout), @intFromEnum(expected_layout) },
+                        .{ site, @backingInt(actual_layout), @backingInt(expected_layout) },
                     );
                 }
             }
@@ -13951,7 +13952,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Get the register used for argument N in the calling convention.
         fn getArgumentRegister(_: *Self, index: u8) GeneralReg {
             if (index >= max_arg_regs) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant(
                         "dev backend ABI invariant violated: argument register index {d} exceeds available register count {d}",
                         .{ index, max_arg_regs },
@@ -14366,8 +14367,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const helper_plan = self.layout_store.rcHelperPlan(helper.key);
             if (helper_plan == .noop) {
-                if (builtin.mode == .Debug) {
-                    base.invariant("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+                if (builtin.mode == .debug) {
+                    base.invariant("LIR/codegen invariant violated: explicit RC statement used noop helper for layout {d}", .{@backingInt(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -14375,8 +14376,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const layout_val = self.layout_store.getLayout(helper.key.layout_idx);
             const value_size = self.layout_store.layoutSizeAlign(layout_val).size;
             if (value_size == 0) {
-                if (builtin.mode == .Debug) {
-                    base.invariant("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@intFromEnum(helper.key.layout_idx)});
+                if (builtin.mode == .debug) {
+                    base.invariant("LIR/codegen invariant violated: explicit RC statement used zero-sized helper layout {d}", .{@backingInt(helper.key.layout_idx)});
                 }
                 unreachable;
             }
@@ -14904,11 +14905,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addRegArg(capture_reg);
-            try builder.addImmArg(@intFromEnum(capture_layout));
+            try builder.addImmArg(@backingInt(capture_layout));
             try builder.addRegArg(desc_reg);
-            try builder.addImmArg(@intFromEnum(RcOp.decref));
+            try builder.addImmArg(@backingInt(RcOp.decref));
             try builder.addImmArg(1);
-            try builder.addImmArg(@intFromEnum(RcAtomicity.atomic));
+            try builder.addImmArg(@backingInt(RcAtomicity.atomic));
             try self.callBoxyBuiltin(&builder, .drop);
 
             self.freeGenerals(.{ desc_reg, capture_reg });
@@ -14951,8 +14952,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (comptime kind == .builtin) {
                 const helper_plan = self.layout_store.rcHelperPlan(payload.key);
                 if (helper_plan == .noop) {
-                    if (builtin.mode == .Debug) {
-                        std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@intFromEnum(payload.key.layout_idx)});
+                    if (builtin.mode == .debug) {
+                        std.debug.panic("attempted to compile noop RC helper for layout {d}", .{@backingInt(payload.key.layout_idx)});
                     }
                     unreachable;
                 }
@@ -15150,7 +15151,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const struct_loc = try self.normalizeValueLocationToLayout(raw_struct_loc, source_layout_idx, base_layout_idx);
             const struct_layout = ls.getLayout(base_layout_idx);
             if (struct_layout.tag != .struct_) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant(
                         "LIR/codegen invariant violated: struct_access expected struct_ layout, got {s} (field_idx={d})",
                         .{ @tagName(struct_layout.tag), access.field_idx },
@@ -15259,7 +15260,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_union,
                 .ptr,
                 => blk: {
-                    if (builtin.mode == .Debug and tpa.payload_idx != 0) {
+                    if (builtin.mode == .debug and tpa.payload_idx != 0) {
                         base.invariant(
                             "LIR/codegen invariant violated: scalar tag payload access requested payload_idx {d}",
                             .{tpa.payload_idx},
@@ -15547,10 +15548,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const box_abi = ls.builtinBoxAbi(s.target_layout);
                     const inner_layout = box_abi.elem_layout;
                     if (inner_layout.tag != .struct_) {
-                        if (builtin.mode == .Debug) {
+                        if (builtin.mode == .debug) {
                             base.invariant(
                                 "LIR/codegen invariant violated: assign_struct target box layout {} did not box a struct",
-                                .{@intFromEnum(s.target_layout)},
+                                .{@backingInt(s.target_layout)},
                             );
                         }
                         unreachable;
@@ -15632,15 +15633,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .tag_union,
                 .ptr,
                 => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: assign_struct target local {d} layout {d} ({s}) is not runtime struct or zst layout; proc={d} stmt={d}",
                             .{
-                                @intFromEnum(s.target),
-                                @intFromEnum(s.target_layout),
+                                @backingInt(s.target),
+                                @backingInt(s.target_layout),
                                 @tagName(target_layout.tag),
                                 if (self.current_proc_name) |name| name.raw() else std.math.maxInt(u64),
-                                if (self.current_stmt_id) |stmt| @intFromEnum(stmt) else std.math.maxInt(u32),
+                                if (self.current_stmt_id) |stmt| @backingInt(stmt) else std.math.maxInt(u32),
                             },
                         );
                     }
@@ -15654,7 +15655,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const union_layout = ls.getLayout(tag.target_layout);
             if (union_layout.tag == .zst) {
                 if (tag.discriminant != 0) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: zero-sized tag layout cannot encode discriminant {d}",
                             .{tag.discriminant},
@@ -15677,7 +15678,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const box_abi = ls.builtinBoxAbi(tag.target_layout);
                 const inner_layout = box_abi.elem_layout;
                 if (inner_layout.tag != .tag_union) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: generateTag expected boxed tag union layout, got boxed {s}",
                             .{@tagName(inner_layout.tag)},
@@ -15700,7 +15701,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const inner_tu_data = ls.getTagUnionData(inner_layout.getTagUnion().idx);
                 const variants = ls.getTagUnionVariants(inner_tu_data);
                 if (@as(usize, tag.variant_index) >= variants.len) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                             .{ tag.variant_index, variants.len },
@@ -15741,7 +15742,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 return .{ .general_reg = result_reg };
             }
             if (union_layout.tag != .tag_union) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant(
                         "LIR/codegen invariant violated: generateTag expected tag_union/scalar/zst layout, got {s}",
                         .{@tagName(union_layout.tag)},
@@ -15754,7 +15755,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const stack_size = tu_data.size.get(self.layout_store.targetUsize());
             const variants = ls.getTagUnionVariants(tu_data);
             if (@as(usize, tag.variant_index) >= variants.len) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant(
                         "LIR/codegen invariant violated: tag assignment variant index {d} exceeded variant count {d}",
                         .{ tag.variant_index, variants.len },
@@ -15802,7 +15803,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             proc_id: lir.LIR.LirProcSpecId,
         ) Allocator.Error!CompiledProc {
             const proc = self.store.getProcSpec(proc_id);
-            if (self.proc_registry.get(@intFromEnum(proc_id))) |compiled| return compiled;
+            if (self.proc_registry.get(@backingInt(proc_id))) |compiled| return compiled;
             if (self.fragment_mode) return .{
                 .id = proc_id,
                 .code_start = unresolved_proc_code_start,
@@ -15813,7 +15814,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             base.invariant(
                 "proc call target {d} ({d}) is missing from the compiled proc registry",
-                .{ @intFromEnum(proc_id), proc.name.raw() },
+                .{ @backingInt(proc_id), proc.name.raw() },
             );
             unreachable;
         }
@@ -15824,17 +15825,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const proc_spec = self.store.getProcSpec(call.proc);
             const arg_refs = self.store.getLocalSpan(call.args);
             const param_refs = self.store.getLocalSpan(proc_spec.args);
-            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
-            const args_alloc = args_sfa.get();
+            var args_sfa_buffer: [8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx))]u8 align(@alignOf(usize)) = undefined;
+            var args_sfa = std.heap.BufferFirstAllocator.init(&args_sfa_buffer, self.allocator);
+            const args_alloc = args_sfa.allocator();
             var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
             defer args_alloc.free(arg_locs);
             var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
             defer args_alloc.free(arg_layouts);
 
-            if (builtin.mode == .Debug and param_refs.len != arg_refs.len) {
+            if (builtin.mode == .debug and param_refs.len != arg_refs.len) {
                 base.invariant(
                     "Dev/codegen invariant violated: call to proc {d} passed {d} args but callee expects {d}",
-                    .{ @intFromEnum(call.proc), arg_refs.len, param_refs.len },
+                    .{ @backingInt(call.proc), arg_refs.len, param_refs.len },
                 );
             }
 
@@ -15848,14 +15850,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 arg_layouts[i] = expected_layout;
             }
 
-            if (builtin.mode == .Debug and proc_spec.ret_layout != call.ret_layout) {
+            if (builtin.mode == .debug and proc_spec.ret_layout != call.ret_layout) {
                 base.invariant(
                     "Dev/codegen invariant violated: direct call target layout {} did not match callee ret layout {} for proc {d}",
-                    .{ @intFromEnum(call.ret_layout), @intFromEnum(proc_spec.ret_layout), @intFromEnum(call.proc) },
+                    .{ @backingInt(call.ret_layout), @backingInt(proc_spec.ret_layout), @backingInt(call.proc) },
                 );
             }
 
-            if (builtin.mode == .Debug and (proc_spec.runtime_ret_desc != null) != (call.out_desc != null)) {
+            if (builtin.mode == .debug and (proc_spec.runtime_ret_desc != null) != (call.out_desc != null)) {
                 var caller_proc: ?usize = null;
                 if (self.current_proc_name) |current_name| {
                     for (self.store.getProcSpecs(), 0..) |candidate, candidate_index| {
@@ -15867,7 +15869,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
                 base.invariant(
                     "Dev/codegen invariant violated: direct call from proc {?d} to proc {d} descriptor output ({}) did not match callee ABI ({})",
-                    .{ caller_proc, @intFromEnum(call.proc), call.out_desc != null, proc_spec.runtime_ret_desc != null },
+                    .{ caller_proc, @backingInt(call.proc), call.out_desc != null, proc_spec.runtime_ret_desc != null },
                 );
             }
 
@@ -15898,7 +15900,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             {
                 std.debug.panic(
                     "Dev/codegen invariant violated: frame-replacing call to proc {d} does not share its caller's return contract",
-                    .{@intFromEnum(call.proc)},
+                    .{@backingInt(call.proc)},
                 );
             }
 
@@ -16114,7 +16116,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             // registers hold the closure, arguments, or capture pointer.
             const result_desc_slot: ?i32 = if (result_desc) |ref| try self.boxyDescRefToSlot(ref) else null;
             const arg_desc_refs = self.store.getLocalSpan(arg_descs);
-            if (builtin.mode == .Debug and arg_desc_refs.len != arg_desc_keys.len) {
+            if (builtin.mode == .debug and arg_desc_refs.len != arg_desc_keys.len) {
                 base.invariant(
                     "Dev/codegen invariant violated: erased call passed {d} descriptors but {d} descriptor keys",
                     .{ arg_desc_refs.len, arg_desc_keys.len },
@@ -16138,10 +16140,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const closure_layout = self.localLayout(closure_local);
             const runtime_closure_layout = self.runtimeRepresentationLayoutIdx(closure_layout);
             const closure_layout_val = self.layout_store.getLayout(runtime_closure_layout);
-            if (builtin.mode == .Debug and closure_layout_val.tag != .erased_callable) {
+            if (builtin.mode == .debug and closure_layout_val.tag != .erased_callable) {
                 base.invariant(
                     "Dev/codegen invariant violated: erased call closure local {d} must have erased_callable layout, got {s}",
-                    .{ @intFromEnum(closure_local), @tagName(closure_layout_val.tag) },
+                    .{ @backingInt(closure_local), @tagName(closure_layout_val.tag) },
                 );
             }
 
@@ -16155,8 +16157,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const arg_refs = self.store.getLocalSpan(call_args);
 
-            var args_sfa = std.heap.stackFallback(8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx)), self.allocator);
-            const args_alloc = args_sfa.get();
+            var args_sfa_buffer: [8 * (@sizeOf(ValueLocation) + @sizeOf(layout.Idx))]u8 align(@alignOf(usize)) = undefined;
+            var args_sfa = std.heap.BufferFirstAllocator.init(&args_sfa_buffer, self.allocator);
+            const args_alloc = args_sfa.allocator();
             var arg_layouts = try args_alloc.alloc(layout.Idx, arg_refs.len);
             defer args_alloc.free(arg_layouts);
             var arg_locs = try args_alloc.alloc(ValueLocation, arg_refs.len);
@@ -16234,7 +16237,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try defer_builder.addImmArg(arg_layouts_span.start);
                 try defer_builder.addImmArg(arg_layouts_span.len);
                 if (result_desc_slot) |s| try defer_builder.addMemArg(frame_ptr, s) else try defer_builder.addImmArg(0);
-                try defer_builder.addImmArg(@intFromEnum(runtime_ret_layout));
+                try defer_builder.addImmArg(@backingInt(runtime_ret_layout));
                 try self.callBoxyBuiltin(&defer_builder, .defer_erased);
                 if (out_desc) |local| try self.bindAssignedLocal(local, .{ .immediate_i64 = 0 });
                 return if (ret_size == 0)
@@ -16274,7 +16277,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(runtime_ret_layout));
+            try builder.addImmArg(@backingInt(runtime_ret_layout));
             if (arg_desc_refs.len == 0)
                 try builder.addImmArg(0)
             else
@@ -16347,7 +16350,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (result_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(runtime_layout));
+            try builder.addImmArg(@backingInt(runtime_layout));
             try self.callBoxyBuiltin(&builder, .drive_pending);
             if (skip_patch) |patch| try self.codegen.patchJump(patch, self.codegen.currentOffset());
             if (out_desc) |local| {
@@ -16372,7 +16375,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             const returned_layout = self.early_return_ret_layout orelse
                 std.debug.panic("Dev/codegen invariant violated: a procedure returning a pending call has no return layout", .{});
-            try builder.addImmArg(@intFromEnum(self.runtimeRepresentationLayoutIdx(returned_layout)));
+            try builder.addImmArg(@backingInt(self.runtimeRepresentationLayoutIdx(returned_layout)));
             try builder.addImmArg(@intFromBool(pending.keeps_own_desc));
             try self.callBoxyBuiltin(&builder, .return_pending);
             try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -16399,7 +16402,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             reuse_unique: bool,
         ) Allocator.Error!ValueLocation {
             const target_layout_val = self.layout_store.getLayout(target_layout);
-            if (builtin.mode == .Debug and target_layout_val.tag != .erased_callable) {
+            if (builtin.mode == .debug and target_layout_val.tag != .erased_callable) {
                 base.invariant(
                     "Dev/codegen invariant violated: packed erased fn target layout must be erased_callable, got {s}",
                     .{@tagName(target_layout_val.tag)},
@@ -16410,7 +16413,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
 
             const capture_size: u32 = if (capture_layout) |layout_idx| self.getLayoutSize(layout_idx) else 0;
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 if (capture_layout) |layout_idx| {
                     const capture_align = self.layout_store.layoutSizeAlign(self.layout_store.getLayout(layout_idx)).alignment.toByteUnits();
                     if (capture_align > builtins.erased_callable.capture_alignment) {
@@ -16547,7 +16550,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try builder.addMemArg(frame_ptr, on_drop_slot);
                     try builder.addLeaArg(frame_ptr, capture_src_slot);
                     try builder.addImmArg(@intCast(total_capture_size));
-                    try builder.addImmArg(@intFromEnum(update_mode));
+                    try builder.addImmArg(@backingInt(update_mode));
                     try self.callBuiltin(&builder, .erased_callable_repack);
                 }
                 const heap_ptr = try self.allocTempGeneral();
@@ -17028,10 +17031,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!ValueLocation {
             std.debug.assert(args.len == arg_layouts.len);
             const has_runtime_ret_desc = self.store.getProcSpec(proc.id).runtime_ret_desc != null;
-            if (builtin.mode == .Debug and out_desc != null and !has_runtime_ret_desc) {
+            if (builtin.mode == .debug and out_desc != null and !has_runtime_ret_desc) {
                 base.invariant(
                     "Dev/codegen invariant violated: proc {d} call requested an unsupported runtime descriptor output",
-                    .{@intFromEnum(proc.id)},
+                    .{@backingInt(proc.id)},
                 );
             }
             const needs_ret_ptr = self.needsInternalReturnByPointer(ret_layout);
@@ -17353,7 +17356,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const ls = self.layout_store;
             var current = layout_idx;
             while (true) {
-                if (@intFromEnum(current) >= ls.layouts.len()) return current;
+                if (@backingInt(current) >= ls.layouts.len()) return current;
 
                 const layout_val = ls.getLayout(current);
                 switch (layout_val.tag) {
@@ -17407,7 +17410,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (a_layout.tag != b_layout.tag) return false;
                 if (ls.layoutSize(a_layout) != ls.layoutSize(b_layout)) return false;
 
-                const key = (@as(u64, @intFromEnum(a)) << 32) | @as(u64, @intFromEnum(b));
+                const key = (@as(u64, @backingInt(a)) << 32) | @as(u64, @backingInt(b));
                 if ((try seen.getOrPut(key)).found_existing) continue;
 
                 switch (a_layout.tag) {
@@ -17459,7 +17462,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.boxy_runtime_used = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
-            } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
+            } else if (builtin.mode == .debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
                 base.invariant(
                     "Dev/codegen invariant violated: {s} overflowed {d} arguments onto the stack without declared parameter ABI sizes",
                     .{ boxy_fn.symbolName(), builder.stack_args.items.len },
@@ -17474,7 +17477,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         "Dev/codegen invariant violated: boxy dev codegen requires shim execution",
                         .{},
                     );
-                    try builder.call(table[@intFromEnum(boxy_fn)]);
+                    try builder.call(table[@backingInt(boxy_fn)]);
                 },
             }
         }
@@ -17500,7 +17503,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static => |desc_id| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
-                    try builder.addImmArg(@intFromEnum(desc_id));
+                    try builder.addImmArg(@backingInt(desc_id));
                     try self.callBoxyBuiltin(&builder, .static_desc);
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17516,7 +17519,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer builder.deinit();
                     try builder.addMemArg(frame_ptr, dict_slot);
                     try builder.addImmArg(projection.method_slot);
-                    try builder.addImmArg(@intFromEnum(projection.method));
+                    try builder.addImmArg(@backingInt(projection.method));
                     try builder.addImmArg(projection.arg_index);
                     try self.callBoxyBuiltin(&builder, .dict_method_arg_desc);
                     const slot = self.codegen.allocStackSlot(8);
@@ -17529,9 +17532,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     defer builder.deinit();
                     try builder.addMemArg(frame_ptr, dict_slot);
                     try builder.addImmArg(projection.method_slot);
-                    try builder.addImmArg(@intFromEnum(projection.method));
+                    try builder.addImmArg(@backingInt(projection.method));
                     try builder.addImmArg(projection.hidden_index);
-                    try builder.addImmArg(@intFromEnum(projection.shape));
+                    try builder.addImmArg(@backingInt(projection.shape));
                     try self.callBoxyBuiltin(&builder, .dict_method_hidden_desc);
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17600,7 +17603,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (elem_is_erased_box) {
                 base.invariant(
                     "Dev/codegen invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
-                    .{@intFromEnum(elem_layout)},
+                    .{@backingInt(elem_layout)},
                 );
             }
 
@@ -17615,7 +17618,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .static => |dict_id| {
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
-                    try builder.addImmArg(@intFromEnum(dict_id));
+                    try builder.addImmArg(@backingInt(dict_id));
                     try self.callBoxyBuiltin(&builder, .static_dict);
                     const slot = self.codegen.allocStackSlot(8);
                     try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17687,7 +17690,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .static => |desc_id| {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
-                        try builder.addImmArg(@intFromEnum(desc_id));
+                        try builder.addImmArg(@backingInt(desc_id));
                         try self.callBoxyBuiltin(&builder, .static_desc);
                         const slot = self.codegen.allocStackSlot(8);
                         try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17717,7 +17720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
-                        try builder.addImmArg(@intFromEnum(box_layout));
+                        try builder.addImmArg(@backingInt(box_layout));
                         try self.callBoxyBuiltin(&builder, .box_payload_desc);
                         const slot = self.codegen.allocStackSlot(8);
                         try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17736,7 +17739,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
                         try builder.addMemArg(frame_ptr, base_slot);
-                        try builder.addImmArg(@intFromEnum(payload.tag_name));
+                        try builder.addImmArg(@backingInt(payload.tag_name));
                         try builder.addImmArg(payload.payload_index);
                         try self.callBoxyBuiltin(&builder, .tag_payload_desc);
                         const slot = self.codegen.allocStackSlot(8);
@@ -17766,7 +17769,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (0..GuardedList.borrowLen(captures)) |i| {
                 const capture_local = GuardedList.at(captures, i);
                 const id_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(id_reg, @intFromEnum(capture_local));
+                try self.codegen.emitLoadImm(id_reg, @backingInt(capture_local));
                 try self.emitStore(.w32, frame_ptr, ids_slot + @as(i32, @intCast(i * 4)), id_reg);
                 self.codegen.freeGeneral(id_reg);
 
@@ -17779,7 +17782,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intFromEnum(desc_id));
+            try builder.addImmArg(@backingInt(desc_id));
             if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, ids_slot);
             if (count == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, descs_slot);
             try builder.addImmArg(@intCast(count));
@@ -17797,13 +17800,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer projection_builder.deinit();
                 try projection_builder.addMemArg(frame_ptr, base_slot);
                 if (assign.box_payload_layout) |box_layout| {
-                    try projection_builder.addImmArg(@intFromEnum(box_layout));
+                    try projection_builder.addImmArg(@backingInt(box_layout));
                     try self.callBoxyBuiltin(&projection_builder, .box_payload_desc);
                 } else if (assign.nested_index) |nested_index| {
                     try projection_builder.addImmArg(@intCast(nested_index));
                     try self.callBoxyBuiltin(&projection_builder, .nested_desc);
                 } else if (assign.tag_payload) |payload| {
-                    try projection_builder.addImmArg(@intFromEnum(payload.tag_name));
+                    try projection_builder.addImmArg(@backingInt(payload.tag_name));
                     try projection_builder.addImmArg(payload.payload_index);
                     try self.callBoxyBuiltin(&projection_builder, .tag_payload_desc);
                 } else {
@@ -17823,7 +17826,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (captures.len == 0) {
                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                         defer builder.deinit();
-                        try builder.addImmArg(@intFromEnum(dict_id));
+                        try builder.addImmArg(@backingInt(dict_id));
                         try self.callBoxyBuiltin(&builder, .static_dict);
                         const slot = self.codegen.allocStackSlot(8);
                         try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
@@ -17837,7 +17840,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     for (0..GuardedList.borrowLen(captures)) |i| {
                         const capture_local = GuardedList.at(captures, i);
                         const id_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(id_reg, @intFromEnum(capture_local));
+                        try self.codegen.emitLoadImm(id_reg, @backingInt(capture_local));
                         try self.emitStore(.w32, frame_ptr, ids_slot + @as(i32, @intCast(i * 4)), id_reg);
                         self.codegen.freeGeneral(id_reg);
 
@@ -17849,7 +17852,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
-                    try builder.addImmArg(@intFromEnum(dict_id));
+                    try builder.addImmArg(@backingInt(dict_id));
                     try builder.addLeaArg(frame_ptr, ids_slot);
                     try builder.addLeaArg(frame_ptr, values_slot);
                     try builder.addImmArg(@intCast(count));
@@ -17880,11 +17883,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (payload_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(assign.payload_layout));
+            try builder.addImmArg(@backingInt(assign.payload_layout));
             if (source_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
             try builder.addMemArg(frame_ptr, payload_desc_slot);
-            try builder.addImmArg(@intFromEnum(assign.payload_mode));
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(assign.payload_mode));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .box);
             try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -17905,12 +17908,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (base_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(base_layout));
+            try builder.addImmArg(@backingInt(base_layout));
             try builder.addMemArg(frame_ptr, base_desc_slot);
             if (fields_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(assign.fields_layout));
+            try builder.addImmArg(@backingInt(assign.fields_layout));
             try builder.addMemArg(frame_ptr, fields_desc_slot);
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .record_update);
             try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -17930,11 +17933,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addImmArg(@backingInt(source_layout));
             try builder.addMemArg(frame_ptr, source_desc_slot);
             if (target_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(target_layout));
-            try builder.addImmArg(@intFromEnum(assign.source_mode));
+            try builder.addImmArg(@backingInt(target_layout));
+            try builder.addImmArg(@backingInt(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .unbox);
             try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -17955,8 +17958,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             if (source_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
             if (target_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(assign.adapter));
-            try builder.addImmArg(@intFromEnum(assign.source_mode));
+            try builder.addImmArg(@backingInt(assign.adapter));
+            try builder.addImmArg(@backingInt(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .adapt);
             try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -17973,12 +17976,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addMemArg(frame_ptr, target_desc_slot);
-            try builder.addImmArg(@intFromEnum(assign.tag_name));
+            try builder.addImmArg(@backingInt(assign.tag_name));
             if (payload_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(assign.payload_layout));
+            try builder.addImmArg(@backingInt(assign.payload_layout));
             if (payload_desc_slot) |slot| try builder.addMemArg(frame_ptr, slot) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(assign.payload_mode));
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(assign.payload_mode));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .tag);
             return self.stackLocationForLayout(target_layout, out_slot);
         }
@@ -17996,12 +17999,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_slot);
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addImmArg(@backingInt(source_layout));
             try builder.addMemArg(frame_ptr, source_desc_slot);
-            try builder.addImmArg(@intFromEnum(assign.tag_name));
+            try builder.addImmArg(@backingInt(assign.tag_name));
             try builder.addImmArg(@intCast(assign.payload_index));
-            try builder.addImmArg(@intFromEnum(target_layout));
-            try builder.addImmArg(@intFromEnum(assign.source_mode));
+            try builder.addImmArg(@backingInt(target_layout));
+            try builder.addImmArg(@backingInt(assign.source_mode));
             try self.callBoxyBuiltin(&builder, .tag_payload);
 
             if (assign.target_desc) |target_desc_local| {
@@ -18025,7 +18028,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, out_slot);
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addImmArg(@backingInt(source_layout));
             try builder.addMemArg(frame_ptr, source_desc_slot);
             try self.callBoxyBuiltin(&builder, .inspect);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -18037,7 +18040,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             if (self.localLayout(assign.rhs) != value_layout) {
                 std.debug.panic(
                     "LIR/codegen invariant violated: boxy equality operands had layouts {d} and {d}",
-                    .{ @intFromEnum(value_layout), @intFromEnum(self.localLayout(assign.rhs)) },
+                    .{ @backingInt(value_layout), @backingInt(self.localLayout(assign.rhs)) },
                 );
             }
             const lhs_off = try self.boxyLocalBytesOffset(assign.lhs);
@@ -18050,7 +18053,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_slot);
             if (lhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             if (rhs_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addImmArg(@backingInt(value_layout));
             try builder.addMemArg(frame_ptr, desc_slot);
             try self.callBoxyBuiltin(&builder, .eq);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -18068,7 +18071,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, out_slot);
             if (value_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addImmArg(@backingInt(value_layout));
             try builder.addMemArg(frame_ptr, desc_slot);
             if (hasher_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
             try self.callBoxyBuiltin(&builder, .hash);
@@ -18178,7 +18181,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn floatRegMask(reg: FloatReg) u32 {
-            return @as(u32, 1) << @intFromEnum(reg);
+            return @as(u32, 1) << @backingInt(reg);
         }
 
         fn spillVectorLocalEntry(
@@ -18186,19 +18189,19 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             local_key: u32,
         ) Allocator.Error!void {
             const value = self.local_locations.get(local_key) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("LIR/codegen invariant violated: tracked vector local {d} is absent", .{local_key});
                 }
                 unreachable;
             };
             if (value != .vector_reg) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("LIR/codegen invariant violated: tracked vector local {d} is {s}", .{ local_key, @tagName(value) });
                 }
                 unreachable;
             }
             const vector = value.vector_reg;
-            const local: LocalId = @enumFromInt(local_key);
+            const local: LocalId = @fromBackingInt(@intCast(local_key));
             const layout_idx = self.localLayout(local);
             const slot = self.codegen.allocStackSlot(16);
             try self.codegen.emitStoreStackV128(slot, vector.reg);
@@ -18220,7 +18223,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var resident_mask = self.vector_local_mask;
             while (resident_mask != 0) {
                 const reg_index: u5 = @intCast(@ctz(resident_mask));
-                self.codegen.freeFloat(@enumFromInt(reg_index));
+                self.codegen.freeFloat(@fromBackingInt(@intCast(reg_index)));
                 resident_mask &= resident_mask - 1;
             }
             self.local_locations.clearRetainingCapacity();
@@ -18231,7 +18234,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn trackVectorLocal(self: *Self, local_key: u32, reg: FloatReg) void {
             const slot = self.vector_local_by_reg.getPtr(reg);
             if (slot.* != null or (self.vector_local_mask & floatRegMask(reg)) != 0) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("LIR/codegen invariant violated: vector register {s} already has a resident local", .{@tagName(reg)});
                 }
                 unreachable;
@@ -18243,7 +18246,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn untrackVectorLocal(self: *Self, local_key: u32, reg: FloatReg) void {
             const slot = self.vector_local_by_reg.getPtr(reg);
             if (slot.* != local_key or (self.vector_local_mask & floatRegMask(reg)) == 0) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("LIR/codegen invariant violated: vector register {s} does not contain local {d}", .{ @tagName(reg), local_key });
                 }
                 unreachable;
@@ -18262,9 +18265,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn spillAllVectorLocals(self: *Self) Allocator.Error!void {
             while (self.vector_local_mask != 0) {
                 const reg_index: u5 = @intCast(@ctz(self.vector_local_mask));
-                const reg: FloatReg = @enumFromInt(reg_index);
+                const reg: FloatReg = @fromBackingInt(@intCast(reg_index));
                 const local_key = self.vector_local_by_reg.get(reg) orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
                     }
                     unreachable;
@@ -18283,9 +18286,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const spillable = self.vector_local_mask & ~protected_mask;
             if (spillable != 0) {
                 const reg_index: u5 = @intCast(@ctz(spillable));
-                const reg: FloatReg = @enumFromInt(reg_index);
+                const reg: FloatReg = @fromBackingInt(@intCast(reg_index));
                 const local_key = self.vector_local_by_reg.get(reg) orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("LIR/codegen invariant violated: active vector register {s} has no resident local", .{@tagName(reg)});
                     }
                     unreachable;
@@ -18389,7 +18392,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const reg = try self.allocTempGeneral();
                 if (plan.value_off) |off| try self.emitLeaStack(reg, off) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_value_off, reg);
-                try self.codegen.emitLoadImm(reg, @intFromEnum(plan.layout));
+                try self.codegen.emitLoadImm(reg, @backingInt(plan.layout));
                 try self.emitStore(.w32, frame_ptr, entry_base + call_arg_layout_off, reg);
                 if (plan.desc_slot) |s| try self.emitLoad(.w64, reg, frame_ptr, s) else try self.codegen.emitLoadImm(reg, 0);
                 try self.emitStore(.w64, frame_ptr, entry_base + call_arg_desc_off, reg);
@@ -18417,13 +18420,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addMemArg(frame_ptr, dict_slot);
             try builder.addImmArg(@intCast(assign.method_slot));
-            try builder.addImmArg(@intFromEnum(assign.method));
+            try builder.addImmArg(@backingInt(assign.method));
             if (arg_locals.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, args_slot);
             try builder.addImmArg(@intCast(arg_locals.len));
             if (hidden_locals.len == 0) try builder.addImmArg(0) else try builder.addLeaArg(frame_ptr, hidden_slot);
             try builder.addImmArg(@intCast(hidden_locals.len));
             if (result_desc_slot) |s| try builder.addMemArg(frame_ptr, s) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .call_dict);
             try self.bindBoxyOutDescriptor(assign.target, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -18442,8 +18445,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
-            try builder.addImmArg(@intFromEnum(lit.default_layout));
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(lit.default_layout));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .dynamic_num_literal_ref);
             try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -18462,8 +18465,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addLeaArg(frame_ptr, out_desc_slot);
             try builder.addLeaArg(frame_ptr, value_slot);
             try builder.addMemArg(frame_ptr, desc_slot);
-            try builder.addImmArg(@intFromEnum(lit.default_layout));
-            try builder.addImmArg(@intFromEnum(target_layout));
+            try builder.addImmArg(@backingInt(lit.default_layout));
+            try builder.addImmArg(@backingInt(target_layout));
             try self.callBoxyBuiltin(&builder, .dynamic_frac_literal_ref);
             try self.bindBoxyOutDescriptor(target_local, out_desc_slot);
             return self.stackLocationForLayout(target_layout, out_slot);
@@ -18480,9 +18483,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             if (source_off) |off| try builder.addLeaArg(frame_ptr, off) else try builder.addImmArg(0);
-            try builder.addImmArg(@intFromEnum(source_layout));
+            try builder.addImmArg(@backingInt(source_layout));
             try builder.addMemArg(frame_ptr, source_desc_slot);
-            try builder.addImmArg(@intFromEnum(tag_match.tag_name));
+            try builder.addImmArg(@backingInt(tag_match.tag_name));
             try self.callBoxyBuiltin(&builder, .tag_match);
             // The wrapper returns a C `bool` in the low byte of the return
             // register; the upper bits are undefined, so mask before testing.
@@ -18514,11 +18517,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, value_off);
-            try builder.addImmArg(@intFromEnum(value_layout));
+            try builder.addImmArg(@backingInt(value_layout));
             try builder.addMemArg(frame_ptr, desc_slot);
-            try builder.addImmArg(@intFromEnum(op));
+            try builder.addImmArg(@backingInt(op));
             try builder.addImmArg(count);
-            try builder.addImmArg(@intFromEnum(atomicity));
+            try builder.addImmArg(@backingInt(atomicity));
             try self.callBoxyBuiltin(&builder, .drop);
         }
 
@@ -18542,12 +18545,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 }
             }
             const entry = self.static_data_symbols.getPtr(id) orelse {
-                if (builtin.mode == .Debug) base.invariant("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@intFromEnum(id)});
+                if (builtin.mode == .debug) base.invariant("Dev/codegen invariant violated: static value {d} has no producer declaration", .{@backingInt(id)});
                 unreachable;
             };
             if (self.fragment_mode and self.fragment_source_mode != .object_file) {
                 if (entry.symbol == null) {
-                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@intFromEnum(id)});
+                    const name = try std.fmt.allocPrint(self.allocator, "roc__b{d}", .{@backingInt(id)});
                     defer self.allocator.free(name);
                     const owned_cell_symbol = try self.internSymbolName(name, .program);
                     const cell_symbol = try self.codegen.symbols.internInternal(self.allocator, self.symbolName(owned_cell_symbol), .program);
@@ -18624,7 +18627,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk slot;
                 },
                 .vector_reg => |vector| blk: {
-                    if (builtin.mode == .Debug and size != 16) {
+                    if (builtin.mode == .debug and size != 16) {
                         base.invariant(
                             "LIR/codegen invariant violated: vector stack materialization has size {d}",
                             .{size},
@@ -18636,7 +18639,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     break :blk slot;
                 },
                 .immediate_i64 => |val| blk: {
-                    if (builtin.mode == .Debug and size > 8) {
+                    if (builtin.mode == .debug and size > 8) {
                         base.invariant(
                             "LIR/codegen invariant violated: ensureOnStack cannot materialize immediate_i64 into {d}-byte value",
                             .{size},
@@ -18784,7 +18787,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn coerceImmediateToLayout(_: *Self, loc: ValueLocation, target_layout: layout.Idx) ValueLocation {
             return switch (target_layout) {
                 .str => switch (loc) {
-                    .immediate_i64, .immediate_i128 => if (builtin.mode == .Debug) {
+                    .immediate_i64, .immediate_i128 => if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: scalar immediate cannot stand in for RocStr layout",
                             .{},
@@ -19228,10 +19231,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             return;
                         },
                         .closure => {
-                            if (builtin.mode == .Debug) {
+                            if (builtin.mode == .debug) {
                                 base.invariant(
                                     "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for result layout {}",
-                                    .{@intFromEnum(result_layout)},
+                                    .{@backingInt(result_layout)},
                                 );
                             }
                             unreachable;
@@ -19998,7 +20001,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 },
                 4 => try self.emitStoreToPtr(.w32, src_reg, ptr_reg, 0),
                 8 => try self.emitStoreToPtr(.w64, src_reg, ptr_reg, 0),
-                else => if (builtin.mode == .Debug) {
+                else => if (builtin.mode == .debug) {
                     base.invariant("LIR/codegen invariant violated: scalar result size {d} is not register-sized", .{size});
                 } else unreachable,
             }
@@ -20064,7 +20067,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         pub fn patchPendingCalls(self: *Self) Allocator.Error!void {
             for (self.pending_calls.items) |pending| {
-                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
+                const proc = self.proc_registry.get(@backingInt(pending.target_proc)) orelse unreachable;
                 try self.patchCallTarget(pending.call_site, proc.code_start);
                 try self.code_refs.append(self.allocator, .{ .site = pending.call_site, .form = .call, .target = .{ .proc = pending.target_proc } });
             }
@@ -20073,7 +20076,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         pub fn patchPendingProcAddrs(self: *Self) Allocator.Error!void {
             for (self.pending_proc_addrs.items) |pending| {
-                const proc = self.proc_registry.get(@intFromEnum(pending.target_proc)) orelse unreachable;
+                const proc = self.proc_registry.get(@backingInt(pending.target_proc)) orelse unreachable;
                 self.patchInternalCodeAddress(pending.instr_offset, proc.code_start);
                 try self.code_refs.append(self.allocator, .{ .site = pending.instr_offset, .form = .addr, .target = .{ .proc = pending.target_proc } });
             }
@@ -20103,8 +20106,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const EmitT = aarch64.Emit(target);
                 const adr_existing: u32 = @bitCast(buf[instr_offset..][0..4].*);
                 const movz_existing: u32 = @bitCast(buf[instr_offset + 4 ..][0..4].*);
-                const dst: GeneralReg = @enumFromInt(@as(u5, @truncate(adr_existing & 0x1F)));
-                const scratch: GeneralReg = @enumFromInt(@as(u5, @truncate(movz_existing & 0x1F)));
+                const dst: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(adr_existing & 0x1F))));
+                const scratch: GeneralReg = @fromBackingInt(@intCast(@as(u5, @truncate(movz_existing & 0x1F))));
                 const parts = CodeGen.pcRelParts(instr_offset, target_offset);
                 const words = [4]u32{
                     EmitT.encodeAdrZero(dst),
@@ -20155,13 +20158,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.generation_mode = mode;
             if ((key >> 63) != 0) {
                 _ = try self.compileSingleBoxyCaptureDropHelper(
-                    @enumFromInt(@as(u32, @intCast((key >> 32) & 0x7fff_ffff))),
+                    @fromBackingInt(@intCast(@as(u32, @intCast((key >> 32) & 0x7fff_ffff)))),
                     @truncate(key),
                 );
             } else {
                 _ = try self.compileSingleRcHelper(.{
                     .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
-                    .atomicity = @enumFromInt(@as(u1, @intCast((key >> 34) & 1))),
+                    .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> 34) & 1)))),
                 });
             }
             try self.finishFragment();
@@ -20239,13 +20242,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (sorted) |key| {
                 if ((key >> 63) != 0) {
                     _ = try self.compileSingleBoxyCaptureDropHelper(
-                        @enumFromInt(@as(u32, @intCast((key >> 32) & 0x7fff_ffff))),
+                        @fromBackingInt(@intCast(@as(u32, @intCast((key >> 32) & 0x7fff_ffff)))),
                         @truncate(key),
                     );
                 } else {
                     try self.scheduleRcHelper(.{
                         .key = RcHelperKey.decode(key & 0x3_ffff_ffff),
-                        .atomicity = @enumFromInt(@as(u1, @intCast((key >> 34) & 1))),
+                        .atomicity = @fromBackingInt(@intCast(@as(u1, @intCast((key >> 34) & 1)))),
                     });
                 }
                 try self.maybeDrainRcHelpers();
@@ -20257,11 +20260,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn compileAllProcSpecs(self: *Self, proc_specs: []const LirProcSpec) Allocator.Error!void {
             self.assertImageOpen();
             for (proc_specs, 0..) |proc, i| {
-                const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(i);
+                const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(i));
                 // A procedure spliced from an object-cache entry is already
                 // registered with its code.
-                if (self.proc_registry.contains(@intFromEnum(proc_id))) continue;
-                try self.proc_registry.put(@intFromEnum(proc_id), .{
+                if (self.proc_registry.contains(@backingInt(proc_id))) continue;
+                try self.proc_registry.put(@backingInt(proc_id), .{
                     .id = proc_id,
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
@@ -20276,7 +20279,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     if (registered.code_start != unresolved_proc_code_start) continue;
                 }
                 if (proc.external) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{i});
                     }
                     unreachable;
@@ -20285,7 +20288,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitBranchIslandIfNeeded();
                     try self.codegen.compactBranchSites();
                 }
-                try self.compileProcSpec(@enumFromInt(i), proc);
+                try self.compileProcSpec(@fromBackingInt(@intCast(i)), proc);
             }
 
             try self.patchPendingCalls();
@@ -20307,8 +20310,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 std.debug.assert(!proc.is_static_initializer);
                 // A procedure spliced from an object-cache entry is already
                 // registered with its code.
-                if (self.proc_registry.contains(@intFromEnum(proc_id))) continue;
-                try self.proc_registry.put(@intFromEnum(proc_id), .{
+                if (self.proc_registry.contains(@backingInt(proc_id))) continue;
+                try self.proc_registry.put(@backingInt(proc_id), .{
                     .id = proc_id,
                     .code_start = unresolved_proc_code_start,
                     .code_end = 0,
@@ -20318,12 +20321,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             for (demand) |proc_id| {
                 const proc = self.store.getProcSpec(proc_id);
-                if (self.proc_registry.get(@intFromEnum(proc_id))) |registered| {
+                if (self.proc_registry.get(@backingInt(proc_id))) |registered| {
                     if (registered.code_start != unresolved_proc_code_start) continue;
                 }
                 if (proc.external) {
-                    if (builtin.mode == .Debug) {
-                        base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@intFromEnum(proc_id)});
+                    if (builtin.mode == .debug) {
+                        base.invariant("Dev/codegen invariant violated: external proc {d} had no object-cache entry spliced before compilation", .{@backingInt(proc_id)});
                     }
                     unreachable;
                 }
@@ -20343,27 +20346,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.boxy_worker_procs) |proc_id| {
                 const proc = self.store.getProcSpec(proc_id);
                 if (proc.is_static_initializer or proc.abi == .erased_callable or proc.hosted != null or proc.body == null) {
-                    if (builtin.mode == .Debug) {
-                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@intFromEnum(proc_id)});
+                    if (builtin.mode == .debug) {
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had a non-worker procedure shape", .{@backingInt(proc_id)});
                     }
                     unreachable;
                 }
-                const compiled = self.proc_registry.get(@intFromEnum(proc_id)) orelse {
-                    if (builtin.mode == .Debug) {
-                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@intFromEnum(proc_id)});
+                const compiled = self.proc_registry.get(@backingInt(proc_id)) orelse {
+                    if (builtin.mode == .debug) {
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} was not compiled", .{@backingInt(proc_id)});
                     }
                     unreachable;
                 };
                 if (compiled.code_start == unresolved_proc_code_start) {
-                    if (builtin.mode == .Debug) {
-                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@intFromEnum(proc_id)});
+                    if (builtin.mode == .debug) {
+                        base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had no code address", .{@backingInt(proc_id)});
                     }
                     unreachable;
                 }
                 // A native pack may already supply this exact thunk ABI.
-                if (self.boxy_dict_thunks.contains(@intFromEnum(proc_id))) continue;
+                if (self.boxy_dict_thunks.contains(@backingInt(proc_id))) continue;
                 const thunk_offset = try self.generateBoxyDictProcThunk(proc_id);
-                try self.boxy_dict_thunks.put(@intFromEnum(proc_id), thunk_offset);
+                try self.boxy_dict_thunks.put(@backingInt(proc_id), thunk_offset);
                 try self.registerAssembledThunk(proc.identity, thunk_offset);
             }
         }
@@ -20379,10 +20382,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.assertImageOpen();
             for (helpers) |helper_key| {
                 if (self.layout_store.rcHelperPlan(helper_key) == .noop) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "Dev/codegen invariant violated: static data requested noop RC helper for layout {d}",
-                            .{@intFromEnum(helper_key.layout_idx)},
+                            .{@backingInt(helper_key.layout_idx)},
                         );
                     }
                     unreachable;
@@ -20440,7 +20443,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// relocate to erased-callable wrapper procedures. The procedure must
         /// already have been compiled by `compileAllProcSpecs`.
         pub fn compiledProcSymbol(self: *const Self, proc_id: lir.LIR.LirProcSpecId) ?CompiledProcSymbol {
-            const proc = self.proc_registry.get(@intFromEnum(proc_id)) orelse return null;
+            const proc = self.proc_registry.get(@backingInt(proc_id)) orelse return null;
             if (proc.code_start == unresolved_proc_code_start) return null;
             return .{
                 .name = proc.name,
@@ -20465,7 +20468,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 self.stack_alloca_slots.deinit();
                 self.stack_alloca_slots = saved_alloca_slots;
             }
-            const key: u32 = @intFromEnum(proc_id);
+            const key: u32 = @backingInt(proc_id);
             const stack_probe_required = proc.stack_probe == .required;
             // Save current state - procedure has its own scope that shouldn't pollute caller
             const saved_stack_offset = self.codegen.stack_offset;
@@ -20530,13 +20533,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Reserve R12/X20 for roc_ops exactly like standalone lambda compilation.
             if (comptime target.toCpuArch() == .x86_64) {
-                const r12_bit = @as(u16, 1) << @intFromEnum(x86_64.GeneralReg.R12);
+                const r12_bit = @as(u16, 1) << @backingInt(x86_64.GeneralReg.R12);
                 self.codegen.callee_saved_used |= r12_bit;
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(x86_64.GeneralReg.R12));
             } else {
-                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
+                const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
                 self.codegen.callee_saved_used |= x20_bit;
-                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20));
+                self.codegen.callee_saved_available &= ~(@as(u32, 1) << @backingInt(aarch64.GeneralReg.X20));
             }
 
             // PHASE 1: Generate body first (to determine callee_saved_used)
@@ -20861,7 +20864,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn requireProcBody(proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) lir.LIR.CFStmtId {
             return proc.body orelse base.invariant(
                 "Dev/codegen invariant violated: non-hosted proc {d} (symbol {d}) missing statement body",
-                .{ @intFromEnum(proc_id), proc.name.raw() },
+                .{ @backingInt(proc_id), proc.name.raw() },
             );
         }
 
@@ -20870,7 +20873,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             hosted: lir.LIR.HostedProc,
             proc: LirProcSpec,
         ) Allocator.Error!void {
-            if (builtin.mode == .Debug and proc.body != null) {
+            if (builtin.mode == .debug and proc.body != null) {
                 base.invariant(
                     "Dev/codegen invariant violated: hosted proc {d} unexpectedly carried a statement body",
                     .{proc.name.raw()},
@@ -21152,7 +21155,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_f32,
                     .immediate_f64,
                     .noreturn,
-                    => if (builtin.mode == .Debug) {
+                    => if (builtin.mode == .debug) {
                         base.invariant(
                             "freezeCallArg expected stack-backed multi-reg arg, got {s} for layout {any}",
                             .{ @tagName(info.loc), info.layout_idx },
@@ -21232,7 +21235,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .immediate_f64,
                     .immediate_i128,
                     .noreturn,
-                    => if (builtin.mode == .Debug) {
+                    => if (builtin.mode == .debug) {
                         base.invariant(
                             "freezeCallArg unsupported F32 source {s} for layout {any}",
                             .{ @tagName(info.loc), info.layout_idx },
@@ -21321,7 +21324,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_stack,
                 .immediate_f32,
                 .immediate_i128,
-                => if (builtin.mode == .Debug) {
+                => if (builtin.mode == .debug) {
                     base.invariant(
                         "freezeCallArg unsupported scalar source {s} for layout {any}",
                         .{ @tagName(info.loc), info.layout_idx },
@@ -21515,7 +21518,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             {
                 const ls = self.layout_store;
-                if (@intFromEnum(runtime_layout_idx) < ls.layouts.len()) {
+                if (@backingInt(runtime_layout_idx) < ls.layouts.len()) {
                     const layout_val = ls.getLayout(runtime_layout_idx);
                     if (layout_val.tag == .zst or ls.layoutSizeAlign(layout_val).size == 0) return 0;
                     // List parameters need 3 registers (24 bytes)
@@ -21534,7 +21537,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn markCallerStackArgBaseUsed(self: *Self) void {
             if (comptime arch == .aarch64 or arch == .aarch64_be) {
-                const bit = @as(u32, 1) << @intFromEnum(caller_stack_arg_base_reg);
+                const bit = @as(u32, 1) << @backingInt(caller_stack_arg_base_reg);
                 self.uses_caller_stack_arg_base = true;
                 self.codegen.callee_saved_used |= bit;
                 self.codegen.callee_saved_available &= ~bit;
@@ -21571,7 +21574,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) ?u32 {
             const start: usize = offsets_span.start;
             const end = start + offsets_span.len;
-            if (builtin.mode == .Debug and end > self.erased_arg_desc_offsets.len) {
+            if (builtin.mode == .debug and end > self.erased_arg_desc_offsets.len) {
                 base.invariant(
                     "Dev/codegen invariant violated: erased descriptor-offset span [{d}, {d}) exceeded table length {d}",
                     .{ start, end, self.erased_arg_desc_offsets.len },
@@ -21580,7 +21583,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var result: ?u32 = null;
             for (self.erased_arg_desc_offsets[start..end]) |offset| {
                 if (!std.meta.eql(offset.key, key)) continue;
-                if (builtin.mode == .Debug and result != null) {
+                if (builtin.mode == .debug and result != null) {
                     base.invariant("Dev/codegen invariant violated: erased descriptor key had multiple capture offsets", .{});
                 }
                 result = offset.offset;
@@ -21607,7 +21610,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         ) Allocator.Error!void {
             const locals = self.store.getLocalSpan(proc.args);
             if (locals.len < 2) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("Dev/codegen invariant violated: erased callable adapter requires hidden capture and reuse args", .{});
                 }
                 unreachable;
@@ -21620,12 +21623,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.saveIncomingPointerArg(capture_ptr_slot, 3);
             try self.saveIncomingPointerArg(reuse_ptr_slot, 4);
 
-            const capture_arg = proc.erased_capture_arg orelse if (builtin.mode == .Debug)
+            const capture_arg = proc.erased_capture_arg orelse if (builtin.mode == .debug)
                 base.invariant("Dev/codegen invariant violated: erased callable proc had no capture argument", .{})
             else
                 unreachable;
             const explicit_count = locals.len - 2;
-            if (builtin.mode == .Debug and GuardedList.at(locals, explicit_count) != capture_arg) {
+            if (builtin.mode == .debug and GuardedList.at(locals, explicit_count) != capture_arg) {
                 base.invariant("Dev/codegen invariant violated: erased callable capture argument was not the first hidden parameter", .{});
             }
             const plan = self.store.getErasedCallArgsPlan(arg_plan);
@@ -21668,7 +21671,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             const params_start: usize = proc.erased_arg_desc_params.start;
             const params_end = params_start + proc.erased_arg_desc_params.len;
-            if (builtin.mode == .Debug and params_end > self.erased_arg_desc_params.len) {
+            if (builtin.mode == .debug and params_end > self.erased_arg_desc_params.len) {
                 base.invariant(
                     "Dev/codegen invariant violated: erased descriptor-param span [{d}, {d}) exceeded table length {d}",
                     .{ params_start, params_end, self.erased_arg_desc_params.len },
@@ -21685,7 +21688,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     try self.emitStore(.w64, frame_ptr, desc_slot, desc_reg);
                     self.freeGenerals(.{ desc_reg, capture_reg });
                 } else {
-                    if (builtin.mode == .Debug and param.read == .call_key) {
+                    if (builtin.mode == .debug and param.read == .call_key) {
                         base.invariant(
                             "Dev/codegen invariant violated: exact erased descriptor parameter had no capture offset",
                             .{},
@@ -21700,7 +21703,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             break;
                         }
                     }
-                    const source = source_local orelse if (builtin.mode == .Debug)
+                    const source = source_local orelse if (builtin.mode == .debug)
                         base.invariant("Dev/codegen invariant violated: projected erased descriptor had no parent parameter", .{})
                     else
                         unreachable;
@@ -21714,7 +21717,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try self.callBoxyBuiltin(&builder, .nested_desc);
                         },
                         .tag_payload => {
-                            try builder.addImmArg(@intFromEnum(param.source_tag_name));
+                            try builder.addImmArg(@backingInt(param.source_tag_name));
                             try builder.addImmArg(param.source_nested_index);
                             try self.callBoxyBuiltin(&builder, .tag_payload_desc);
                         },
@@ -21845,7 +21848,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const num_regs = param_num_regs[param_idx];
 
                 if (param_idx == locals.len) {
-                    if (builtin.mode == .Debug and (num_regs != 1 or param_pass_by_ptr[param_idx])) {
+                    if (builtin.mode == .debug and (num_regs != 1 or param_pass_by_ptr[param_idx])) {
                         base.invariant("Dev/codegen invariant violated: runtime return descriptor pointer had an invalid ABI plan", .{});
                     }
                     const desc_ptr_slot = self.codegen.allocStackSlot(8);
@@ -21933,12 +21936,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const runtime_ret_layout = self.runtimeRepresentationLayoutIdx(ret_layout);
             const layout_val = ls.getLayout(runtime_ret_layout);
 
-            if (builtin.mode == .Debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.getScalar().tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
+            if (builtin.mode == .debug and loc == .stack_str and !(layout_val.tag == .scalar and layout_val.getScalar().tag == .str) and layout_val.tag != .list and layout_val.tag != .list_of_zst) {
                 base.invariant(
                     "LIR/codegen invariant violated: stack_str result with non-string/list return layout {s} (layout_idx={})",
                     .{
                         @tagName(layout_val.tag),
-                        @intFromEnum(ret_layout),
+                        @backingInt(ret_layout),
                     },
                 );
             }
@@ -22195,10 +22198,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 // Box: single pointer (1 register)
                 .box, .box_of_zst, .erased_box, .erased_callable, .ptr => try self.moveOneRegToReturn(loc),
                 .closure => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: runtimeRepresentationLayoutIdx returned closure for return layout {}",
-                            .{@intFromEnum(ret_layout)},
+                            .{@backingInt(ret_layout)},
                         );
                     }
                     unreachable;
@@ -22231,7 +22234,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .immediate_i128,
                 .noreturn,
                 => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant(
                             "LIR/codegen invariant violated: moveOneRegToReturn does not support loc={s}",
                             .{@tagName(loc)},
@@ -22282,7 +22285,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     else => blk: {
                         // A general register holds at most 8 bytes; a wider
                         // return value can never be materialized here.
-                        if (builtin.mode == .Debug and ret_size > 8) {
+                        if (builtin.mode == .debug and ret_size > 8) {
                             base.invariant(
                                 "LIR/codegen invariant violated: general-register return value has size {d}",
                                 .{ret_size},
@@ -22445,8 +22448,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
             // Most control-flow graphs are shallow, so keep the work stack in a
             // small on-stack buffer and only spill to the heap for deep nesting.
-            var sfa = std.heap.stackFallback(64 * @sizeOf(StmtWork), self.allocator);
-            const wa = sfa.get();
+            var sfa_buffer: [64 * @sizeOf(StmtWork)]u8 align(@alignOf(usize)) = undefined;
+            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
+            const wa = sfa.allocator();
             var work = std.ArrayList(StmtWork).empty;
             defer work.deinit(wa);
             try work.append(wa, .{ .node = root_stmt_id });
@@ -22456,7 +22460,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             while (work.pop()) |item| switch (scratch.begin(self, item)) {
                 .node => |stmt_id| {
                     if (comptime target.toCpuArch() == .aarch64) try self.emitBranchIslandIfNeeded();
-                    const stmt_key = @intFromEnum(stmt_id);
+                    const stmt_key = @backingInt(stmt_id);
                     if (self.stmt_locations.get(stmt_key)) |stmt_location| {
                         const patch = try self.codegen.emitJump();
                         try self.codegen.patchJump(patch, stmt_location);
@@ -22501,7 +22505,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         try self.spillAllVectorLocals();
                                         var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                         defer builder.deinit();
-                                        try builder.addImmArg(@intCast(@intFromEnum(id)));
+                                        try builder.addImmArg(@intCast(@backingInt(id)));
                                         try self.callComptimeHook(&builder, hooks, .ensure_static_value);
                                     }
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
@@ -22692,7 +22696,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 self.pending_overflow_result_target = null;
                                 try self.bindAssignedLocal(assign.target, value_loc);
                                 if (fusion) |matched| {
-                                    try self.precomputed_overflow_results.put(@intFromEnum(matched.consumer_stmt), {});
+                                    try self.precomputed_overflow_results.put(@backingInt(matched.consumer_stmt), {});
                                 }
                             }
                             try work.append(wa, .{ .node = assign.next });
@@ -22772,7 +22776,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .noreturn,
                                 => base.invariant(
                                     "Dev/codegen invariant violated: debug message local {d} did not lower to a RocStr stack value",
-                                    .{@intFromEnum(debug_stmt.message)},
+                                    .{@backingInt(debug_stmt.message)},
                                 ),
                             };
                             try self.emitRocDbgFromStackStr(msg_offset);
@@ -22785,7 +22789,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (expect_stmt.site) |site| {
                                 var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                                 defer builder.deinit();
-                                try builder.addImmArg(@intFromEnum(site));
+                                try builder.addImmArg(@backingInt(site));
                                 try builder.addRegArg(cond_reg);
                                 try self.callRuntimeSymbol(&builder, .roc_expect_observed);
                                 self.codegen.freeGeneral(cond_reg);
@@ -22816,7 +22820,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .noreturn,
                                 => base.invariant(
                                     "Dev/codegen invariant violated: expect_err message local {d} did not lower to a RocStr stack value",
-                                    .{@intFromEnum(expect_err_stmt.message)},
+                                    .{@backingInt(expect_err_stmt.message)},
                                 ),
                             };
                             try self.emitRocExpectErrFromStackStr(msg_offset, expect_err_stmt.region);
@@ -22845,7 +22849,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .join => |j| {
-                            const jp_key = @intFromEnum(j.id);
+                            const jp_key = @backingInt(j.id);
                             try self.registerJoinPointParams(j.id, j.params);
                             if (!self.join_point_jumps.contains(jp_key)) {
                                 try self.join_point_jumps.put(jp_key, std.ArrayList(JumpRecord).empty);
@@ -22860,7 +22864,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .jump => |jmp| {
                             const jump_location = try self.emitJumpPlaceholder();
 
-                            const jp_key = @intFromEnum(jmp.target);
+                            const jp_key = @backingInt(jmp.target);
                             if (self.join_point_jumps.getPtr(jp_key)) |jumps| {
                                 try jumps.append(self.allocator, .{ .location = jump_location });
                             }
@@ -22871,13 +22875,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             if (value_loc == .noreturn) return;
                             const value_layout = self.valueLayout(r.value);
                             const ret_layout = self.early_return_ret_layout orelse value_layout;
-                            if (builtin.mode == .Debug and ret_layout != value_layout) {
+                            if (builtin.mode == .debug and ret_layout != value_layout) {
                                 base.invariant(
                                     "Dev/codegen invariant violated: proc return local layout {} did not match proc ret_layout {} at stmt {d}",
                                     .{
-                                        @intFromEnum(value_layout),
-                                        @intFromEnum(ret_layout),
-                                        if (self.current_stmt_id) |current_stmt_id| @intFromEnum(current_stmt_id) else std.math.maxInt(u32),
+                                        @backingInt(value_layout),
+                                        @backingInt(ret_layout),
+                                        if (self.current_stmt_id) |current_stmt_id| @backingInt(current_stmt_id) else std.math.maxInt(u32),
                                     },
                                 );
                             }
@@ -23091,7 +23095,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                         .noreturn,
                                         => base.invariant(
                                             "Dev/codegen invariant violated: crash message local {d} did not lower to a RocStr stack value",
-                                            .{@intFromEnum(message)},
+                                            .{@backingInt(message)},
                                         ),
                                     };
                                     if (crash.checked_error)
@@ -23104,7 +23108,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .loop_continue => {
-                            if (builtin.mode == .Debug and self.loop_continue_targets.items.len == 0) {
+                            if (builtin.mode == .debug and self.loop_continue_targets.items.len == 0) {
                                 base.invariant(
                                     "Dev/codegen invariant violated: loop_continue encountered outside a loop",
                                     .{},
@@ -23116,7 +23120,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .loop_break => {
-                            if (builtin.mode == .Debug and self.loop_break_patch_starts.items.len == 0) {
+                            if (builtin.mode == .debug and self.loop_break_patch_starts.items.len == 0) {
                                 base.invariant(
                                     "Dev/codegen invariant violated: loop_break encountered outside a loop",
                                     .{},
@@ -23235,7 +23239,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .str_match_set_arm => |state| {
                     self.current_stmt_id = state.owner;
                     self.restoreStmtEnv(&state.before_env);
-                    if (builtin.mode == .Debug and state.index >= state.arms.len) {
+                    if (builtin.mode == .debug and state.index >= state.arms.len) {
                         base.invariant("Dev/codegen invariant violated: string-match-set arm index exceeded arm count", .{});
                     }
                     const arm = GuardedList.at(state.arms, state.index);
@@ -23312,7 +23316,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .noreturn,
                 => base.invariant(
                     "LIR/codegen invariant violated: str_match source local {d} did not lower to a RocStr stack value",
-                    .{@intFromEnum(source)},
+                    .{@backingInt(source)},
                 ),
             };
 
@@ -23661,8 +23665,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Register join parameters; storage is assigned by the procedure plan.
         fn registerJoinPointParams(self: *Self, join_point: JoinPointId, params: LocalSpan) Allocator.Error!void {
-            const jp_key = @intFromEnum(join_point);
-            if (builtin.mode == .Debug and self.join_point_params.contains(jp_key)) {
+            const jp_key = @backingInt(join_point);
+            if (builtin.mode == .debug and self.join_point_params.contains(jp_key)) {
                 base.invariant(
                     "LIR/codegen invariant violated: duplicate join-point registration for id {d}",
                     .{jp_key},
@@ -23680,7 +23684,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const base_offset = self.codegen.allocStackSlot(roc_str_size);
 
             if (backing_bytes.len < roc_str_size and str_bytes.len < roc_str_size) {
-                var bytes: [roc_str_size]u8 = .{0} ** roc_str_size;
+                var bytes: [roc_str_size]u8 = @splat(0);
                 @memcpy(bytes[0..str_bytes.len], str_bytes);
                 bytes[small_str_max_len] = @intCast(str_bytes.len | 0x80);
 
@@ -23824,7 +23828,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         fn staticStringEntry(self: *Self, str_idx: base.StringLiteral.Idx) StaticStringData.Entry {
             return self.static_strings.find(str_idx) orelse {
-                if (builtin.mode == .Debug) base.invariant("Dev/codegen invariant violated: literal {d} has no readonly data entry", .{@intFromEnum(str_idx)});
+                if (builtin.mode == .debug) base.invariant("Dev/codegen invariant violated: literal {d} has no readonly data entry", .{@backingInt(str_idx)});
                 unreachable;
             };
         }
@@ -23838,7 +23842,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn verifyStaticStringBytes(str_bytes: []const u8) void {
-            if (comptime builtin.mode != .Debug) return;
+            if (comptime builtin.mode != .debug) return;
 
             const data_addr = @intFromPtr(str_bytes.ptr);
             if (data_addr % @alignOf(isize) != 0) {
@@ -24009,7 +24013,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            try builder.addImmArg(@intCast(@backingInt(site)));
             try builder.addImmArg(@intCast(branch_index));
             try self.callComptimeHook(&builder, hooks, .branch_taken);
         }
@@ -24022,7 +24026,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            try builder.addImmArg(@intCast(@backingInt(site)));
             try self.callComptimeHook(&builder, hooks, .exhaustiveness_failed);
         }
 
@@ -24041,7 +24045,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try builder.addImmArg(@intCast(loc.file));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
-            try builder.addImmArg(@intCast(@intFromEnum(stmt_id)));
+            try builder.addImmArg(@intCast(@backingInt(stmt_id)));
             try self.callComptimeHook(&builder, hooks, .failure_region);
         }
 
@@ -24158,9 +24162,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
-                const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
+                const x19_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
+                const x21_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X21);
                 self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
@@ -24242,9 +24246,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
-                const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
+                const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
+                const r13_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R13);
                 self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
@@ -24389,9 +24393,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                const x19_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X19);
-                const x20_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X20);
-                const x21_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X21);
+                const x19_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X19);
+                const x20_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X20);
+                const x21_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X21);
                 self.codegen.callee_saved_used = x19_bit | x20_bit | x21_bit;
                 self.codegen.callee_saved_available &= ~(x19_bit | x20_bit | x21_bit);
                 self.codegen.stack_offset = 16 + CodeGen.CALLEE_SAVED_AREA_SIZE;
@@ -24453,9 +24457,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 const saved_callee_saved_available = self.codegen.callee_saved_available;
                 const saved_early_return_patches_len = self.early_return_patches.items.len;
 
-                const rbx_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.RBX);
-                const r12_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R12);
-                const r13_bit = @as(u32, 1) << @intFromEnum(x86_64.GeneralReg.R13);
+                const rbx_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.RBX);
+                const r12_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R12);
+                const r13_bit = @as(u32, 1) << @backingInt(x86_64.GeneralReg.R13);
                 self.codegen.callee_saved_used = rbx_bit | r12_bit | r13_bit;
                 self.codegen.callee_saved_available &= ~(rbx_bit | r12_bit | r13_bit);
                 self.codegen.stack_offset = -CodeGen.CALLEE_SAVED_AREA_SIZE;
@@ -24627,10 +24631,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             param_slots: []const ?i32,
         ) Allocator.Error!void {
             const proc = self.store.getProcSpec(proc_id);
-            if (builtin.mode == .Debug and (runtime_ret_desc_slot != null) != (proc.runtime_ret_desc != null)) {
+            if (builtin.mode == .debug and (runtime_ret_desc_slot != null) != (proc.runtime_ret_desc != null)) {
                 base.invariant(
                     "Dev/codegen invariant violated: dictionary thunk runtime return descriptor slot disagreed with proc {d} ABI",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             }
             const desc_value_slot: ?i32 = if (runtime_ret_desc_slot) |slot|
@@ -24675,8 +24679,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addRegArg(addr_reg);
-            try builder.addImmArg(@intFromEnum(proc_id));
-            try builder.addImmArg(@intFromEnum(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout)));
+            try builder.addImmArg(@backingInt(proc_id));
+            try builder.addImmArg(@backingInt(self.runtimeRepresentationLayoutIdx(proc_spec.ret_layout)));
             try builder.addImmArg(metadata_offset);
             try builder.addImmArg(proc_spec.erased_arg_layouts.start);
             try builder.addImmArg(proc_spec.erased_arg_layouts.len);
@@ -24703,12 +24707,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 else
                     0;
                 const capture_size = capture_prefix_size + self.getLayoutSize(capture_layout);
-                try self.emitErasedProcRegistration(@enumFromInt(index), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
+                try self.emitErasedProcRegistration(@fromBackingInt(@intCast(index)), @intCast(builtins.erased_callable.compilerMetadataOffset(capture_size)), capture_prefix_size);
             }
             for (self.boxy_worker_procs) |proc_id| {
-                const proc_index = @intFromEnum(proc_id);
+                const proc_index = @backingInt(proc_id);
                 const thunk_offset = self.boxy_dict_thunks.get(proc_index) orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("Dev/codegen invariant violated: Boxy worker proc {d} had no generated dispatch thunk", .{proc_index});
                     }
                     unreachable;
@@ -24722,7 +24726,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 defer builder.deinit();
                 try builder.addImmArg(@intCast(proc_index));
                 try builder.addRegArg(addr_reg);
-                try builder.addImmArg(@intFromEnum(ret_layout));
+                try builder.addImmArg(@backingInt(ret_layout));
                 try builder.addImmArg(@bitCast(proc.rc_borrowed_params));
                 try builder.addImmArg(if (proc.rc_ret_borrowed) 1 else 0);
                 try builder.addImmArg(@bitCast(proc.rc_ret_lenders));
@@ -24945,7 +24949,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (std.debug.runtime_safety) {
                     base.invariant(
                         "entrypoint proc {d} was not compiled before wrapper generation",
-                        .{@intFromEnum(entry_proc)},
+                        .{@backingInt(entry_proc)},
                     );
                 }
                 unreachable;
@@ -25297,7 +25301,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 if (std.debug.runtime_safety) {
                     base.invariant(
                         "entrypoint proc {d} was not compiled before wrapper generation",
-                        .{@intFromEnum(entry_proc)},
+                        .{@backingInt(entry_proc)},
                     );
                 }
                 unreachable;
@@ -25364,12 +25368,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Code offset of a Boxy dictionary thunk by the proc it dispatches to.
         pub fn boxyThunkOffset(self: *const Self, proc_id: lir.LIR.LirProcSpecId) ?usize {
-            return self.boxy_dict_thunks.get(@intFromEnum(proc_id));
+            return self.boxy_dict_thunks.get(@backingInt(proc_id));
         }
 
         /// Name of an interned symbol.
         pub fn symbolName(self: *const Self, id: SymbolTable.Id) []const u8 {
-            return self.codegen.symbols.names.items[@intFromEnum(id)];
+            return self.codegen.symbols.names.items[@backingInt(id)];
         }
 
         /// The scope generated code declared for symbol `id`.
@@ -25413,7 +25417,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .proc => |proc_id| {
                     const proc = self.store.getProcSpec(proc_id);
                     const frame_info = frame orelse unreachable;
-                    try self.proc_registry.put(@intFromEnum(proc_id), .{
+                    try self.proc_registry.put(@backingInt(proc_id), .{
                         .id = proc_id,
                         .code_start = start,
                         .code_end = end,
@@ -25428,7 +25432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     });
                 },
                 .rc_helper => |key| try self.compiled_rc_helpers.put(key, start + entry),
-                .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@intFromEnum(proc_id), start + entry),
+                .boxy_thunk => |proc_id| try self.boxy_dict_thunks.put(@backingInt(proc_id), start + entry),
                 .entrypoint, .message_pool_run, .branch_island, .hosted_stub, .spliced_proc, .spliced_boxy_thunk, .spliced_helper => {},
             }
             if (frame) |frame_info| {
@@ -25716,7 +25720,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn assertImageFinished(self: *const Self) void {
-            if (builtin.mode == .Debug and !self.image_finished) {
+            if (builtin.mode == .debug and !self.image_finished) {
                 base.invariant("generated code was read before finishImage", .{});
             }
         }
@@ -25724,7 +25728,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Emission after `finishImage` would leave the new code without its
         /// message pool and far-call stubs; `reset` reopens the image.
         fn assertImageOpen(self: *const Self) void {
-            if (builtin.mode == .Debug and self.image_finished) {
+            if (builtin.mode == .debug and self.image_finished) {
                 base.invariant("code was emitted after finishImage", .{});
             }
         }
@@ -26010,7 +26014,7 @@ fn deadTempChainFrameSize(temp_count: u32, step_value: i64) Allocator.Error!u32 
     var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    return codegen.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+    return codegen.proc_registry.get(@backingInt(proc)).?.frame_size;
 }
 
 test "aggregate entrypoint wrappers own independent register scopes" {
@@ -26019,13 +26023,13 @@ test "aggregate entrypoint wrappers own independent register scopes" {
     defer store.deinit();
     var state = try TestLayoutState.init(allocator);
     defer state.deinit();
-    const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
+    const record_layout = try state.layout_store.putCaptureStruct(&(@as([16]layout.Idx, @splat(.u64))));
     const scalar = try addLocal(&store, .u64);
     const record = try addLocal(&store, record_layout);
     const ret = try store.addCFStmt(.{ .ret = .{ .value = record } }, .test_fixture);
     const construct = try store.addCFStmt(.{ .assign_struct = .{
         .target = record,
-        .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
+        .fields = try store.addLocalSpan(&(@as([16]LocalId, @splat(scalar)))),
         .next = ret,
     } }, .test_fixture);
     const entry = try store.addCFStmt(.{ .assign_literal = .{
@@ -26058,7 +26062,7 @@ test "aggregate parameter copy preserves following argument registers" {
     defer store.deinit();
     var state = try TestLayoutState.init(allocator);
     defer state.deinit();
-    const record_layout = try state.layout_store.putCaptureStruct(&([_]layout.Idx{.u64} ** 16));
+    const record_layout = try state.layout_store.putCaptureStruct(&(@as([16]layout.Idx, @splat(.u64))));
     const record_param = try addLocal(&store, record_layout);
     const scalar_param = try addLocal(&store, .u64);
     const callee_return = try store.addCFStmt(.{ .ret = .{ .value = scalar_param } }, .test_fixture);
@@ -26075,7 +26079,7 @@ test "aggregate parameter copy preserves following argument registers" {
     } }, .test_fixture);
     const construct = try store.addCFStmt(.{ .assign_struct = .{
         .target = record,
-        .fields = try store.addLocalSpan(&([_]LocalId{scalar} ** 16)),
+        .fields = try store.addLocalSpan(&(@as([16]LocalId, @splat(scalar)))),
         .next = call,
     } }, .test_fixture);
     const entry = try store.addCFStmt(.{ .assign_literal = .{
@@ -26266,7 +26270,7 @@ test "stack reuse does not allocate declaration-only join parameters" {
         var cg = try HostLirCodeGen.init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
         defer cg.deinit();
         try cg.compileAllProcSpecs(store.getProcSpecs());
-        size.* = cg.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+        size.* = cg.proc_registry.get(@backingInt(proc)).?.frame_size;
         if (comptime builtin.cpu.arch == .x86_64 or builtin.cpu.arch == .aarch64) {
             try std.testing.expectEqual(@as(u64, 42), try runRootU64(&store, &state.layout_store, proc, .u64));
         }
@@ -26288,7 +26292,7 @@ test "stack reuse bounds locals and call scratch on both native architectures" {
                 var cg = try LirCodeGen(target).init(allocator, &store, &state.layout_store, .{}, &.{}, .default);
                 defer cg.deinit();
                 try cg.compileAllProcSpecs(store.getProcSpecs());
-                size.* = cg.proc_registry.get(@intFromEnum(proc)).?.frame_size;
+                size.* = cg.proc_registry.get(@backingInt(proc)).?.frame_size;
             }
             try std.testing.expectEqual(sizes[0], sizes[1]);
             try std.testing.expect(sizes[1] < 4096);
@@ -26489,7 +26493,7 @@ fn stackOffsetOfTestLocation(loc: anytype) i32 {
 }
 
 fn freshTestJoinPointId(next: *u32) lir.LIR.JoinPointId {
-    const id: lir.LIR.JoinPointId = @enumFromInt(next.*);
+    const id: lir.LIR.JoinPointId = @fromBackingInt(@intCast(next.*));
     next.* += 1;
     return id;
 }
@@ -26546,8 +26550,8 @@ test "Boxy dictionary thunks are emitted only for producer-named workers" {
     try codegen.compileAllProcSpecs(store.getProcSpecs());
 
     try std.testing.expectEqual(@as(usize, 1), codegen.boxy_dict_thunks.count());
-    try std.testing.expect(codegen.boxy_dict_thunks.contains(@intFromEnum(worker_proc)));
-    try std.testing.expect(!codegen.boxy_dict_thunks.contains(@intFromEnum(ordinary_proc)));
+    try std.testing.expect(codegen.boxy_dict_thunks.contains(@backingInt(worker_proc)));
+    try std.testing.expect(!codegen.boxy_dict_thunks.contains(@backingInt(ordinary_proc)));
 }
 
 test "Boxy thunk artifact splice preserves worker namespace in both orders and across packs" {
@@ -26661,18 +26665,18 @@ test "statement environments restore nested bindings and overwrites without allo
     const inner_local = try addLocal(&store, .u64);
     // Failed table growth must not leave a journal entry for an absent binding.
     codegen.local_locations.allocator = std.testing.failing_allocator;
-    try std.testing.expectError(error.OutOfMemory, codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 10 }));
+    try std.testing.expectError(error.OutOfMemory, codegen.setLocalLocation(@backingInt(before), .{ .immediate_i64 = 10 }));
     codegen.local_locations.allocator = allocator;
     try std.testing.expectEqual(@as(u32, 0), codegen.local_locations.count());
     try std.testing.expectEqual(@as(usize, 0), codegen.local_location_undo.items.len);
-    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 10 });
+    try codegen.setLocalLocation(@backingInt(before), .{ .immediate_i64 = 10 });
     const outer = try codegen.captureStmtEnv();
-    try codegen.setLocalLocation(@intFromEnum(outer_local), .{ .immediate_i64 = 20 });
-    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 11 });
+    try codegen.setLocalLocation(@backingInt(outer_local), .{ .immediate_i64 = 20 });
+    try codegen.setLocalLocation(@backingInt(before), .{ .immediate_i64 = 11 });
     const inner = try codegen.captureStmtEnv();
-    try codegen.setLocalLocation(@intFromEnum(inner_local), .{ .immediate_i64 = 30 });
-    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 12 });
-    try codegen.setLocalLocation(@intFromEnum(before), .{ .immediate_i64 = 13 });
+    try codegen.setLocalLocation(@backingInt(inner_local), .{ .immediate_i64 = 30 });
+    try codegen.setLocalLocation(@backingInt(before), .{ .immediate_i64 = 12 });
+    try codegen.setLocalLocation(@backingInt(before), .{ .immediate_i64 = 13 });
     _ = codegen.codegen.allocStackSlot(16);
     const stack_offset = codegen.codegen.stack_offset;
     _ = codegen.codegen.allocFloat().?;
@@ -26688,15 +26692,15 @@ test "statement environments restore nested bindings and overwrites without allo
     }
     _ = try codegen.captureStmtEnv();
     codegen.restoreStmtEnv(&inner);
-    try std.testing.expectEqual(@as(i64, 11), codegen.local_locations.get(@intFromEnum(before)).?.immediate_i64);
-    try std.testing.expectEqual(@as(i64, 20), codegen.local_locations.get(@intFromEnum(outer_local)).?.immediate_i64);
-    try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(inner_local)));
+    try std.testing.expectEqual(@as(i64, 11), codegen.local_locations.get(@backingInt(before)).?.immediate_i64);
+    try std.testing.expectEqual(@as(i64, 20), codegen.local_locations.get(@backingInt(outer_local)).?.immediate_i64);
+    try std.testing.expect(!codegen.local_locations.contains(@backingInt(inner_local)));
     try std.testing.expectEqual(inner.free_float, codegen.codegen.free_float);
     try std.testing.expectEqual(inner.undo_mark, codegen.local_location_undo.items.len);
     codegen.restoreStmtEnv(&inner);
     codegen.restoreStmtEnv(&outer);
     codegen.restoreStmtEnv(&outer);
-    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@intFromEnum(before)).?.immediate_i64);
+    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@backingInt(before)).?.immediate_i64);
     try std.testing.expectEqual(@as(u32, 1), codegen.local_locations.count());
     try std.testing.expectEqual(outer.undo_mark, codegen.local_location_undo.items.len);
     try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
@@ -26723,25 +26727,25 @@ test "statement environments spill vectors before marks and undo arm spills in r
     const before = try addLocal(&store, .u8x16);
     const arm_local = try addLocal(&store, .u8x16);
     const reg = codegen.codegen.allocFloat().?;
-    try codegen.setLocalLocation(@intFromEnum(before), .{ .vector_reg = .{ .reg = reg, .kind = .u8x16 } });
-    codegen.trackVectorLocal(@intFromEnum(before), reg);
+    try codegen.setLocalLocation(@backingInt(before), .{ .vector_reg = .{ .reg = reg, .kind = .u8x16 } });
+    codegen.trackVectorLocal(@backingInt(before), reg);
     const outer = try codegen.captureStmtEnv();
-    const before_loc = codegen.local_locations.get(@intFromEnum(before)).?;
+    const before_loc = codegen.local_locations.get(@backingInt(before)).?;
     try std.testing.expect(before_loc == .stack);
     try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
 
     // Each sibling binds the same local, then an inner capture spills it.
     for (0..2) |_| {
         const arm_reg = codegen.codegen.allocFloat().?;
-        try codegen.setLocalLocation(@intFromEnum(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
-        codegen.trackVectorLocal(@intFromEnum(arm_local), arm_reg);
+        try codegen.setLocalLocation(@backingInt(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
+        codegen.trackVectorLocal(@backingInt(arm_local), arm_reg);
         const inner = try codegen.captureStmtEnv();
-        try std.testing.expect(codegen.local_locations.get(@intFromEnum(arm_local)).? == .stack);
+        try std.testing.expect(codegen.local_locations.get(@backingInt(arm_local)).? == .stack);
         codegen.restoreStmtEnv(&inner);
-        try std.testing.expect(codegen.local_locations.contains(@intFromEnum(arm_local)));
+        try std.testing.expect(codegen.local_locations.contains(@backingInt(arm_local)));
         codegen.restoreStmtEnv(&outer);
-        try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(arm_local)));
-        try std.testing.expect(std.meta.eql(before_loc, codegen.local_locations.get(@intFromEnum(before)).?));
+        try std.testing.expect(!codegen.local_locations.contains(@backingInt(arm_local)));
+        try std.testing.expect(std.meta.eql(before_loc, codegen.local_locations.get(@backingInt(before)).?));
         try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
         try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(arm_reg));
         try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
@@ -26750,10 +26754,10 @@ test "statement environments spill vectors before marks and undo arm spills in r
 
     // Also discard a vector that is still resident at the end of an arm.
     const arm_reg = codegen.codegen.allocFloat().?;
-    try codegen.setLocalLocation(@intFromEnum(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
-    codegen.trackVectorLocal(@intFromEnum(arm_local), arm_reg);
+    try codegen.setLocalLocation(@backingInt(arm_local), .{ .vector_reg = .{ .reg = arm_reg, .kind = .u8x16 } });
+    codegen.trackVectorLocal(@backingInt(arm_local), arm_reg);
     codegen.restoreStmtEnv(&outer);
-    try std.testing.expect(!codegen.local_locations.contains(@intFromEnum(arm_local)));
+    try std.testing.expect(!codegen.local_locations.contains(@backingInt(arm_local)));
     try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
     try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(arm_reg));
     try std.testing.expectEqual(outer.free_float, codegen.codegen.free_float);
@@ -26775,9 +26779,9 @@ test "statement environment journal survives procedure scopes" {
     _ = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .u64 } }, .u64);
     const local = try addLocal(&store, .u64);
     const before = try codegen.captureStmtEnv();
-    try codegen.setLocalLocation(@intFromEnum(local), .{ .immediate_i64 = 10 });
+    try codegen.setLocalLocation(@backingInt(local), .{ .immediate_i64 = 10 });
     try codegen.compileAllProcSpecs(store.getProcSpecs());
-    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@intFromEnum(local)).?.immediate_i64);
+    try std.testing.expectEqual(@as(i64, 10), codegen.local_locations.get(@backingInt(local)).?.immediate_i64);
     try std.testing.expectEqual(@as(usize, 1), codegen.local_location_undo.items.len);
     codegen.restoreStmtEnv(&before);
     try std.testing.expectEqual(@as(u32, 0), codegen.local_locations.count());
@@ -26800,23 +26804,23 @@ test "vector spill residency is independent of scalar local count" {
 
     const vector_local = try addLocal(&store, .u8x16);
     const vector_reg = codegen.codegen.allocFloat().?;
-    try codegen.setLocalLocation(@intFromEnum(vector_local), .{ .vector_reg = .{
+    try codegen.setLocalLocation(@backingInt(vector_local), .{ .vector_reg = .{
         .reg = vector_reg,
         .kind = .u8x16,
     } });
-    codegen.trackVectorLocal(@intFromEnum(vector_local), vector_reg);
+    codegen.trackVectorLocal(@backingInt(vector_local), vector_reg);
 
     for (0..4096) |_| {
         const scalar_local = try addLocal(&store, .u64);
-        try codegen.setLocalLocation(@intFromEnum(scalar_local), .{ .immediate_i64 = 0 });
+        try codegen.setLocalLocation(@backingInt(scalar_local), .{ .immediate_i64 = 0 });
     }
 
     try codegen.spillAllVectorLocals();
 
     try std.testing.expectEqual(@as(u32, 0), codegen.vector_local_mask);
     try std.testing.expectEqual(@as(?u32, null), codegen.vector_local_by_reg.get(vector_reg));
-    try std.testing.expect((codegen.codegen.free_float & (@as(u32, 1) << @intFromEnum(vector_reg))) != 0);
-    try std.testing.expect(codegen.local_locations.get(@intFromEnum(vector_local)).? == .stack);
+    try std.testing.expect((codegen.codegen.free_float & (@as(u32, 1) << @backingInt(vector_reg))) != 0);
+    try std.testing.expect(codegen.local_locations.get(@backingInt(vector_local)).? == .stack);
 }
 
 test "proc params and mutable list cells use distinct stack slots" {
@@ -26873,9 +26877,9 @@ test "proc params and mutable list cells use distinct stack slots" {
     try codegen.bindProcParams(args, 0, false);
     try codegen.ensureStableLocationsForStmtLocals(answer_stmt);
 
-    const end_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(end)).?);
-    const answer_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(answer)).?);
-    const appended_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@intFromEnum(appended)).?);
+    const end_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@backingInt(end)).?);
+    const answer_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@backingInt(answer)).?);
+    const appended_slot = stackOffsetOfTestLocation(codegen.local_locations.get(@backingInt(appended)).?);
 
     try std.testing.expect(answer_slot != end_slot);
     try std.testing.expect(appended_slot != end_slot);
@@ -26942,18 +26946,18 @@ test "immutable aliases share storage but aliases of mutable locals do not" {
     }
 
     try codegen.ensureStableLocationsForStmtLocals(source_stmt);
-    const source_loc = codegen.local_locations.get(@intFromEnum(source)).?;
-    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias1)).?));
-    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias2)).?));
-    const mutable_source_loc = codegen.local_locations.get(@intFromEnum(mutable_source)).?;
-    const mutable_alias_loc = codegen.local_locations.get(@intFromEnum(mutable_alias)).?;
+    const source_loc = codegen.local_locations.get(@backingInt(source)).?;
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@backingInt(alias1)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@backingInt(alias2)).?));
+    const mutable_source_loc = codegen.local_locations.get(@backingInt(mutable_source)).?;
+    const mutable_alias_loc = codegen.local_locations.get(@backingInt(mutable_alias)).?;
     try std.testing.expect(!std.meta.eql(mutable_source_loc, mutable_alias_loc));
 
     try codegen.bindAssignedLocal(source, .{ .immediate_i64 = 1 });
     try codegen.bindAssignedLocal(alias1, try codegen.generateLookup(source));
     try codegen.bindAssignedLocal(alias2, try codegen.generateLookup(alias1));
-    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias1)).?));
-    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@intFromEnum(alias2)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@backingInt(alias1)).?));
+    try std.testing.expect(std.meta.eql(source_loc, codegen.local_locations.get(@backingInt(alias2)).?));
 }
 
 test "Windows internal proc ABI reads stack arguments after shadow space" {
@@ -26984,7 +26988,7 @@ test "Windows internal proc ABI reads stack arguments after shadow space" {
 
     try codegen.bindProcParams(args, 0, false);
 
-    _ = codegen.local_locations.get(@intFromEnum(list)) orelse return error.TestUnexpectedResult;
+    _ = codegen.local_locations.get(@backingInt(list)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
@@ -27019,7 +27023,7 @@ test "Windows erased callable ABI reads reuse pointer from caller stack" {
     };
     try codegen.bindErasedCallableAdapterParams(proc, arg_plan);
 
-    _ = codegen.local_locations.get(@intFromEnum(reuse_arg)) orelse return error.TestUnexpectedResult;
+    _ = codegen.local_locations.get(@backingInt(reuse_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
@@ -27041,7 +27045,7 @@ test "Windows dictionary thunk ABI reads result descriptor pointer from caller s
     var codegen = try WinCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
     defer codegen.deinit();
 
-    try codegen.proc_registry.put(@intFromEnum(proc_id), .{
+    try codegen.proc_registry.put(@backingInt(proc_id), .{
         .id = proc_id,
         .code_start = 0,
         .code_end = 0,
@@ -27084,11 +27088,11 @@ test "AArch64 internal proc ABI uses caller stack arg base for stack arguments" 
 
     try codegen.bindProcParams(args, 0, false);
 
-    const x28_bit = @as(u32, 1) << @intFromEnum(aarch64.GeneralReg.X28);
+    const x28_bit = @as(u32, 1) << @backingInt(aarch64.GeneralReg.X28);
     try std.testing.expect(codegen.uses_caller_stack_arg_base);
     try std.testing.expect((codegen.codegen.callee_saved_used & x28_bit) != 0);
     try std.testing.expect((codegen.codegen.callee_saved_available & x28_bit) == 0);
-    _ = codegen.local_locations.get(@intFromEnum(stack_arg)) orelse return error.TestUnexpectedResult;
+    _ = codegen.local_locations.get(@backingInt(stack_arg)) orelse return error.TestUnexpectedResult;
     try std.testing.expect(codegen.codegen.getCode().len > 0);
 }
 
@@ -28281,7 +28285,7 @@ test "symbol producer caches reuse identities and reset with generated code" {
         var codegen = try LirCodeGen(target).init(allocator, &store, &test_state.layout_store, strings.view(), &.{}, .default);
         defer codegen.deinit();
         try std.testing.expectEqual(@as(usize, 0), codegen.getSymbolNames().len);
-        const data_id: lir.LIR.StaticDataId = @enumFromInt(7);
+        const data_id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(7));
         try codegen.setStaticDataSymbols(&.{.{
             .symbol_name = "test_static_root",
             .value_id = data_id,
@@ -28302,9 +28306,9 @@ test "symbol producer caches reuse identities and reset with generated code" {
         try codegen.emitStaticDataAddress(if (comptime target.toCpuArch() == .x86_64) .RAX else .X0, data_id);
         const new_data_symbol = codegen.static_data_symbols.get(data_id).?.symbol.?;
         try std.testing.expect(old_data_symbol != new_data_symbol);
-        try std.testing.expectEqualStrings("test_static_root", codegen.getSymbolNames()[@intFromEnum(new_data_symbol)]);
+        try std.testing.expectEqualStrings("test_static_root", codegen.getSymbolNames()[@backingInt(new_data_symbol)]);
         const literal_symbol = try codegen.staticStringSymbol(literal);
-        try std.testing.expectEqualStrings(strings.find(literal).?.symbol_name, codegen.getSymbolNames()[@intFromEnum(literal_symbol)]);
+        try std.testing.expectEqualStrings(strings.find(literal).?.symbol_name, codegen.getSymbolNames()[@backingInt(literal_symbol)]);
     }
 }
 
@@ -28337,7 +28341,7 @@ test "independent fragment emits only requested procedure with unresolved self a
         const other = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
         const result = try addLocal(&store, .i64);
         const ret = try store.addCFStmt(.{ .ret = .{ .value = result } }, origin);
-        const self_id: LIR.LirProcSpecId = @enumFromInt(store.procSpecCount());
+        const self_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(store.procSpecCount()));
         const recursive = try store.addCFStmt(.{ .assign_call = .{
             .target = result,
             .proc = self_id,
@@ -28520,7 +28524,7 @@ test "AArch64 finalized artifacts preserve external calls across changed placeme
         var placed = try CG.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
         defer placed.deinit();
         placed.codegen.branch_reach_limit = 4096;
-        const prefix = [_]u8{0} ** 512;
+        const prefix = @as([512]u8, @splat(0));
         _ = try placed.appendAssembledRegion(&prefix, .{ .message_pool_run = 0 }, 0, null);
         var helpers = Artifact.HelperKeys.init(allocator);
         defer helpers.deinit();
@@ -28594,7 +28598,7 @@ test "independent fragment symbolic hooks record actual context use" {
     var layouts = try TestLayoutState.init(allocator);
     defer layouts.deinit();
     const pure = try addLiteralProc(&store, .{ .i64_literal = .{ .value = 42, .layout_idx = .i64 } }, .i64);
-    const data_id: LIR.StaticDataId = @enumFromInt(8);
+    const data_id: LIR.StaticDataId = @fromBackingInt(@intCast(8));
     const data_proc = try addLiteralProc(&store, .{ .static_data = data_id }, .i64);
     var source = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
     defer source.deinit();

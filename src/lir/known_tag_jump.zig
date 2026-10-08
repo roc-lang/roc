@@ -761,7 +761,7 @@ test "known tag jump outlines an inline exit arm into a join the edge jumps to" 
     defer fixture.deinit();
     try fixture.run();
     const edge = fixture.doneEdge();
-    try testing.expectEqual(@as(LIR.JoinPointId, @enumFromInt(fixture.first_fresh_join)), edge.target);
+    try testing.expectEqual(@as(LIR.JoinPointId, @fromBackingInt(@intCast(fixture.first_fresh_join))), edge.target);
     try testing.expect(!edge.writes_params);
 }
 

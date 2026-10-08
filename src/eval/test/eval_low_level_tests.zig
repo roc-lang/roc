@@ -3308,6 +3308,19 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "\"-500\"" },
     },
     .{
+        .name = "regression: signed narrow formatting and 128-bit limb extraction",
+        .source =
+        \\{
+        \\signed_16 = I16.to_str(-32768.I16)
+        \\signed_32 = I32.to_str(-2147483648.I32)
+        \\signed_128 = I128.to_str(-18446744073709551617.I128)
+        \\unsigned_128 = U128.to_str(18446744073709551617.U128)
+        \\"${signed_16}|${signed_32}|${signed_128}|${unsigned_128}"
+        \\}
+        ,
+        .expected = .{ .inspect_str = "\"-32768|-2147483648|-18446744073709551617|18446744073709551617\"" },
+    },
+    .{
         .name = "low_level - U32.to_str",
         .source =
         \\{

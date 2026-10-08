@@ -195,7 +195,11 @@ pub const BuildEnv = struct {
     mode: Mode,
     max_threads: usize,
     target: roc_target.RocTarget,
-    compiler_version: []const u8 = build_options.compiler_version,
+    /// Cache namespace passed to Coordinator.init; embedders may override it.
+    compiler_version: []const u8 = build_options.compiler_compatibility_id,
+    /// Human release/nightly version used only for source header pin warnings.
+    /// Inspection tools leave it null and do not acquire Git metadata inputs.
+    source_pin_version: ?[]const u8 = null,
 
     // Workspace roots for sandboxing (absolute, canonical)
     workspace_roots: std.array_list.Managed([]const u8),
@@ -799,6 +803,7 @@ pub const BuildEnv = struct {
             self.cache_manager,
             self.filesystem,
         );
+        coord.source_pin_version = self.source_pin_version;
         // Enable hosted transform for platform modules - converts e_anno_only to e_hosted_lambda
         // This is required for roc build so that hosted functions can be called at runtime
         coord.enable_hosted_transform = true;
@@ -2488,7 +2493,7 @@ pub const BuildEnv = struct {
     /// BuildEnv allocator and must be released with `freeWatchInputStates`.
     pub fn collectWatchInputStates(self: *BuildEnv) Allocator.Error![]const watch_inputs.Input {
         if (!self.track_watch_inputs) {
-            if (builtin.mode == .Debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
+            if (builtin.mode == .debug) base.invariant("collectWatchInputStates called without watch input tracking enabled", .{});
             unreachable;
         }
 
@@ -2505,7 +2510,7 @@ pub const BuildEnv = struct {
             const pkg = entry.value_ptr.*;
             if (pkg.url != null) continue;
             const state = pkg.root_file_state orelse {
-                if (builtin.mode == .Debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
+                if (builtin.mode == .debug) base.invariant("build package {s} has root_file without root_file_state", .{entry.key_ptr.*});
                 unreachable;
             };
             try self.appendWatchInputState(&inputs, &seen, pkg.root_file, state);
@@ -2518,7 +2523,7 @@ pub const BuildEnv = struct {
                 if (pkg.url != null) continue;
                 for (pkg.modules.items) |*mod| {
                     const state = mod.source_file_state orelse {
-                        if (builtin.mode == .Debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
+                        if (builtin.mode == .debug) base.invariant("coordinator module {s} has no source_file_state", .{mod.name});
                         unreachable;
                     };
                     try self.appendWatchInputState(&inputs, &seen, mod.path, state);
@@ -3202,13 +3207,13 @@ pub const BuildEnv = struct {
 
     pub fn executableRootCheckedArtifact(self: *BuildEnv) *const check.CheckedArtifact.CheckedModuleArtifact {
         const semantic = self.getExecutableRootSemanticData() orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("build env invariant violated: executable root semantic data is missing", .{});
             }
             unreachable;
         };
         return semantic.checked_artifact orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("build env invariant violated: executable root has no checked artifact", .{});
             }
             unreachable;
@@ -3298,7 +3303,7 @@ pub const BuildEnv = struct {
         for (root_artifact.lowering_visibility.module_ids) |key| {
             if (rootRelationContainsArtifact(root_artifact, key)) continue;
             const artifact = self.artifactByKey(key) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("build env invariant violated: missing lowering visibility artifact", .{});
                 }
                 unreachable;
@@ -3319,7 +3324,7 @@ pub const BuildEnv = struct {
 
         for (root_artifact.platform_required_bindings.bindings) |binding| {
             const artifact = self.artifactByKey(binding.app_value.artifact) orelse {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("build env invariant violated: missing relation artifact", .{});
                 }
                 unreachable;
@@ -3724,7 +3729,7 @@ test "BuildEnv collectWatchInputStates includes package root state" {
     defer env.deinit();
     env.setWatchInputTracking(true);
 
-    const root_hash = [_]u8{7} ** 32;
+    const root_hash = @as([32]u8, @splat(7));
     const key = try allocator.dupe(u8, "pkg");
     errdefer allocator.free(key);
 
@@ -3785,7 +3790,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         .name = try allocator.dupe(u8, "pkg"),
         .kind = .package,
         .root_file = try allocator.dupe(u8, generated_app_path),
-        .root_file_state = .{ .hash = [_]u8{1} ** 32 },
+        .root_file_state = .{ .hash = @as([32]u8, @splat(1)) },
         .root_dir = try allocator.dupe(u8, generated_dir),
     });
 
@@ -3796,7 +3801,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
         1,
         roc_target.RocTarget.detectNative(),
         env.builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         env.filesystem,
     );
@@ -3804,11 +3809,11 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     env.coordinator = coord;
 
     const coord_pkg = try coord.ensurePackage("pkg", generated_dir);
-    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = [_]u8{1} ** 32 });
+    try coord_pkg.setRootInput(allocator, generated_app_path, .{ .hash = @as([32]u8, @splat(1)) });
     const coord_module_id = try coord_pkg.ensureModule(allocator, "App", generated_app_path);
     const coord_mod = &coord_pkg.modules.items[coord_module_id];
     coord_mod.source_dir_override = try allocator.dupe(u8, real_src_dir);
-    coord_mod.source_file_state = .{ .hash = [_]u8{2} ** 32 };
+    coord_mod.source_file_state = .{ .hash = @as([32]u8, @splat(2)) };
     try testing.expectEqualStrings(real_src_dir, coord_mod.canonicalSourceDir());
 
     const source = try allocator.dupe(u8, "main = 1\n");
@@ -3816,7 +3821,7 @@ test "BuildEnv collectWatchInputStates resolves file dependencies from module so
     module_env.* = try ModuleEnv.init(allocator, source);
     try module_env.initCIRFields("App");
     const dep_idx = try module_env.recordFileDependency("data.txt", 0, 0);
-    const dep_hash = [_]u8{3} ** 32;
+    const dep_hash = @as([32]u8, @splat(3));
     module_env.setFileDependencyContentHash(dep_idx, dep_hash);
     coord_mod.semantic = .{ .module_env = module_env, .checked_artifact = null };
 

@@ -4,7 +4,6 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const build_options = @import("build_options");
 const protocol = @import("../protocol.zig");
 const position_params = @import("position_params.zig");
 const fmt = @import("fmt");
@@ -108,7 +107,7 @@ fn formatSource(allocator: std.mem.Allocator, source: []const u8) FormatSourceEr
 
     // Format the AST, keeping formatting here identical to `roc fmt`—which
     // includes bringing a stale `roc` version pin up to date.
-    try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = build_options.compiler_version });
+    try fmt.formatAstWithOptions(ast.*, &result.writer, .{ .compiler_version = @import("compiler_version").compiler_version });
 
     return try result.toOwnedSlice();
 }

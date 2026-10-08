@@ -198,7 +198,7 @@ pub fn schemeFromVar(
 /// A source scheme's key: its root type's key in the scheme namespace.
 fn schemeKeyForType(key: canonical.CanonicalTypeKey) canonical.CanonicalTypeSchemeKey {
     var hasher = TypeDigestHasher.init();
-    hasher.update(&.{@intFromEnum(KeyTag.canonical_type_scheme)});
+    hasher.update(&.{@backingInt(KeyTag.canonical_type_scheme)});
     hasher.update(&key.bytes);
     return .{ .bytes = hasher.finalResult() };
 }
@@ -415,10 +415,10 @@ const KeyEngine = type_key_engine.Engine(SourceAdapter);
 /// The key tags the engine writes itself, shared by every checked-type key
 /// encoder.
 pub const key_engine_tags = type_key_engine.Tags{
-    .identity_ref = @intFromEnum(KeyTag.identity_var_ref),
-    .cycle = @intFromEnum(KeyTag.cycle),
-    .child_key = @intFromEnum(KeyTag.child_key),
-    .child_key_mapped = @intFromEnum(KeyTag.child_key_mapped),
+    .identity_ref = @backingInt(KeyTag.identity_var_ref),
+    .cycle = @backingInt(KeyTag.cycle),
+    .child_key = @backingInt(KeyTag.child_key),
+    .child_key_mapped = @backingInt(KeyTag.child_key_mapped),
 };
 
 /// Keys source types through the shared engine. Without `retain`, every
@@ -445,7 +445,7 @@ const Digester = struct {
         if (!self.retain) self.engine.reset();
         // A failed request can leave partial classes behind.
         errdefer self.engine.reset();
-        const summary = try self.engine.summarize(&self.adapter, @intFromEnum(var_));
+        const summary = try self.engine.summarize(&self.adapter, @backingInt(var_));
         return .{
             .key = .{ .bytes = summary.key },
             .contains_identity_variables = summary.contains_identity,
@@ -510,15 +510,15 @@ const SourceAdapter = struct {
     }
 
     pub fn resolve(self: *SourceAdapter, node: u32) u32 {
-        return @intFromEnum(self.store.resolveVar(@enumFromInt(node)).var_);
+        return @backingInt(self.store.resolveVar(@fromBackingInt(@intCast(node))).var_);
     }
 
     fn child(self: *SourceAdapter, sink: *type_key_engine.Sink, var_: Var) Allocator.Error!void {
-        try sink.child(@intFromEnum(self.store.resolveVar(var_).var_));
+        try sink.child(@backingInt(self.store.resolveVar(var_).var_));
     }
 
     fn tag(sink: *type_key_engine.Sink, comptime key_tag: KeyTag) Allocator.Error!void {
-        try sink.byte(@intFromEnum(key_tag));
+        try sink.byte(@backingInt(key_tag));
     }
 
     fn ident(self: *SourceAdapter, sink: *type_key_engine.Sink, idx: Ident.Idx) Allocator.Error!void {
@@ -527,7 +527,7 @@ const SourceAdapter = struct {
     }
 
     pub fn describe(self: *SourceAdapter, node: u32, sink: *type_key_engine.Sink) Allocator.Error!type_key_engine.NodeKind {
-        const var_: Var = @enumFromInt(node);
+        const var_: Var = @fromBackingInt(@intCast(node));
         const resolved = self.store.resolveVar(var_);
         if (self.err_by_var and resolved.desc.content == .err) {
             try tag(sink, .err_var);
@@ -599,7 +599,7 @@ const SourceAdapter = struct {
         if (self.identity_anchors) |anchors| {
             if (anchors.contains(var_)) {
                 try tag(sink, .identity_var_anchor);
-                try sink.varint(@intFromEnum(var_));
+                try sink.varint(@backingInt(var_));
                 sink.counts_identity = true;
                 return .leaf;
             }
@@ -946,7 +946,7 @@ pub const KeyTag = enum(u8) {
 
 /// Append a key node's one-byte tag.
 pub fn appendKeyTag(buf: *std.ArrayList(u8), allocator: Allocator, tag: KeyTag) Allocator.Error!void {
-    try buf.append(allocator, @intFromEnum(tag));
+    try buf.append(allocator, @backingInt(tag));
 }
 
 /// Unsigned LEB128. Every integer in the encoding sits at a position its
@@ -1046,7 +1046,7 @@ const Inspector = struct {
         self.adapter.detect_invalid_nominals = self.detect_errors;
         const frames_base = self.frames.items.len;
         errdefer self.frames.items.len = frames_base;
-        try self.visit(self.adapter.resolve(@intFromEnum(var_)));
+        try self.visit(self.adapter.resolve(@backingInt(var_)));
         while (self.frames.items.len > frames_base) {
             const frame = &self.frames.items[self.frames.items.len - 1];
             const items = self.descriptions.itemsOf(frame.desc);
@@ -1067,13 +1067,13 @@ const Inspector = struct {
     fn visit(self: *Inspector, node: u32) Allocator.Error!void {
         if ((try self.visited.getOrPut(node)).found_existing) return;
         for (self.opaque_roots) |opaque_root| {
-            if (@intFromEnum(opaque_root) == node) return;
+            if (@backingInt(opaque_root) == node) return;
         }
         const desc = try type_key_engine.describe(SourceAdapter, &self.adapter, self.allocator, &self.descriptions, node, false);
         if (self.detect_errors and desc.contains_error) self.contains_error = true;
         switch (desc.kind) {
             .identity => {
-                try self.identity_variables.append(self.allocator, @enumFromInt(node));
+                try self.identity_variables.append(self.allocator, @fromBackingInt(@intCast(node)));
                 if (!self.walk_identity_constraints) return;
             },
             .content => {},
@@ -1096,7 +1096,7 @@ fn builtinModuleIdent(idents: *const Ident.Store) Ident.Idx {
 }
 
 fn invariantViolation(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant(message, .{});
     }
     unreachable;
@@ -1350,7 +1350,7 @@ test "canonical error detection traverses alias arguments" {
 
     var env = try ModuleEnv.init(allocator, "");
     defer env.deinit();
-    try env.setContentIdentity([_]u8{0xA5} ** 32);
+    try env.setContentIdentity(@as([32]u8, @splat(0xA5)));
     const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
 
     var store = try TypeStore.initCapacity(allocator, 16, 8);
@@ -1428,6 +1428,9 @@ test "issue 11128 scheme writer reuses scratch with fresh identity and cycle num
 
 test "issue 11128 scheme writer recovers from every allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 256, 256);
@@ -1437,14 +1440,14 @@ test "issue 11128 scheme writer recovers from every allocation failure" {
     const root = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(&args) } } });
     const expected = try schemeFromVar(gpa, &store, &env, root);
     const small_expected = try schemeFromVar(gpa, &store, &env, args[0]);
-    var successful = std.testing.FailingAllocator.init(gpa, .{});
+    var successful = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     {
         var writer = SchemeWriter.init(successful.allocator(), &store, &env);
         defer writer.deinit();
         _ = try writer.fromVar(root);
     }
     for (0..successful.allocations) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var writer = SchemeWriter.init(failing.allocator(), &store, &env);
         defer writer.deinit();
         try std.testing.expectError(error.OutOfMemory, writer.fromVar(root));
@@ -1514,6 +1517,9 @@ test "row ranks preserve keys across sorting thresholds and extension runs" {
 
 test "type writer reuses maps and resets complete digests after allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 256, 256);
@@ -1527,7 +1533,7 @@ test "type writer reuses maps and resets complete digests after allocation failu
     try std.testing.expect(expected.contains_identity_variables);
     try std.testing.expect(!closed_expected.contains_identity_variables);
 
-    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var counter = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     var writer = TypeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     _ = try writer.fromVar(root);
@@ -1542,7 +1548,7 @@ test "type writer reuses maps and resets complete digests after allocation failu
     try std.testing.expectEqual(allocated, counter.allocated_bytes);
 
     for (0..allocations) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var retry = TypeWriter.init(failing.allocator(), &store, &env);
         defer retry.deinit();
         try std.testing.expectError(error.OutOfMemory, retry.fromVar(root));
@@ -1598,6 +1604,9 @@ test "type writer resets checker digest modes between requests" {
 
 test "scheme identity enumeration reuses scratch and recovers from every allocation failure" {
     const gpa = std.testing.allocator;
+    // Zig 0.17 SafeAllocator can grow a buffer in place depending on its
+    // neighbors. Disable resize/remap so every sweep has the same allocation
+    // points while retaining SafeAllocator leak and double-free checks.
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
     var store = try TypeStore.initCapacity(gpa, 2048, 256);
@@ -1614,7 +1623,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
     defer gpa.free(expected);
     try std.testing.expectEqualSlices(Var, &identities, expected);
 
-    var counter = std.testing.FailingAllocator.init(gpa, .{});
+    var counter = std.testing.FailingAllocator.init(gpa, .{ .resize_fail_index = 0 });
     var writer = TypeWriter.init(counter.allocator(), &store, &env);
     defer writer.deinit();
     const warm = try writer.identityVarsFromScheme(root, &relations);
@@ -1632,7 +1641,7 @@ test "scheme identity enumeration reuses scratch and recovers from every allocat
         try std.testing.expectEqualSlices(Var, &.{ identities[127], root }, fresh);
     }
     for (0..allocation_count) |fail_at| {
-        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at });
+        var failing = std.testing.FailingAllocator.init(gpa, .{ .fail_index = fail_at, .resize_fail_index = 0 });
         var retry = TypeWriter.init(failing.allocator(), &store, &env);
         defer retry.deinit();
         try std.testing.expectError(error.OutOfMemory, retry.identityVarsFromScheme(root, &relations));
@@ -1781,7 +1790,7 @@ test "issue 11350 inspection preserves identity slots through constraints and cy
     const gpa = std.testing.allocator;
     var env = try ModuleEnv.init(gpa, "");
     defer env.deinit();
-    try env.setContentIdentity([_]u8{0xA5} ** 32);
+    try env.setContentIdentity(@as([32]u8, @splat(0xA5)));
     const rigid_name = try env.insertIdent(Ident.for_text("a"));
     const method_name = try env.insertIdent(Ident.for_text("method"));
     const nominal_name = try env.insertIdent(Ident.for_text("Box"));
@@ -2083,7 +2092,7 @@ test "key encodings decode back into their tag sequence" {
 
     var env = try ModuleEnv.init(allocator, "");
     defer env.deinit();
-    try env.setContentIdentity([_]u8{0x5A} ** 32);
+    try env.setContentIdentity(@as([32]u8, @splat(0x5A)));
     const alias_ident = try env.insertIdent(Ident.for_text("Alias"));
     const nominal_ident = try env.insertIdent(Ident.for_text("Wrapper"));
     const a_name = try env.insertIdent(Ident.for_text("a"));

@@ -227,7 +227,7 @@ fn evaluateEntrypointInState(
 ) void {
     const view = &state.view;
     const entrypoint = state.entrypoints.forOrdinal(entry_idx) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             invariant("LIR shim invariant violated: missing platform entrypoint ordinal {d}", .{entry_idx});
         }
         unreachable;

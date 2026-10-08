@@ -521,7 +521,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
-    const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
+    const cpu = try allocator.dupeSentinel(u8, roc_target.llvmCpuName(resolved_target), 0);
     errdefer allocator.free(cpu);
     const features = try roc_target.llvmFeatureString(allocator, resolved_target);
     errdefer allocator.free(features);
@@ -706,7 +706,7 @@ fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
 
-    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+    if (@backingInt(runtime_layout_idx) < layouts.layouts.len()) {
         const layout_val = layouts.getLayout(runtime_layout_idx);
         const size = layouts.layoutSizeAlign(layout_val).size;
         if (layout_val.tag == .zst or size == 0) return 0;

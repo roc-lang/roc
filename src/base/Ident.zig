@@ -21,7 +21,7 @@ const TextRankCache = @import("TextRankCache.zig");
 
 /// Whether to enable debug store tracking. This adds a Debug-only check that
 /// verifies Idx values are only looked up in the store that created them.
-const enable_store_tracking = builtin.mode == .Debug;
+const enable_store_tracking = builtin.mode == .debug;
 
 /// Method name for addition - used by + operator desugaring
 pub const PLUS_METHOD_NAME = "plus";
@@ -128,7 +128,7 @@ pub const Idx = packed struct(u32) {
     pub const NONE: Idx = .{ .attributes = .{ .effectful = true, .ignored = true, .reserved = true }, .idx = std.math.maxInt(u29) };
 
     pub fn eql(self: Idx, other: Idx) bool {
-        if (comptime builtin.mode == .Debug) {
+        if (comptime builtin.mode == .debug) {
             if (self.idx == other.idx) {
                 std.debug.assert(@as(u3, @bitCast(self.attributes)) == @as(u3, @bitCast(other.attributes)));
             }
@@ -183,7 +183,7 @@ pub const Store = struct {
     /// outside this interner's data and is caught by the bounds check.
     fn verifyIdx(self: *const Store, idx: Idx) void {
         if (enable_store_tracking) {
-            if (!self.interner.isInBounds(@enumFromInt(@as(u32, idx.idx)))) {
+            if (!self.interner.isInBounds(@fromBackingInt(@as(u32, idx.idx)))) {
                 invariant(
                     "Ident.Idx lookup in wrong store: offset {d} is not a valid " ++
                         "entry in this interner. It was created by a different store.",
@@ -261,11 +261,11 @@ pub const Store = struct {
         const idx = try self.interner.insert(gpa, ident.raw_text);
         // The 29-bit id space is the store's capacity; `maxInt(u29)` is the
         // `NONE` sentinel.
-        if (@intFromEnum(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
+        if (@backingInt(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
 
         const result = Idx{
             .attributes = ident.attributes,
-            .idx = @intCast(@intFromEnum(idx)),
+            .idx = @intCast(@backingInt(idx)),
         };
 
         return result;
@@ -299,7 +299,7 @@ pub const Store = struct {
 
         return Idx{
             .attributes = ident.attributes,
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @as(u29, @intCast(@backingInt(idx))),
         };
     }
 
@@ -336,7 +336,7 @@ pub const Store = struct {
         const name = str_buffer[digit_index + 1 ..];
 
         const idx = try self.interner.insert(gpa, name);
-        if (@intFromEnum(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
+        if (@backingInt(idx) >= std.math.maxInt(u29)) return error.OutOfMemory;
 
         const attributes = Attributes{
             .effectful = false,
@@ -346,15 +346,15 @@ pub const Store = struct {
 
         const expected_idx = self.attributes.items.items.len;
         const attributes_idx = try self.attributes.append(gpa, attributes);
-        if (comptime builtin.mode == .Debug) {
-            std.debug.assert(@intFromEnum(attributes_idx) == expected_idx);
-        } else if (@intFromEnum(attributes_idx) != expected_idx) {
+        if (comptime builtin.mode == .debug) {
+            std.debug.assert(@backingInt(attributes_idx) == expected_idx);
+        } else if (@backingInt(attributes_idx) != expected_idx) {
             unreachable;
         }
 
         const result = Idx{
             .attributes = attributes,
-            .idx = @intCast(@intFromEnum(idx)),
+            .idx = @intCast(@backingInt(idx)),
         };
 
         return result;
@@ -363,7 +363,7 @@ pub const Store = struct {
     /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
         self.verifyIdx(idx);
-        return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
+        return self.interner.getText(@fromBackingInt(@intCast(@as(u32, idx.idx))));
     }
 
     /// Compare the texts behind two identifiers from this store.
@@ -389,7 +389,7 @@ pub const Store = struct {
         const Context = struct {
             store: *const Store,
             pub fn text(ctx: @This(), index: u32) []const u8 {
-                return ctx.store.interner.getText(@enumFromInt(index));
+                return ctx.store.interner.getText(@fromBackingInt(@intCast(index)));
             }
             pub fn next(_: @This(), index: u32, bytes: []const u8) u32 {
                 return index + @as(u32, @intCast(bytes.len)) + 1;
@@ -419,7 +419,7 @@ pub const Store = struct {
         // Create an Idx with inferred attributes from the text
         return Idx{
             .attributes = Attributes.fromString(text),
-            .idx = @as(u29, @intCast(@intFromEnum(interner_idx))),
+            .idx = @as(u29, @intCast(@backingInt(interner_idx))),
         };
     }
 
@@ -605,7 +605,7 @@ test "Ident.Store basic CompactWriter roundtrip" {
 
     // Check the bytes length for validation
     const bytes_len = deserialized.interner.bytes.len();
-    const idx1_value = @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx))));
+    const idx1_value = @backingInt(@as(SmallStringInterner.Idx, @fromBackingInt(@intCast(@as(u32, idx1.idx)))));
 
     // Verify the index is valid
     if (bytes_len <= idx1_value) {
@@ -706,8 +706,8 @@ test "Ident.Store CompactWriter roundtrip" {
 
     const idx1 = try original.insert(gpa, Ident.for_text("test1"));
     const idx2 = try original.insert(gpa, Ident.for_text("test2"));
-    try std.testing.expect(@intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx1.idx)))) <
-        @intFromEnum(@as(SmallStringInterner.Idx, @enumFromInt(@as(u32, idx2.idx)))));
+    try std.testing.expect(@backingInt(@as(SmallStringInterner.Idx, @fromBackingInt(@intCast(@as(u32, idx1.idx))))) <
+        @backingInt(@as(SmallStringInterner.Idx, @fromBackingInt(@intCast(@as(u32, idx2.idx))))));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});

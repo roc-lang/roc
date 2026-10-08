@@ -754,9 +754,11 @@ pub fn parseStandardArgsFromSlice(raw_args: []const []const u8, allocator: Alloc
     var i: usize = 1;
     while (i < raw_args.len) : (i += 1) {
         const arg = raw_args[i];
-        if (std.mem.eql(u8, arg, "--filter")) {
+        if (std.mem.eql(u8, arg, "--filter") or std.mem.eql(u8, arg, "--test-filter")) {
             i += 1;
             if (i < raw_args.len) try filters.append(allocator, raw_args[i]);
+        } else if (std.mem.startsWith(u8, arg, "--test-filter=")) {
+            try filters.append(allocator, arg["--test-filter=".len..]);
         } else if (std.mem.eql(u8, arg, "--verbose")) {
             args.verbose = true;
         } else if (std.mem.eql(u8, arg, "--llvm") or std.mem.eql(u8, arg, "--include-llvm")) {
@@ -887,14 +889,16 @@ test "parseStandardArgsFromSlice treats threads zero as default and keeps repeat
         "0",
         "--filter",
         "alpha",
-        "--filter",
+        "--test-filter",
         "beta",
+        "--test-filter=gamma",
     }, arena.allocator());
 
     try std.testing.expect(args.max_threads == null);
-    try std.testing.expectEqual(@as(usize, 2), args.filters.len);
+    try std.testing.expectEqual(@as(usize, 3), args.filters.len);
     try std.testing.expectEqualStrings("alpha", args.filters[0]);
     try std.testing.expectEqualStrings("beta", args.filters[1]);
+    try std.testing.expectEqualStrings("gamma", args.filters[2]);
     try std.testing.expectEqual(@as(usize, 1), args.positional.len);
     try std.testing.expectEqualStrings("roc-binary", args.positional[0]);
 }
@@ -1372,7 +1376,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
             }
 
             if (is_tty) {
-                std.debug.print("\r{s}\r", .{" " ** 72});
+                std.debug.print("\r{s}\r", .{@as([72]u8, @splat(' '))});
             }
         }
 
@@ -1900,7 +1904,7 @@ pub fn ProcessPool(comptime Spec: type, comptime Result: type, comptime cfg: Poo
 /// Send the forked child's stderr to `<dir>/child_<index>.log`.
 fn redirectChildStderr(dir: []const u8, test_idx: usize) void {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = std.fmt.bufPrintZ(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }) catch return;
+    const path = std.mem.printSentinel(&path_buf, "{s}/child_{d}.log", .{ dir, test_idx }, 0) catch return;
     const fd = std.c.open(path.ptr, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true }, @as(std.c.mode_t, 0o644));
     if (fd < 0) return;
     _ = std.c.dup2(fd, posix.STDERR_FILENO);
@@ -1933,7 +1937,7 @@ fn freezeOnCrash(sig: posix.SIG, info: *const posix.siginfo_t, _: ?*anyopaque) c
     var buf: [192]u8 = undefined;
     const message = std.fmt.bufPrint(&buf, "\n[child] frozen after crash, pid={d} signo={d} si_code={d} addr=0x{x} cpu={d}\n", .{
         linux.getpid(),
-        @intFromEnum(sig),
+        @backingInt(sig),
         info.code,
         @intFromPtr(info.fields.sigfault.addr),
         cpu,

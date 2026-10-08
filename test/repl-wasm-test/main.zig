@@ -170,11 +170,11 @@ pub fn main(init: std.process.Init) anyerror!void {
 
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":112,"op":"eval","params":{"source":"expect x == 41"}}
-    , &.{ "\"ok\":true", "\"kind\":\"statement\"", "\"status\":\"ok\"", "\"committed\":false", "\"revision\":3", "\"value\":null", "\"type\":null", "\"completed\":true", "\"committed_count\":0" }, &.{ "internal_error" });
+    , &.{ "\"ok\":true", "\"kind\":\"statement\"", "\"status\":\"ok\"", "\"committed\":false", "\"revision\":3", "\"value\":null", "\"type\":null", "\"completed\":true", "\"committed_count\":0" }, &.{"internal_error"});
 
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":113,"op":"eval","params":{"source":"expect x == 0"}}
-    , &.{ "\"kind\":\"statement\"", "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Expect Failed", "\"completed\":false" }, &.{ "internal_error" });
+    , &.{ "\"kind\":\"statement\"", "\"status\":\"diagnostic\"", "\"code\":\"compile_error\"", "Compile Time Expect Failed", "\"completed\":false" }, &.{"internal_error"});
 
     try sendAndCheck(interface, gpa,
         \\{"protocol":1,"id":12,"op":"eval","params":{"source":"crash \"boom\""}}

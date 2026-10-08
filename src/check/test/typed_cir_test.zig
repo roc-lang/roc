@@ -9,14 +9,22 @@ test "typed CIR exposes solved vars on defs exprs and patterns" {
         \\id = \x -> x
         \\answer = id(42)
     );
-    defer test_env.deinit();
 
     const source_modules = [_]TypedCIR.Modules.SourceModule{
         test_env.takePublishedSourceModule(),
         .{ .precompiled = test_env.builtin_module.env },
     };
-    var modules = try TypedCIR.Modules.init(std.testing.allocator, &source_modules);
+    var modules = TypedCIR.Modules.init(std.testing.allocator, &source_modules) catch |err| {
+        // Ownership transfers only after Modules.init succeeds.
+        test_env.published_owns_module_env = false;
+        test_env.owned_source = source_modules[0].owned_checked.owned_source;
+        test_env.deinit();
+        return err;
+    };
     defer modules.deinit();
+    // The published module owns ModuleEnv, while the fixture's checker and
+    // canonicalizer still borrow it during teardown.
+    defer test_env.deinit();
     const module = modules.module(0);
     const defs = test_env.module_env.store.sliceDefs(test_env.module_env.all_defs);
 

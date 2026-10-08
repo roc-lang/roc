@@ -20,12 +20,12 @@ var rand = std.Random.DefaultPrng.init(1234);
 
 /// Generate a random index of type `T`.
 fn rand_idx(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u32));
+    return @fromBackingInt(@intCast(rand.random().int(u32)));
 }
 
 /// Generate a random index of type `T`.
 fn rand_idx_u16(comptime T: type) T {
-    return @enumFromInt(rand.random().int(u16));
+    return @fromBackingInt(@intCast(rand.random().int(u16)));
 }
 
 /// Helper to create a `DataSpan` from raw start and length positions.
@@ -660,7 +660,7 @@ test "NodeStore mixed field-access path preserves segment order, modes, and regi
 
     // A path builder owns only its reserved node tail. Rolling one back must
     // leave unrelated index spans untouched.
-    const sentinel_expr: CIR.Expr.Idx = @enumFromInt(0x1234_5678);
+    const sentinel_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(0x1234_5678));
     const prefix = try store.appendExprSpan(&.{sentinel_expr});
     const abandoned = try store.startFieldAccessPath(2);
     _ = store.appendFieldAccessPathSegmentAssumeCapacity(abandoned, .{
@@ -680,7 +680,7 @@ test "NodeStore mixed field-access path preserves segment order, modes, and regi
     try testing.expectEqualSlices(CIR.Expr.Idx, &.{sentinel_expr}, store.sliceExpr(prefix));
 
     const expected_expr = CIR.Expr{ .e_field_access = .{
-        .receiver = @enumFromInt(41),
+        .receiver = @fromBackingInt(@intCast(41)),
         .segments = segments,
     } };
     const expr_idx = try store.addExpr(expected_expr, from_raw_offsets(2, 29));
@@ -1406,7 +1406,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .apply = .{
             .name = rand_ident_idx(),
-            .base = .{ .local = .{ .decl_idx = @enumFromInt(10) } },
+            .base = .{ .local = .{ .decl_idx = @fromBackingInt(@intCast(10)) } },
             .args = CIR.TypeAnno.Span{ .span = rand_span() },
         },
     });
@@ -1445,7 +1445,7 @@ test "NodeStore round trip - TypeAnno" {
     try type_annos.append(gpa, CIR.TypeAnno{
         .lookup = .{
             .name = rand_ident_idx(),
-            .base = .{ .local = .{ .decl_idx = @enumFromInt(10) } },
+            .base = .{ .local = .{ .decl_idx = @fromBackingInt(@intCast(10)) } },
         },
     });
     try type_annos.append(gpa, CIR.TypeAnno{
@@ -1534,19 +1534,19 @@ test "NodeStore round trip - annotation record field optionality" {
     const fields = [_]CIR.TypeAnno.RecordField{
         .{
             .name = @bitCast(@as(u32, 1)),
-            .ty = @enumFromInt(2),
+            .ty = @fromBackingInt(@intCast(2)),
             .is_optional = false,
             .is_unnamed = false,
         },
         .{
             .name = @bitCast(@as(u32, 3)),
-            .ty = @enumFromInt(4),
+            .ty = @fromBackingInt(@intCast(4)),
             .is_optional = true,
             .is_unnamed = false,
         },
         .{
             .name = @bitCast(@as(u32, 5)),
-            .ty = @enumFromInt(6),
+            .ty = @fromBackingInt(@intCast(6)),
             .is_optional = false,
             .is_unnamed = true,
         },
@@ -1683,7 +1683,7 @@ test "NodeStore round trip - Pattern" {
     });
 
     // Test the round-trip for all patterns with their original regions
-    var regions = [_]base.Region{undefined} ** NodeStore.MODULEENV_PATTERN_NODE_COUNT;
+    var regions = @as([NodeStore.MODULEENV_PATTERN_NODE_COUNT]base.Region, @splat(undefined));
     for (&regions) |*region| {
         region.* = rand_region();
     }
@@ -1695,7 +1695,7 @@ test "NodeStore round trip - Pattern" {
         try testing.expectEqualDeep(pattern, retrieved);
 
         // Also verify the region was stored correctly
-        const stored_region = store.getRegionAt(@enumFromInt(@intFromEnum(idx)));
+        const stored_region = store.getRegionAt(@fromBackingInt(@intCast(@backingInt(idx))));
         try testing.expectEqualDeep(region, stored_region);
     }
 
@@ -1716,8 +1716,8 @@ test "SurfaceOrigin encode/decode round-trips" {
         );
     }
     // Every binop form.
-    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".fields) |field| {
-        const op: CIR.Expr.Binop.Op = @enumFromInt(field.value);
+    inline for (@typeInfo(CIR.Expr.Binop.Op).@"enum".field_values) |field_value| {
+        const op: CIR.Expr.Binop.Op = @fromBackingInt(@intCast(field_value));
         const origin = SurfaceOrigin{ .binop = op };
         try testing.expectEqual(
             origin,
@@ -1788,19 +1788,19 @@ test "where clause span records canonical rigid ownership by annotation scope" {
     const owners = store.sliceWhereClauseOwners(where);
     try testing.expectEqual(@as(usize, 4), owners.len);
 
-    try testing.expectEqual(@intFromEnum(outer), owners[0].rigid_var);
+    try testing.expectEqual(@backingInt(outer), owners[0].rigid_var);
     try testing.expect(owners[0].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{outer_method}, store.sliceWhereClausesForOwner(owners[0]));
 
-    try testing.expectEqual(@intFromEnum(item), owners[1].rigid_var);
+    try testing.expectEqual(@backingInt(item), owners[1].rigid_var);
     try testing.expect(owners[1].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{item_method}, store.sliceWhereClausesForOwner(owners[1]));
 
-    try testing.expectEqual(@intFromEnum(detached), owners[2].rigid_var);
+    try testing.expectEqual(@backingInt(detached), owners[2].rigid_var);
     try testing.expect(!owners[2].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{detached_method}, store.sliceWhereClausesForOwner(owners[2]));
 
-    try testing.expectEqual(@intFromEnum(enclosing), owners[3].rigid_var);
+    try testing.expectEqual(@backingInt(enclosing), owners[3].rigid_var);
     try testing.expect(!owners[3].owned_by_annotation);
     try testing.expectEqualSlices(CIR.WhereClause.Idx, &.{enclosing_method}, store.sliceWhereClausesForOwner(owners[3]));
 
@@ -1845,13 +1845,13 @@ test "field access paths are direct contiguous node ranges" {
 
     try testing.expectEqual(@as(u32, 3), segments.len);
     try testing.expectEqual(index_data_len, store.index_data.len());
-    try testing.expectEqual(@intFromEnum(segments.start) + segments.len, @intFromEnum(access_idx));
+    try testing.expectEqual(@backingInt(segments.start) + segments.len, @backingInt(access_idx));
 
     for (expected_names, expected_modes, expected_regions, 0..) |name, mode, region, position| {
         const segment_idx = store.fieldAccessSegmentAt(segments, @intCast(position));
         try testing.expectEqual(
-            @intFromEnum(segments.start) + @as(u32, @intCast(position)),
-            @intFromEnum(segment_idx),
+            @backingInt(segments.start) + @as(u32, @intCast(position)),
+            @backingInt(segment_idx),
         );
         const segment = store.getFieldAccessSegment(segment_idx);
         try testing.expectEqual(name, @as(u32, @bitCast(segment.name)));

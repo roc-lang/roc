@@ -387,12 +387,12 @@ test "issue 10993: erased callable ABI writes exactly ret_size bytes through the
     };
 
     for (cases) |case| {
-        const compiled = codegen.proc_registry.get(@intFromEnum(case.proc_id)) orelse return error.TestUnexpectedResult;
+        const compiled = codegen.proc_registry.get(@backingInt(case.proc_id)) orelse return error.TestUnexpectedResult;
         const callable: builtins.erased_callable.ErasedCallableFn = @ptrCast(@alignCast(executable.codePtr() + compiled.code_start));
 
         // Sentinel bytes on both sides of the result slot; the callee owns
         // only ret_buf[8 .. 8 + expected.len].
-        var ret_buf align(16) = [_]u8{0xAA} ** 32;
+        var ret_buf align(16) = @as([32]u8, @splat(0xAA));
         var out_desc: ?*const anyopaque = null;
         const saved_host = builtins.in_process_host.enter(&roc_ops, null);
         defer builtins.in_process_host.leave(saved_host);
@@ -441,7 +441,7 @@ test "x86_64 Windows hosted U128 return stores all 16 bytes from XMM0" {
     const code = codegen.getGeneratedCode();
     var return_code: ?[]const u8 = null;
     for (codegen.getRelocations()) |relocation| {
-        if (relocation == .linked_function and std.mem.eql(u8, codegen.getSymbolNames()[@intFromEnum(relocation.linked_function.symbol)], "hosted_u128_identity")) {
+        if (relocation == .linked_function and std.mem.eql(u8, codegen.getSymbolNames()[@backingInt(relocation.linked_function.symbol)], "hosted_u128_identity")) {
             const call_end: usize = @intCast(relocation.linked_function.offset + 4);
             return_code = code[call_end..@min(call_end + 32, code.len)];
             break;

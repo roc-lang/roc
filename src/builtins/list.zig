@@ -332,7 +332,7 @@ pub const RocList = extern struct {
             // to notice. Debug builds hold the claim against the runtime truth
             // so a mistaken proof fails a test instead of silently corrupting
             // memory.
-            if (comptime builtin.mode == .Debug) {
+            if (comptime builtin.mode == .debug) {
                 if (!self.isUnique(roc_ops)) {
                     roc_ops.crash("List written in place while another reference to it was live");
                 }
@@ -2237,13 +2237,13 @@ test "default-platform RocList view matches canonical RocList layout" {
     try std.testing.expectEqual(@sizeOf(RocList), @sizeOf(View));
     try std.testing.expectEqual(@alignOf(RocList), @alignOf(View));
 
-    const canonical_fields = @typeInfo(RocList).@"struct".fields;
-    const view_fields = @typeInfo(View).@"struct".fields;
-    try std.testing.expectEqual(canonical_fields.len, view_fields.len);
-    inline for (canonical_fields, view_fields) |canonical, view| {
-        try std.testing.expect(std.mem.eql(u8, canonical.name, view.name));
-        try std.testing.expectEqual(canonical.type, view.type);
-        try std.testing.expectEqual(@offsetOf(RocList, canonical.name), @offsetOf(View, view.name));
+    const canonical_info = @typeInfo(RocList).@"struct";
+    const view_info = @typeInfo(View).@"struct";
+    try std.testing.expectEqual(canonical_info.field_names.len, view_info.field_names.len);
+    inline for (canonical_info.field_names, canonical_info.field_types, view_info.field_names, view_info.field_types) |canonical_name, CanonicalType, view_name, ViewType| {
+        try std.testing.expect(std.mem.eql(u8, canonical_name, view_name));
+        try std.testing.expectEqual(CanonicalType, ViewType);
+        try std.testing.expectEqual(@offsetOf(RocList, canonical_name), @offsetOf(View, view_name));
     }
 }
 

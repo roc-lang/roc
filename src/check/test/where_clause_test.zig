@@ -551,11 +551,11 @@ test "where clause - inferred from method call without annotation" {
 fn hasRuntimeErrorExpr(test_env: *const TestEnv) bool {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const node = test_env.checker.cir.store.nodes.get(node_idx);
         if (!std.mem.startsWith(u8, @tagName(node.tag), "expr_") and node.tag != .malformed) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (test_env.checker.cir.store.getExpr(expr_idx) == .e_runtime_error) return true;
     }
     return false;

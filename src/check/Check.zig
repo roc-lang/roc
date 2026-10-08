@@ -586,6 +586,14 @@ predeclared_use_fresh_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// annotation yet. Each is recorded against the method's own scheme when that
 /// body generates its annotation (`recordPredeclaredBodySlots`).
 waiting_predeclared_dispatch_uses: std.ArrayListUnmanaged(WaitingPredeclaredDispatchUse) = .empty,
+/// Uses of a predeclared scheme whose binding has not published its own
+/// scheme yet. Each is related to the published scheme by the boundary that
+/// publishes it (`relatePendingPredeclaredUsesOf`); see design.md "Predeclared
+/// Scheme Uses".
+pending_predeclared_use_relations: std.ArrayListUnmanaged(PendingPredeclaredUseRelation) = .empty,
+/// Backing storage for `PendingPredeclaredUseRelation.fresh`. Reclaimed once
+/// no relation is pending.
+predeclared_relation_vars: std.ArrayListUnmanaged(Var) = .empty,
 /// The block-local (`s_decl`) analogue of `predeclared_scheme_vars`, keyed by
 /// pattern and live only while the local def is in flight (entries are
 /// removed when the statement finishes). The value is the def's annotation,
@@ -1357,7 +1365,7 @@ fn setTopLevelPattern(self: *Self, pattern: CIR.Pattern.Idx, value: DefProcessed
 /// right above it, or a callable relation settling.
 const WaitingTrigger = struct {
     fn pattern(p: CIR.Pattern.Idx) u64 {
-        return (@as(u64, 1) << 32) | @intFromEnum(p);
+        return (@as(u64, 1) << 32) | @backingInt(p);
     }
 
     fn group(g: u32) u64 {
@@ -1365,7 +1373,7 @@ const WaitingTrigger = struct {
     }
 
     fn fnVar(v: Var) u64 {
-        return (@as(u64, 3) << 32) | @intFromEnum(v);
+        return (@as(u64, 3) << 32) | @backingInt(v);
     }
 };
 
@@ -1613,6 +1621,9 @@ const SchemeRequirementCandidate = struct {
 const BoundaryRoot = struct {
     owner: Var,
     interface: Var,
+    /// The root's annotation, whose predeclared scheme uses this boundary
+    /// relates to the scheme it publishes.
+    annotation: ?CIR.Annotation.Idx = null,
 };
 
 /// One dispatch-constrained receiver var awaiting the local ambiguity
@@ -2087,7 +2098,7 @@ fn radixSortSchemeUsePairs(source_pairs: []ModuleEnv.SchemeUsePair, target_pairs
     var target = target_pairs;
     var shift: u5 = 0;
     while (true) {
-        var counts = [_]u32{0} ** (1 << digit_bits);
+        var counts = @as([1 << digit_bits]u32, @splat(0));
         for (source) |pair| counts[(pair.old_var >> shift) & ((1 << digit_bits) - 1)] += 1;
         var total: u32 = 0;
         for (&counts) |*count| {
@@ -2170,13 +2181,13 @@ fn appendSchemeRequirementEvidencePairs(
         const fresh_receiver = self.types.resolveVar(requirement.receiver_var).var_;
         if (scheme_receiver != fresh_receiver) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
-                .old_var = @intFromEnum(scheme_receiver),
-                .fresh_var = @intFromEnum(fresh_receiver),
+                .old_var = @backingInt(scheme_receiver),
+                .fresh_var = @backingInt(fresh_receiver),
             });
         }
         try self.scratch_evidence_pairs.append(self.gpa, .{
-            .old_var = @intFromEnum(self.types.resolveVar(requirement.scheme_fn_var).var_),
-            .fresh_var = @intFromEnum(self.types.resolveVar(requirement.constraint.fn_var).var_),
+            .old_var = @backingInt(self.types.resolveVar(requirement.scheme_fn_var).var_),
+            .fresh_var = @backingInt(self.types.resolveVar(requirement.constraint.fn_var).var_),
         });
     }
 }
@@ -2214,7 +2225,7 @@ fn registerInstantiatedSchemeRequirement(
             .var_ = requirement.receiver_var,
             .constraints = constraint_range,
             .failure_expr = if (instantiation_expr) |expr_idx|
-                .from(@intFromEnum(expr_idx))
+                .from(@backingInt(expr_idx))
             else
                 .none,
         }, .current_group);
@@ -2362,6 +2373,7 @@ const WaitingPredeclaredDispatchUse = struct {
     scheme_root: Var,
     record_policy: PredeclaredRecordPolicy,
     fresh: VarRange,
+    site: PredeclaredUseSite,
 };
 
 /// Whether a use of a predeclared scheme whose substitution turns out empty
@@ -2406,6 +2418,32 @@ const PredeclaredSlots = struct {
     /// Whether the predeclared scheme has evidence params, computed at the
     /// first use whose substitution is otherwise empty.
     has_evidence_params: ?bool = null,
+    /// Whether the binding's own scheme is final: the boundary that publishes
+    /// it has related every pending use, and a later use is related at once.
+    published: bool = false,
+};
+
+/// Where one use of a predeclared scheme happened, for relating it to the
+/// binding's published scheme and for reporting and retiring it when the
+/// published scheme rejects it.
+const PredeclaredUseSite = struct {
+    /// The referencing expression, or the dispatching expression; 0 for a
+    /// generated call, which has no expression of its own.
+    node_idx: u32,
+    /// The use's instantiation of the predeclared scheme.
+    use_var: Var,
+    region: Region,
+    def_name: ?Ident.Idx,
+};
+
+/// A use of a predeclared scheme waiting for its binding to publish its own
+/// scheme, in `pending_predeclared_use_relations`.
+const PendingPredeclaredUseRelation = struct {
+    annotation: CIR.Annotation.Idx,
+    site: PredeclaredUseSite,
+    /// This use's copies of the predeclared identity slots, in
+    /// `predeclared_relation_vars`.
+    fresh: VarRange,
 };
 
 const HoistPosition = enum {
@@ -3393,7 +3431,7 @@ fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
 
     const import_count: usize = @intCast(cir.imports.imports.items.items.len);
     for (0..import_count) |i| {
-        const import_idx: can.CIR.Import.Idx = @enumFromInt(i);
+        const import_idx: can.CIR.Import.Idx = @fromBackingInt(@intCast(i));
         if (cir.imports.getResolvedModule(import_idx) != null) continue;
         if (cir.imports.importFailedBeforeChecking(import_idx)) continue;
 
@@ -3406,7 +3444,7 @@ fn preflightForTypeChecking(cir: *ModuleEnv) std.mem.Allocator.Error!void {
 }
 
 fn nodeSlot(idx: anytype) usize {
-    return @intFromEnum(ModuleEnv.nodeIdxFrom(idx));
+    return @backingInt(ModuleEnv.nodeIdxFrom(idx));
 }
 
 fn initNodeSlots(
@@ -3499,13 +3537,13 @@ fn initAssumePrepared(
     var rehydrated_type_scheme_by_var: std.AutoHashMapUnmanaged(Var, u32) = .empty;
     errdefer rehydrated_type_scheme_by_var.deinit(gpa);
     for (cir.binding_scheme_codec_requirements.items.items) |serialized_requirement| {
-        const scheme_root: Var = @enumFromInt(serialized_requirement.scheme_root);
-        const indexed_var: Var = @enumFromInt(serialized_requirement.node_idx);
-        const receiver_var: Var = @enumFromInt(serialized_requirement.receiver_var);
+        const scheme_root: Var = @fromBackingInt(@intCast(serialized_requirement.scheme_root));
+        const indexed_var: Var = @fromBackingInt(@intCast(serialized_requirement.node_idx));
+        const receiver_var: Var = @fromBackingInt(@intCast(serialized_requirement.receiver_var));
         if (serialized_requirement.is_synthetic != 0) try synthetic_binding_schemes.put(gpa, indexed_var, {});
-        std.debug.assert(@intFromEnum(scheme_root) < types.len());
-        std.debug.assert(@intFromEnum(indexed_var) < types.len());
-        std.debug.assert(@intFromEnum(receiver_var) < types.len());
+        std.debug.assert(@backingInt(scheme_root) < types.len());
+        std.debug.assert(@backingInt(indexed_var) < types.len());
+        std.debug.assert(@backingInt(receiver_var) < types.len());
 
         const scheme_idx: usize = if (rehydrated_type_scheme_by_var.get(scheme_root)) |existing_idx|
             existing_idx
@@ -3560,8 +3598,8 @@ fn initAssumePrepared(
     var rehydrated_where_method_uses: std.AutoHashMapUnmanaged(Var, u32) = .empty;
     errdefer rehydrated_where_method_uses.deinit(gpa);
     for (cir.scheme_uses.items.items, 0..) |record, record_idx| {
-        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
-        const entry = try rehydrated_where_method_uses.getOrPut(gpa, @enumFromInt(record.slot_data));
+        if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) continue;
+        const entry = try rehydrated_where_method_uses.getOrPut(gpa, @fromBackingInt(@intCast(record.slot_data)));
         if (entry.found_existing) {
             base.invariant("body constraint callable has multiple where-method use records", .{});
         }
@@ -3788,6 +3826,8 @@ pub fn deinit(self: *Self) void {
     self.pending_dispatch_targets.deinit(self.gpa);
     self.pending_predeclared_scheme_uses.deinit(self.gpa);
     self.predeclared_use_fresh_vars.deinit(self.gpa);
+    self.pending_predeclared_use_relations.deinit(self.gpa);
+    self.predeclared_relation_vars.deinit(self.gpa);
     self.waiting_predeclared_dispatch_uses.deinit(self.gpa);
     for (self.type_schemes.items) |*scheme| {
         scheme.indexed_vars.deinit(self.gpa);
@@ -4334,7 +4374,7 @@ fn rejectCapturingMethods(self: *Self) Allocator.Error!void {
     defer methods.deinit(self.gpa);
     for (self.cir.method_defs.entries.items) |entry| {
         if (self.cir.store.nodes.get(entry.value.type_node_idx).tag != .statement_decl) continue;
-        const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(entry.value.type_node_idx))).s_decl;
+        const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(entry.value.type_node_idx)))).s_decl;
         // An associated value that is not a local procedure is no method:
         // nothing dispatches to it, and it is a value of the body declaring
         // its type like any other local binding.
@@ -4720,7 +4760,7 @@ fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Er
         try transaction.commit();
     }
 
-    if (builtin.mode == .Debug and has_child_candidates) {
+    if (builtin.mode == .debug and has_child_candidates) {
         switch (action) {
             .suppress_children,
             .cover_with_current_root,
@@ -4834,7 +4874,7 @@ fn combineHoistPromotionDependencies(
     const a = left orelse return right;
     const b = right orelse return left;
     if (a == b) return a;
-    const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+    const id: HoistPromotionDependencyId = @fromBackingInt(@intCast(self.hoist_promotion_dependencies.items.len));
     try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .both = .{ .left = a, .right = b } } });
     return id;
 }
@@ -4850,7 +4890,7 @@ fn noteHoistProcedureDependency(self: *Self, pattern: CIR.Pattern.Idx, candidate
     if (self.hoist_frames.items.len == 0) return;
     if (!self.hoist_frames.items[self.hoist_frames.items.len - 1].eligible()) return;
     if (candidate.dependency == null) {
-        const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+        const id: HoistPromotionDependencyId = @fromBackingInt(@intCast(self.hoist_promotion_dependencies.items.len));
         try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .procedure = pattern } });
         candidate.dependency = id;
     }
@@ -4882,7 +4922,7 @@ fn noteHoistDispatchDependency(self: *Self, receiver_var: Var, method_name: Iden
     }
     // A proof names a callable that only a committed relation keeps.
     std.debug.assert(self.probe_depth == 0);
-    const id: HoistPromotionDependencyId = @enumFromInt(self.hoist_promotion_dependencies.items.len);
+    const id: HoistPromotionDependencyId = @fromBackingInt(@intCast(self.hoist_promotion_dependencies.items.len));
     try self.hoist_promotion_dependencies.append(self.gpa, .{ .proof = .{ .dispatch = constraint_fn_var } });
     try self.addHoistPromotionDependency(id);
 }
@@ -4969,8 +5009,8 @@ fn localDeclExprForPattern(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Erro
         var raw_node: u32 = 0;
         const node_count: u32 = @intCast(self.cir.store.nodes.len());
         while (raw_node < node_count) : (raw_node += 1) {
-            if (self.cir.store.nodes.get(@enumFromInt(raw_node)).tag != .statement_decl) continue;
-            const decl = self.cir.store.getStatement(@enumFromInt(raw_node)).s_decl;
+            if (self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag != .statement_decl) continue;
+            const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(raw_node))).s_decl;
             try self.local_decl_expr_by_pattern.put(self.gpa, decl.pattern, decl.expr);
         }
     }
@@ -4987,14 +5027,14 @@ fn finalizeComptimeConditions(self: *Self) Allocator.Error!void {
             .procedure => |pattern| self.promoted_local_procedure_patterns.contains(pattern),
             .dispatch => |fn_var| !self.contextual_local_dispatch_fn_vars.contains(fn_var),
             .both => |both| blk: {
-                std.debug.assert(@intFromEnum(both.left) < index and @intFromEnum(both.right) < index);
-                break :blk self.hoist_promotion_dependencies.items[@intFromEnum(both.left)].available and
-                    self.hoist_promotion_dependencies.items[@intFromEnum(both.right)].available;
+                std.debug.assert(@backingInt(both.left) < index and @backingInt(both.right) < index);
+                break :blk self.hoist_promotion_dependencies.items[@backingInt(both.left)].available and
+                    self.hoist_promotion_dependencies.items[@backingInt(both.right)].available;
             },
         };
     }
     for (self.pending_comptime_conditions.items) |pending| {
-        if (!self.hoist_promotion_dependencies.items[@intFromEnum(pending.dependency)].available) continue;
+        if (!self.hoist_promotion_dependencies.items[@backingInt(pending.dependency)].available) continue;
         if (self.hoistExprInvalidated(pending.expr)) continue;
         try self.emitComptimeCondition(pending.expr, pending.kind);
     }
@@ -5009,7 +5049,7 @@ fn recordHoistBindingCandidate(
 ) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
-    if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
+    if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!self.patternCanOwnHoistedBindingRoot(pattern)) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
@@ -5047,7 +5087,7 @@ fn recordHoistPatternProvenance(
 ) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
-    if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
+    if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
     if (!self.exprCanBeHoistedBindingRoot(expr)) return;
     if (isFunctionDef(&self.cir.store, self.cir.store.getExpr(expr))) return;
@@ -5090,7 +5130,7 @@ fn recordHoistPatternValidationCandidate(
 ) Allocator.Error!void {
     const completed = self.last_hoist_result orelse return;
     if (completed.expr != expr) return;
-    if (builtin.mode == .Debug) std.debug.assert(completed.hoist_position == hoist_position);
+    if (builtin.mode == .debug) std.debug.assert(completed.hoist_position == hoist_position);
     if (!completed.hoist_position.allowsSelection() or !completed.top_level_equivalent) return;
 
     try self.hoist_deferred_roots.append(self.gpa, .{ .pattern_validation = .{
@@ -5833,7 +5873,7 @@ fn visitExprChildren(self: *const Self, expr: CIR.Expr.Idx, visitor: anytype) Al
 }
 
 fn debugAssertHoistSelectionConsistent(self: *const Self) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     var expr_iter = self.hoist_selected_exprs.iterator();
     while (expr_iter.next()) |entry| {
@@ -5954,10 +5994,10 @@ const HoistSelectionTestState = struct {
 fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestExpr}!CIR.Expr.Idx {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < checker.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (!isExprNodeTag(checker.cir.store.nodes.get(node_idx).tag)) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         switch (checker.cir.store.getExpr(expr_idx)) {
             .e_num,
             .e_num_from_numeral,
@@ -6026,7 +6066,7 @@ fn firstHoistSelectionTestExpr(checker: *Self) error{ExpectedHoistSelectionTestE
 }
 
 test "hoist frame finish leaves child candidates unchanged when selection allocation fails" {
-    const parent_expr: CIR.Expr.Idx = @enumFromInt(1);
+    const parent_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
     defer test_env.deinit();
@@ -6065,7 +6105,7 @@ test "hoist frame finish leaves child candidates unchanged when selection alloca
 test "fresh expected context suppresses hoist selection by default" {
     try std.testing.expectEqual(HoistPosition.suppressed, Expected.none().hoist_position);
 
-    const parent_expr: CIR.Expr.Idx = @enumFromInt(1);
+    const parent_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
     defer test_env.deinit();
@@ -6088,8 +6128,8 @@ test "fresh expected context suppresses hoist selection by default" {
 }
 
 test "hoist frame finish is atomic when child flush precedes deferred dependency failure" {
-    const parent_expr: CIR.Expr.Idx = @enumFromInt(1);
-    const dependency_pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const parent_expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
+    const dependency_pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
     defer test_env.deinit();
@@ -6151,7 +6191,7 @@ test "hoist frame finish is atomic when child flush precedes deferred dependency
 }
 
 test "hoisted binding root selection is atomic when binding map allocation fails" {
-    const pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
     defer test_env.deinit();
@@ -6184,8 +6224,8 @@ test "hoisted binding root selection is atomic when binding map allocation fails
 }
 
 test "hoisted pattern extraction root selection is atomic when binding map allocation fails" {
-    const scrutinee_pattern: CIR.Pattern.Idx = @enumFromInt(2);
-    const result_pattern: CIR.Pattern.Idx = @enumFromInt(3);
+    const scrutinee_pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
+    const result_pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(3));
     const TestEnv = @import("test/TestEnv.zig");
     var test_env = try TestEnv.initExpr("HoistSelection", "1.I64");
     defer test_env.deinit();
@@ -6230,8 +6270,8 @@ test "hoisted pattern extraction root selection is atomic when binding map alloc
 }
 
 test "hoist lexical scope removes branch-local candidates and known values" {
-    const expr: CIR.Expr.Idx = @enumFromInt(1);
-    const pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
+    const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
 
     var state = HoistSelectionTestState.init(std.testing.allocator);
     defer state.deinit();
@@ -6253,8 +6293,8 @@ test "hoist lexical scope removes branch-local candidates and known values" {
 }
 
 test "hoist known value insertion leaves no state when map allocation fails" {
-    const expr: CIR.Expr.Idx = @enumFromInt(1);
-    const pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
+    const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
 
     var state = HoistSelectionTestState.init(std.testing.allocator);
     defer state.deinit();
@@ -6270,8 +6310,8 @@ test "hoist known value insertion leaves no state when map allocation fails" {
 }
 
 test "hoist known value insertion rolls back map when scope tracking allocation fails" {
-    const expr: CIR.Expr.Idx = @enumFromInt(1);
-    const pattern: CIR.Pattern.Idx = @enumFromInt(2);
+    const expr: CIR.Expr.Idx = @fromBackingInt(@intCast(1));
+    const pattern: CIR.Pattern.Idx = @fromBackingInt(@intCast(2));
 
     var state = HoistSelectionTestState.init(std.testing.allocator);
     defer state.deinit();
@@ -6574,10 +6614,10 @@ fn varIsIteratorNominal(self: *Self, var_: Var) bool {
 }
 
 fn iteratorNominalSourceDecl(self: *const Self) ?u32 {
-    if (self.builtin_ctx.builtin_indices) |indices| return @intFromEnum(indices.iter_type);
+    if (self.builtin_ctx.builtin_indices) |indices| return @backingInt(indices.iter_type);
     if (self.cir.module_role != .builtin) return null;
     const iter_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_iter) orelse return null;
-    return @intFromEnum(iter_stmt_idx);
+    return @backingInt(iter_stmt_idx);
 }
 
 fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
@@ -6588,7 +6628,7 @@ fn stringHasInterpolation(self: *Self, span: CIR.Expr.Span) bool {
 }
 /// In debug builds, verifies that region and type arrays have matching lengths.
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const region_nodes = self.regions.len();
         const type_nodes = self.types.len();
         if (!(region_nodes == type_nodes)) {
@@ -6741,11 +6781,11 @@ fn probeRecordConstruction(ctx: *const anyopaque, var_: Var) bool {
 }
 
 fn sourceRecordConstructionForVar(self: *const Self, var_: Var) ?CIR.Expr.Idx {
-    const raw = @intFromEnum(var_);
+    const raw = @backingInt(var_);
     if (raw < self.cir.store.nodes.len()) {
-        const node = self.cir.store.nodes.get(@enumFromInt(raw));
+        const node = self.cir.store.nodes.get(@fromBackingInt(@intCast(raw)));
         if (node.tag == .expr_record or node.tag == .expr_empty_record) {
-            return @enumFromInt(raw);
+            return @fromBackingInt(@intCast(raw));
         }
     }
     return null;
@@ -6804,7 +6844,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
     const result = try unifier.unify(&unify_env, a, b, unify_opts);
     switch (result) {
         .problem => |problem_idx| {
-            const mismatch = &self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch;
+            const mismatch = &self.problems.problems.items[@backingInt(problem_idx)].type_mismatch;
             mismatch.context = self.mismatchContext(mismatch.context, b);
         },
         .unified, .suppressed_by_error, .mismatch => {},
@@ -6847,7 +6887,7 @@ fn runUnifyWithDispatchOwner(self: *Self, a: Var, b: Var, env: *Env, opts: unifi
             if (owned_constraint.failure_expr == .none) {
                 for (self.types.sliceStaticDispatchConstraints(owned_constraint.constraints)) |constraint| {
                     if (constraint.origin == .where_clause) {
-                        owned_constraint.failure_expr = .from(@intFromEnum(expr_idx));
+                        owned_constraint.failure_expr = .from(@backingInt(expr_idx));
                         break;
                     }
                 }
@@ -6994,9 +7034,9 @@ fn appendTypeMismatch(
 fn mismatchContext(self: *Self, ctx: problem.Context, actual: Var) problem.Context {
     const violation = self.unify_scratch.bounded_row_violation orelse return ctx;
     self.unify_scratch.bounded_row_violation = null;
-    const raw_actual = @intFromEnum(actual);
+    const raw_actual = @backingInt(actual);
     const actual_is_pattern = raw_actual < self.cir.store.nodes.len() and
-        isPatternNodeTag(self.cir.store.nodes.get(@enumFromInt(raw_actual)).tag);
+        isPatternNodeTag(self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_actual))).tag);
     return .{ .tag_not_in_annotation = .{
         .region = self.getRegionAt(actual),
         .tag_name = violation.tag,
@@ -7263,15 +7303,15 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     const seeder = SettledRootSeeder{ .gpa = self.gpa, .seeds = &seeds };
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const tag = self.cir.store.nodes.get(node_idx).tag;
         if (isExprNodeTag(tag)) {
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
             try seeder.visit(ModuleEnv.varFrom(expr_idx));
             try output_type_roots.forEachCallTypeRoot(self.cir, expr_idx, &seeder);
             try output_type_roots.forEachStaticDispatchTypeRoot(self.cir, expr_idx, &seeder);
         } else if (isPatternNodeTag(tag)) {
-            try seeder.visit(@enumFromInt(raw_node_idx));
+            try seeder.visit(@fromBackingInt(@intCast(raw_node_idx)));
         }
     }
     for (self.cir.store.sliceDefs(self.cir.global_value_defs)) |def_idx| {
@@ -7296,7 +7336,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
     }
     std.mem.sort(Var, row_roots.items, {}, struct {
         fn lessThan(_: void, a: Var, b: Var) bool {
-            return @intFromEnum(a) < @intFromEnum(b);
+            return @backingInt(a) < @backingInt(b);
         }
     }.lessThan);
 
@@ -7370,7 +7410,7 @@ fn validateSettledValueRows(self: *Self, env: *Env) std.mem.Allocator.Error!void
             const problem_idx = try self.reportInvalidRow(.tag_union, bad_var, env, self.getRegionAt(row_root), .none);
             // The row head introduces the content that conflicts with its
             // extension. Keep the offending suffix snapshot, but blame that head.
-            self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = row_root;
+            self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = row_root;
             try invalid_rows.append(self.gpa, row_root);
         } else if (repeats) {
             try repeating_rows.append(self.gpa, row_root);
@@ -7865,7 +7905,7 @@ fn poisonInvalidTypeDeclarations(self: *Self, poisoned: []bool) std.mem.Allocato
             .s_nominal_decl => blk: {
                 const nominal_idx = self.types.lookupNominalDeclByKey(
                     self_origin,
-                    @intFromEnum(decl_idx),
+                    @backingInt(decl_idx),
                 ) orelse unreachable;
                 const nominal = self.types.getNominalDecl(nominal_idx);
                 self.types.markNominalDeclInvalid(nominal_idx);
@@ -7979,7 +8019,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
     const decl_count = self.types.nominalDeclCount();
     var decl_int: u32 = 0;
     while (decl_int < decl_count) : (decl_int += 1) {
-        const decl_idx: types_mod.NominalDecl.Idx = @enumFromInt(decl_int);
+        const decl_idx: types_mod.NominalDecl.Idx = @fromBackingInt(@intCast(decl_int));
         const decl = self.types.getNominalDecl(decl_idx);
 
         // Imported declarations were validated by their own module; module
@@ -7988,7 +8028,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
         // traversal covers.
         if (decl.origin_module != self_origin) continue;
 
-        const decl_var: Var = @enumFromInt(decl.statement());
+        const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
         const resolved = self.types.resolveVar(decl_var).desc.content;
         // A declaration whose generation already failed (malformed backing)
         // has nothing further to validate.
@@ -8014,7 +8054,7 @@ fn validateNominalDeclRecursion(self: *Self) std.mem.Allocator.Error!void {
 
         // Poison the declaration: uses instantiate `.err` and are suppressed,
         // and no later stage can walk the cyclic template graph.
-        self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
+        self.markTypeDeclInvalid(@fromBackingInt(@intCast(decl.statement())));
         self.types.markNominalDeclInvalid(decl_idx);
         try self.types.setVarContent(decl_var, .err);
         try self.types.setVarContent(decl.backing, .err);
@@ -8092,11 +8132,11 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
 
     var decl_int: u32 = 0;
     while (decl_int < decl_count) : (decl_int += 1) {
-        const decl_idx: types_mod.NominalDecl.Idx = @enumFromInt(decl_int);
+        const decl_idx: types_mod.NominalDecl.Idx = @fromBackingInt(@intCast(decl_int));
         const decl = self.types.getNominalDecl(decl_idx);
         if (decl.origin_module != self_origin) continue;
         if (!decl.isValid()) continue;
-        const decl_var: Var = @enumFromInt(decl.statement());
+        const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
         const resolved = self.types.resolveVar(decl_var).desc.content;
         if (resolved != .structure or resolved.structure != .nominal_type) continue;
         const slot: u32 = @intCast(slots.items.len);
@@ -8323,7 +8363,7 @@ fn validateNominalDeclArgumentGrowth(self: *Self) std.mem.Allocator.Error!void {
 /// no later stage walks the template.
 fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) std.mem.Allocator.Error!void {
     const decl = self.types.getNominalDecl(decl_idx);
-    const decl_var: Var = @enumFromInt(decl.statement());
+    const decl_var: Var = @fromBackingInt(@intCast(decl.statement()));
     const snapshot = try self.snapshotVarForError(decl.backing);
     _ = try self.problems.appendProblem(self.gpa, .{ .invalid_nominal_decl_recursion = .{
         .decl_var = decl_var,
@@ -8331,7 +8371,7 @@ fn reportGrowingNominalDecl(self: *Self, decl_idx: types_mod.NominalDecl.Idx) st
         .type_name = decl.ident.ident_idx,
         .kind = .growing_args,
     } });
-    self.markTypeDeclInvalid(@enumFromInt(decl.statement()));
+    self.markTypeDeclInvalid(@fromBackingInt(@intCast(decl.statement())));
     self.types.markNominalDeclInvalid(decl_idx);
     try self.types.setVarContent(decl_var, .err);
     try self.types.setVarContent(decl.backing, .err);
@@ -8615,7 +8655,7 @@ fn typeSchemeIndexForRoot(self: *Self, root_var: Var) ?usize {
 }
 
 fn isBindingSchemeVar(self: *const Self, var_: Var) bool {
-    const raw_var: usize = @intFromEnum(var_);
+    const raw_var: usize = @backingInt(var_);
     if (raw_var < self.binding_scheme_nodes.bit_length) {
         return self.binding_scheme_nodes.isSet(raw_var);
     }
@@ -8623,7 +8663,7 @@ fn isBindingSchemeVar(self: *const Self, var_: Var) bool {
 }
 
 fn markBindingSchemeVar(self: *Self, var_: Var) Allocator.Error!void {
-    const raw_var: usize = @intFromEnum(var_);
+    const raw_var: usize = @backingInt(var_);
     if (raw_var < self.binding_scheme_nodes.bit_length) {
         if (self.binding_scheme_nodes.isSet(raw_var)) return;
         self.binding_scheme_nodes.set(raw_var);
@@ -8640,7 +8680,7 @@ fn finalizeBindingSchemeNodes(self: *Self) Allocator.Error!void {
     var raw_node: usize = 0;
     while (raw_node < self.binding_scheme_nodes.bit_length) : (raw_node += 1) {
         if (self.binding_scheme_nodes.isSet(raw_node)) {
-            try self.cir.recordBindingScheme(@enumFromInt(raw_node));
+            try self.cir.recordBindingScheme(@fromBackingInt(@intCast(raw_node)));
         }
     }
 }
@@ -8653,15 +8693,15 @@ fn verifyPredeclaredSchemeUsesRecorded(self: *Self) Allocator.Error!void {
     if (self.waiting_predeclared_dispatch_uses.items.len != 0) {
         base.invariant("type checker invariant violated: a dispatch use of a predeclared scheme was never recorded", .{});
     }
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     var predeclared_roots: std.AutoHashMapUnmanaged(u32, void) = .empty;
     defer predeclared_roots.deinit(self.gpa);
     var slots_iter = self.predeclared_slots.valueIterator();
-    while (slots_iter.next()) |slots| try predeclared_roots.put(self.gpa, @intFromEnum(slots.scheme_var), {});
+    while (slots_iter.next()) |slots| try predeclared_roots.put(self.gpa, @backingInt(slots.scheme_var), {});
     for (self.cir.scheme_uses.items.items) |record| {
         if (predeclared_roots.contains(record.scheme_root)) {
             base.invariant("type checker invariant violated: a {s} scheme-use record is rooted at a predeclared scheme", .{
-                @tagName(@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))),
+                @tagName(@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))),
             });
         }
     }
@@ -8848,8 +8888,8 @@ fn recordWhereMethodUse(
     var pair_iter = self.var_map.iterator();
     while (pair_iter.next()) |entry| {
         self.scratch_evidence_pairs.appendAssumeCapacity(.{
-            .old_var = @intFromEnum(entry.key_ptr.*),
-            .fresh_var = @intFromEnum(entry.value_ptr.*),
+            .old_var = @backingInt(entry.key_ptr.*),
+            .fresh_var = @backingInt(entry.value_ptr.*),
         });
     }
     if (self.scratch_evidence_pairs.items.len == 0) {
@@ -8862,9 +8902,9 @@ fn recordWhereMethodUse(
     try self.where_method_use_record_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
     const record_index: u32 = @intCast(self.cir.scheme_uses.items.items.len);
     try self.cir.recordSchemeUse(
-        if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
         .where_method_use,
-        @intFromEnum(constraint.fn_var),
+        @backingInt(constraint.fn_var),
         signature_var,
         self.scratch_evidence_pairs.items,
     );
@@ -8882,12 +8922,12 @@ fn existingWhereMethodUse(
 ) ?Var {
     const record_idx = self.where_method_use_record_by_fn_var.get(constraint_fn_var) orelse return null;
     const record = self.cir.scheme_uses.items.items[record_idx];
-    if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
-        record.slot_data != @intFromEnum(constraint_fn_var))
+    if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use) or
+        record.slot_data != @backingInt(constraint_fn_var))
     {
         base.invariant("where-method use index named the wrong scheme-use record", .{});
     }
-    if (self.types.resolveVar(@as(Var, @enumFromInt(record.scheme_root))).var_ !=
+    if (self.types.resolveVar(@as(Var, @fromBackingInt(@intCast(record.scheme_root)))).var_ !=
         self.types.resolveVar(signature_var).var_)
     {
         base.invariant("body constraint callable was matched to two where-method signatures", .{});
@@ -8895,8 +8935,8 @@ fn existingWhereMethodUse(
     const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
     const signature_root = self.types.resolveVar(signature_var).var_;
     for (pairs) |pair| {
-        if (self.types.resolveVar(@as(Var, @enumFromInt(pair.old_var))).var_ == signature_root) {
-            return @enumFromInt(pair.fresh_var);
+        if (self.types.resolveVar(@as(Var, @fromBackingInt(@intCast(pair.old_var)))).var_ == signature_root) {
+            return @fromBackingInt(@intCast(pair.fresh_var));
         }
     }
     base.invariant("where-method use record omitted its signature callable copy", .{});
@@ -9260,7 +9300,7 @@ fn instantiateVarOrphan(
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
-    std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
+    std.debug.assert(@backingInt(rank) <= @backingInt(env.rank()));
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -9504,7 +9544,7 @@ fn instantiateVarOrphanSharingVars(
 ) std.mem.Allocator.Error!Var {
     const trace = tracy.trace(@src());
     defer trace.end();
-    std.debug.assert(@intFromEnum(rank) <= @intFromEnum(env.rank()));
+    std.debug.assert(@backingInt(rank) <= @backingInt(env.rank()));
     var instantiate_ctx = Instantiator{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
@@ -9774,7 +9814,7 @@ fn instantiateVarHelpFromScheme(
 
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
-    const root_instantiated_region = self.regions.get(@enumFromInt(@intFromEnum(var_to_instantiate))).*;
+    const root_instantiated_region = self.regions.get(@fromBackingInt(@intCast(@backingInt(var_to_instantiate)))).*;
     self.scratch_evidence_pairs.clearRetainingCapacity();
     const var_context: InstantiatedVarContext = .{
         .records_scheme_use = evidence.recordsSchemeUse(),
@@ -9797,7 +9837,7 @@ fn instantiateVarHelpFromScheme(
         self.setRegionAt(deferred.placeholder, switch (region_behavior) {
             .explicit => |region| region,
             .use_root_instantiated => root_instantiated_region,
-            .use_last_var => self.regions.get(@enumFromInt(@intFromEnum(deferred.source))).*,
+            .use_last_var => self.regions.get(@fromBackingInt(@intCast(@backingInt(deferred.source)))).*,
         });
     }
 
@@ -9810,9 +9850,9 @@ fn instantiateVarHelpFromScheme(
         if (self.scratch_evidence_pairs.items.len > 0 or try self.schemeHasEvidenceParams(scheme_source)) {
             const slot: ModuleEnv.SchemeUseRecord.Slot, const node_idx: u32, const slot_data: u32 = switch (evidence) {
                 .none => unreachable,
-                .value_use => |expr| .{ .value_use, @intFromEnum(expr), 0 },
-                .nested_function_use => |expr| .{ .nested_function_use, @intFromEnum(expr), @intFromEnum(instantiated_var) },
-                .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @intFromEnum(site.constraint_fn_var) },
+                .value_use => |expr| .{ .value_use, @backingInt(expr), 0 },
+                .nested_function_use => |expr| .{ .nested_function_use, @backingInt(expr), @backingInt(instantiated_var) },
+                .dispatch_target => |site| .{ .dispatch_target, site.node_idx, @backingInt(site.constraint_fn_var) },
             };
             const record: u32 = @intCast(self.cir.scheme_uses.items.items.len);
             try self.cir.recordSchemeUse(node_idx, slot, slot_data, scheme_source, self.scratch_evidence_pairs.items);
@@ -9977,8 +10017,8 @@ inline fn registerInstantiatedVar(
         const old_resolved = self.types.resolveVar(old);
         if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
-                .old_var = @intFromEnum(old),
-                .fresh_var = @intFromEnum(fresh_var),
+                .old_var = @backingInt(old),
+                .fresh_var = @backingInt(fresh_var),
             });
         }
         if (fresh_constraints_len > 0) {
@@ -9993,8 +10033,8 @@ inline fn registerInstantiatedVar(
                 const fresh_fn_var = var_map.get(old_fn_root) orelse
                     (if (ctx.deferred) |placeholders| placeholders.get(old_fn_root) else null) orelse continue;
                 try self.scratch_evidence_pairs.append(self.gpa, .{
-                    .old_var = @intFromEnum(old_fn_root),
-                    .fresh_var = @intFromEnum(fresh_fn_var),
+                    .old_var = @backingInt(old_fn_root),
+                    .fresh_var = @backingInt(fresh_fn_var),
                 });
             }
         }
@@ -10072,7 +10112,7 @@ inline fn registerInstantiatedVar(
         },
         .use_last_var => {
             const old_var = old;
-            const old_region = self.regions.get(@enumFromInt(@intFromEnum(old_var))).*;
+            const old_region = self.regions.get(@fromBackingInt(@intCast(@backingInt(old_var)))).*;
             self.setRegionAt(fresh_var, old_region);
         },
     }
@@ -10096,7 +10136,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
         try self.enqueueDeferredDispatchConstraint(env, .{
             .var_ = requirement.receiver_var,
             .constraints = range,
-            .failure_expr = if (requirement.failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+            .failure_expr = if (requirement.failure_expr) |expr| .from(@backingInt(expr)) else .none,
         }, .{ .recorded = .{ .group_index = self.type_schemes.items[scheme_idx].capture_group_index, .scheme_root = self.type_schemes.items[scheme_idx].root_var } });
     }
 }
@@ -10159,7 +10199,7 @@ fn recordRecursiveReference(self: *Self, node_idx: u32, scheme_root: Var) std.me
 
 /// Fill slots in the regions array up to and including the target var
 fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
-    const idx = @intFromEnum(target_var);
+    const idx = @backingInt(target_var);
 
     if (idx >= self.regions.len()) {
         // Use Check's allocator since regions is owned by Check
@@ -10174,12 +10214,12 @@ fn fillInRegionsThrough(self: *Self, target_var: Var) Allocator.Error!void {
 
 /// Set the region for a var
 fn setRegionAt(self: *Self, target_var: Var, new_region: Region) void {
-    self.regions.set(@enumFromInt(@intFromEnum(target_var)), new_region);
+    self.regions.set(@fromBackingInt(@intCast(@backingInt(target_var))), new_region);
 }
 
 /// Get the region for a var
 fn getRegionAt(self: *Self, target_var: Var) Region {
-    return self.regions.get(@enumFromInt(@intFromEnum(target_var))).*;
+    return self.regions.get(@fromBackingInt(@intCast(@backingInt(target_var)))).*;
 }
 
 // fresh vars //
@@ -10330,13 +10370,13 @@ fn debugAssertSourceDeclKind(self: *const Self, source_decl: u32, kind: SourceDe
 }
 
 fn debugAssertSourceDeclKindInEnv(env: *const ModuleEnv, source_decl: u32, kind: SourceDeclKind) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     if (source_decl >= env.store.nodes.len()) {
         base.invariant("type checker invariant violated: source declaration {} is outside node store", .{source_decl});
     }
 
-    const node = env.store.nodes.get(@enumFromInt(source_decl));
+    const node = env.store.nodes.get(@fromBackingInt(@intCast(source_decl)));
     const ok = switch (kind) {
         .alias => node.tag == .statement_alias_decl,
         .nominal => node.tag == .statement_nominal_decl,
@@ -10365,25 +10405,25 @@ fn sourceDeclForBuiltinNominal(self: *const Self, decl: BuiltinNominalDecl) u32 
             .num => |num_kind| builtinNumStmtFromIndices(indices, num_kind),
         };
         const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
-        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
-        return @intFromEnum(stmt_idx);
+        debugAssertSourceDeclKindInEnv(owner_env, @backingInt(stmt_idx), .nominal);
+        return @backingInt(stmt_idx);
     }
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
     }
 
     const stmt_idx = self.findLocalTypeDeclByName(self.builtinNominalIdent(decl)) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: Builtin.{s} declaration not found while checking Builtin", .{builtinNominalLabel(decl)});
         }
         unreachable;
     };
-    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
-    return @intFromEnum(stmt_idx);
+    self.debugAssertSourceDeclKind(@backingInt(stmt_idx), .nominal);
+    return @backingInt(stmt_idx);
 }
 
 fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) u32 {
@@ -10392,19 +10432,19 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
         const stmt_idx = switch (decl) {
             .tag_union => indices.parse_tag_union_spec_type,
             .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
                 }
                 unreachable;
             },
         };
         const owner_env = self.builtin_ctx.builtin_module orelse self.cir;
-        debugAssertSourceDeclKindInEnv(owner_env, @intFromEnum(stmt_idx), .nominal);
-        return @intFromEnum(stmt_idx);
+        debugAssertSourceDeclKindInEnv(owner_env, @backingInt(stmt_idx), .nominal);
+        return @backingInt(stmt_idx);
     }
 
     if (!self.isCheckingBuiltinModuleDirectly() and self.builtin_ctx.builtin_module != null) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
@@ -10413,20 +10453,20 @@ fn sourceDeclForBuiltinParseSpec(self: *const Self, decl: BuiltinParseSpecDecl) 
     const ident = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
         },
     };
     const stmt_idx = self.findLocalTypeDeclByName(ident) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: Builtin parse spec declaration not found while checking Builtin", .{});
         }
         unreachable;
     };
-    self.debugAssertSourceDeclKind(@intFromEnum(stmt_idx), .nominal);
-    return @intFromEnum(stmt_idx);
+    self.debugAssertSourceDeclKind(@backingInt(stmt_idx), .nominal);
+    return @backingInt(stmt_idx);
 }
 
 /// Create a nominal List type with the given element type
@@ -10464,7 +10504,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     };
     const decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
             }
             unreachable;
@@ -10480,7 +10520,7 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
             .stream => self.cir.idents.builtin_stream,
         };
         const stmt_idx = self.findLocalTypeDeclByName(type_ident) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: {s} declaration not found while checking Builtin", .{type_name});
             }
             unreachable;
@@ -10491,14 +10531,14 @@ fn mkForLoopSequenceVar(self: *Self, kind: CIR.ForKind, item_var: Var, env: *Env
     const sequence_var = try self.instantiateVar(decl_var, env, .{ .explicit = region }, .none);
     const sequence_content = self.types.resolveVar(sequence_var).desc.content;
     const nominal = sequence_content.unwrapNominalType() orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: {s} declaration did not instantiate to a nominal type", .{type_name});
         }
         unreachable;
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: {s} expected one type argument, found {d}", .{ type_name, args.len });
         }
         unreachable;
@@ -10515,7 +10555,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
 
     const range_decl_var = if (self.builtin_ctx.builtin_module) |builtin_env| blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
             }
             unreachable;
@@ -10523,7 +10563,7 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
         break :blk try self.copyVar(ModuleEnv.varFrom(indices.range_type), builtin_env, region);
     } else blk: {
         const range_stmt_idx = self.findLocalTypeDeclByName(self.cir.idents.builtin_range) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: Builtin.Num.Range declaration not found while checking Builtin", .{});
             }
             unreachable;
@@ -10534,14 +10574,14 @@ fn mkRangeVar(self: *Self, num_var: Var, env: *Env, region: Region) Allocator.Er
     const range_var = try self.instantiateVar(range_decl_var, env, .{ .explicit = region }, .none);
     const range_content = self.types.resolveVar(range_var).desc.content;
     const nominal = range_content.unwrapNominalType() orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: Builtin.Num.Range did not instantiate to a nominal type", .{});
         }
         unreachable;
     };
     const args = self.types.sliceNominalArgs(nominal);
     if (args.len != 1) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: Builtin.Num.Range expected one type argument, found {d}", .{args.len});
         }
         unreachable;
@@ -10601,8 +10641,8 @@ fn mkIteratorStepContent(self: *Self, item_var: Var, iter_var: Var, env: *Env) A
             .skip_tag_ident = @bitCast(skip_ident),
             .item_field_ident = @bitCast(item_ident),
             .rest_field_ident = @bitCast(rest_ident),
-            .one_payload_var = @intFromEnum(payload_record),
-            .skip_payload_var = @intFromEnum(skip_payload_record),
+            .one_payload_var = @backingInt(payload_record),
+            .skip_payload_var = @backingInt(skip_payload_record),
         },
     };
 }
@@ -10637,10 +10677,10 @@ fn builtinNominalDeclForSourceDecl(source_env: *const ModuleEnv, source_decl: ?u
     const raw_decl = source_decl orelse return null;
     if (raw_decl >= source_env.store.nodes.len()) return null;
 
-    const node: CIR.Node.Idx = @enumFromInt(raw_decl);
+    const node: CIR.Node.Idx = @fromBackingInt(@intCast(raw_decl));
     const node_tag = source_env.store.nodes.get(node).tag;
     if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return null;
-    const statement_idx: CIR.Statement.Idx = @enumFromInt(raw_decl);
+    const statement_idx: CIR.Statement.Idx = @fromBackingInt(@intCast(raw_decl));
     const header_idx = switch (source_env.store.getStatement(statement_idx)) {
         .s_alias_decl => |alias| alias.header,
         .s_nominal_decl => |nominal| nominal.header,
@@ -10703,27 +10743,27 @@ fn builtinNominalDeclForBuiltinSourceDecl(self: *const Self, source_decl: ?u32) 
     }
 
     const indices = self.builtin_ctx.builtin_indices orelse return null;
-    if (raw_decl == @intFromEnum(indices.list_type)) return .list;
-    if (raw_decl == @intFromEnum(indices.box_type)) return .box;
-    if (raw_decl == @intFromEnum(indices.dict_type)) return .dict;
-    if (raw_decl == @intFromEnum(indices.set_type)) return .set;
-    if (raw_decl == @intFromEnum(indices.try_type)) return .try_type;
-    if (raw_decl == @intFromEnum(indices.fields_type)) return .fields;
-    if (raw_decl == @intFromEnum(indices.field_type)) return .field;
-    if (raw_decl == @intFromEnum(indices.numeral_type)) return .numeral;
-    if (raw_decl == @intFromEnum(indices.u8_type)) return .{ .num = .u8 };
-    if (raw_decl == @intFromEnum(indices.i8_type)) return .{ .num = .i8 };
-    if (raw_decl == @intFromEnum(indices.u16_type)) return .{ .num = .u16 };
-    if (raw_decl == @intFromEnum(indices.i16_type)) return .{ .num = .i16 };
-    if (raw_decl == @intFromEnum(indices.u32_type)) return .{ .num = .u32 };
-    if (raw_decl == @intFromEnum(indices.i32_type)) return .{ .num = .i32 };
-    if (raw_decl == @intFromEnum(indices.u64_type)) return .{ .num = .u64 };
-    if (raw_decl == @intFromEnum(indices.i64_type)) return .{ .num = .i64 };
-    if (raw_decl == @intFromEnum(indices.u128_type)) return .{ .num = .u128 };
-    if (raw_decl == @intFromEnum(indices.i128_type)) return .{ .num = .i128 };
-    if (raw_decl == @intFromEnum(indices.f32_type)) return .{ .num = .f32 };
-    if (raw_decl == @intFromEnum(indices.f64_type)) return .{ .num = .f64 };
-    if (raw_decl == @intFromEnum(indices.dec_type)) return .{ .num = .dec };
+    if (raw_decl == @backingInt(indices.list_type)) return .list;
+    if (raw_decl == @backingInt(indices.box_type)) return .box;
+    if (raw_decl == @backingInt(indices.dict_type)) return .dict;
+    if (raw_decl == @backingInt(indices.set_type)) return .set;
+    if (raw_decl == @backingInt(indices.try_type)) return .try_type;
+    if (raw_decl == @backingInt(indices.fields_type)) return .fields;
+    if (raw_decl == @backingInt(indices.field_type)) return .field;
+    if (raw_decl == @backingInt(indices.numeral_type)) return .numeral;
+    if (raw_decl == @backingInt(indices.u8_type)) return .{ .num = .u8 };
+    if (raw_decl == @backingInt(indices.i8_type)) return .{ .num = .i8 };
+    if (raw_decl == @backingInt(indices.u16_type)) return .{ .num = .u16 };
+    if (raw_decl == @backingInt(indices.i16_type)) return .{ .num = .i16 };
+    if (raw_decl == @backingInt(indices.u32_type)) return .{ .num = .u32 };
+    if (raw_decl == @backingInt(indices.i32_type)) return .{ .num = .i32 };
+    if (raw_decl == @backingInt(indices.u64_type)) return .{ .num = .u64 };
+    if (raw_decl == @backingInt(indices.i64_type)) return .{ .num = .i64 };
+    if (raw_decl == @backingInt(indices.u128_type)) return .{ .num = .u128 };
+    if (raw_decl == @backingInt(indices.i128_type)) return .{ .num = .i128 };
+    if (raw_decl == @backingInt(indices.f32_type)) return .{ .num = .f32 };
+    if (raw_decl == @backingInt(indices.f64_type)) return .{ .num = .f64 };
+    if (raw_decl == @backingInt(indices.dec_type)) return .{ .num = .dec };
     return null;
 }
 
@@ -11085,8 +11125,8 @@ fn mkFlexWithFromQuoteConstraint(
 
 fn recordedNumeralLiteralForNode(self: *const Self, node_idx: CIR.Node.Idx) ModuleEnv.NumeralLiteral {
     return self.cir.numeralLiteralForNode(node_idx) orelse {
-        if (builtin.mode == .Debug) {
-            base.invariant("missing recorded exact numeral for source node {}", .{@intFromEnum(node_idx)});
+        if (builtin.mode == .debug) {
+            base.invariant("missing recorded exact numeral for source node {}", .{@backingInt(node_idx)});
         }
         unreachable;
     };
@@ -11101,7 +11141,7 @@ fn exactNumeralInfoForLiteral(self: *const Self, literal: ModuleEnv.NumeralLiter
     const fit_set = if (literal.isMaterialized())
         try exact_numeral.computeFitSet(self.gpa, exact)
     else
-        exact_numeral.FitSet.initEmpty();
+        exact_numeral.FitSet.empty;
     return types_mod.NumeralInfo.fromExact(exact, fit_set, literal.isMaterialized(), region);
 }
 
@@ -11123,17 +11163,17 @@ fn checkNumeralLiteral(
     const literal = self.recordedNumeralLiteralForNode(node_idx);
     var num_literal_info = try self.exactNumeralInfoForLiteral(literal, region);
     const failure_expr: ?CIR.Expr.Idx = switch (occurrence) {
-        .expression => @enumFromInt(@intFromEnum(node_idx)),
+        .expression => @fromBackingInt(@intCast(@backingInt(node_idx))),
         .pattern => if (pattern_failure_owner) |owner| self.literalFailureOwnerExpr(owner) else null,
     };
     const is_int_unbound = switch (occurrence) {
         .expression => blk: {
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(@intFromEnum(node_idx));
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(@backingInt(node_idx)));
             const expr = self.cir.store.getExpr(expr_idx);
             break :blk expr == .e_num and expr.e_num.kind == .int_unbound;
         },
         .pattern => blk: {
-            const pat_idx: CIR.Pattern.Idx = @enumFromInt(@intFromEnum(node_idx));
+            const pat_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(@backingInt(node_idx)));
             const pat = self.cir.store.getPattern(pat_idx);
             break :blk pat == .num_literal and pat.num_literal.kind == .int_unbound;
         },
@@ -11241,7 +11281,7 @@ fn mkParseSpecVar(
     const ident_idx = switch (decl) {
         .tag_union => self.cir.idents.builtin_encoding_parse_tag_union_spec,
         .bool, .str, .null, .list_start, .list_next, .list_after_item, .tuple_start, .tuple_next, .tuple_end, .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .dec, .f32, .f64, .record_start, .record_field, .record_after_field => {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: this parse method does not have a builtin parse spec declaration", .{});
             }
             unreachable;
@@ -11347,11 +11387,11 @@ fn unifyWithFresh(
                 return;
             }
             const fresh_var = try self.freshFromContent(content, env, self.getRegionAt(target_var));
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 const target_var_rank = self.types.resolveVar(target_var).desc.rank;
                 const fresh_var_rank = self.types.resolveVar(fresh_var).desc.rank;
-                if (@intFromEnum(target_var_rank) > @intFromEnum(fresh_var_rank)) {
-                    base.invariant("trying unifyWith unexpected ranks {} & {}", .{ @intFromEnum(target_var_rank), @intFromEnum(fresh_var_rank) });
+                if (@backingInt(target_var_rank) > @backingInt(fresh_var_rank)) {
+                    base.invariant("trying unifyWith unexpected ranks {} & {}", .{ @backingInt(target_var_rank), @backingInt(fresh_var_rank) });
                 }
             }
             _ = try self.unify(target_var, fresh_var, env);
@@ -11419,7 +11459,7 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
     const checking_builtin_directly = self.isCheckingBuiltinModuleDirectly();
     const bool_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.bool_type) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: local Builtin.Bool declaration not found while checking Builtin", .{});
             }
             unreachable;
@@ -11428,7 +11468,7 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
         self.builtin_ctx.bool_stmt;
     const str_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.builtin_str) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: local Builtin.Str declaration not found while checking Builtin", .{});
             }
             unreachable;
@@ -11437,14 +11477,14 @@ fn copyBuiltinTypes(self: *Self) Allocator.Error!void {
         self.builtin_ctx.str_stmt;
     const u64_stmt_idx = if (checking_builtin_directly)
         self.findLocalTypeDeclByName(self.cir.idents.u64_type) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: local Builtin.U64 declaration not found while checking Builtin", .{});
             }
             unreachable;
         }
     else blk: {
         const indices = self.builtin_ctx.builtin_indices orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("type checker invariant violated: builtin indices missing while copying Builtin.U64", .{});
             }
             unreachable;
@@ -11496,7 +11536,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
     if (self.isCheckingBuiltinModuleDirectly()) return;
     const builtin_env = self.builtin_ctx.builtin_module orelse return;
     const indices = self.builtin_ctx.builtin_indices orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: builtin module env present without builtin indices", .{});
         }
         unreachable;
@@ -11509,7 +11549,7 @@ fn ensureBuiltinNominalDeclEntries(self: *Self) Allocator.Error!void {
         try copy_import.ensureNominalDeclForStatement(
             &builtin_env.types,
             self.types,
-            @intFromEnum(@field(indices, spec.type_field)),
+            @backingInt(@field(indices, spec.type_field)),
             &self.var_map,
             builtin_env,
             self.cir,
@@ -11563,7 +11603,7 @@ const DefaultParamVar = struct {
     rigid_var: Var,
 
     fn rigidVarLessThan(_: void, lhs: DefaultParamVar, rhs: DefaultParamVar) bool {
-        return @intFromEnum(lhs.rigid_var) < @intFromEnum(rhs.rigid_var);
+        return @backingInt(lhs.rigid_var) < @backingInt(rhs.rigid_var);
     }
 };
 
@@ -11847,6 +11887,9 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.recheckNominalConstructorBackings(&env);
 
     try self.rejectEffectfulCompileTimeExecutableRoots();
+    if (self.pending_predeclared_use_relations.items.len != 0) {
+        base.invariant("type checker invariant violated: a predeclared scheme use was never related to its binding's published scheme", .{});
+    }
     try self.poisonErroneousValueUses();
     try self.poisonErroneousValueExprs();
 
@@ -11880,6 +11923,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     // Pruning can mark a destructured name erroneous; its uses are poisoned
     // like those of any other erroneous binding.
     try self.poisonErroneousValueUses();
+    try self.publishDispatchRelationMerges();
     try self.finalizeLiteralDispatchResolutions();
     try self.finalizeTopLevelDemandDependencies(&env);
     try self.finalizeExpectEffectSlots();
@@ -12039,7 +12083,7 @@ fn poisonCheckedStrictDemandCycles(
                 if (a.region.end.offset != b.region.end.offset) {
                     return a.region.end.offset < b.region.end.offset;
                 }
-                return @intFromEnum(a.def_idx) < @intFromEnum(b.def_idx);
+                return @backingInt(a.def_idx) < @backingInt(b.def_idx);
             }
         }.lessThan);
 
@@ -12069,12 +12113,12 @@ fn poisonCheckedStrictDemandCycles(
 /// ensured up front by `ensureBuiltinNominalDeclEntries`. A miss here means a
 /// nominal application was minted without its declaration being reachable.
 fn debugAssertNominalDeclTableComplete(self: *const Self) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     var var_int: u32 = 0;
     const num_vars: u32 = @intCast(self.types.len());
     while (var_int < num_vars) : (var_int += 1) {
-        const resolved = self.types.resolveVar(@enumFromInt(var_int));
+        const resolved = self.types.resolveVar(@fromBackingInt(@intCast(var_int)));
         if (!resolved.is_root) continue;
         const content = resolved.desc.content;
         if (content != .structure) continue;
@@ -12086,7 +12130,7 @@ fn debugAssertNominalDeclTableComplete(self: *const Self) void {
                 "type checker invariant violated: nominal application '{s}' (origin {}, statement {}) has no declaration table entry in its store",
                 .{
                     self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx),
-                    @intFromEnum(nominal.origin_module),
+                    @backingInt(nominal.origin_module),
                     nominal.sourceDecl().statement,
                 },
             );
@@ -12292,7 +12336,7 @@ fn hoistedRootIsIntrinsicallyKept(
 }
 
 fn debugVerifyKeptHoistedRootDependencies(self: *Self) Allocator.Error!void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
 
     const root_count = self.selected_hoisted_roots.items.len;
     const keep_roots = try self.gpa.alloc(bool, root_count);
@@ -12343,7 +12387,7 @@ fn varHasConcreteType(self: *Self, var_: Var) Allocator.Error!bool {
 fn nominalDeclBackingTemplate(self: *const Self, nominal: types_mod.NominalType) ?Var {
     const decl_idx = self.types.lookupNominalDecl(nominal) orelse {
         if (nominal.sourceDecl().present) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
                     .{self.cir.getIdentStoreConst().getText(nominal.ident.ident_idx)},
@@ -12559,7 +12603,7 @@ const HoistedDependencyContext = struct {
 };
 
 fn hoistSelectionInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant("check invariant violated: " ++ message, .{});
     }
     unreachable;
@@ -13122,7 +13166,7 @@ fn hoistedCallableDefForExpr(
         .e_lookup_local => |lookup| hoistedTopLevelDefForPattern(module, lookup.pattern_idx),
         .e_lookup_external => |external| blk: {
             const imported_module = self.hoistedImportedModule(module, external.module_idx) orelse break :blk null;
-            break :blk hoistedTopLevelDefForNode(imported_module, @enumFromInt(external.target_node_idx));
+            break :blk hoistedTopLevelDefForNode(imported_module, @fromBackingInt(@intCast(external.target_node_idx)));
         },
         .e_lookup_associated_resolved => |resolved| blk: {
             const target_module = self.moduleEnvForIdentity(module, resolved.module_identity);
@@ -13226,8 +13270,9 @@ fn patternBindsNode(module: *const ModuleEnv, root: CIR.Pattern.Idx, node: CIR.N
     if (ModuleEnv.nodeIdxFrom(root) == node) return true;
     if (module.store.getPattern(root) == .assign or module.store.getPattern(root) == .var_assign) return false;
 
-    var stack_allocator_state = std.heap.stackFallback(2048, module.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, module.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
     defer pending.deinit(stack_allocator);
 
@@ -13565,7 +13610,7 @@ fn finishAmbiguityPinnableSets(
 /// store.
 fn constraintIntroExpr(constraint: StaticDispatchConstraint) ?CIR.Expr.Idx {
     const raw = constraint.provenance.intro_expr.get() orelse return null;
-    return @enumFromInt(raw);
+    return @fromBackingInt(@intCast(raw));
 }
 
 /// The source expression whose checked value becomes invalid when this
@@ -13589,12 +13634,12 @@ fn constraintSourceExpr(
 
     for (self.cir.store.literalDispatchPlans()) |plan| {
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
-        const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
-            return @enumFromInt(plan.node_idx);
+            return @fromBackingInt(@intCast(plan.node_idx));
         }
         if (pattern_failure_expr == null) {
-            if (plan.patternFailureOwner(&self.cir.store)) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@enumFromInt(raw));
+            if (plan.patternFailureOwner(&self.cir.store)) |raw| pattern_failure_expr = self.literalFailureOwnerExpr(@fromBackingInt(@intCast(raw)));
         }
     }
     return pattern_failure_expr;
@@ -13624,7 +13669,7 @@ fn instantiatedConstraintUseExpr(self: *const Self, constraint: StaticDispatchCo
 /// Constraint provenance can name only expressions. A statement or definition
 /// retains its exact owner in the literal plan instead of borrowing its RHS.
 fn literalFailureOwnerExpr(self: *const Self, owner: CIR.Node.Idx) ?CIR.Expr.Idx {
-    return if (isExprNodeTag(self.cir.store.nodes.get(owner).tag)) @enumFromInt(@intFromEnum(owner)) else null;
+    return if (isExprNodeTag(self.cir.store.nodes.get(owner).tag)) @fromBackingInt(@intCast(@backingInt(owner))) else null;
 }
 
 fn poisonPatternBindings(self: *Self, pattern: CIR.Pattern.Idx) Allocator.Error!void {
@@ -13653,11 +13698,11 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
     // pattern it is) becomes a runtime error; the binders are scoped inside
     // it.
     if (isExprNodeTag(tag)) {
-        try self.markErroneousValueExpr(@enumFromInt(@intFromEnum(owner)));
+        try self.markErroneousValueExpr(@fromBackingInt(@intCast(@backingInt(owner))));
         return;
     }
     if (tag == .def) {
-        const def_idx: CIR.Def.Idx = @enumFromInt(@intFromEnum(owner));
+        const def_idx: CIR.Def.Idx = @fromBackingInt(@intCast(@backingInt(owner)));
         try self.poisonPatternBindings(self.cir.store.getDef(def_idx).pattern);
         try self.rejected_destructure_defs.put(self.gpa, def_idx, {});
         return;
@@ -13665,7 +13710,7 @@ fn rejectPatternFailureOwner(self: *Self, owner: CIR.Node.Idx) Allocator.Error!v
 
     // The remaining producer-owned contexts are binding and loop statements.
     // The statement binds nothing and is replaced with a runtime error.
-    const stmt_idx: CIR.Statement.Idx = @enumFromInt(@intFromEnum(owner));
+    const stmt_idx: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(owner)));
     const pattern = switch (self.cir.store.getStatement(stmt_idx)) {
         .s_decl => |decl| decl.pattern,
         inline .s_var, .s_var_uninitialized, .s_reassign => |var_| var_.pattern_idx,
@@ -13824,7 +13869,7 @@ fn literalDispatchPlanMatchesConstraint(
     // The raw callable is the literal occurrence's stable identity. Distinct
     // occurrences may share both a receiver root and a callable equivalence
     // class after unification, so either resolved root would conflate owners.
-    return plan.fn_var == @intFromEnum(constraint.fn_var) and
+    return plan.fn_var == @backingInt(constraint.fn_var) and
         self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root);
 }
 
@@ -13840,7 +13885,7 @@ fn literalDispatchPlanMatches(
         .interpolation => unreachable,
     };
     return kind_matches and
-        self.types.resolveVar(@enumFromInt(plan.target_var)).var_ == dispatcher_root;
+        self.types.resolveVar(@fromBackingInt(@intCast(plan.target_var))).var_ == dispatcher_root;
 }
 
 fn matchingLiteralDispatchPlan(
@@ -13865,10 +13910,10 @@ fn literalPatternFailureExprForConstraint(
     const dispatcher_root = self.types.resolveVar(dispatcher_var).var_;
     for (self.cir.store.literalDispatchPlans()) |plan| {
         if (!self.literalDispatchPlanMatchesConstraint(plan, constraint, dispatcher_root)) continue;
-        const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
         if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
         const raw = plan.patternFailureOwner(&self.cir.store) orelse continue;
-        return self.literalFailureOwnerExpr(@enumFromInt(raw));
+        return self.literalFailureOwnerExpr(@fromBackingInt(@intCast(raw)));
     }
     return null;
 }
@@ -13897,13 +13942,13 @@ fn poisonLiteralFailureOwners(
 
         for (self.cir.store.literalDispatchPlans()) |plan| {
             if (!self.literalDispatchPlanMatches(plan, literal_kind, dispatcher_root)) continue;
-            if (self.types.resolveVar(@enumFromInt(plan.fn_var)).var_ != literal_fn_root) continue;
-            const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+            if (self.types.resolveVar(@fromBackingInt(@intCast(plan.fn_var))).var_ != literal_fn_root) continue;
+            const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
             if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) {
-                try literal_exprs.append(self.gpa, @enumFromInt(plan.node_idx));
+                try literal_exprs.append(self.gpa, @fromBackingInt(@intCast(plan.node_idx)));
                 continue;
             }
-            const owner: CIR.Node.Idx = @enumFromInt(plan.patternFailureOwner(&self.cir.store) orelse continue);
+            const owner: CIR.Node.Idx = @fromBackingInt(@intCast(plan.patternFailureOwner(&self.cir.store) orelse continue));
             for (pattern_owners.items) |recorded| {
                 if (recorded == owner) break;
             } else try pattern_owners.append(self.gpa, owner);
@@ -13925,7 +13970,7 @@ fn poisonLiteralFailureOwners(
 }
 
 fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
-    if (deferred.failure_expr.get()) |raw| return @enumFromInt(raw);
+    if (deferred.failure_expr.get()) |raw| return @fromBackingInt(@intCast(raw));
 
     for (self.types.sliceStaticDispatchConstraints(deferred.constraints)) |constraint| {
         if (constraint.origin.literalKind() == null) continue;
@@ -13936,7 +13981,7 @@ fn deferredConstraintFailureExpr(self: *Self, deferred: DeferredConstraintCheck)
 
 fn explicitDeferredConstraintFailureExpr(deferred: DeferredConstraintCheck) ?CIR.Expr.Idx {
     const raw = deferred.failure_expr.get() orelse return null;
-    return @enumFromInt(raw);
+    return @fromBackingInt(@intCast(raw));
 }
 
 fn inheritDeferredConstraintFailureExpr(
@@ -14628,7 +14673,7 @@ fn findStaticDispatchUseForConstraint(
 /// `poly() == poly()`) where the dispatch is created at the use site rather
 /// than copied by an instantiation.
 fn applyAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         // The residual judgment just ran: an unjudged candidate here would
         // mean a dispatch-constrained receiver escaped both the
         // generalization events and the end-of-check pass—a worklist bug,
@@ -14728,10 +14773,10 @@ fn applyInstantiationAmbiguityVerdict(self: *Self, verdict: AmbiguityVerdict) st
     } else {
         var raw_node_idx: u32 = 0;
         while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-            const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+            const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
             if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
-            const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+            const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
             if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
             const expr = self.cir.store.getExpr(expr_idx);
             if (expr != .e_call) continue;
@@ -14934,7 +14979,7 @@ fn checkInstantiatedStaticDispatchConstraints(
             // its now-concrete relations instead.
             for (pending_creation_materializations.items) |materialization| {
                 if (self.types.resolveVar(materialization.var_).desc.content != .flex) continue;
-                const constraints_start: u32 = @intFromEnum(materialization.constraints.start);
+                const constraints_start: u32 = @backingInt(materialization.constraints.start);
                 var constraint_offset: u32 = 0;
                 while (constraint_offset < materialization.constraints.len()) : (constraint_offset += 1) {
                     const constraint_idx = constraints_start + constraint_offset;
@@ -14947,7 +14992,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                         env,
                         .{
                             .constraints = .{
-                                .start = @enumFromInt(constraint_idx),
+                                .start = @fromBackingInt(@intCast(constraint_idx)),
                                 .count = 1,
                             },
                             .default_target = materialization.target,
@@ -14989,7 +15034,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                 .var_ = current.dispatcher_var,
                 .constraints = current.constraints,
                 .failure_expr = if (current.instantiation_expr) |expr_idx|
-                    .from(@intFromEnum(expr_idx))
+                    .from(@backingInt(expr_idx))
                 else
                     .none,
             }, .{ .recorded = .{ .group_index = current.owner_group_index, .scheme_root = current.owner_scheme_root } });
@@ -15074,10 +15119,10 @@ fn applyCreationAmbiguityVerdicts(self: *Self) std.mem.Allocator.Error!void {
     // expressions—or already reported per-instantiation—is reported once.
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (self.cir.store.getExpr(expr_idx) == .e_runtime_error) continue;
 
         const resolved = self.types.resolveVar(ModuleEnv.varFrom(expr_idx));
@@ -15346,7 +15391,7 @@ fn finalizeExpectEffectSlots(self: *Self) Allocator.Error!void {
             const fn_root = self.types.resolveVar(watcher.fn_var).var_;
             if (!successful_roots.contains(fn_root)) continue;
             if (try self.functionEffectStateHelp(fn_root) == .effectful) {
-                self.expect_effect_slots.items[@intFromEnum(watcher.slot)].effectful = true;
+                self.expect_effect_slots.items[@backingInt(watcher.slot)].effectful = true;
             }
         }
     }
@@ -15472,7 +15517,7 @@ fn staticDispatchAllowsHoistedRoot(self: *Self, dispatcher_var: Var, callable_va
 fn localProcedureTargetPattern(self: *Self, env: *const ModuleEnv, binding: ModuleEnv.MethodBinding) Allocator.Error!?CIR.Pattern.Idx {
     if (env != self.cir) return null;
     if (self.cir.store.nodes.get(binding.type_node_idx).tag != .statement_decl) return null;
-    const decl = self.cir.store.getStatement(@enumFromInt(@intFromEnum(binding.type_node_idx))).s_decl;
+    const decl = self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(binding.type_node_idx)))).s_decl;
     if (self.cir.store.getExpr(decl.expr) == .e_runtime_error) return decl.pattern;
     var pattern = decl.pattern;
     var expr = decl.expr;
@@ -15664,7 +15709,7 @@ const UnresolvedInspectScan = struct {
     pub fn enter(scan: *UnresolvedInspectScan, items: Eval.Items, leaf: Leaf) std.mem.Allocator.Error!Eval.Expansion {
         const self = scan.check;
         const resolved = self.types.resolveVar(leaf.var_);
-        const position_bit = @as(u8, 1) << @intFromEnum(leaf.position);
+        const position_bit = @as(u8, 1) << @backingInt(leaf.position);
         const visit = try scan.visited.getOrPut(resolved.var_);
         if (!visit.found_existing) visit.value_ptr.* = 0;
         if (visit.value_ptr.* & position_bit != 0) return .{ .value = false };
@@ -16151,7 +16196,7 @@ fn processRequiresTypes(self: *Self, env: *Env) std.mem.Allocator.Error!void {
                         &.{},
                         0,
                         self.aliasOriginModule(),
-                        @intFromEnum(type_alias.alias_stmt_idx),
+                        @backingInt(type_alias.alias_stmt_idx),
                         self.cir.module_role == .builtin,
                     ),
                     env,
@@ -16279,7 +16324,7 @@ fn instantiatePlatformRequiredType(
     const declared_aliases = input.env.for_clause_aliases.sliceRange(required_type.type_aliases);
     for (declared_aliases) |alias| {
         const binding = forClauseAliasBinding(bindings, alias.alias_stmt_idx) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("platform requirement for-clause alias was not collected for the requires clause", .{});
             }
             unreachable;
@@ -16324,7 +16369,7 @@ fn instantiatePlatformRequiredType(
     errdefer self.gpa.free(identity_vars);
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         slot_var.* = self.var_map.get(platform_var) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("platform requirement identity var was not copied into the app store", .{});
             }
             unreachable;
@@ -16340,7 +16385,7 @@ fn instantiatePlatformRequiredType(
     for (platform_identity_vars, identity_vars) |platform_var, *slot_var| {
         if (alias_var_substitutions.get(platform_var)) |app_type_var| {
             const resolved_app_type = self.types.resolveVar(app_type_var).var_;
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.assert(self.types.resolveVar(slot_var.*).var_ == resolved_app_type);
             }
             slot_var.* = resolved_app_type;
@@ -16349,7 +16394,7 @@ fn instantiatePlatformRequiredType(
 
         const resolved = self.types.resolveVar(slot_var.*);
         slot_var.* = self.var_map.get(resolved.var_) orelse {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant("platform requirement identity var was not instantiated with its requirement root", .{});
             }
             unreachable;
@@ -16405,7 +16450,7 @@ fn collectForClauseAliasBindings(
             if (forClauseAliasBinding(bindings.items, alias.alias_stmt_idx) != null) continue;
             const alias_statement = input.env.store.getStatement(alias.alias_stmt_idx);
             if (alias_statement != .s_alias_decl) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("platform requirement for-clause alias referenced a non-alias statement", .{});
                 }
                 unreachable;
@@ -16414,7 +16459,7 @@ fn collectForClauseAliasBindings(
             const platform_alias_resolved = input.env.types.resolveVar(ModuleEnv.varFrom(alias.alias_stmt_idx));
             const platform_alias_content = platform_alias_resolved.desc.content;
             if (platform_alias_content != .alias) {
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     base.invariant("platform requirement for-clause alias statement had no alias type", .{});
                 }
                 unreachable;
@@ -16423,7 +16468,7 @@ fn collectForClauseAliasBindings(
             const platform_alias_source = copy_import.AliasSource{
                 .origin_module = platform_alias.origin_module,
                 .source_decl = platform_alias.source_decl.toOptional() orelse {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("platform requirement for-clause alias had no source declaration", .{});
                     }
                     unreachable;
@@ -16476,9 +16521,9 @@ fn appTypeDeclByIdent(self: *Self, ident: Ident.Idx) ?CIR.Statement.Idx {
 fn exposedAppDefByIdent(self: *Self, ident: Ident.Idx) ?CIR.Def.Idx {
     const node_idx = self.cir.getExposedValueNodeIndexById(ident) orelse return null;
     if (node_idx >= self.cir.store.nodes.len()) return null;
-    const cir_node: CIR.Node.Idx = @enumFromInt(node_idx);
+    const cir_node: CIR.Node.Idx = @fromBackingInt(@intCast(node_idx));
     if (self.cir.store.nodes.get(cir_node).tag != .def) return null;
-    return @enumFromInt(node_idx);
+    return @fromBackingInt(@intCast(node_idx));
 }
 
 /// Record every annotation that types a host-boundary value—a hosted
@@ -17369,8 +17414,9 @@ fn appendPredeclaredIdentitySlots(self: *Self, scheme_var: Var, var_: Var) Alloc
         try self.canonical_key_writer.appendIdentityVarsFromVar(var_, &self.predeclared_slot_vars);
         return;
     };
-    var stack_allocator_state = std.heap.stackFallback(256, self.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [256]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     const hole_roots = try stack_allocator.alloc(Var, holes.len);
     defer stack_allocator.free(hole_roots);
     for (holes, hole_roots) |hole, *hole_root| hole_root.* = self.types.resolveVar(hole).var_;
@@ -17405,10 +17451,13 @@ fn recordPredeclaredBodySlots(self: *Self, annotation_idx: CIR.Annotation.Idx) A
             annotation_idx,
             .dispatch_target,
             waiting.node_idx,
-            @intFromEnum(waiting.constraint_fn_var),
+            @backingInt(waiting.constraint_fn_var),
             waiting.scheme_root,
             waiting.record_policy,
         );
+        // The body has only just generated its annotation, so its scheme is
+        // published by a boundary still ahead.
+        try self.deferPredeclaredUse(annotation_idx, waiting.fresh.slice(self.predeclared_use_fresh_vars.items), waiting.site);
     }
     self.waiting_predeclared_dispatch_uses.shrinkRetainingCapacity(write);
     self.reclaimPredeclaredUseFreshVars();
@@ -17478,8 +17527,8 @@ fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, us
         const resolved = self.types.resolveVar(body_var);
         if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
-                .old_var = @intFromEnum(resolved.var_),
-                .fresh_var = @intFromEnum(fresh_var),
+                .old_var = @backingInt(resolved.var_),
+                .fresh_var = @backingInt(fresh_var),
             });
         }
     }
@@ -17503,8 +17552,8 @@ fn appendPredeclaredUsePairs(self: *Self, annotation_idx: CIR.Annotation.Idx, us
         }
         for (body_constraints, fresh_fns) |body_constraint, fresh_fn| {
             try self.scratch_evidence_pairs.append(self.gpa, .{
-                .old_var = @intFromEnum(self.types.resolveVar(body_constraint.fn_var).var_),
-                .fresh_var = @intFromEnum(fresh_fn),
+                .old_var = @backingInt(self.types.resolveVar(body_constraint.fn_var).var_),
+                .fresh_var = @backingInt(fresh_fn),
             });
         }
     }
@@ -17553,6 +17602,8 @@ fn recordInFlightPredeclaredSchemeUse(
     slot_data: u32,
     scheme_root: Var,
     policy: PredeclaredRecordPolicy,
+    site: PredeclaredUseSite,
+    env: *Env,
 ) Allocator.Error!void {
     const fresh_start = self.predeclared_use_fresh_vars.items.len;
     defer self.predeclared_use_fresh_vars.shrinkRetainingCapacity(fresh_start);
@@ -17560,6 +17611,188 @@ fn recordInFlightPredeclaredSchemeUse(
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items));
     try self.writePredeclaredSchemeUse(annotation_idx, slot, node_idx, slot_data, scheme_root, policy);
+    try self.relateOrDeferPredeclaredUse(annotation_idx, use_copies.slice(self.predeclared_use_fresh_vars.items), site, env);
+}
+
+/// Relate a use of a predeclared scheme to its binding's own scheme now if
+/// that scheme is published, or keep it for the boundary that publishes it.
+fn relateOrDeferPredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+    env: *Env,
+) Allocator.Error!void {
+    if (self.predeclaredSlotsPtr(annotation_idx).published) {
+        return self.relatePredeclaredUse(annotation_idx, use_copies, site, null, env);
+    }
+    try self.deferPredeclaredUse(annotation_idx, use_copies, site);
+}
+
+/// Keep a use of a predeclared scheme until the boundary that publishes its
+/// binding's own scheme relates it.
+fn deferPredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+) Allocator.Error!void {
+    std.debug.assert(!self.predeclaredSlotsPtr(annotation_idx).published);
+    const start: u32 = @intCast(self.predeclared_relation_vars.items.len);
+    try self.predeclared_relation_vars.appendSlice(self.gpa, use_copies);
+    try self.pending_predeclared_use_relations.append(self.gpa, .{
+        .annotation = annotation_idx,
+        .site = site,
+        .fresh = .{ .start = start, .len = @intCast(use_copies.len) },
+    });
+}
+
+/// Relate every pending use of `annotation_idx` to its binding's own scheme.
+/// `quantified_from` is the rank of the boundary about to generalize that
+/// scheme, or null once it has. Returns whether any use was related.
+fn relatePendingPredeclaredUsesOf(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    quantified_from: ?Rank,
+    env: *Env,
+) Allocator.Error!bool {
+    var related = false;
+    var write: usize = 0;
+    var read: usize = 0;
+    while (read < self.pending_predeclared_use_relations.items.len) : (read += 1) {
+        const pending = self.pending_predeclared_use_relations.items[read];
+        if (pending.annotation != annotation_idx) {
+            self.pending_predeclared_use_relations.items[write] = pending;
+            write += 1;
+            continue;
+        }
+        try self.relatePredeclaredUse(
+            annotation_idx,
+            pending.fresh.slice(self.predeclared_relation_vars.items),
+            pending.site,
+            quantified_from,
+            env,
+        );
+        related = true;
+    }
+    self.pending_predeclared_use_relations.shrinkRetainingCapacity(write);
+    if (write == 0) self.predeclared_relation_vars.clearRetainingCapacity();
+    return related;
+}
+
+/// Relate the pending uses of every predeclared annotation a generalization
+/// boundary's roots own, while the boundary is still open: everything that
+/// boundary will quantify sits at or above its rank.
+fn relateBoundaryPredeclaredUses(self: *Self, roots: []const BoundaryRoot, env: *Env) Allocator.Error!bool {
+    var related = false;
+    for (roots) |root| {
+        const annotation_idx = root.annotation orelse continue;
+        if (!self.predeclared_slots.contains(annotation_idx)) continue;
+        if (try self.relatePendingPredeclaredUsesOf(annotation_idx, env.rank(), env)) related = true;
+    }
+    return related;
+}
+
+/// Mark the predeclared annotations a finished boundary's roots own as
+/// published, so every later use relates at once.
+fn publishBoundaryPredeclaredSchemes(self: *Self, roots: []const BoundaryRoot) void {
+    for (roots) |root| {
+        const annotation_idx = root.annotation orelse continue;
+        const slots = self.predeclared_slots.getPtr(annotation_idx) orelse continue;
+        slots.published = true;
+    }
+}
+
+/// Relate one use of a predeclared scheme to its binding's own scheme
+/// (design.md "Predeclared Scheme Uses"). Both generations of the annotation
+/// enumerate the same identity slots, but the body may have solved a slot the
+/// use's copy left free: it may close an implicitly opened output row, or join
+/// it with another slot. The use must be an instance of the binding's scheme,
+/// so each body slot the scheme quantifies stands for the use's copy of the
+/// first slot that reaches it, and every other slot's copy must equal that
+/// slot's image. A rejected use is reported and retired; the binding keeps its
+/// own scheme.
+fn relatePredeclaredUse(
+    self: *Self,
+    annotation_idx: CIR.Annotation.Idx,
+    use_copies: []const Var,
+    site: PredeclaredUseSite,
+    quantified_from: ?Rank,
+    env: *Env,
+) Allocator.Error!void {
+    const body_range = self.predeclaredSlotsPtr(annotation_idx).body orelse
+        base.invariant("type checker invariant violated: predeclared scheme use related before its body generated the annotation", .{});
+    const body = body_range.slice(self.predeclared_slot_vars.items);
+    var images = std.AutoHashMap(Var, Var).init(self.gpa);
+    defer images.deinit();
+    for (body, use_copies[0..body.len]) |body_var, use_copy| {
+        const image = (try self.predeclaredSlotImage(body_var, use_copy, quantified_from, &images, site.region, env)) orelse continue;
+        const result = try self.runUnify(use_copy, image, env, .{ .on_mismatch = .write_no_report, .row_width_relation = .exact });
+        if (!result.isAccepted()) {
+            try self.rejectPredeclaredUse(annotation_idx, site);
+            return;
+        }
+    }
+}
+
+/// The type a use's copy of one predeclared slot must have, given what the
+/// body solved that slot to, or null when the copy is free: it is the first
+/// to reach a quantified slot, or the body already rejected the slot.
+fn predeclaredSlotImage(
+    self: *Self,
+    body_var: Var,
+    use_copy: Var,
+    quantified_from: ?Rank,
+    images: *std.AutoHashMap(Var, Var),
+    region: Region,
+    env: *Env,
+) Allocator.Error!?Var {
+    var current = body_var;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        if (canonical_type_keys.isIdentityVariable(resolved.desc)) {
+            const quantified = resolved.desc.rank == .generalized or
+                (if (quantified_from) |rank| @backingInt(resolved.desc.rank) >= @backingInt(rank) else false);
+            if (!quantified) return resolved.var_;
+            const entry = try images.getOrPut(resolved.var_);
+            if (entry.found_existing) return entry.value_ptr.*;
+            entry.value_ptr.* = use_copy;
+            return null;
+        }
+        switch (resolved.desc.content) {
+            .err => return null,
+            .structure => |flat| switch (flat) {
+                // A closed row has no variables, so a fresh copy is its
+                // image under every substitution.
+                .empty_tag_union => return try self.freshFromContent(.{ .structure = .empty_tag_union }, env, region),
+                // A row with no tags is its extension.
+                .tag_union => |tag_union| if (tag_union.tags.len() == 0) {
+                    current = tag_union.ext;
+                    continue;
+                },
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => {},
+            },
+            .alias, .field_presence, .flex, .rigid => {},
+        }
+        // The annotation's rigids cannot be solved, and its implicitly opened
+        // rows are bounded: they may close or join another row, but never
+        // gain a tag.
+        base.invariant("type checker invariant violated: an annotated body solved a predeclared identity slot to structure other than a row", .{});
+    }
+}
+
+/// Report a use of a predeclared scheme that its binding's own scheme
+/// rejects, and retire the use; the binding keeps its scheme.
+fn rejectPredeclaredUse(self: *Self, annotation_idx: CIR.Annotation.Idx, site: PredeclaredUseSite) Allocator.Error!void {
+    _ = try self.appendTypeMismatch(ModuleEnv.varFrom(annotation_idx), site.use_var, .{ .predeclared_use = .{
+        .region = site.region,
+        .def_name = site.def_name,
+    } });
+    if (site.node_idx != 0) {
+        try self.markErroneousValueExpr(@fromBackingInt(site.node_idx));
+    } else {
+        try self.markErroneous(site.use_var);
+    }
 }
 
 /// Record a dispatch edge to an annotated method that selected the method's
@@ -17572,9 +17805,18 @@ fn recordPredeclaredDispatchUse(
     constraint_fn_var: Var,
     scheme_root: Var,
     policy: PredeclaredRecordPolicy,
+    use_var: Var,
+    region: Region,
+    env: *Env,
 ) Allocator.Error!void {
+    const site: PredeclaredUseSite = .{
+        .node_idx = node_idx,
+        .use_var = use_var,
+        .region = region,
+        .def_name = null,
+    };
     if (self.predeclaredSlotsPtr(annotation_idx).body != null) {
-        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @intFromEnum(constraint_fn_var), scheme_root, policy);
+        return self.recordInFlightPredeclaredSchemeUse(annotation_idx, .dispatch_target, node_idx, @backingInt(constraint_fn_var), scheme_root, policy, site, env);
     }
     try self.waiting_predeclared_dispatch_uses.append(self.gpa, .{
         .annotation = annotation_idx,
@@ -17583,6 +17825,7 @@ fn recordPredeclaredDispatchUse(
         .scheme_root = scheme_root,
         .record_policy = policy,
         .fresh = try self.appendPredeclaredUseFreshVars(annotation_idx),
+        .site = site,
     });
 }
 
@@ -17599,8 +17842,9 @@ fn recordPredeclaredDispatchUse(
 fn resetAnnotationNodes(self: *Self, annotation_idx: CIR.Annotation.Idx) std.mem.Allocator.Error!void {
     try self.types.resetVarToUnbound(ModuleEnv.varFrom(annotation_idx), Rank.outermost);
 
-    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
@@ -17699,8 +17943,9 @@ fn collectUnderscoreAnnoVars(
     annotation_idx: CIR.Annotation.Idx,
     out: *std.ArrayListUnmanaged(Var),
 ) std.mem.Allocator.Error!void {
-    var stack_allocator_state = std.heap.stackFallback(1024, self.gpa);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.gpa);
+    const stack_allocator = stack_allocator_state.allocator();
     var nodes: std.ArrayList(CIR.TypeAnno.Idx) = .empty;
     defer nodes.deinit(stack_allocator);
     try self.collectAnnotationTypeAnnos(annotation_idx, &nodes, stack_allocator);
@@ -17933,7 +18178,7 @@ fn stepEnsureGroup(self: *Self, state: *EnsureGroupActivity) std.mem.Allocator.E
                 // the group is never re-entered. This also covers a pending
                 // target recorded mid-body for a later member of the SAME group:
                 // by boundary time the member loop has checked it.
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     var on_stack = false;
                     for (self.group_stack.items) |frame| {
                         if (frame.group_index == group_index) {
@@ -18061,6 +18306,7 @@ fn stepGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.Er
                 state.member_roots[i] = .{
                     .owner = ModuleEnv.varFrom(member_def.expr),
                     .interface = ModuleEnv.varFrom(member_def.expr),
+                    .annotation = member_def.annotation,
                 };
             }
 
@@ -18268,9 +18514,14 @@ fn stepBoundary(self: *Self, state: *BoundaryActivity, input: ?CheckActivityResu
         },
         .replayed_after_capture => {
             const replayed_after_capture = input.?.replayedAny();
-            if (!state.replayed_before_capture and !replayed_after_capture and
+            // Every use of a root's predeclared scheme relates to the scheme
+            // this boundary publishes. A relation can pin a receiver, so the
+            // boundary runs another round after relating any.
+            const related_predeclared_uses = try self.relateBoundaryPredeclaredUses(state.roots, env);
+            if (!state.replayed_before_capture and !replayed_after_capture and !related_predeclared_uses and
                 self.pending_dispatch_targets.items.len == state.pending_before)
             {
+                self.publishBoundaryPredeclaredSchemes(state.roots);
                 try self.finalizeFunctionEffectsAtBoundary(state.roots);
                 // Invariant D: every remaining deferred dispatch constraint targets a
                 // checked def, an annotated scheme, or a still-flex receiver.
@@ -18625,7 +18876,7 @@ const WaitingObligationKey = struct {
 };
 
 fn waitingObligationKey(deferred: DeferredConstraintCheck) WaitingObligationKey {
-    return .{ .constraints_start = @intFromEnum(deferred.constraints.start), .owner_group = deferred.owner_group_index };
+    return .{ .constraints_start = @backingInt(deferred.constraints.start), .owner_group = deferred.owner_group_index };
 }
 
 fn waitingObligationContext(
@@ -18777,8 +19028,8 @@ fn replayPredeclaredSchemeUse(
     self.scratch_evidence_pairs.clearRetainingCapacity();
     try self.appendPredeclaredUsePairs(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items));
     for (self.scratch_evidence_pairs.items) |pair| {
-        const body_root: Var = @enumFromInt(pair.old_var);
-        try self.var_map.put(body_root, @enumFromInt(pair.fresh_var));
+        const body_root: Var = @fromBackingInt(@intCast(pair.old_var));
+        try self.var_map.put(body_root, @fromBackingInt(@intCast(pair.fresh_var)));
         try seeded_body_vars.put(body_root, {});
     }
 
@@ -18823,8 +19074,8 @@ fn replayPredeclaredSchemeUse(
         // the replay's fresh copy may already be solved.
         if (canonical_type_keys.isIdentityVariable(old_resolved.desc)) {
             try self.scratch_evidence_pairs.append(self.gpa, .{
-                .old_var = @intFromEnum(old_resolved.var_),
-                .fresh_var = @intFromEnum(fresh_resolved.var_),
+                .old_var = @backingInt(old_resolved.var_),
+                .fresh_var = @backingInt(fresh_resolved.var_),
             });
         }
         if (old_constraints.len() > 0) {
@@ -18832,8 +19083,8 @@ fn replayPredeclaredSchemeUse(
                 const old_fn_root = self.types.resolveVar(old_constraint.fn_var).var_;
                 const fresh_fn_var = self.var_map.get(old_fn_root) orelse continue;
                 try self.scratch_evidence_pairs.append(self.gpa, .{
-                    .old_var = @intFromEnum(old_fn_root),
-                    .fresh_var = @intFromEnum(self.types.resolveVar(fresh_fn_var).var_),
+                    .old_var = @backingInt(old_fn_root),
+                    .fresh_var = @backingInt(self.types.resolveVar(fresh_fn_var).var_),
                 });
             }
         }
@@ -18865,11 +19116,17 @@ fn replayPredeclaredSchemeUse(
         }
         try env.var_pool.addVarToRank(fresh_var, fresh_resolved.desc.rank);
         try self.fillInRegionsThrough(fresh_var);
-        self.setRegionAt(fresh_var, self.regions.get(@enumFromInt(@intFromEnum(old_var))).*);
+        self.setRegionAt(fresh_var, self.regions.get(@fromBackingInt(@intCast(@backingInt(old_var)))).*);
     }
 
     try self.appendSchemeRequirementEvidencePairs(instantiated_requirements.items);
-    try self.writePredeclaredSchemeUse(annotation_idx, .value_use, @intFromEnum(pending.source_expr), 0, scheme_root, .when_needed);
+    try self.writePredeclaredSchemeUse(annotation_idx, .value_use, @backingInt(pending.source_expr), 0, scheme_root, .when_needed);
+    try self.relateOrDeferPredeclaredUse(annotation_idx, pending.fresh.slice(self.predeclared_use_fresh_vars.items), .{
+        .node_idx = @backingInt(pending.source_expr),
+        .use_var = pending.use_var,
+        .region = self.cir.store.getExprRegion(pending.source_expr),
+        .def_name = self.getPatternIdent(self.cir.store.getDef(pending.target_def).pattern),
+    }, env);
 
     for (instantiated_requirements.items) |requirement| {
         try self.registerInstantiatedSchemeRequirement(
@@ -18950,7 +19207,7 @@ fn pinVarAtGroupBoundaryRank(self: *Self, obligation_var: Var, env: *Env) std.me
 fn pinVarAtRank(self: *Self, obligation_var: Var, boundary_rank: Rank, env: *Env) std.mem.Allocator.Error!void {
     const resolved = self.types.resolveVar(obligation_var);
     if (resolved.desc.rank != .generalized and
-        @intFromEnum(resolved.desc.rank) > @intFromEnum(boundary_rank))
+        @backingInt(resolved.desc.rank) > @backingInt(boundary_rank))
     {
         try self.types.setDescRank(resolved.desc_idx, boundary_rank);
         try env.var_pool.addVarToRank(resolved.var_, boundary_rank);
@@ -18982,7 +19239,7 @@ fn predeclareAliasDecl(
             header_vars,
             @intCast(header_vars.len),
             self.aliasOriginModule(),
-            @intFromEnum(decl_var),
+            @backingInt(decl_var),
             self.cir.module_role == .builtin,
         ),
         env,
@@ -19006,7 +19263,7 @@ fn predeclareNominalDecl(
             .{ .ident_idx = header.relative_name },
             header_vars,
             self.cir.selfModuleIdentity(),
-            @intFromEnum(decl_var),
+            @backingInt(decl_var),
             nominal.is_opaque,
             self.cir.module_role == .builtin,
         ),
@@ -19014,7 +19271,7 @@ fn predeclareNominalDecl(
     );
 
     try self.registerLocalNominalDecl(
-        @intFromEnum(decl_var),
+        @backingInt(decl_var),
         header.relative_name,
         header_vars,
         backing_var,
@@ -19728,8 +19985,8 @@ fn derivedCodecDiagnosticRegion(
 }
 
 fn codecRelationRegionFrom(self: *const Self, expr_idx: CIR.Expr.Idx) ?Region {
-    const node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(expr_idx));
-    if (@intFromEnum(node_idx) >= self.cir.store.nodes.len()) return null;
+    const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(expr_idx)));
+    if (@backingInt(node_idx) >= self.cir.store.nodes.len()) return null;
     if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) return null;
     const region = self.cir.store.getExprRegion(expr_idx);
     if (region.isEmpty()) return null;
@@ -19902,10 +20159,10 @@ fn annoIsAnonymousOpenExt(self: *const Self, ext_anno_idx: CIR.TypeAnno.Idx) boo
 /// against, in which case nothing can be the builtin `Try`.
 fn builtinTrySourceDecl(self: *const Self) ?u32 {
     if (self.isCheckingBuiltinModuleDirectly()) {
-        return @intFromEnum(self.findLocalTypeDeclByName(self.cir.idents.@"try") orelse return null);
+        return @backingInt(self.findLocalTypeDeclByName(self.cir.idents.@"try") orelse return null);
     }
     const indices = self.builtin_ctx.builtin_indices orelse return null;
-    return @intFromEnum(indices.try_type);
+    return @backingInt(indices.try_type);
 }
 
 /// Source-formal adapter positions from the completed declaration graph.
@@ -20028,7 +20285,7 @@ fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, 
     // Compiler primitives have no source body; their actuals inherit position.
     const statement = nominal.sourceDeclOptional() orelse return surrounding;
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
-    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no position transfer.
+    const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no position transfer.
     std.debug.assert(index < positions.len);
     return positions[index].polarity(surrounding);
 }
@@ -20038,9 +20295,9 @@ fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) 
     const statement = alias.source_decl.toOptional() orelse return true; // Compiler abstract alias arguments are bookkeeping.
     const owner = self.moduleEnvForIdentity(self.cir, alias.origin_module).env;
     for (owner.for_clause_aliases.items.items) |abstract| {
-        if (@intFromEnum(abstract.alias_stmt_idx) == statement) return true;
+        if (@backingInt(abstract.alias_stmt_idx) == statement) return true;
     }
-    const positions = (try self.declarationPositions(owner, @enumFromInt(statement))) orelse return null; // Rejected source has no argument-usage facts.
+    const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no argument-usage facts.
     std.debug.assert(index < positions.len);
     return positions[index].isEmpty();
 }
@@ -20059,12 +20316,12 @@ fn rejectWhereAliasInTypePosition(
         .local => |local| self.cir.store.getStatement(local.decl_idx) == .s_where_alias_decl,
         .external => |ext| blk: {
             const ext_ref = (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) orelse break :blk false;
-            const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+            const stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx)));
             break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
         },
         .external_identity => |ext| blk: {
             const ext_ref = (try self.resolveVarFromExternalIdentity(ext.module_identity, ext.target_node_idx)) orelse break :blk false;
-            const stmt: CIR.Statement.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+            const stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx)));
             break :blk ext_ref.other_cir.store.getStatement(stmt) == .s_where_alias_decl;
         },
         .builtin, .pending => false,
@@ -20312,7 +20569,7 @@ fn resolveExternalWhereAlias(
         // Canonicalization already reported the unresolved import.
         return null;
     };
-    const decl = switch (ext_ref.other_cir.store.getStatement(@enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx)))) {
+    const decl = switch (ext_ref.other_cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx))))) {
         .s_where_alias_decl => |decl| decl,
         .s_decl,
         .s_var,
@@ -20848,11 +21105,11 @@ fn stepOwnersGen(self: *Self, frame: *OwnersGenFrame) std.mem.Allocator.Error!Ty
         frame.index += 1;
         if (owner.owned_by_annotation) {
             // The owner is a rigid var anno; polarity is irrelevant for it.
-            return .{ .request = .{ .anno = .{ .idx = @enumFromInt(owner.rigid_var), .ctx = frame.ctx, .polarity = .neg } } };
+            return .{ .request = .{ .anno = .{ .idx = @fromBackingInt(@intCast(owner.rigid_var)), .ctx = frame.ctx, .polarity = .neg } } };
         }
 
         frame.invalid_receiver = true;
-        const rigid_anno = self.cir.store.getTypeAnno(@enumFromInt(owner.rigid_var));
+        const rigid_anno = self.cir.store.getTypeAnno(@fromBackingInt(@intCast(owner.rigid_var)));
         std.debug.assert(rigid_anno == .rigid_var);
         const type_var_name = rigid_anno.rigid_var.name;
         for (self.cir.store.sliceWhereClausesForOwner(owner)) |where_idx| {
@@ -20978,7 +21235,7 @@ fn stepDeclGen(self: *Self, frame: *DeclGenFrame, input: ?TypeGenResult, env: *E
             // (declaration validity replaced the unifier's err-backed-nominal
             // short-circuit).
             if (self.types.resolveVar(backing_var).desc.content == .err) {
-                if (self.types.lookupNominalDeclByKey(self.cir.selfModuleIdentity(), @intFromEnum(decl_idx))) |table_idx| {
+                if (self.types.lookupNominalDeclByKey(self.cir.selfModuleIdentity(), @backingInt(decl_idx))) |table_idx| {
                     self.types.markNominalDeclInvalid(table_idx);
                 }
                 try self.unifyWithTargetRank(decl_var, .err, env);
@@ -21064,7 +21321,7 @@ fn beginAliasDeclBody(
                 header_vars,
                 @intCast(header_vars.len),
                 self.aliasOriginModule(),
-                @intFromEnum(decl_idx),
+                @backingInt(decl_idx),
                 self.cir.module_role == .builtin,
             ),
             env,
@@ -21174,7 +21431,7 @@ fn beginNominalDeclBody(
                 .{ .ident_idx = header.relative_name },
                 header_vars,
                 self.cir.selfModuleIdentity(),
-                @intFromEnum(decl_idx),
+                @backingInt(decl_idx),
                 nominal.is_opaque,
                 self.cir.module_role == .builtin,
             ),
@@ -21182,7 +21439,7 @@ fn beginNominalDeclBody(
         );
 
         try self.registerLocalNominalDecl(
-            @intFromEnum(decl_idx),
+            @backingInt(decl_idx),
             header.relative_name,
             header_vars,
             ModuleEnv.varFrom(nominal.anno),
@@ -21258,7 +21515,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     .annotation => |anno_ctx| blk: {
                         const where_span = anno_ctx.where orelse break :blk &.{};
                         for (self.cir.store.sliceWhereClauseOwners(where_span)) |owner| {
-                            if (owner.rigid_var == @intFromEnum(anno_idx) and owner.owned_by_annotation) {
+                            if (owner.rigid_var == @backingInt(anno_idx) and owner.owned_by_annotation) {
                                 break :blk self.cir.store.sliceWhereClausesForOwner(owner);
                             }
                         }
@@ -21325,7 +21582,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                                                 .{ .ident_idx = this_decl.name },
                                                 &.{},
                                                 self.cir.selfModuleIdentity(),
-                                                @intFromEnum(this_decl.idx),
+                                                @backingInt(this_decl.idx),
                                                 this_decl.is_opaque,
                                                 self.cir.module_role == .builtin,
                                             ), env);
@@ -21570,7 +21827,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
             _ = try self.types.static_dispatch_constraints.append(self.types.gpa, scratch_constraint.constraint);
         }
         const static_dispatch_constraints_end = self.types.static_dispatch_constraints.len();
-        const static_dispatch_constraints_range = StaticDispatchConstraint.SafeList.Range{ .start = @enumFromInt(static_dispatch_constraints_start), .count = @intCast(static_dispatch_constraints_end - static_dispatch_constraints_start) };
+        const static_dispatch_constraints_range = StaticDispatchConstraint.SafeList.Range{ .start = @fromBackingInt(@intCast(static_dispatch_constraints_start)), .count = @intCast(static_dispatch_constraints_end - static_dispatch_constraints_start) };
 
         try self.unifyWith(anno_var, .{ .rigid = Rigid{
             .name = rigid.name,
@@ -21774,7 +22031,7 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
                                         .{ .ident_idx = this_decl.name },
                                         anno_arg_vars,
                                         self.cir.selfModuleIdentity(),
-                                        @intFromEnum(this_decl.idx),
+                                        @backingInt(this_decl.idx),
                                         this_decl.is_opaque,
                                         self.cir.module_role == .builtin,
                                     ), env);
@@ -22203,7 +22460,7 @@ fn stepRecordAnnoGen(self: *Self, frame: *AnnoGenFrame, rec: std.meta.fieldInfo(
                     const presence_var = try self.freshFromContent(
                         .{ .field_presence = .{ .defaulted = .{
                             .origin_module = self.cir.selfModuleIdentity(),
-                            .expr_node = @intFromEnum(default_expr_idx),
+                            .expr_node = @backingInt(default_expr_idx),
                         } } },
                         env,
                         anno_region,
@@ -22552,7 +22809,7 @@ fn failAliasRow(
 /// start only happens when the record has fields; start may be undefined when
 /// count is 0.
 fn aliasRowField(self: *Self, range: types_mod.RecordField.SafeMultiList.Range, idx: u32) types_mod.RecordField {
-    return self.types.record_fields.get(@enumFromInt(@intFromEnum(range.start) + idx));
+    return self.types.record_fields.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx)));
 }
 
 fn stepRecordRow(self: *Self, frame: *RecordRowFrame, env: *Env, region: Region) Allocator.Error!RowStep {
@@ -22626,7 +22883,7 @@ fn stepRecordRow(self: *Self, frame: *RecordRowFrame, env: *Env, region: Region)
 /// start only happens when the tag union has tags; start may be undefined when
 /// count is 0.
 fn aliasRowTag(self: *Self, range: types_mod.Tag.SafeMultiList.Range, idx: u32) types_mod.Tag {
-    return self.types.tags.get(@enumFromInt(@intFromEnum(range.start) + idx));
+    return self.types.tags.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx)));
 }
 
 fn stepTagRow(self: *Self, frame: *TagRowFrame, env: *Env, region: Region) Allocator.Error!RowStep {
@@ -23893,7 +24150,7 @@ fn registerExpectedShapeVars(self: *Self, fresh_start: u64, env: *Env) Allocator
         const fresh_var = entry.value_ptr.*;
         // A nominal opening seeds its substitution with borrowed actual args.
         // Only newly allocated cells need bookkeeping.
-        if (@intFromEnum(fresh_var) < fresh_start) continue;
+        if (@backingInt(fresh_var) < fresh_start) continue;
         const source_region = self.getRegionAt(entry.key_ptr.*);
         const rank = self.types.resolveVar(fresh_var).desc.rank;
         try env.var_pool.addVarToRank(fresh_var, rank);
@@ -24289,6 +24546,8 @@ const ExprCheckFrame = struct {
     should_generalize: bool,
     rank_pushed: bool,
     hoist_frame: ?HoistFrameGuard,
+    /// The annotation this frame materialized, if any.
+    annotation: ?CIR.Annotation.Idx = null,
     active: bool = true,
 
     fn deinit(self: *ExprCheckFrame) void {
@@ -24394,6 +24653,18 @@ const ExprCheckFrame = struct {
         // Check any accumulated static dispatch constraints
         try checker.checkStaticDispatchConstraints(env, false);
 
+        // A frame that does not generalize publishes its annotation's scheme
+        // as it stands; a group member's scheme is published by its group's
+        // boundary instead.
+        if (!self.should_generalize and !self.suppress_group_member_generalize) {
+            if (self.annotation) |annotation_idx| {
+                if (checker.predeclared_slots.getPtr(annotation_idx)) |slots| {
+                    _ = try checker.relatePendingPredeclaredUsesOf(annotation_idx, null, env);
+                    slots.published = true;
+                }
+            }
+        }
+
         // If this type of expr should be generalized, generalize it!
         if (self.should_generalize) {
             // Bind pending record-destructure binders BEFORE boundary literal
@@ -24414,7 +24685,10 @@ const ExprCheckFrame = struct {
             // obligations (pinned at the group's boundary rank) escape this
             // frame and stay live for the group boundary.
             try checker.defaultLiteralsAtGeneralizationBoundary(.{ .owner = self.expr_var_raw, .interface = self.expr_var }, env);
+            const roots = [_]BoundaryRoot{.{ .owner = self.expr_var_raw, .interface = self.expr_var, .annotation = self.annotation }};
+            _ = try checker.relateBoundaryPredeclaredUses(&roots, env);
             try self.generalize();
+            checker.publishBoundaryPredeclaredSchemes(&roots);
         }
 
         try self.hoist_frame.?.finish(does_fx);
@@ -24564,6 +24838,7 @@ fn beginExprCheckFrame(
                 try self.boundAnnotationRows(annotation_idx);
             }
             try self.recordPredeclaredBodySlots(annotation_idx);
+            frame.annotation = annotation_idx;
             const anno_var = ModuleEnv.varFrom(annotation_idx);
             const anno_backup = try self.expectedTypeBackup(anno_var, env);
             break :blk .{
@@ -24781,7 +25056,11 @@ fn finishExprFrame(self: *Self, state: *ExprKernelActivity, frame: *ExprCheckFra
             state.finishing = .{ .frame = frame.*, .does_fx = does_fx };
             frame.active = false;
             const roots = try self.gpa.alloc(BoundaryRoot, 1);
-            roots[0] = .{ .owner = state.finishing.?.frame.expr_var_raw, .interface = state.finishing.?.frame.expr_var };
+            roots[0] = .{
+                .owner = state.finishing.?.frame.expr_var_raw,
+                .interface = state.finishing.?.frame.expr_var,
+                .annotation = state.finishing.?.frame.annotation,
+            };
             return .{ .push = .{ .boundary = .{ .roots = roots, .owns_roots = true } } };
         },
     }
@@ -25159,7 +25438,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             );
                             if (self.defInOnStackGroup(processing_def.def_idx)) {
                                 try self.recordRecursiveReference(
-                                    @intFromEnum(expr_idx),
+                                    @backingInt(expr_idx),
                                     ModuleEnv.varFrom(processing_def.def_idx),
                                 );
                             }
@@ -25171,7 +25450,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             // a later member of the CURRENT recursive group—
                             // its pattern var was ranked in the group's shared
                             // frame before any member body ran.
-                            if (builtin.mode == .Debug) {
+                            if (builtin.mode == .debug) {
                                 if (!self.defInCurrentRecursiveGroup(processing_def.def_idx)) {
                                     base.invariant("type checker invariant violated: name reference to unchecked def outside the current binding group", .{});
                                 }
@@ -25191,13 +25470,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 // flow into the inferred scheme.
                                 _ = try self.unifyInContext(expr_var, pat_var, env, .{ .recursive_def = .{ .def_name = processing_def.def_name } });
                                 try self.recordSharedSchemeUse(
-                                    @intFromEnum(expr_idx),
+                                    @backingInt(expr_idx),
                                     .shared_value_use,
                                     0,
                                     ModuleEnv.varFrom(processing_def.def_idx),
                                 );
                                 try self.recordRecursiveReference(
-                                    @intFromEnum(expr_idx),
+                                    @backingInt(expr_idx),
                                     ModuleEnv.varFrom(processing_def.def_idx),
                                 );
                             }
@@ -25219,14 +25498,21 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                             try self.recordInFlightPredeclaredSchemeUse(
                                 referenced_def.annotation.?,
                                 .value_use,
-                                @intFromEnum(expr_idx),
+                                @backingInt(expr_idx),
                                 0,
                                 ModuleEnv.varFrom(referenced_def.expr),
                                 .when_needed,
+                                .{
+                                    .node_idx = @backingInt(expr_idx),
+                                    .use_var = expr_var,
+                                    .region = expr_region,
+                                    .def_name = processing_def.def_name,
+                                },
+                                env,
                             );
                             _ = try self.unify(expr_var, instantiated, env);
                             try self.recordRecursiveReference(
-                                @intFromEnum(expr_idx),
+                                @backingInt(expr_idx),
                                 ModuleEnv.varFrom(processing_def.def_idx),
                             );
                             break :blk;
@@ -25255,13 +25541,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                         // generalizing with the suspended group's boundary.
                         _ = try self.unifyInContext(expr_var, ModuleEnv.varFrom(referenced_def.expr), env, .{ .recursive_def = .{ .def_name = processing_def.def_name } });
                         try self.recordSharedSchemeUse(
-                            @intFromEnum(expr_idx),
+                            @backingInt(expr_idx),
                             .shared_value_use,
                             0,
                             ModuleEnv.varFrom(processing_def.def_idx),
                         );
                         try self.recordRecursiveReference(
-                            @intFromEnum(expr_idx),
+                            @backingInt(expr_idx),
                             ModuleEnv.varFrom(processing_def.def_idx),
                         );
                         break :blk;
@@ -25278,14 +25564,21 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                                 try self.recordInFlightPredeclaredSchemeUse(
                                     referenced_def.annotation.?,
                                     .value_use,
-                                    @intFromEnum(expr_idx),
+                                    @backingInt(expr_idx),
                                     0,
                                     ModuleEnv.varFrom(referenced_def.expr),
                                     .when_needed,
+                                    .{
+                                        .node_idx = @backingInt(expr_idx),
+                                        .use_var = expr_var,
+                                        .region = expr_region,
+                                        .def_name = processing_def.def_name,
+                                    },
+                                    env,
                                 );
                                 _ = try self.unify(expr_var, instantiated, env);
                                 try self.recordRecursiveReference(
-                                    @intFromEnum(expr_idx),
+                                    @backingInt(expr_idx),
                                     ModuleEnv.varFrom(processing_def.def_idx),
                                 );
                                 break :blk;
@@ -25359,14 +25652,21 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     try self.recordInFlightPredeclaredSchemeUse(
                         annotation_idx,
                         .value_use,
-                        @intFromEnum(expr_idx),
+                        @backingInt(expr_idx),
                         0,
                         pat_var,
                         .when_needed,
+                        .{
+                            .node_idx = @backingInt(expr_idx),
+                            .use_var = expr_var,
+                            .region = expr_region,
+                            .def_name = local_def.def_name,
+                        },
+                        env,
                     );
                     _ = try self.unify(expr_var, instantiated, env);
                     try self.recordRecursiveReference(
-                        @intFromEnum(expr_idx),
+                        @backingInt(expr_idx),
                         pat_var,
                     );
                     break :blk;
@@ -25377,13 +25677,13 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
 
                 _ = try self.unifyInContext(expr_var, pat_var, env, .{ .recursive_def = .{ .def_name = local_def.def_name } });
                 try self.recordSharedSchemeUse(
-                    @intFromEnum(expr_idx),
+                    @backingInt(expr_idx),
                     .shared_value_use,
                     0,
                     pat_var,
                 );
                 try self.recordRecursiveReference(
-                    @intFromEnum(expr_idx),
+                    @backingInt(expr_idx),
                     pat_var,
                 );
                 break :blk;
@@ -25393,7 +25693,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             // RHS. The value is mid-check, so its type is not generalized and
             // the ordinary tail below shares its var monomorphically.
             if (self.local_value_processing_ptrns.contains(lookup.pattern_idx)) {
-                try self.recordSharedSchemeUse(@intFromEnum(expr_idx), .recursive_value_reference, 0, pat_var);
+                try self.recordSharedSchemeUse(@backingInt(expr_idx), .recursive_value_reference, 0, pat_var);
             }
 
             const resolved_pat = self.types.resolveVar(pat_var);
@@ -25418,14 +25718,14 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 _ = try self.unify(expr_var, use_var, env);
                 if (mb_processing_def) |processing_def| {
                     try self.recordSharedSchemeUse(
-                        @intFromEnum(expr_idx),
+                        @backingInt(expr_idx),
                         .shared_value_use,
                         0,
                         ModuleEnv.varFrom(processing_def.def_idx),
                     );
                     if (self.defInOnStackGroup(processing_def.def_idx)) {
                         try self.recordRecursiveReference(
-                            @intFromEnum(expr_idx),
+                            @backingInt(expr_idx),
                             ModuleEnv.varFrom(processing_def.def_idx),
                         );
                     }
@@ -25436,7 +25736,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
             // With WaitingForDependencies phase, dependencies are guaranteed to be Done
             // before canonicalization, so target_node_idx is always valid.
             if (try self.resolveVarFromExternal(ext.module_idx, ext.target_node_idx)) |ext_ref| {
-                const target_def: CIR.Def.Idx = @enumFromInt(@intFromEnum(ext_ref.other_cir_node_idx));
+                const target_def: CIR.Def.Idx = @fromBackingInt(@intCast(@backingInt(ext_ref.other_cir_node_idx)));
                 // An exposed name bound by a top-level destructure points at
                 // its binder pattern rather than a def; only a def can be a
                 // generated method marker or an annotation-only declaration.
@@ -25955,8 +26255,8 @@ fn recordUpdateFieldContext(
 ) problem.Context {
     return .{ .record_update = .{
         .field_name = field.name,
-        .field_region_idx = @enumFromInt(@intFromEnum(field.value)),
-        .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
+        .field_region_idx = @fromBackingInt(@intCast(@backingInt(field.value))),
+        .record_region_idx = @fromBackingInt(@intCast(@backingInt(record_being_updated_var))),
         .record_name = record_being_updated_name,
     } };
 }
@@ -26084,8 +26384,8 @@ fn resumeRecordUpdateCheck(self: *Self, task: *ExprTask, state: *RecordUpdateChe
         // Unify this record update with the record we're updating
         _ = try self.unifyRecordInContext(record_being_updated_var, single_field_record, env, .{ .record_update = .{
             .field_name = field.name,
-            .field_region_idx = @enumFromInt(@intFromEnum(field_idx)),
-            .record_region_idx = @enumFromInt(@intFromEnum(record_being_updated_var)),
+            .field_region_idx = @fromBackingInt(@intCast(@backingInt(field_idx))),
+            .record_region_idx = @fromBackingInt(@intCast(@backingInt(record_being_updated_var))),
             .record_name = state.record_being_updated_name,
         } });
     }
@@ -26362,7 +26662,7 @@ fn resumeNominalCheck(self: *Self, task: *ExprTask, state: *NominalCheck, env: *
             child_expected.withContextualType(.{
                 .var_ = usage.backing_var,
                 .context = .{ .nominal_constructor = .{
-                    .backing_type = @enumFromInt(@intFromEnum(backing_type)),
+                    .backing_type = @fromBackingInt(@intCast(@backingInt(backing_type))),
                 } },
             })
         else
@@ -27342,7 +27642,7 @@ fn expectBodyExpected(expected: Expected) Expected {
 }
 
 fn beginExpectBody(self: *Self, expect_region: Region, body: CIR.Expr.Idx) std.mem.Allocator.Error!ExpectBodyScope {
-    const slot: ExpectEffectSlotId = @enumFromInt(self.expect_effect_slots.items.len);
+    const slot: ExpectEffectSlotId = @fromBackingInt(@intCast(self.expect_effect_slots.items.len));
     try self.expect_effect_slots.append(self.gpa, .{ .region = expect_region, .body = body });
 
     const saved_slot = self.current_expect_effect_slot;
@@ -27351,7 +27651,7 @@ fn beginExpectBody(self: *Self, expect_region: Region, body: CIR.Expr.Idx) std.m
 }
 
 fn finishExpectBody(self: *Self, scope: ExpectBodyScope, does_fx: bool) void {
-    self.expect_effect_slots.items[@intFromEnum(scope.slot)].effectful = does_fx;
+    self.expect_effect_slots.items[@backingInt(scope.slot)].effectful = does_fx;
     self.current_expect_effect_slot = scope.saved_slot;
 }
 
@@ -28558,8 +28858,9 @@ fn resumeTypeMethodCallCheck(self: *Self, task: *ExprTask, state: *OperandsCheck
         return .{ .child = .{ .expr = arg_expr_idxs[state.index - 1], .expected = frame.nested_expected.forStatement() } };
     }
 
-    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const arg_vars_alloc = arg_vars_sfa.get();
+    var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 align(@alignOf(usize)) = undefined;
+    var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.allocator();
     const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
     defer arg_vars_alloc.free(arg_vars);
     for (arg_expr_idxs, 0..) |arg_expr_idx, i| {
@@ -29250,7 +29551,7 @@ fn resumeMatchCheck(self: *Self, task: *ExprTask, state: *MatchCheck, env: *Env,
     const cond_is_error = resolved_cond.desc.content == .err;
 
     if (!match.skip_exhaustiveness and !state.had_type_error and !cond_is_error and !state.has_invalid_try and !state.cond_always_crashes) {
-        const match_region = self.getRegionAt(@enumFromInt(@intFromEnum(expr_idx)));
+        const match_region = self.getRegionAt(@fromBackingInt(@intCast(@backingInt(expr_idx))));
 
         // Exhaustiveness analysis (and its union-closing) walks the
         // SCRUTINEE type, so every record-destructure binder in the branch
@@ -29672,10 +29973,10 @@ fn getExprPatternIdent(self: *const Self, expr_idx: CIR.Expr.Idx) ?Ident.Idx {
 fn checkInspectedTopLevelValues(self: *Self) Allocator.Error!void {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < self.cir.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (!isExprNodeTag(self.cir.store.nodes.get(node_idx).tag)) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const expr = self.cir.store.getExpr(expr_idx);
         if (expr != .e_call) continue;
         const call = expr.e_call;
@@ -29703,7 +30004,7 @@ fn exprIsBuiltinStrInspect(self: *Self, expr_idx: CIR.Expr.Idx) bool {
     const module_idx = self.cir.imports.getResolvedModule(ext.module_idx) orelse return false;
     if (module_idx >= self.imported_modules.len) return false;
     const other_env = self.imported_modules[module_idx];
-    const def_idx: CIR.Def.Idx = @enumFromInt(@as(u32, ext.target_node_idx));
+    const def_idx: CIR.Def.Idx = @fromBackingInt(@intCast(@as(u32, ext.target_node_idx)));
     const ident = patternIdentInModule(other_env, def_idx) orelse return false;
     return ident.eql(other_env.idents.builtin_str_inspect);
 }
@@ -29869,7 +30170,7 @@ fn ownerEnvForOriginModule(
         }
     }
 
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant(
             "type checker invariant violated: unable to find module environment for {s} owner from module {s}, source_decl={d}, origin_is_builtin={}",
             .{ context, self.cir.moduleIdentityDisplayText(origin_module), owner_source_decl, origin_is_builtin },
@@ -29879,7 +30180,7 @@ fn ownerEnvForOriginModule(
 }
 
 fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, context: []const u8) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     if (ownerModuleEnvSourceDeclMatches(candidate, source_decl)) return;
     base.invariant(
         "type checker invariant violated: {s} owner resolved by content identity to module '{s}' whose node {d} is not a type declaration",
@@ -29889,7 +30190,7 @@ fn debugAssertOwnerEnvSourceDecl(candidate: *const ModuleEnv, source_decl: u32, 
 
 fn nonBuiltinOwnerSourceDecl(source_decl: ?u32, context: []const u8, origin_text: []const u8) u32 {
     if (source_decl) |raw_decl| return raw_decl;
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant(
             "type checker invariant violated: {s} owner {s} has no source declaration",
             .{ context, origin_text },
@@ -29904,7 +30205,7 @@ fn builtinOwnerEnvForSourceDecl(
     context: []const u8,
 ) struct { *const ModuleEnv, bool } {
     if (source_decl == null) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "type checker invariant violated: {s} compiler-builtin owner has no source declaration",
                 .{context},
@@ -29915,7 +30216,7 @@ fn builtinOwnerEnvForSourceDecl(
 
     if (self.maybeBuiltinOwnerEnvForSourceDecl(source_decl.?)) |owner| return .{ owner.env, owner.is_this_module };
 
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant(
             "type checker invariant violated: unable to find compiler-builtin module environment for {s} owner",
             .{context},
@@ -29951,7 +30252,7 @@ fn maybeBuiltinOwnerEnvForSourceDecl(
 fn ownerModuleEnvSourceDeclMatches(candidate: *const ModuleEnv, source_decl: u32) bool {
     if (source_decl >= candidate.store.nodes.len()) return false;
 
-    const node: CIR.Node.Idx = @enumFromInt(source_decl);
+    const node: CIR.Node.Idx = @fromBackingInt(@intCast(source_decl));
     const node_tag = candidate.store.nodes.get(node).tag;
     if (node_tag != .statement_alias_decl and node_tag != .statement_nominal_decl) return false;
     return true;
@@ -29982,7 +30283,7 @@ fn patternIdentInModule(module_env: *const ModuleEnv, def_idx: CIR.Def.Idx) ?Ide
     const pattern_idx: CIR.Pattern.Idx = if (tag == .def)
         module_env.store.getDef(def_idx).pattern
     else if (tag == .pattern_identifier or tag == .pattern_var_identifier or tag == .pattern_as)
-        @enumFromInt(@intFromEnum(def_idx))
+        @fromBackingInt(@intCast(@backingInt(def_idx)))
     else
         return null;
     const pattern = module_env.store.getPattern(pattern_idx);
@@ -30437,7 +30738,7 @@ fn collectAbsentCtorPayloadBlockers(
 fn backfillRegionsForAnalysisVars(self: *Self) Allocator.Error!void {
     const num_vars = self.types.len();
     if (num_vars == 0) return;
-    try self.fillInRegionsThrough(@enumFromInt(num_vars - 1));
+    try self.fillInRegionsThrough(@fromBackingInt(@intCast(num_vars - 1)));
 }
 
 fn payloadVarCanResolveToEmpty(content: Content) bool {
@@ -30640,7 +30941,7 @@ fn reportNonExhaustiveLambdaParams(self: *Self, env: *Env) std.mem.Allocator.Err
 /// the iterable expression cannot supply constructor facts about them.
 fn reportNonExhaustiveForPatterns(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.cir.for_loop_dispatch_plans.items.items) |plan| {
-        const pattern_idx: CIR.Pattern.Idx = @enumFromInt(plan.pattern_idx);
+        const pattern_idx: CIR.Pattern.Idx = @fromBackingInt(@intCast(plan.pattern_idx));
         try self.checkPatternExhaustivenessWithoutValue(pattern_idx, env);
     }
 }
@@ -31821,7 +32122,7 @@ fn mkMethodCallConstraint(
 fn constraintProvenance(intro_expr: ?CIR.Expr.Idx) StaticDispatchConstraint.Provenance {
     return .{
         .intro_expr = if (intro_expr) |e|
-            StaticDispatchConstraint.Provenance.OptExprIdx.from(@intFromEnum(e))
+            StaticDispatchConstraint.Provenance.OptExprIdx.from(@backingInt(e))
         else
             .none,
     };
@@ -31868,8 +32169,9 @@ fn mkReceiverDispatchFnVar(
     env: *Env,
     region: Region,
 ) Allocator.Error!Var {
-    var all_args_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const all_args_alloc = all_args_sfa.get();
+    var all_args_sfa_buffer: [16 * @sizeOf(Var)]u8 align(@alignOf(usize)) = undefined;
+    var all_args_sfa = std.heap.BufferFirstAllocator.init(&all_args_sfa_buffer, self.gpa);
+    const all_args_alloc = all_args_sfa.allocator();
     const all_args = try all_args_alloc.alloc(Var, arg_vars.len + 1);
     defer all_args_alloc.free(all_args);
     all_args[0] = receiver_var;
@@ -31964,8 +32266,9 @@ fn mkInterpolationMetadata(
     std.debug.assert(parts.len % 2 == 0);
 
     const interpolated_len = parts.len / 2;
-    var interpolated_parts_sfa = std.heap.stackFallback(8 * @sizeOf(InterpolationPartMetadata), self.gpa);
-    const interpolated_parts_alloc = interpolated_parts_sfa.get();
+    var interpolated_parts_sfa_buffer: [8 * @sizeOf(InterpolationPartMetadata)]u8 align(@alignOf(usize)) = undefined;
+    var interpolated_parts_sfa = std.heap.BufferFirstAllocator.init(&interpolated_parts_sfa_buffer, self.gpa);
+    const interpolated_parts_alloc = interpolated_parts_sfa.allocator();
     var interpolated_parts = try std.ArrayList(InterpolationPartMetadata).initCapacity(interpolated_parts_alloc, interpolated_len);
     defer interpolated_parts.deinit(interpolated_parts_alloc);
 
@@ -32226,7 +32529,7 @@ fn copyImportedBindingSchemeCodecRequirements(
         const receiver_var = try copy_import.copyVar(
             &source_env.types,
             self.types,
-            @enumFromInt(source_requirement.receiver_var),
+            @fromBackingInt(@intCast(source_requirement.receiver_var)),
             &self.var_map,
             null,
             source_env,
@@ -32288,7 +32591,7 @@ fn resolveVarFromExternal(
         const other_module_env = self.imported_modules[module_idx];
 
         // The idx of the expression in the other module
-        const target_node_idx = @as(CIR.Node.Idx, @enumFromInt(node_idx));
+        const target_node_idx = @as(CIR.Node.Idx, @fromBackingInt(@intCast(node_idx)));
 
         const copied_var = try self.importedSchemeFromSource(other_module_env, target_node_idx);
 
@@ -32317,7 +32620,7 @@ fn resolveVarFromExternalIdentity(
     const target = self.moduleEnvForIdentity(self.cir, module_identity);
     return try self.copyVarFromOtherModule(
         target.env,
-        @enumFromInt(node_idx),
+        @fromBackingInt(@intCast(node_idx)),
     );
 }
 
@@ -32369,11 +32672,11 @@ fn checkLocalAssociatedLookup(
     region: Region,
     env: *Env,
 ) Allocator.Error!void {
-    try self.noteTypeDeclReferenceForLocalProcedures(@enumFromInt(lookup.type_node_idx));
+    try self.noteTypeDeclReferenceForLocalProcedures(@fromBackingInt(@intCast(lookup.type_node_idx)));
     try self.checkAssociatedLookupFromOwnerVar(
         expr_idx,
         expr_var,
-        @enumFromInt(lookup.type_node_idx),
+        @fromBackingInt(@intCast(lookup.type_node_idx)),
         lookup.type_ident,
         lookup.item_ident,
         region,
@@ -32484,7 +32787,7 @@ fn checkResolvedAssociatedLookup(
         expr_var,
         target.env,
         target.is_this_module,
-        @enumFromInt(lookup.target_node_idx),
+        @fromBackingInt(@intCast(lookup.target_node_idx)),
         lookup.target_def_idx,
         region,
         env,
@@ -32505,7 +32808,7 @@ fn checkResolvedAssociatedTarget(
     // A method declared in a function body is a local binding, and naming it
     // through its type refers to that binding like any local lookup.
     if (is_this_module and self.cir.store.nodes.get(target_node_idx).tag == .statement_decl) {
-        try self.noteLocalLookupForLocalProcedures(self.cir.store.getStatement(@enumFromInt(@intFromEnum(target_node_idx))).s_decl.pattern);
+        try self.noteLocalLookupForLocalProcedures(self.cir.store.getStatement(@fromBackingInt(@intCast(@backingInt(target_node_idx)))).s_decl.pattern);
     }
     if (derivedMethodDef(target_env, target_def_idx)) |derived| {
         try self.checkDerivedMethodReference(expr_idx, expr_var, target_env, is_this_module, derived, region, env);
@@ -32583,10 +32886,10 @@ fn moduleEnvForIdentity(
 ) OwnerEnvCandidate {
     const target_hash = source_module.moduleIdentityHash(module_identity);
     return self.owner_envs_by_identity.get(target_hash.*) orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant(
                 "type checker invariant violated: resolved associated lookup target is unavailable in module '{s}', identity={d}",
-                .{ source_module.module_name, @intFromEnum(module_identity) },
+                .{ source_module.module_name, @backingInt(module_identity) },
             );
         }
         unreachable;
@@ -32691,7 +32994,7 @@ fn postProcessCopiedVars(self: *Self, first_new_var: usize, region: Region) std.
     // If we had to insert any new type variables, ensure that we have
     // corresponding regions for them. This is essential for error reporting.
     for (first_new_var..@as(usize, @intCast(self.types.len()))) |raw_var| {
-        const fresh_var: Var = @enumFromInt(@as(u32, @intCast(raw_var)));
+        const fresh_var: Var = @fromBackingInt(@intCast(@as(u32, @intCast(raw_var))));
         try self.fillInRegionsThrough(fresh_var);
 
         self.setRegionAt(fresh_var, region);
@@ -32751,7 +33054,7 @@ fn openNominalBackingFromTemplate(
 ) std.mem.Allocator.Error!?Var {
     const decl_idx = self.types.lookupNominalDecl(nominal_type) orelse {
         if (nominal_type.sourceDecl().present) {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 base.invariant(
                     "type checker invariant violated: nominal application '{s}' has a source declaration but no declaration table entry",
                     .{self.cir.getIdentStoreConst().getText(nominal_type.ident.ident_idx)},
@@ -32838,9 +33141,9 @@ test "constructor projection retains nominal identity and sparse owned children"
         var checked_growth = false;
         var index: u32 = 0;
         while (index < test_env.module_env.store.nodes.len()) : (index += 1) {
-            const node: CIR.Node.Idx = @enumFromInt(index);
+            const node: CIR.Node.Idx = @fromBackingInt(@intCast(index));
             if (!isExprNodeTag(test_env.module_env.store.nodes.get(node).tag)) continue;
-            const expr = test_env.module_env.store.getExpr(@enumFromInt(index));
+            const expr = test_env.module_env.store.getExpr(@fromBackingInt(@intCast(index)));
             if (expr != .e_nominal) continue;
             const child = ModuleEnv.varFrom(expr.e_nominal.backing_expr);
             const content = test_env.checker.types.resolveVar(child).desc.content;
@@ -32850,7 +33153,7 @@ test "constructor projection retains nominal identity and sparse owned children"
             try std.testing.expect(tail == .structure and tail.structure == .empty_tag_union);
             if (!checked_growth) {
                 const checker = &test_env.checker;
-                const nominal = checker.types.resolveVar(@enumFromInt(index)).desc.content.structure.nominal_type;
+                const nominal = checker.types.resolveVar(@fromBackingInt(@intCast(index))).desc.content.structure.nominal_type;
                 const empty = try test_env.module_env.insertIdent(Ident.for_text("Empty"));
                 var env = try checker.env_pool.acquire();
                 defer checker.env_pool.release(env);
@@ -32868,8 +33171,8 @@ test "constructor projection retains nominal identity and sparse owned children"
         var patterns: usize = 0;
         index = 0;
         while (index < test_env.module_env.store.nodes.len()) : (index += 1) {
-            if (!isPatternNodeTag(test_env.module_env.store.nodes.get(@enumFromInt(index)).tag)) continue;
-            const pattern = test_env.module_env.store.getPattern(@enumFromInt(index));
+            if (!isPatternNodeTag(test_env.module_env.store.nodes.get(@fromBackingInt(@intCast(index))).tag)) continue;
+            const pattern = test_env.module_env.store.getPattern(@fromBackingInt(@intCast(index)));
             const backing = switch (pattern) {
                 .nominal => |nominal| nominal.backing_pattern,
                 .nominal_external => |nominal| nominal.backing_pattern,
@@ -33090,7 +33393,7 @@ fn finishNominalTypeUsage(
         // owned selected payloads proves membership. The constructor's child
         // keeps its sparse row; only the outer node publishes nominal identity.
         const context: problem.Context = .{ .nominal_constructor = .{
-            .backing_type = @enumFromInt(@intFromEnum(backing_type)),
+            .backing_type = @fromBackingInt(@intCast(@backingInt(backing_type))),
         } };
         const result = try self.runUnify(prepared.backing_var, actual_backing_var, env, .{
             .context = context,
@@ -33119,7 +33422,7 @@ fn finishNominalTypeUsage(
 
     // Convert CIR.Expr.NominalBackingType to the diagnostic context's backing
     // kind, then relate what the user wrote to the opened declaration backing.
-    const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @enumFromInt(@intFromEnum(backing_type));
+    const context_backing_type: problem.Context.NominalConstructorContext.BackingType = @fromBackingInt(@intCast(@backingInt(backing_type)));
     const constructor_context: problem.Context.NominalConstructorContext = .{ .backing_type = context_backing_type };
     // Only an anonymous expected backing can be inverse-lifted through, and an
     // accepted relation merges that side away, so capture the settled-state
@@ -33321,13 +33624,13 @@ fn recordErroneousCause(self: *Self, node: u32) Allocator.Error!void {
 /// Record an erroneous value expression, under the current relation.
 fn markErroneousValueExpr(self: *Self, expr_idx: CIR.Expr.Idx) Allocator.Error!void {
     try self.erroneous_value_exprs.put(self.gpa, expr_idx, {});
-    try self.recordErroneousCause(@intFromEnum(expr_idx));
+    try self.recordErroneousCause(@backingInt(expr_idx));
 }
 
 /// Record a binder that binds nothing, under the current relation.
 fn markErroneousValuePattern(self: *Self, pattern_idx: CIR.Pattern.Idx) Allocator.Error!void {
     try self.erroneous_value_patterns.put(self.gpa, pattern_idx, {});
-    try self.recordErroneousCause(@intFromEnum(pattern_idx));
+    try self.recordErroneousCause(@backingInt(pattern_idx));
 }
 
 /// Make `owner` the current relation, returning the one it replaces. Every
@@ -33725,11 +34028,11 @@ fn settledValueCause(self: *Self, root: CIR.Expr.Idx, settled: *SettledValueCaus
         }
         var cause: SettledValueCause = .{};
         if (self.erroneous_value_exprs.contains(visit.expr)) {
-            cause.any = ErroneousCause.merge(cause.any, self.erroneous_causes.get(@intFromEnum(visit.expr)) orelse .independent);
+            cause.any = ErroneousCause.merge(cause.any, self.erroneous_causes.get(@backingInt(visit.expr)) orelse .independent);
         }
         if (sources.unlinked_pattern) |pattern| {
             if (self.erroneous_value_patterns.contains(pattern)) {
-                const binder_cause = self.erroneous_causes.get(@intFromEnum(pattern)) orelse .independent;
+                const binder_cause = self.erroneous_causes.get(@backingInt(pattern)) orelse .independent;
                 cause.any = ErroneousCause.merge(cause.any, binder_cause);
                 cause.through_name = ErroneousCause.merge(cause.through_name, binder_cause);
             }
@@ -33922,7 +34225,7 @@ fn poisonErroneousValueExprs(self: *Self) Allocator.Error!void {
         const diagnostic = if (entry.value_ptr.*) |value_expr| blk: {
             const poisoned_expr = self.cir.store.getExpr(value_expr);
             if (poisoned_expr != .e_runtime_error) {
-                if (@import("builtin").mode == .Debug) {
+                if (@import("builtin").mode == .debug) {
                     base.invariant("check invariant violated: rejected statement value was not poisoned", .{});
                 }
                 unreachable;
@@ -34028,8 +34331,8 @@ const Probe = struct {
         // vars the savepoint rollback just discarded.
         while (self.check.cir.scheme_uses.items.items.len > self.scheme_uses_len) {
             const removed = self.check.cir.scheme_uses.items.pop().?;
-            if (removed.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
-                const did_remove = self.check.where_method_use_record_by_fn_var.remove(@enumFromInt(removed.slot_data));
+            if (removed.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.where_method_use)) {
+                const did_remove = self.check.where_method_use_record_by_fn_var.remove(@fromBackingInt(@intCast(removed.slot_data)));
                 std.debug.assert(did_remove);
             }
         }
@@ -34213,7 +34516,7 @@ const CommitProbe = struct {
         self.check.truncateProblems(self.problems_len);
         self.check.snapshots.truncateToMark(self.snapshots_mark);
         for (self.check.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
-            self.env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
+            self.env.var_pool.shrinkRank(@fromBackingInt(@intCast(rank_idx)), pool_len);
         }
     }
 
@@ -34237,10 +34540,10 @@ fn beginCommitProbe(self: *Self, env: *Env) std.mem.Allocator.Error!CommitProbe 
     // the unified descriptors), so capturing only the current rank's list would
     // miss entries.
     self.probe_var_pool_lens.clearRetainingCapacity();
-    const rank_count = @intFromEnum(env.rank()) + 1;
+    const rank_count = @backingInt(env.rank()) + 1;
     try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
     for (0..rank_count) |rank_idx| {
-        const rank: Rank = @enumFromInt(rank_idx);
+        const rank: Rank = @fromBackingInt(@intCast(rank_idx));
         self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
     }
     return .{
@@ -34346,7 +34649,7 @@ fn judgeRecordUpdates(self: *Self, env: *Env) std.mem.Allocator.Error!void {
     for (self.pending_record_updates.items) |pending| {
         const resolved = self.types.resolveVar(pending.presence_var);
         if (resolved.desc.content == .flex) {
-            if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+            if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
                 self.pending_record_updates.items[retained] = pending;
                 retained += 1;
                 continue;
@@ -34399,7 +34702,7 @@ fn judgeOptionalFieldAccesses(self: *Self, env: *Env) std.mem.Allocator.Error!vo
                 .optional => {},
             },
             .flex => {
-                if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
                     self.optional_field_accesses.items[retained] = access;
                     retained += 1;
                     continue;
@@ -34491,7 +34794,7 @@ fn judgeRecordDestructBinds(self: *Self, env: *Env) std.mem.Allocator.Error!void
                 // scope that owns it (finalize as the monomorphic
                 // backstop, where every remaining non-generalized var is
                 // at rank).
-                if (@intFromEnum(resolved.desc.rank) < @intFromEnum(env.rank())) {
+                if (@backingInt(resolved.desc.rank) < @backingInt(env.rank())) {
                     self.pending_record_destructs.items[retained] = pending;
                     retained += 1;
                     continue;
@@ -34647,11 +34950,11 @@ fn distributeRecordOmittedDefaults(self: *Self) Allocator.Error!void {
         omission: ModuleEnv.RecordOmittedDefault,
 
         fn lessThan(_: void, a: @This(), b: @This()) bool {
-            if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
+            if (a.root != b.root) return @backingInt(a.root) < @backingInt(b.root);
             if (a.omission.field_name != b.omission.field_name)
                 return @as(u32, @bitCast(a.omission.field_name)) < @as(u32, @bitCast(b.omission.field_name));
             if (a.omission.origin_module != b.omission.origin_module)
-                return @intFromEnum(a.omission.origin_module) < @intFromEnum(b.omission.origin_module);
+                return @backingInt(a.omission.origin_module) < @backingInt(b.omission.origin_module);
             return a.omission.default_expr_node < b.omission.default_expr_node;
         }
     };
@@ -34782,7 +35085,7 @@ fn checkDefaultRestrictions(self: *Self) std.mem.Allocator.Error!void {
     //    dispatch_target record's node_idx may be a foreign module's CIR
     //    index and is never compared against local nodes here).
     for (self.cir.scheme_uses.items.items, 0..) |record, record_index| {
-        const slot: ModuleEnv.SchemeUseRecord.Slot = @enumFromInt(record.slot_kind);
+        const slot: ModuleEnv.SchemeUseRecord.Slot = @fromBackingInt(@intCast(record.slot_kind));
         switch (slot) {
             .value_use, .nested_function_use => {
                 const entry = try evidence.node_to_scheme_uses.getOrPut(self.gpa, record.node_idx);
@@ -34896,7 +35199,7 @@ fn retireRejectedDefault(
 
     for (omitted_defaults) |omitted| {
         if (omitted.origin_module != self.cir.selfModuleIdentity()) continue;
-        if (omitted.default_expr_node != @intFromEnum(pending.default_expr)) continue;
+        if (omitted.default_expr_node != @backingInt(pending.default_expr)) continue;
         if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
         try self.replaceExprWithRuntimeError(omitted.expr, diagnostic_idx);
         try self.markErroneousValueExpr(omitted.expr);
@@ -34930,7 +35233,7 @@ fn retireOmissionsOfRejectedForeignDefaults(self: *Self) std.mem.Allocator.Error
     for (omitted_defaults) |omitted| {
         if (omitted.origin_module == self_identity) continue;
         const owner = self.moduleEnvForIdentity(self.cir, omitted.origin_module).env;
-        if (owner.store.getExpr(@enumFromInt(omitted.default_expr_node)) != .e_runtime_error) continue;
+        if (owner.store.getExpr(@fromBackingInt(@intCast(omitted.default_expr_node))) != .e_runtime_error) continue;
         if (self.cir.store.getExpr(omitted.expr) == .e_runtime_error) continue;
         const diagnostic_idx = try self.cir.addDiagnostic(.{ .erroneous_value_expr = .{
             .region = self.cir.store.getExprRegion(omitted.expr),
@@ -35147,7 +35450,7 @@ fn defaultMaterializationIsRecursive(
     root: CIR.Expr.Idx,
     evidence: *const DefaultWalkEvidence,
 ) std.mem.Allocator.Error!bool {
-    const target_expr_node: u32 = @intFromEnum(root);
+    const target_expr_node: u32 = @backingInt(root);
     const self_module = self.cir.selfModuleIdentity();
 
     var expr_work: std.ArrayList(CIR.Expr.Idx) = .empty;
@@ -35210,11 +35513,11 @@ fn defaultMaterializationIsRecursive(
                     // call, so its function body walks.
                     try invoked_work.append(self.gpa, self.cir.store.getDef(instantiation.target_binding.def_idx).expr);
                 }
-                if (evidence.dispatch_scheme_uses.get(@intFromEnum(instantiation.constraint_fn_var))) |record_index| {
+                if (evidence.dispatch_scheme_uses.get(@backingInt(instantiation.constraint_fn_var))) |record_index| {
                     const record = self.cir.scheme_uses.items.items[record_index];
                     const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
                     for (pairs) |pair| {
-                        try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                        try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
                     }
                 }
             }
@@ -35347,12 +35650,12 @@ fn defaultMaterializationIsRecursive(
         // This is how a dispatch performed INSIDE an instantiated scheme
         // body—local or foreign—reaches its stamped target: the body-side
         // dispatch node carries the pristine scheme's var, never the copy.
-        if (evidence.node_to_scheme_uses.get(@intFromEnum(expr_idx))) |record_indices| {
+        if (evidence.node_to_scheme_uses.get(@backingInt(expr_idx))) |record_indices| {
             for (record_indices.items) |record_index| {
                 const record = self.cir.scheme_uses.items.items[record_index];
                 const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
                 for (pairs) |pair| {
-                    try seed_work.append(self.gpa, @enumFromInt(pair.fresh_var));
+                    try seed_work.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
                 }
             }
         }
@@ -35684,7 +35987,7 @@ fn appendOmittedDefaultDependencies(
         if (omitted.default_expr_node == target_expr_node) return true;
         const seen = try visited_defaults.getOrPut(self.gpa, omitted.default_expr_node);
         if (!seen.found_existing) {
-            try expr_work.append(self.gpa, @enumFromInt(omitted.default_expr_node));
+            try expr_work.append(self.gpa, @fromBackingInt(@intCast(omitted.default_expr_node)));
         }
     }
     return false;
@@ -35820,7 +36123,7 @@ fn inspectOverrideStrInstance(self: *Self, def_idx: CIR.Def.Idx, owner: CIR.Stat
     const generalized = self.isBindingSchemeVar(binding_var) or self.types.resolveVar(binding_var).desc.rank == .generalized;
     const instance = if (generalized)
         try self.instantiateBindingVar(binding_var, env, .use_last_var, .{ .dispatch_target = .{
-            .node_idx = @intFromEnum(self.cir.store.getDef(def_idx).pattern),
+            .node_idx = @backingInt(self.cir.store.getDef(def_idx).pattern),
             .constraint_fn_var = use_var,
         } })
     else
@@ -36276,7 +36579,7 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // precomputed fit sets keeps the check O(1) per candidate and
             // makes the outcome independent of which member carries the
             // driving constraint (mirror-image programs commit identically).
-            var component_fits = exact_numeral.FitSet.initFull();
+            var component_fits = exact_numeral.FitSet.full;
             for (self.literal_defaulting_open_roots.items, 0..) |member_root, member_idx| {
                 if (componentFind(self.literal_defaulting_component_parent.items, member_idx) != leader) continue;
                 member_count += 1;
@@ -37276,7 +37579,7 @@ fn retireStructurallyPublishedTypeSchemeRequirements(
         const scheme_root_published = published_vars.contains(self.types.resolveVar(scheme.root_var).var_);
         if (!scheme_root_published and
             std.meta.eql(scheme.capture_group_index, self.currentGroupIndex()) and
-            @intFromEnum(scheme.capture_rank) > @intFromEnum(boundary_rank))
+            @backingInt(scheme.capture_rank) > @backingInt(boundary_rank))
         {
             // This scheme belongs to a nested lexical frame of the closing
             // boundary's own group and its root did not escape through the
@@ -37345,15 +37648,15 @@ fn publishBindingSchemeCodecRequirement(
     destination: enum { active, retired },
 ) Allocator.Error!void {
     const range = try self.types.appendStaticDispatchConstraints(&.{requirement.constraint});
-    const constraint_index: u32 = @intFromEnum(range.start);
+    const constraint_index: u32 = @backingInt(range.start);
     for (scheme.indexed_vars.items) |indexed_var| {
-        const raw_var: usize = @intFromEnum(indexed_var);
+        const raw_var: usize = @backingInt(indexed_var);
         if (!self.isBindingSchemeVar(indexed_var)) continue;
         if (destination == .retired) {
             try self.retired_binding_scheme_codec_requirements.append(self.gpa, .{
                 .node_idx = @intCast(raw_var),
-                .scheme_root = @intFromEnum(scheme.root_var),
-                .receiver_var = @intFromEnum(requirement.receiver_var),
+                .scheme_root = @backingInt(scheme.root_var),
+                .receiver_var = @backingInt(requirement.receiver_var),
                 .constraint_index = constraint_index,
                 .requires_instantiation = @intFromBool(requirement.pristine_codec_is_scheme_only),
                 .is_synthetic = @intFromBool(self.synthetic_binding_schemes.contains(indexed_var)),
@@ -37361,7 +37664,7 @@ fn publishBindingSchemeCodecRequirement(
             continue;
         }
         try self.cir.recordBindingSchemeCodecRequirement(
-            @enumFromInt(raw_var),
+            @fromBackingInt(@intCast(raw_var)),
             scheme.root_var,
             requirement.receiver_var,
             constraint_index,
@@ -37383,9 +37686,9 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
     self.cir.binding_scheme_codec_requirements.items.clearRetainingCapacity();
     for (self.retired_binding_scheme_codec_requirements.items) |requirement| {
         try self.cir.recordBindingSchemeCodecRequirement(
-            @enumFromInt(requirement.node_idx),
-            @enumFromInt(requirement.scheme_root),
-            @enumFromInt(requirement.receiver_var),
+            @fromBackingInt(@intCast(requirement.node_idx)),
+            @fromBackingInt(@intCast(requirement.scheme_root)),
+            @fromBackingInt(@intCast(requirement.receiver_var)),
             requirement.constraint_index,
             requirement.requires_instantiation != 0,
             requirement.is_synthetic != 0,
@@ -37440,7 +37743,7 @@ fn finalizeTypeSchemeRequirementsAtCheckedBoundary(self: *Self) Allocator.Error!
 
     while (self.type_schemes.items.len > 0) self.removeTypeSchemeAt(self.type_schemes.items.len - 1);
 
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         std.debug.assert(self.type_scheme_by_var.count() == 0);
         std.debug.assert(self.scheme_requirement_candidate_indices_by_owner.count() == 0);
     }
@@ -37635,7 +37938,7 @@ fn codecInputsAreBoundaryLocal(
             .structure => |flat| switch (flat) {
                 // Even a closed anonymous value can acquire nominal identity
                 // through an enclosing scope, including an empty record.
-                .record, .tag_union, .empty_record, .empty_tag_union => if (@intFromEnum(resolved.desc.rank) < @intFromEnum(rank)) return false,
+                .record, .tag_union, .empty_record, .empty_tag_union => if (@backingInt(resolved.desc.rank) < @backingInt(rank)) return false,
                 .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound => {},
             },
             .alias, .field_presence => {},
@@ -37719,7 +38022,7 @@ fn captureSchemeDispatchRequirements(
                         try ready.append(self.gpa, .{
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
-                            .failure_expr = if (candidate.failure_expr) |expr| .from(@intFromEnum(expr)) else .none,
+                            .failure_expr = if (candidate.failure_expr) |expr| .from(@backingInt(expr)) else .none,
                             .owner = .{ .recorded = .{ .group_index = self.currentGroupIndex(), .scheme_root = candidate.owner_root } },
                         });
                         // The exact relation has transferred to this boundary;
@@ -37741,7 +38044,7 @@ fn captureSchemeDispatchRequirements(
                             try undecided.append(self.gpa, candidate_idx);
                             break :created false;
                         }
-                        break :created @intFromEnum(receiver.desc.rank) < @intFromEnum(rank);
+                        break :created @backingInt(receiver.desc.rank) < @backingInt(rank);
                     },
                     // A copied relation is detached from its receiver descriptor.
                     // Its structural origin is retained separately so publication
@@ -37818,7 +38121,7 @@ fn boundaryReachableIncludingRelations(self: *const Self, var_: Var) bool {
 }
 
 fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const BoundaryRoot) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     for (roots) |root| {
         std.debug.assert(!self.scheme_requirement_candidate_indices_by_owner.contains(root.owner));
     }
@@ -37827,7 +38130,7 @@ fn assertSchemeRequirementBoundaryQuiescent(self: *const Self, roots: []const Bo
 /// Before generalization a boundary is quiescent when only rank-undecided
 /// creation candidates remain for its roots.
 fn assertSchemeRequirementBoundaryDecided(self: *const Self, roots: []const BoundaryRoot, env: *const Env) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     const rank = env.rank();
     for (roots) |root| {
         const owner_indices = self.scheme_requirement_candidate_indices_by_owner.get(root.owner) orelse continue;
@@ -38091,7 +38394,7 @@ fn quiesceSchemeRequirementsAtBoundary(
             defer self.constraining_boundary_codecs = previous;
             while (boundary_codecs.pop()) |codec| {
                 const region = self.getRegionAt(codec.dispatcher_var);
-                const failure_expr: ?CIR.Expr.Idx = if (codec.failure_expr == .none) null else @enumFromInt(@intFromEnum(codec.failure_expr));
+                const failure_expr: ?CIR.Expr.Idx = if (codec.failure_expr == .none) null else @fromBackingInt(@intCast(@backingInt(codec.failure_expr)));
                 if (codec.constraint.fn_name.eql(self.cir.idents.parser_for)) {
                     try self.satisfyImplicitParserConstraint(codec.dispatcher_var, codec.constraint, codec.constraint.fn_var, env, region, failure_expr);
                 } else {
@@ -38152,7 +38455,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
             .var_ = dispatcher.dispatcher_var,
             .constraints = dispatcher.constraints,
             .failure_expr = if (dispatcher.instantiation_expr) |expr_idx|
-                .from(@intFromEnum(expr_idx))
+                .from(@backingInt(expr_idx))
             else
                 .none,
         }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
@@ -38224,7 +38527,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                     .var_ = requirement.receiver_var,
                     .constraints = constraint_range,
                     .failure_expr = if (requirement.failure_expr) |expr_idx|
-                        .from(@intFromEnum(expr_idx))
+                        .from(@backingInt(expr_idx))
                     else
                         .none,
                 }, .{ .recorded = .{ .group_index = scheme.capture_group_index, .scheme_root = scheme.root_var } });
@@ -38709,7 +39012,7 @@ fn recordDefaultDecidedVar(self: *Self, var_: Var, decision: DefaultDecision) Al
     const flex = switch (resolved.desc.content) {
         .flex => |flex| flex,
         .rigid, .alias, .structure, .field_presence, .err => {
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("type checker invariant violated: a default-decided record must start from an undetermined variable", .{});
             }
             unreachable;
@@ -38754,7 +39057,7 @@ fn defaultDecidedRecordFor(self: *const Self, var_: Var) ?usize {
         idx -= 1;
         if (self.types.resolveVar(self.default_decided_records.items[idx].var_).var_ == root) return idx;
     }
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         std.debug.panic("type checker invariant violated: default-decided class has no default-decided record", .{});
     }
     unreachable;
@@ -38915,7 +39218,7 @@ fn builtinLiteralCandidatesLackMethod(
             if (str_content == .structure and str_content.structure == .nominal_type) {
                 return !self.builtinNominalHasMethod(str_content.structure.nominal_type, method_name);
             }
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.panic("type checker invariant violated: the builtin Str type is not a nominal type", .{});
             }
             unreachable;
@@ -38935,7 +39238,7 @@ fn firstLiteralRegionInClass(self: *Self, kind: StaticDispatchConstraint.Literal
     const plan = self.matchingLiteralDispatchPlan(self.cir.store.literalDispatchPlans(), kind, root) orelse
         self.matchingLiteralDispatchPlan(self.retired_literal_dispatch_plans.items, kind, root) orelse
         return null;
-    return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
+    return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));
 }
 
 fn undeterminedTypeUseRegion(
@@ -39497,7 +39800,7 @@ fn checkReturnRelation(
     if (result.isProblem()) {
         std.debug.assert(result == .problem);
         const result_expr = self.resultValueExpr(actual_expr);
-        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
         try self.markErroneousValueExpr(result_expr);
     }
 }
@@ -39523,7 +39826,7 @@ fn relateResultValue(
     if (!result.isProblem()) return result;
     const result_expr = self.resultValueExpr(actual_expr);
     const problem_idx = try self.appendTypeMismatch(expected, actual, self.mismatchContext(ctx, actual));
-    self.problems.problems.items[@intFromEnum(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.problems.problems.items[@backingInt(problem_idx)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     self.types.assertNoSavepointActive();
     try self.types.poisonOnMismatch(expected, actual);
     try self.markErroneousValueExpr(result_expr);
@@ -39689,7 +39992,7 @@ fn checkProjectedTryReturn(self: *Self, expected: Var, plan: TryReturnRows.Plan,
     const actual = try self.freshFromContent(try self.mkTryContent(plan.ok, row), env, region);
     const result = try self.unifyReturnContribution(expected, actual, env, ctx);
     if (result.isProblem()) {
-        self.problems.problems.items[@intFromEnum(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
+        self.problems.problems.items[@backingInt(result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(plan.expr);
         try self.markErroneousValueExpr(plan.expr);
     }
 }
@@ -39813,7 +40116,7 @@ fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: C
     if (!body_result.isProblem()) return;
     self.refinePlatformRequirementReturnContext(body_result);
     const result_expr = self.resultValueExpr(body);
-    self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
+    self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch.types.actual_var = ModuleEnv.varFrom(result_expr);
     try self.markErroneousValueExpr(result_expr);
 }
 
@@ -39822,7 +40125,7 @@ fn refineAnnotatedBodyMismatch(self: *Self, body_result: unifier.Result, body: C
 fn refinePlatformRequirementReturnContext(self: *Self, body_result: unifier.Result) void {
     if (!body_result.isProblem()) return;
     std.debug.assert(body_result == .problem);
-    const mismatch = &self.problems.problems.items[@intFromEnum(body_result.problem)].type_mismatch;
+    const mismatch = &self.problems.problems.items[@backingInt(body_result.problem)].type_mismatch;
     if (mismatch.context == .platform_requirement) {
         const requirement_context = mismatch.context.platform_requirement;
         mismatch.context = .{ .platform_requirement_return = requirement_context };
@@ -40614,7 +40917,7 @@ fn discardImportedSchemeMetadata(self: *Self, scheme_var: Var) void {
         self.removeTypeSchemeAt(scheme_idx);
     }
     // Imported roots are allocated after CIR's source-node domain.
-    std.debug.assert(@intFromEnum(scheme_var) >= self.binding_scheme_nodes.bit_length);
+    std.debug.assert(@backingInt(scheme_var) >= self.binding_scheme_nodes.bit_length);
     _ = self.synthetic_binding_schemes.remove(scheme_var);
 }
 
@@ -40949,7 +41252,7 @@ fn methodNameMints(self: *Self, name: MethodNameId) Allocator.Error!?[]const Met
             self.scratch_method_mint_requirements.clearRetainingCapacity();
             for (env.bindingSchemeCodecRequirementsForNode(binding.type_node_idx)) |requirement| {
                 try self.scratch_method_mint_requirements.append(self.gpa, .{
-                    .receiver = @enumFromInt(requirement.receiver_var),
+                    .receiver = @fromBackingInt(@intCast(requirement.receiver_var)),
                     .constraint = env.types.getStaticDispatchConstraintAt(requirement.constraint_index),
                     .requires_instantiation = false,
                 });
@@ -41939,7 +42242,7 @@ fn instantiateDispatchTargetMethodVar(
     else
         null;
     const evidence: InstantiationEvidence = .{ .dispatch_target = .{
-        .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
         .constraint_fn_var = constraint.fn_var,
         .records_scheme_use = predeclared_annotation == null,
     } };
@@ -41962,6 +42265,9 @@ fn instantiateDispatchTargetMethodVar(
             constraint.fn_var,
             method_type_var,
             .always,
+            method_var,
+            region,
+            env,
         );
     }
 
@@ -41984,7 +42290,7 @@ fn instantiateDispatchTargetMethodVar(
         try self.cir.recordSchemeUse(
             evidence.dispatch_target.node_idx,
             .dispatch_target,
-            @intFromEnum(constraint.fn_var),
+            @backingInt(constraint.fn_var),
             record_scheme_root,
             &.{},
         );
@@ -42054,8 +42360,8 @@ noinline fn dispatchReplayEligible(
 fn dispatchReplayBinding(method_lookup: StaticDispatchMethodBinding) DispatchReplayBinding {
     return .{
         .env = @intFromPtr(method_lookup.env),
-        .type_node = @intFromEnum(method_lookup.binding.type_node_idx),
-        .def = @intFromEnum(method_lookup.binding.def_idx),
+        .type_node = @backingInt(method_lookup.binding.type_node_idx),
+        .def = @backingInt(method_lookup.binding.def_idx),
     };
 }
 
@@ -42124,14 +42430,14 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
                 .optional => try out.append(self.gpa, 4),
                 .defaulted => |id| {
                     try out.append(self.gpa, 5);
-                    try appendReplayWord(out, self.gpa, @intFromEnum(id.origin_module));
+                    try appendReplayWord(out, self.gpa, @backingInt(id.origin_module));
                     try appendReplayWord(out, self.gpa, id.expr_node);
                 },
             },
             .alias => |alias| {
                 try out.append(self.gpa, 6);
                 try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
-                try appendReplayWord(out, self.gpa, @intFromEnum(alias.origin_module));
+                try appendReplayWord(out, self.gpa, @backingInt(alias.origin_module));
                 try appendReplayWord(out, self.gpa, @bitCast(alias.source_decl));
                 try appendReplayWord(out, self.gpa, alias.source_arg_count);
                 const args = self.types.sliceAliasArgs(alias);
@@ -42202,7 +42508,7 @@ fn appendReplayShapeWalk(self: *Self) Allocator.Error!?void {
                 .nominal_type => |nominal| {
                     try out.append(self.gpa, 15);
                     try appendReplayWord(out, self.gpa, @bitCast(nominal.ident.ident_idx));
-                    try appendReplayWord(out, self.gpa, @intFromEnum(nominal.origin_module));
+                    try appendReplayWord(out, self.gpa, @backingInt(nominal.origin_module));
                     try appendReplayWord(out, self.gpa, @bitCast(nominal.source));
                     const args = self.types.sliceNominalArgs(nominal);
                     try appendReplayWord(out, self.gpa, @intCast(args.len));
@@ -42344,8 +42650,8 @@ noinline fn recordDispatchReplaySource(self: *Self, fn_var: Var) Allocator.Error
     if (!try self.varIsReplayGround(instantiation.method_var)) return;
     try self.dispatch_replay_bindings.put(self.gpa, .{
         .env = @intFromPtr(instantiation.target_env),
-        .type_node = @intFromEnum(instantiation.target_binding.type_node_idx),
-        .def = @intFromEnum(instantiation.target_binding.def_idx),
+        .type_node = @backingInt(instantiation.target_binding.type_node_idx),
+        .def = @backingInt(instantiation.target_binding.def_idx),
     }, {});
     if (self.pending_replay_shape_edge != raw_index) return;
     self.pending_replay_shape_edge = null;
@@ -42378,9 +42684,9 @@ fn freezeDispatchReplaySource(
     if (scheme_use) |record_idx| {
         const record = self.cir.scheme_uses.items.items[record_idx];
         for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
-            const fresh_var: Var = @enumFromInt(pair.fresh_var);
+            const fresh_var: Var = @fromBackingInt(@intCast(pair.fresh_var));
             if (self.scratch_freeze_map.get(self.types.resolveVar(fresh_var).var_)) |frozen_var| {
-                try self.dispatch_replay_frozen_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @intFromEnum(frozen_var) });
+                try self.dispatch_replay_frozen_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @backingInt(frozen_var) });
             } else if (self.dispatchReplaySourceOwnsDerivation(instantiation, fresh_var)) {
                 try self.dispatch_replay_frozen_pairs.append(self.gpa, pair);
             } else {
@@ -42593,14 +42899,14 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                 .optional => try out.append(self.gpa, 14),
                 .defaulted => |id| {
                     try out.append(self.gpa, 15);
-                    try appendReplayWord(out, self.gpa, @intFromEnum(id.origin_module));
+                    try appendReplayWord(out, self.gpa, @backingInt(id.origin_module));
                     try appendReplayWord(out, self.gpa, id.expr_node);
                 },
             },
             .alias => |alias| {
                 try out.append(self.gpa, 4);
                 try appendReplayWord(out, self.gpa, @bitCast(alias.ident.ident_idx));
-                try appendReplayWord(out, self.gpa, @intFromEnum(alias.origin_module));
+                try appendReplayWord(out, self.gpa, @backingInt(alias.origin_module));
                 const args = self.types.sliceAliasAllArgs(alias);
                 try appendReplayWord(out, self.gpa, @intCast(args.len));
                 try stack.append(self.gpa, self.types.getAliasBackingVar(alias));
@@ -42630,7 +42936,7 @@ fn appendReplayTree(self: *Self, root: Var, out: *std.ArrayListUnmanaged(u8)) Al
                 .nominal_type => |nominal| {
                     try out.append(self.gpa, 11);
                     try appendReplayWord(out, self.gpa, @bitCast(nominal.ident.ident_idx));
-                    try appendReplayWord(out, self.gpa, @intFromEnum(nominal.origin_module));
+                    try appendReplayWord(out, self.gpa, @backingInt(nominal.origin_module));
                     const args = self.types.sliceNominalArgs(nominal);
                     try appendReplayWord(out, self.gpa, @intCast(args.len));
                     try appendReplayChildren(&stack, self.gpa, args);
@@ -42776,7 +43082,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     self.link_new_copies.clearRetainingCapacity();
     var copies = self.link_var_map.iterator();
     while (copies.next()) |copy| {
-        if (@intFromEnum(copy.value_ptr.*) < first_new) continue;
+        if (@backingInt(copy.value_ptr.*) < first_new) continue;
         try self.link_new_copies.append(self.gpa, .{ .old = copy.key_ptr.*, .fresh = copy.value_ptr.* });
     }
 
@@ -42785,7 +43091,7 @@ fn linkUseCallables(self: *Self, use_idx: u32) Allocator.Error!void {
     // registers them.
     if (self.probe_depth != 0 or self.commit_probe_active) {
         if (self.types.len() > first_new) {
-            try self.fillInRegionsThrough(@enumFromInt(self.types.len() - 1));
+            try self.fillInRegionsThrough(@fromBackingInt(@intCast(self.types.len() - 1)));
         }
         const copies_start: u32 = @intCast(self.probe_link_copies.items.len);
         try self.probe_link_copies.appendSlice(self.gpa, self.link_new_copies.items);
@@ -42918,7 +43224,7 @@ fn linkDeferredUsesFrom(self: *Self, min_rank: Rank) Allocator.Error!void {
         const use_idx = self.uses_with_deferred_callables.items[index];
         const use = self.use_instances.items[use_idx];
         if (!use.deferred_linked and use.state != .replayed and
-            @intFromEnum(use.link.?.rank) >= @intFromEnum(min_rank))
+            @backingInt(use.link.?.rank) >= @backingInt(min_rank))
         {
             try self.linkUseCallables(use_idx);
         }
@@ -43094,7 +43400,7 @@ fn encodeUseReplayShape(self: *Self, scheme_root: Var, instance_root: Var) Alloc
     self.scratch_replay_shape_vars.clearRetainingCapacity();
     const stack = &self.scratch_ground_vars;
     stack.clearRetainingCapacity();
-    try appendReplayWord(out, self.gpa, @intFromEnum(self.types.resolveVar(scheme_root).var_));
+    try appendReplayWord(out, self.gpa, @backingInt(self.types.resolveVar(scheme_root).var_));
     try stack.append(self.gpa, instance_root);
     try self.appendReplayShapeWalk() orelse return null;
     return std.hash.Wyhash.hash(0, out.items);
@@ -43151,7 +43457,7 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
     const roots = &root_list;
     try self.appendUseInstanceParts(use.instance_root, roots);
     for (self.cir.scheme_use_pairs.items.items[record.pairs_start..][0..record.pairs_len]) |pair| {
-        try roots.append(self.gpa, @enumFromInt(pair.fresh_var));
+        try roots.append(self.gpa, @fromBackingInt(@intCast(pair.fresh_var)));
     }
     self.scratch_replay_sources.clearRetainingCapacity();
     for (self.use_owned_fns.items[use.owned_start..][0..use.owned_len]) |fn_var| {
@@ -43177,10 +43483,10 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
     var record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
         const written = self.cir.scheme_uses.items.items[record_idx];
-        switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(written.slot_kind))) {
+        switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(written.slot_kind)))) {
             .dispatch_target => {},
             .recursive_dispatch_target => {
-                if (self.scratch_freeze_map.contains(self.types.resolveVar(@enumFromInt(written.slot_data)).var_)) return;
+                if (self.scratch_freeze_map.contains(self.types.resolveVar(@fromBackingInt(@intCast(written.slot_data))).var_)) return;
             },
             .value_use, .nested_function_use, .shared_value_use, .recursive_reference, .recursive_value_reference, .where_method_use => {},
         }
@@ -43195,8 +43501,8 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
     record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
         const written = self.cir.scheme_uses.items.items[record_idx];
-        if (written.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
-        const edge_fn: Var = @enumFromInt(written.slot_data);
+        if (written.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
+        const edge_fn: Var = @fromBackingInt(@intCast(written.slot_data));
         const frozen_class = self.scratch_freeze_map.get(self.types.resolveVar(edge_fn).var_) orelse continue;
         const edge_var = try self.types.freshFromContentWithRank(.{ .flex = types_mod.Flex.init() }, .outermost);
         try self.fillInRegionsThrough(edge_var);
@@ -43211,29 +43517,29 @@ fn freezeUseReplaySource(self: *Self, source: *UseReplaySource, env: *Env) Alloc
     var pair_idx: u32 = 0;
     while (pair_idx < record.pairs_len) : (pair_idx += 1) {
         const pair = self.cir.scheme_use_pairs.items.items[record.pairs_start + pair_idx];
-        const frozen = self.frozenUseVar(&frozen_edges, @enumFromInt(pair.fresh_var)).?;
-        _ = try self.cir.scheme_use_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @intFromEnum(frozen) });
+        const frozen = self.frozenUseVar(&frozen_edges, @fromBackingInt(@intCast(pair.fresh_var))).?;
+        _ = try self.cir.scheme_use_pairs.append(self.gpa, .{ .old_var = pair.old_var, .fresh_var = @backingInt(frozen) });
     }
     record_idx = use.record + 1;
     while (record_idx < use.records_end) : (record_idx += 1) {
         const written = self.cir.scheme_uses.items.items[record_idx];
-        if (written.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
-        const edge_var = frozen_edges.get(@enumFromInt(written.slot_data)) orelse continue;
+        if (written.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
+        const edge_var = frozen_edges.get(@fromBackingInt(@intCast(written.slot_data))) orelse continue;
         self.scratch_replay_pairs.clearRetainingCapacity();
         for (self.cir.scheme_use_pairs.items.items[written.pairs_start..][0..written.pairs_len]) |pair| {
-            const frozen = self.frozenUseVar(&frozen_edges, @enumFromInt(pair.fresh_var));
+            const frozen = self.frozenUseVar(&frozen_edges, @fromBackingInt(@intCast(pair.fresh_var)));
             try self.scratch_replay_pairs.append(self.gpa, .{
                 .old_var = pair.old_var,
-                .fresh_var = if (frozen) |var_| @intFromEnum(var_) else pair.fresh_var,
+                .fresh_var = if (frozen) |var_| @backingInt(var_) else pair.fresh_var,
             });
         }
-        try self.cir.recordSchemeUse(written.node_idx, .dispatch_target, @intFromEnum(edge_var), @enumFromInt(written.scheme_root), self.scratch_replay_pairs.items);
+        try self.cir.recordSchemeUse(written.node_idx, .dispatch_target, @backingInt(edge_var), @fromBackingInt(@intCast(written.scheme_root)), self.scratch_replay_pairs.items);
     }
     const tree_start: u32 = @intCast(self.use_replay_trees.items.len);
     if (std.debug.runtime_safety) {
         try self.appendReplayTree(frozen_root, &self.use_replay_trees);
         for (self.cir.scheme_use_pairs.items.items[pairs_start..][0..record.pairs_len]) |pair| {
-            try self.appendReplayTree(@enumFromInt(pair.fresh_var), &self.use_replay_trees);
+            try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &self.use_replay_trees);
         }
     }
     source.* = .{
@@ -43363,11 +43669,11 @@ fn replayUse(self: *Self, source: *UseReplaySource, use_idx: u32, env: *Env) All
     for (use_pairs, 0..) |use_pair, use_offset| {
         const source_offset = if (subset) matched.items[use_offset] else use_offset;
         const frozen_pair = all_pairs[source.pairs_start + source_offset];
-        switch (self.types.resolveVar(@enumFromInt(use_pair.fresh_var)).desc.content) {
+        switch (self.types.resolveVar(@fromBackingInt(@intCast(use_pair.fresh_var))).desc.content) {
             .flex => |flex| if (flex.constraints.len() == 0) continue,
             .rigid, .alias, .field_presence, .structure, .err => continue,
         }
-        try relations.append(self.gpa, .{ .source = @enumFromInt(frozen_pair.fresh_var), .target = @enumFromInt(use_pair.fresh_var) });
+        try relations.append(self.gpa, .{ .source = @fromBackingInt(@intCast(frozen_pair.fresh_var)), .target = @fromBackingInt(@intCast(use_pair.fresh_var)) });
     }
 
     // Relations the unifications below queue belong to a replayed use and
@@ -43498,17 +43804,17 @@ fn replayDispatchTarget(
     if (source_record) |record| {
         self.scratch_replay_pairs.clearRetainingCapacity();
         for (self.dispatch_replay_frozen_pairs.items[replay_source.pairs_start..][0..replay_source.pairs_len]) |pair| {
-            const node = self.scratch_replay_nodes.get(@enumFromInt(pair.fresh_var));
+            const node = self.scratch_replay_nodes.get(@fromBackingInt(@intCast(pair.fresh_var)));
             try self.scratch_replay_pairs.append(self.gpa, .{
                 .old_var = pair.old_var,
-                .fresh_var = if (node) |mapped| @intFromEnum(mapped) else pair.fresh_var,
+                .fresh_var = if (node) |mapped| @backingInt(mapped) else pair.fresh_var,
             });
         }
         try self.cir.recordSchemeUse(
-            if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+            if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
             .dispatch_target,
-            @intFromEnum(constraint.fn_var),
-            @enumFromInt(record.scheme_root),
+            @backingInt(constraint.fn_var),
+            @fromBackingInt(@intCast(record.scheme_root)),
             self.scratch_replay_pairs.items,
         );
     }
@@ -43660,7 +43966,7 @@ fn finishDispatchReplayFreezes(self: *Self) Allocator.Error!void {
                 tree.clearRetainingCapacity();
                 try self.appendReplayTree(source.frozen_root, &tree);
                 for (self.cir.scheme_use_pairs.items.items[source.pairs_start..][0..source.pairs_len]) |pair| {
-                    try self.appendReplayTree(@enumFromInt(pair.fresh_var), &tree);
+                    try self.appendReplayTree(@fromBackingInt(@intCast(pair.fresh_var)), &tree);
                 }
                 if (!replayShapeEql(self.use_replay_trees.items[source.tree_start..][0..source.tree_len], tree.items)) {
                     base.invariant("a frozen whole-use replay instance changed while replayed uses shared it", .{});
@@ -43832,8 +44138,8 @@ fn dispatchTargetSchemeUse(self: *const Self, records_start: usize, fn_var: Var)
     while (index > records_start) {
         index -= 1;
         const record = records[index];
-        if (record.slot_kind == @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) and
-            record.slot_data == @intFromEnum(fn_var)) return @intCast(index);
+        if (record.slot_kind == @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target) and
+            record.slot_data == @backingInt(fn_var)) return @intCast(index);
     }
     return null;
 }
@@ -44026,9 +44332,9 @@ fn closeConcreteRecursiveDispatch(
     try self.dispatch_target_instantiations.ensureUnusedCapacity(self.gpa, 1);
     try self.dispatch_target_instantiation_by_fn_var.ensureUnusedCapacity(self.gpa, 1);
     try self.cir.recordSchemeUse(
-        if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+        if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
         .recursive_dispatch_target,
-        @intFromEnum(constraint.fn_var),
+        @backingInt(constraint.fn_var),
         ancestor.method_var,
         &.{},
     );
@@ -44052,10 +44358,10 @@ fn closeConcreteRecursiveDispatch(
 
 fn localProcedureMethodBinding(self: *const Self, method_lookup: StaticDispatchMethodBinding) bool {
     if (!method_lookup.is_this_module) return false;
-    const raw_node = @intFromEnum(method_lookup.binding.type_node_idx);
+    const raw_node = @backingInt(method_lookup.binding.type_node_idx);
     if (raw_node >= self.cir.store.nodes.len()) return false;
-    if (self.cir.store.nodes.get(@enumFromInt(raw_node)).tag != .statement_decl) return false;
-    const stmt = self.cir.store.getStatement(@enumFromInt(raw_node));
+    if (self.cir.store.nodes.get(@fromBackingInt(@intCast(raw_node))).tag != .statement_decl) return false;
+    const stmt = self.cir.store.getStatement(@fromBackingInt(@intCast(raw_node)));
     if (stmt != .s_decl) return false;
     const expr = self.cir.store.getExpr(stmt.s_decl.expr);
     return expr == .e_lambda or expr == .e_closure;
@@ -44486,7 +44792,7 @@ inline fn processDeferredDispatchEntry(
             inheritDeferredConstraintFailureExpr(
                 env,
                 deferred_children_start,
-                if (child_failure_expr) |expr_idx| .from(@intFromEnum(expr_idx)) else .none,
+                if (child_failure_expr) |expr_idx| .from(@backingInt(expr_idx)) else .none,
             );
         }
     }
@@ -44605,7 +44911,7 @@ inline fn processDeferredDispatchEntry(
                         // above may have appended to (and reallocated) the
                         // constraint store, but it only grows it, so the rigid
                         // range indices stay valid.
-                        const rc_start: usize = @intFromEnum(rigid.constraints.start);
+                        const rc_start: usize = @backingInt(rigid.constraints.start);
                         const rc_len: usize = rigid.constraints.len();
                         const backing = self.types.static_dispatch_constraints.items.items;
                         for (rc_start..rc_start + rc_len) |i| {
@@ -44660,7 +44966,7 @@ inline fn processDeferredDispatchEntry(
             // Iterate over the constraints
             const constraints_range = deferred_constraint.constraints;
             const constraints_len = constraints_range.len();
-            const constraints_start: usize = @intFromEnum(constraints_range.start);
+            const constraints_start: usize = @backingInt(constraints_range.start);
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 // Re-fetch by index each iteration because nested unification can append
@@ -44879,7 +45185,7 @@ inline fn processDeferredDispatchEntry(
                         }
                         continue;
                     }
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         base.invariant("derived-method marker registered for unsupported method", .{});
                     }
                     unreachable;
@@ -45008,10 +45314,10 @@ inline fn processDeferredDispatchEntry(
                     // path above instead of nesting another savepoint.
                     std.debug.assert(default_record != null);
                     self.probe_var_pool_lens.clearRetainingCapacity();
-                    const rank_count = @intFromEnum(env.rank()) + 1;
+                    const rank_count = @backingInt(env.rank()) + 1;
                     try self.probe_var_pool_lens.ensureTotalCapacity(self.gpa, rank_count);
                     for (0..rank_count) |rank_idx| {
-                        const rank: Rank = @enumFromInt(rank_idx);
+                        const rank: Rank = @fromBackingInt(@intCast(rank_idx));
                         self.probe_var_pool_lens.appendAssumeCapacity(env.var_pool.getVarsForRank(rank).len);
                     }
                     var probe = try self.beginProbe(env);
@@ -45019,7 +45325,7 @@ inline fn processDeferredDispatchEntry(
                     defer if (!committed) {
                         probe.rollback();
                         for (self.probe_var_pool_lens.items, 0..) |pool_len, rank_idx| {
-                            env.var_pool.shrinkRank(@enumFromInt(rank_idx), pool_len);
+                            env.var_pool.shrinkRank(@fromBackingInt(@intCast(rank_idx)), pool_len);
                         }
                     };
                     const probed_result = try self.runUnify(method_var, constraint.fn_var, env, .{
@@ -45066,7 +45372,7 @@ inline fn processDeferredDispatchEntry(
             const region = self.getRegionAt(deferred_constraint.var_);
             const constraints_range = deferred_constraint.constraints;
             const constraints_len = constraints_range.len();
-            const constraints_start: usize = @intFromEnum(constraints_range.start);
+            const constraints_start: usize = @backingInt(constraints_range.start);
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
@@ -45646,7 +45952,7 @@ inline fn processDeferredDispatchEntry(
         const child_failure_expr = self.deferredConstraintFailureExpr(deferred_constraint);
         drain.stopped_children = .{
             .start = deferred_children_start,
-            .failure_expr = if (child_failure_expr) |expr_idx| .from(@intFromEnum(expr_idx)) else .none,
+            .failure_expr = if (child_failure_expr) |expr_idx| .from(@backingInt(expr_idx)) else .none,
         };
         return .stopped;
     }
@@ -45752,7 +46058,7 @@ fn satisfyBuiltinStrInterpolation(
 ) Allocator.Error!bool {
     const metadata = constraint.interpolation;
     const expr_region = metadata.expr_region.get() orelse {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: builtin Str interpolation constraint had no metadata", .{});
         }
         unreachable;
@@ -45796,7 +46102,7 @@ fn ensureCustomInterpolationPartsChecked(
 ) Allocator.Error!void {
     const metadata = constraint.interpolation;
     if (!metadata.isPresent()) {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             base.invariant("type checker invariant violated: checked interpolation constraint had no generated item type", .{});
         }
         unreachable;
@@ -46898,7 +47204,7 @@ fn nominalIsBuiltinStrType(self: *const Self, nominal_type: types_mod.NominalTyp
     if (!nominal_type.originIsBuiltin()) return false;
     if (nominal_type.sourceDeclOptional()) |source_decl| {
         if (self.builtin_ctx.builtin_indices) |indices| {
-            if (source_decl == @intFromEnum(indices.str_type)) return true;
+            if (source_decl == @backingInt(indices.str_type)) return true;
         }
     }
     const ident = nominal_type.ident.ident_idx;
@@ -46909,7 +47215,7 @@ fn nominalIsBuiltinBoolType(self: *const Self, nominal_type: types_mod.NominalTy
     if (!nominal_type.originIsBuiltin()) return false;
     if (nominal_type.sourceDeclOptional()) |source_decl| {
         if (self.builtin_ctx.builtin_indices) |indices| {
-            if (source_decl == @intFromEnum(indices.bool_type)) return true;
+            if (source_decl == @backingInt(indices.bool_type)) return true;
         }
     }
     const ident = nominal_type.ident.ident_idx;
@@ -47055,7 +47361,7 @@ fn closeTagRowsForDerivationHelp(
                         arg_span.dropFirstElem();
                         var i: usize = 0;
                         while (i < arg_span.count) : (i += 1) {
-                            try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@intFromEnum(arg_span.start) + i] });
+                            try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(arg_span.start) + i] });
                         }
                         try pending.append(self.gpa, .{ .var_ = self.types.getAliasBackingVar(alias) });
                     },
@@ -47064,7 +47370,7 @@ fn closeTagRowsForDerivationHelp(
                             const fields_range = record.fields;
                             var i: usize = 0;
                             while (i < fields_range.count) : (i += 1) {
-                                const field = self.types.record_fields.get(@enumFromInt(@intFromEnum(fields_range.start) + i));
+                                const field = self.types.record_fields.get(@fromBackingInt(@intCast(@backingInt(fields_range.start) + i)));
                                 try pending.append(self.gpa, .{ .var_ = field.presence.typeVar() });
                             }
                             try pending.append(self.gpa, .{ .var_ = record.ext });
@@ -47072,24 +47378,24 @@ fn closeTagRowsForDerivationHelp(
                         .tuple => |tuple| {
                             var i: usize = 0;
                             while (i < tuple.elems.count) : (i += 1) {
-                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@intFromEnum(tuple.elems.start) + i] });
+                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(tuple.elems.start) + i] });
                             }
                         },
                         .nominal_type => |nominal| {
                             const args_range = types_mod.Store.getNominalArgsRange(nominal);
                             var i: usize = 0;
                             while (i < args_range.count) : (i += 1) {
-                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@intFromEnum(args_range.start) + i] });
+                                try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(args_range.start) + i] });
                             }
                         },
                         .tag_union => |tag_union| {
                             const tags_range = tag_union.tags;
                             var tag_i: usize = 0;
                             while (tag_i < tags_range.count) : (tag_i += 1) {
-                                const tag_args = self.types.tags.get(@enumFromInt(@intFromEnum(tags_range.start) + tag_i)).args;
+                                const tag_args = self.types.tags.get(@fromBackingInt(@intCast(@backingInt(tags_range.start) + tag_i))).args;
                                 var arg_i: usize = 0;
                                 while (arg_i < tag_args.count) : (arg_i += 1) {
-                                    try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@intFromEnum(tag_args.start) + arg_i] });
+                                    try pending.append(self.gpa, .{ .var_ = self.types.vars.items.items[@backingInt(tag_args.start) + arg_i] });
                                 }
                             }
                             try pending.append(self.gpa, .{ .tag_ext = tag_union.ext });
@@ -47377,7 +47683,7 @@ fn collectDerivedCodecOpenRecordExts(
 }
 
 fn varLessThan(_: void, a: Var, b: Var) bool {
-    return @intFromEnum(a) < @intFromEnum(b);
+    return @backingInt(a) < @backingInt(b);
 }
 
 /// Close every flexible record extension `collectDerivedCodecOpenRecordExts`
@@ -48124,6 +48430,98 @@ fn literalTargetIsBuiltinDirect(
     }
 }
 
+/// Publish every static-dispatch relation the unifier folded into a retained
+/// relation and that selected no target of its own, mapped to the first
+/// relation, in fold order, reachable through its folds whose target checking
+/// selected. Solving is settled here. One relation can be folded more than
+/// once, because a deferred copy of a constraint keeps it in another
+/// constraint list; every relation it reaches is unified with it and must
+/// have selected the same method. Such a relation's dispatch shares that
+/// relation's instantiation, and checked publication keys it by these exact
+/// raw vars rather than by union-find roots, which unrelated dispatches can
+/// come to share.
+fn publishDispatchRelationMerges(self: *Self) Allocator.Error!void {
+    const merges = self.types.static_dispatch_relation_merges.items;
+    if (merges.len == 0) return;
+
+    // Each dropped var's folds, in journal order, as a linked list over
+    // journal indexes.
+    const no_fold = std.math.maxInt(u32);
+    var first_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer first_fold.deinit(self.gpa);
+    var last_fold: std.AutoHashMapUnmanaged(Var, u32) = .empty;
+    defer last_fold.deinit(self.gpa);
+    const next_fold = try self.gpa.alloc(u32, merges.len);
+    defer self.gpa.free(next_fold);
+    try first_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    try last_fold.ensureTotalCapacity(self.gpa, @intCast(merges.len));
+    for (merges, 0..) |merge, index| {
+        next_fold[index] = no_fold;
+        const last = last_fold.getOrPutAssumeCapacity(merge.dropped_fn_var);
+        if (last.found_existing) {
+            next_fold[last.value_ptr.*] = @intCast(index);
+        } else {
+            first_fold.putAssumeCapacity(merge.dropped_fn_var, @intCast(index));
+        }
+        last.value_ptr.* = @intCast(index);
+    }
+
+    var stack: std.ArrayListUnmanaged(Var) = .empty;
+    defer stack.deinit(self.gpa);
+    var visited: std.AutoHashMapUnmanaged(Var, void) = .empty;
+    defer visited.deinit(self.gpa);
+
+    try self.cir.dispatch_relation_merges.items.ensureUnusedCapacity(self.gpa, first_fold.count());
+    for (merges, 0..) |merge, index| {
+        const dropped = merge.dropped_fn_var;
+        // Visit each dropped var once, at its first fold.
+        if (first_fold.get(dropped).? != index) continue;
+        // A deferred copy of the folded constraint can still discharge it;
+        // that selection is its own exact instantiation.
+        if (self.dispatch_target_instantiation_by_fn_var.contains(dropped)) continue;
+
+        stack.clearRetainingCapacity();
+        visited.clearRetainingCapacity();
+        try visited.put(self.gpa, dropped, {});
+        var selected: ?Var = null;
+        var fold = first_fold.get(dropped).?;
+        while (true) {
+            // Push this var's folds in reverse so they pop in journal order.
+            const push_start = stack.items.len;
+            while (fold != no_fold) : (fold = next_fold[fold]) {
+                const retained = merges[fold].retained_fn_var;
+                if ((try visited.getOrPut(self.gpa, retained)).found_existing) continue;
+                try stack.append(self.gpa, retained);
+            }
+            std.mem.reverse(Var, stack.items[push_start..]);
+
+            const current = stack.pop() orelse break;
+            if (self.dispatch_target_instantiation_by_fn_var.get(current)) |raw_index| {
+                if (selected) |first| {
+                    const first_target = self.dispatch_target_instantiations.items[self.dispatch_target_instantiation_by_fn_var.get(first).?];
+                    const target = self.dispatch_target_instantiations.items[raw_index];
+                    if (first_target.target_env != target.target_env or
+                        !std.meta.eql(first_target.target_binding, target.target_binding))
+                    {
+                        base.invariant("a folded static-dispatch relation reached two different selected methods", .{});
+                    }
+                } else {
+                    selected = current;
+                }
+                fold = no_fold;
+                continue;
+            }
+            fold = first_fold.get(current) orelse no_fold;
+        }
+
+        const retained = selected orelse continue;
+        self.cir.dispatch_relation_merges.items.appendAssumeCapacity(.{
+            .dropped_fn_var = @backingInt(dropped),
+            .retained_fn_var = @backingInt(retained),
+        });
+    }
+}
+
 /// Seal every live literal record with the exact decision checking made. The
 /// method-instantiation table is positive evidence for a concrete custom
 /// target; an identity-bearing target remains a specialization obligation.
@@ -48139,18 +48537,14 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     var visited = collections.DenseMap(Var, void).init(self.gpa);
     defer visited.deinit();
 
-    // Evidence is recorded under each discharged constraint's raw fn_var, but
-    // same-name literal constraints deduplicate when their receivers unify
-    // (e.g. two elements of one list): the callable vars are unified and only
-    // one raw fn_var survives on the merged constraint. Solving is settled
-    // here, so comparing resolved roots recovers every literal's share of that
-    // one discharged edge.
-    var evidence_fn_roots = collections.DenseMap(Var, void).init(self.gpa);
-    defer evidence_fn_roots.deinit();
-    try evidence_fn_roots.ensureTotalCapacity(self.dispatch_target_instantiation_by_fn_var.count());
-    var evidence_key_it = self.dispatch_target_instantiation_by_fn_var.keyIterator();
-    while (evidence_key_it.next()) |evidence_fn_var| {
-        try evidence_fn_roots.put(self.types.resolveVar(evidence_fn_var.*).var_, {});
+    // A literal whose constraint was folded into a same-name relation (e.g.
+    // two elements of one list) shares the target that relation selected.
+    var folded_fn_vars = collections.DenseMap(Var, void).init(self.gpa);
+    defer folded_fn_vars.deinit();
+    const merges = self.cir.dispatch_relation_merges.items.items;
+    try folded_fn_vars.ensureTotalCapacity(@intCast(merges.len));
+    for (merges) |merge| {
+        try folded_fn_vars.put(@fromBackingInt(merge.dropped_fn_var), {});
     }
 
     // Finalization only changes resolution fields and retirement happens
@@ -48160,8 +48554,8 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             base.invariant("literal dispatch plan reached finalization already resolved", .{});
         }
 
-        const target_var: Var = @enumFromInt(plan.target_var);
-        const fn_var: Var = @enumFromInt(plan.fn_var);
+        const target_var: Var = @fromBackingInt(@intCast(plan.target_var));
+        const fn_var: Var = @fromBackingInt(@intCast(plan.fn_var));
         const resolution: can.NodeStore.LiteralDispatchPlan.Resolution = resolution: {
             // A dispatch-specific rejection is stronger than a concrete
             // builtin target (for example, an out-of-range U8 literal).
@@ -48171,9 +48565,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 break :resolution .checked_error;
             }
 
-            const node_idx: CIR.Node.Idx = @enumFromInt(plan.node_idx);
+            const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(plan.node_idx));
             if (isExprNodeTag(self.cir.store.nodes.get(node_idx).tag) and
-                self.erroneous_value_exprs.contains(@enumFromInt(plan.node_idx)))
+                self.erroneous_value_exprs.contains(@fromBackingInt(@intCast(plan.node_idx))))
             {
                 break :resolution .checked_error;
             }
@@ -48195,7 +48589,9 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
             if (try self.literalTargetContainsIdentity(target_var, &visited)) {
                 break :resolution .specialization_dispatch;
             }
-            if (evidence_fn_roots.contains(self.types.resolveVar(fn_var).var_)) {
+            if (self.dispatch_target_instantiation_by_fn_var.contains(fn_var) or
+                folded_fn_vars.contains(fn_var))
+            {
                 break :resolution .custom_dispatch;
             }
 
@@ -48242,18 +48638,18 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
                 .{
                     @tagName(plan.dispatchKind()),
                     plan.node_idx,
-                    @intFromEnum(target.var_),
+                    @backingInt(target.var_),
                     target_shape,
                     target_name,
-                    @intFromEnum(callable.var_),
+                    @backingInt(callable.var_),
                     callable_shape,
                 },
             );
         };
-        self.cir.finalizeLiteralDispatchResolution(@enumFromInt(plan.node_idx), resolution);
+        self.cir.finalizeLiteralDispatchResolution(@fromBackingInt(@intCast(plan.node_idx)), resolution);
         if (resolution == .checked_error) {
             if (plan.patternFailureOwner(&self.cir.store)) |owner| {
-                try failed_pattern_owners.append(self.gpa, @enumFromInt(owner));
+                try failed_pattern_owners.append(self.gpa, @fromBackingInt(@intCast(owner)));
             }
         }
     }
@@ -48261,7 +48657,7 @@ fn finalizeLiteralDispatchResolutions(self: *Self) Allocator.Error!void {
     // so a large rejected destructure is not invalidated once per literal.
     std.mem.sort(CIR.Node.Idx, failed_pattern_owners.items, {}, struct {
         fn lessThan(_: void, a: CIR.Node.Idx, b: CIR.Node.Idx) bool {
-            return @intFromEnum(a) < @intFromEnum(b);
+            return @backingInt(a) < @backingInt(b);
         }
     }.lessThan);
     var previous_owner: ?CIR.Node.Idx = null;
@@ -48923,7 +49319,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     // Repeat after rollback to exercise reuse of the discarded type indices.
     for (0..2) |_| {
         var transaction = try checker.beginProbe(null);
-        const ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?;
+        const ordinary = (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?;
         const copied_type_count = checker.types.len();
         const method = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
         try std.testing.expectEqual(ordinary.local_var, method);
@@ -48939,7 +49335,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
         // Exercise method-first lookup too, followed by an ordinary hit.
         const second_method = try checker.importedSchemeFromSource(source.module_env, nodes[1]);
         const second_type_count = checker.types.len();
-        const second_ordinary = (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[1]))).?;
+        const second_ordinary = (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[1]))).?;
         try std.testing.expectEqual(second_method, second_ordinary.local_var);
         try std.testing.expectEqual(second_type_count, checker.types.len());
         transaction.rollback();
@@ -48958,7 +49354,7 @@ test "issue 11444: complete imported schemes share a cache and roll back with th
     const retained = try checker.importedSchemeFromSource(source.module_env, nodes[0]);
     try committed.commit();
     var probe = try checker.beginProbe(null);
-    try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @intFromEnum(nodes[0]))).?.local_var);
+    try std.testing.expectEqual(retained, (try checker.resolveVarFromExternal(import_idx, @backingInt(nodes[0]))).?.local_var);
     probe.rollback();
     try std.testing.expect(checker.typeSchemeIndexForRoot(retained) != null);
     try std.testing.expect(checker.isBindingSchemeVar(retained));
@@ -50270,10 +50666,10 @@ fn recordGeneratedCodecDerivationSnapshot(
     defer roots.deinit(self.gpa);
     try roots.appendSlice(self.gpa, &fixed_vars);
     for (calls) |call| {
-        try roots.append(self.gpa, @enumFromInt(call.dispatcher_var));
-        try roots.append(self.gpa, @enumFromInt(call.callable_var));
+        try roots.append(self.gpa, @fromBackingInt(@intCast(call.dispatcher_var)));
+        try roots.append(self.gpa, @fromBackingInt(@intCast(call.callable_var)));
         if (call.subject_var != ModuleEnv.GeneratedCodecCall.no_subject_var) {
-            try roots.append(self.gpa, @enumFromInt(call.subject_var));
+            try roots.append(self.gpa, @fromBackingInt(@intCast(call.subject_var)));
         }
     }
 
@@ -50343,12 +50739,12 @@ fn recordGeneratedCodecDerivationSnapshot(
         else blk: {
             const subject = copied_vars[cursor];
             cursor += 1;
-            break :blk @intFromEnum(subject);
+            break :blk @backingInt(subject);
         };
         copied_calls.appendAssumeCapacity(.{
             .method_ident = call.method_ident,
-            .dispatcher_var = @intFromEnum(copied_dispatcher),
-            .callable_var = @intFromEnum(copied_callable),
+            .dispatcher_var = @backingInt(copied_dispatcher),
+            .callable_var = @backingInt(copied_callable),
             .evidence_var = call.evidence_var,
             .subject_var = copied_subject,
         });
@@ -50497,8 +50893,9 @@ fn stepDerivedMethodCall(self: *Self, task: *ExprTask, state: *CallCheck, env: *
     }
     if (try self.retireCallLikeExprWithErroneousOperands(expr_idx, expr_var, arg_expr_idxs)) return .done;
 
-    var arg_vars_sfa = std.heap.stackFallback(16 * @sizeOf(Var), self.gpa);
-    const arg_vars_alloc = arg_vars_sfa.get();
+    var arg_vars_sfa_buffer: [16 * @sizeOf(Var)]u8 align(@alignOf(usize)) = undefined;
+    var arg_vars_sfa = std.heap.BufferFirstAllocator.init(&arg_vars_sfa_buffer, self.gpa);
+    const arg_vars_alloc = arg_vars_sfa.allocator();
     const arg_vars = try arg_vars_alloc.alloc(Var, arg_expr_idxs.len);
     defer arg_vars_alloc.free(arg_vars);
     for (arg_expr_idxs, arg_vars) |arg_expr_idx, *arg_var| arg_var.* = ModuleEnv.varFrom(arg_expr_idx);
@@ -50817,10 +51214,10 @@ fn recordGeneratedCodecCall(
 ) Allocator.Error!void {
     try self.scratch_generated_codec_calls.append(self.gpa, .{
         .method_ident = @bitCast(method_name),
-        .dispatcher_var = @intFromEnum(dispatcher_var),
-        .callable_var = @intFromEnum(callable_var),
-        .evidence_var = @intFromEnum(evidence_var),
-        .subject_var = if (subject_var) |subject| @intFromEnum(subject) else ModuleEnv.GeneratedCodecCall.no_subject_var,
+        .dispatcher_var = @backingInt(dispatcher_var),
+        .callable_var = @backingInt(callable_var),
+        .evidence_var = @backingInt(evidence_var),
+        .subject_var = if (subject_var) |subject| @backingInt(subject) else ModuleEnv.GeneratedCodecCall.no_subject_var,
     });
 }
 
@@ -50901,6 +51298,9 @@ fn instantiateGeneratedCodecMethodTarget(
             evidence_var,
             method_type_var,
             .when_needed,
+            method_var,
+            region,
+            env,
         );
     } else if (self.cir.scheme_uses.items.items.len == records_before and
         try self.schemeHasEvidenceParams(scheme_var))
@@ -50908,7 +51308,7 @@ fn instantiateGeneratedCodecMethodTarget(
         try self.recordSharedSchemeUse(
             0,
             .dispatch_target,
-            @intFromEnum(evidence_var),
+            @backingInt(evidence_var),
             scheme_var,
         );
     }
@@ -50931,7 +51331,7 @@ fn stepParseSettle(
 ) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
     const env = inputs.env;
     const failure_expr = inputs.failure_expr;
-    const failure_expr_idx: StaticDispatchConstraint.Provenance.OptExprIdx = if (failure_expr) |expr| .from(@intFromEnum(expr)) else .none;
+    const failure_expr_idx: StaticDispatchConstraint.Provenance.OptExprIdx = if (failure_expr) |expr| .from(@backingInt(expr)) else .none;
     if (!settle.entered) {
         settle.entered = true;
         self.settling_codec_method_requirements_depth += 1;
@@ -54025,7 +54425,7 @@ fn checkFlexVarConstraintCompatibility(
     };
     const region = self.getRegionAt(var_);
 
-    const constraints_start: usize = @intFromEnum(constraints_range.start);
+    const constraints_start: usize = @backingInt(constraints_range.start);
     var had_error = false;
     var constraint_i: usize = 0;
     while (constraint_i < constraints_range.len()) : (constraint_i += 1) {
@@ -54061,7 +54461,7 @@ fn checkFlexVarConstraintCompatibility(
         // constraint; publishing that name as evidence would defer a typing
         // error until post-check lowering.
         const method_binding = builtin_env.lookupMethodBindingFromTwoEnvsAndDeclConst(
-            @intFromEnum(default_type_stmt),
+            @backingInt(default_type_stmt),
             self.cir,
             constraint.fn_name,
         ) orelse {
@@ -54104,7 +54504,7 @@ fn checkFlexVarConstraintCompatibility(
             defer if (!committed) commit_probe.rollback();
 
             const method_var = try self.instantiateVar(imported_scheme, env, .{ .explicit = region }, .{ .dispatch_target = .{
-                .node_idx = if (constraintIntroExpr(constraint)) |expr| @intFromEnum(expr) else 0,
+                .node_idx = if (constraintIntroExpr(constraint)) |expr| @backingInt(expr) else 0,
                 .constraint_fn_var = constraint.fn_var,
             } });
 
@@ -54428,7 +54828,7 @@ fn quoteLiteralRegionForDispatcher(self: *Self, constraint: StaticDispatchConstr
         kind,
         dispatcher_root,
     ) orelse return null;
-    return self.cir.store.getNodeRegion(@enumFromInt(plan.node_idx));
+    return self.cir.store.getNodeRegion(@fromBackingInt(@intCast(plan.node_idx)));
 }
 
 const ReportedConstraintError = struct {
@@ -54735,7 +55135,7 @@ pub fn createImportMapping(
                 const stmt_idx: CIR.Statement.Idx = @field(indices, spec.type_field);
 
                 // Skip invalid statement indices (index 0 is typically invalid/sentinel)
-                if (@intFromEnum(stmt_idx) != 0) {
+                if (@backingInt(stmt_idx) != 0) {
                     const stmt = builtin_env.store.getStatement(stmt_idx);
                     const header_idx = switch (stmt) {
                         .s_nominal_decl => |decl| decl.header,

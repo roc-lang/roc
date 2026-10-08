@@ -83,7 +83,7 @@ fn expectSingleErrorResponse(
 
     const response_error = response.get("error") orelse return error.MissingError;
     const code = response_error.object.get("code") orelse return error.MissingCode;
-    try std.testing.expectEqual(@as(i64, @intFromEnum(expected_code)), code.integer);
+    try std.testing.expectEqual(@as(i64, @backingInt(expected_code)), code.integer);
     const message = response_error.object.get("message") orelse return error.MissingMessage;
     try std.testing.expectEqualStrings(expected_message, message.string);
 }
@@ -168,7 +168,7 @@ test "server handles initialize/shutdown/exit handshake" {
         defer parsed.deinit();
         const response_error = parsed.value.object.get("error") orelse return error.MissingError;
         const code = response_error.object.get("code") orelse return error.MissingCode;
-        try std.testing.expectEqual(@as(i64, @intFromEnum(protocol.ErrorCode.invalid_request)), code.integer);
+        try std.testing.expectEqual(@as(i64, @backingInt(protocol.ErrorCode.invalid_request)), code.integer);
     }
 }
 
@@ -220,7 +220,7 @@ test "server rejects re-initialization requests" {
     var parsed_error = try std.json.parseFromSlice(std.json.Value, allocator, responses[1], .{});
     defer parsed_error.deinit();
     const error_obj = parsed_error.value.object.get("error") orelse return error.ExpectedError;
-    try std.testing.expect(error_obj.object.get("code").?.integer == @intFromEnum(protocol.ErrorCode.invalid_request));
+    try std.testing.expect(error_obj.object.get("code").?.integer == @backingInt(protocol.ErrorCode.invalid_request));
 }
 
 test "server reports definition parameter errors exactly once" {
@@ -881,7 +881,7 @@ test "workspace trust gates document builds and all semantic requests" {
             for (responses[1 .. 1 + semantic_methods.len]) |body| {
                 const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
                 defer parsed.deinit();
-                try std.testing.expectEqual(@as(i64, @intFromEnum(protocol.ErrorCode.request_failed)), parsed.value.object.get("error").?.object.get("code").?.integer);
+                try std.testing.expectEqual(@as(i64, @backingInt(protocol.ErrorCode.request_failed)), parsed.value.object.get("error").?.object.get("code").?.integer);
             }
             for (responses[1 + semantic_methods.len ..]) |body| {
                 const parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});

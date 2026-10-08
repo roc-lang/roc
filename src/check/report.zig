@@ -242,7 +242,7 @@ pub const ReportBuilder = struct {
     /// created during type checking. Returns null only if the index is beyond even
     /// the checker's region list (shouldn't happen in normal operation).
     fn getRegionSafe(self: *const Self, region_idx: Region.Idx) ?*Region {
-        if (@intFromEnum(region_idx) >= self.checker_regions.len()) return null;
+        if (@backingInt(region_idx) >= self.checker_regions.len()) return null;
         return self.checker_regions.get(region_idx);
     }
 
@@ -259,7 +259,7 @@ pub const ReportBuilder = struct {
     /// not reachable from this report; render only the local side).
     fn defaultDeclRegion(self: *Self, id: types_mod.DefaultId) ?Region {
         if (id.origin_module != self.can_ir.selfModuleIdentity()) return null;
-        return self.can_ir.store.getExprRegion(@enumFromInt(id.expr_node));
+        return self.can_ir.store.getExprRegion(@fromBackingInt(@intCast(id.expr_node)));
     }
 
     /// Point at the construct introducing an expression instead of covering its
@@ -360,7 +360,7 @@ pub const ReportBuilder = struct {
     /// Convert a type into a type var
     pub fn regionIdxFrom(idx: anytype) Region.Idx {
         std.debug.assert(@TypeOf(idx) == Var or @TypeOf(idx) == CIR.Expr.Idx or @TypeOf(idx) == CIR.Pattern.Idx or @TypeOf(idx) == CIR.Node.Idx);
-        return @enumFromInt(@intFromEnum(idx));
+        return @fromBackingInt(@intCast(@backingInt(idx)));
     }
 
     const ProblemRegion = union(enum) {
@@ -975,6 +975,7 @@ pub const ReportBuilder = struct {
                     .record_access => |ctx| self.buildRecordAccess(mismatch.types, mismatch.evidence, ctx),
                     .record_update => |ctx| self.buildRecordUpdate(mismatch.types, mismatch.evidence, ctx),
                     .recursive_def => |ctx| self.buildRecursiveDef(mismatch.types, ctx),
+                    .predeclared_use => |ctx| self.buildPredeclaredUse(mismatch.types, ctx),
                     .platform_requirement, .platform_requirement_return => |ctx| {
                         const is_return = mismatch.context == .platform_requirement_return;
                         var report = try self.makeMismatchReport(
@@ -2036,7 +2037,7 @@ pub const ReportBuilder = struct {
         else
             null;
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(types.actual_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -2108,7 +2109,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, title, headline, .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(types.actual_var)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(types.actual_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -2418,7 +2419,7 @@ pub const ReportBuilder = struct {
         fn_var: Var,
     ) Allocator.Error!void {
         const region: Region = owner_region orelse
-            (self.getRegionSafe(@enumFromInt(@intFromEnum(fn_var))) orelse return).*;
+            (self.getRegionSafe(@fromBackingInt(@backingInt(fn_var))) orelse return).*;
         try self.addSourceRegionOf(&report.document, region, .error_highlight);
         try report.document.addLineBreak();
     }
@@ -2463,7 +2464,7 @@ pub const ReportBuilder = struct {
         const types_store = &self.module_env.types;
         const failed_fn = types_store.resolveVar(data.fn_var).var_;
         for (self.module_env.for_loop_dispatch_plans.items.items) |plan| {
-            if (types_store.resolveVar(@enumFromInt(plan.iter_fn_var)).var_ != failed_fn) continue;
+            if (types_store.resolveVar(@fromBackingInt(@intCast(plan.iter_fn_var))).var_ != failed_fn) continue;
             const nominal = types_store.resolveVar(data.dispatcher_var).desc.content.unwrapNominalType() orelse return false;
             return nominal.ident.ident_idx.eql(self.module_env.idents.builtin_stream);
         }
@@ -2836,7 +2837,7 @@ pub const ReportBuilder = struct {
 
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.fn_var)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.fn_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -2897,7 +2898,7 @@ pub const ReportBuilder = struct {
         const snapshot_str = try report.addOwnedString(self.getFormattedString(data.dispatcher_snapshot));
 
         const literal_region = data.quote_region orelse
-            (if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero());
+            (if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero());
         const region_info = self.module_env.calcRegionInfo(literal_region);
 
         try self.addSourceRegionTo(&report.document, region_info, .error_highlight);
@@ -2929,7 +2930,7 @@ pub const ReportBuilder = struct {
 
         // Get the region of the dispatcher (the type that was expected)
         // This might be different if the type came from somewhere else (e.g., a type annotation)
-        const dispatcher_region = if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.dispatcher_var)))) |r| r.* else Region.zero();
+        const dispatcher_region = if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.dispatcher_var))))) |r| r.* else Region.zero();
 
         try self.addSourceRegionTo(&report.document, num_region_info, .error_highlight);
         try report.document.addLineBreak();
@@ -4134,6 +4135,29 @@ pub const ReportBuilder = struct {
         );
     }
 
+    fn buildPredeclaredUse(
+        self: *Self,
+        types: TypePair,
+        ctx: problem_mod.Context.PredeclaredUseContext,
+    ) Allocator.Error!Report {
+        return try self.makeMismatchReport(
+            ProblemRegion{ .direct = ctx.region },
+            if (ctx.def_name) |def_name|
+                &.{
+                    D.bytes("This use of"),
+                    D.ident(def_name).withAnnotation(.inline_code),
+                    D.bytes("needs a type its definition does not have."),
+                }
+            else
+                &.{D.bytes("This use needs a type its definition does not have.")},
+            &.{D.bytes("Here it is used as:")},
+            types.actual_snapshot,
+            &.{D.bytes("But its definition has the type:")},
+            types.expected_snapshot,
+            &.{&.{D.bytes("A tag union in an output position is open for callers only as far as the definition's body leaves it open. This definition's body narrows it (for example, by returning a value whose tag union is closed), so no use, including one inside the definition itself, may rely on the annotation alone.")}},
+        );
+    }
+
     /// Build a report for when an anonymous type doesn't support equality
     fn buildCannotAccessOpaqueNominal(
         self: *Self,
@@ -4150,7 +4174,7 @@ pub const ReportBuilder = struct {
             D.bytes("type."),
         }, self, &report, &report.headline);
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
@@ -4176,7 +4200,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Compiler Bug", "An internal compiler error occurred while checking this nominal type usage.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
         }
 
@@ -4562,7 +4586,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline),
         }
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.decl_var)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.decl_var)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -4604,7 +4628,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Infinite Type", "I am inferring a weird self-referential type.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -4688,7 +4712,7 @@ pub const ReportBuilder = struct {
             }, self, &report, &report.headline);
         }
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -4719,7 +4743,7 @@ pub const ReportBuilder = struct {
         var report = try Report.init(self.gpa, "Polymorphic Value", "This top-level value still has an unresolved polymorphic type.", .runtime_error);
         errdefer report.deinit();
 
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.var_)))) |region| {
+        if (self.getRegionSafe(@fromBackingInt(@backingInt(data.var_)))) |region| {
             try self.addSourceRegionOf(&report.document, region.*, .error_highlight);
             try report.document.addLineBreak();
         }
@@ -5423,7 +5447,7 @@ pub const ReportBuilder = struct {
         errdefer report.deinit();
 
         // Add source region highlighting
-        if (self.getRegionSafe(@enumFromInt(@intFromEnum(data.match_expr)))) |match_region| {
+        if (self.getRegionSafe(@fromBackingInt(@intCast(@backingInt(data.match_expr))))) |match_region| {
             try self.addSourceHighlightRegion(&report, match_region.*);
             try report.document.addLineBreak();
         }

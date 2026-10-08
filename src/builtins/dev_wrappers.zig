@@ -101,9 +101,9 @@ pub fn roc_builtins_simd_eval(
     args: *const [3]u128,
 ) callconv(.c) void {
     out.* = simd.eval(
-        @enumFromInt(op),
-        @enumFromInt(arg_kind),
-        @enumFromInt(ret_kind),
+        @fromBackingInt(@intCast(op)),
+        @fromBackingInt(@intCast(arg_kind)),
+        @fromBackingInt(@intCast(ret_kind)),
         args[0],
         args[1],
         args[2],
@@ -189,7 +189,7 @@ pub fn roc_builtins_hasher_write_bytes(seed: u64, domain: u8, bytes: ?[*]const u
 pub fn roc_builtins_hasher_write_str(seed: u64, str_bytes: ?[*]u8, str_len: usize, str_cap: usize) callconv(.c) u64 {
     const value = RocStr{ .bytes = str_bytes, .length = str_len, .capacity_or_alloc_ptr = str_cap };
     const bytes = value.asSlice();
-    return hash.hasher_write_bytes(seed, @intFromEnum(hash.HasherDomain.str), bytes.ptr, bytes.len);
+    return hash.hasher_write_bytes(seed, @backingInt(hash.HasherDomain.str), bytes.ptr, bytes.len);
 }
 
 /// C ABI wrapper for finalizing a builtin Hasher state.
@@ -605,7 +605,7 @@ pub fn roc_builtins_str_from_utf8_result(out: [*]u8, list_bytes: ?[*]u8, list_le
     }
 
     utils.writeAs(u64, out + layout.err_index_offset, result.byte_index, @src());
-    utils.writeAs(u8, out + layout.err_problem_offset, @intFromEnum(result.problem_code), @src());
+    utils.writeAs(u8, out + layout.err_problem_offset, @backingInt(result.problem_code), @src());
     writeDiscriminant(out, layout.inner_disc_offset, layout.inner_disc_size, layout.inner_bad_utf8_tag);
     writeDiscriminant(out, layout.outer_disc_offset, layout.outer_disc_size, layout.err_tag);
 }
@@ -781,11 +781,11 @@ test "formatInvalidLocal renders the check identity and reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: str local 7 of roc__p0dd5e7903b5a4e63af0a004f1598b1ae received an invalid RocStr (null bytes pointer)",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.str), @backingInt(InvalidLocalReason.null_bytes_pointer), 7, 0x0dd5e7903b5a4e63, 0xaf0a004f1598b1ae),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: box local 3 of roc__p00000000000000090000000000000002 received a non-aligned pointer",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.box), @intFromEnum(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.box), @backingInt(InvalidLocalReason.non_aligned_pointer), 3, 9, 2),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: unknown local 1 of roc__p00000000000000020000000000000003 received an invalid value (unknown reason)",
@@ -797,11 +797,11 @@ test "formatInvalidLocal fits maximum identifiers and the longest reason" {
     var buffer: [192]u8 = undefined;
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: unknown local outside the frame of roc__pffffffffffffffffffffffffffffffff received an invalid RocStr (misaligned allocation pointer)",
-        formatInvalidLocal(&buffer, 200, @intFromEnum(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
+        formatInvalidLocal(&buffer, 200, @backingInt(InvalidLocalReason.misaligned_allocation_pointer), std.math.maxInt(u32), std.math.maxInt(u64), std.math.maxInt(u64)),
     );
     try std.testing.expectEqualStrings(
         "LIR/codegen invariant violated: str local 0 of roc__p00000000000000000000000000000000 received an invalid RocStr (null bytes pointer)",
-        formatInvalidLocal(&buffer, @intFromEnum(InvalidLocalKind.str), @intFromEnum(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
+        formatInvalidLocal(&buffer, @backingInt(InvalidLocalKind.str), @backingInt(InvalidLocalReason.null_bytes_pointer), 0, 0, 0),
     );
 }
 
@@ -1714,10 +1714,10 @@ fn writeRocStrFromSlice(out: *RocStr, slice: []const u8, roc_ops: *RocOps) void 
     const small_string_size = @sizeOf(RocStr);
 
     if (slice.len < small_string_size) {
-        var buf: [small_string_size]u8 = .{0} ** small_string_size;
+        var buf: [small_string_size]u8 = @splat(0);
         @memcpy(buf[0..slice.len], slice);
         buf[small_string_size - 1] = @intCast(slice.len | 0x80);
-        out.* = @bitCast(buf);
+        @memcpy(std.mem.asBytes(out), &buf);
     } else {
         const heap_ptr = allocateWithRefcountC(slice.len, 1, false, roc_ops);
         @memcpy(heap_ptr[0..slice.len], slice);
@@ -1995,7 +1995,8 @@ fn decBinaryWrapper(comptime op: anytype) fn (*u64, *u64, u64, u64, u64, u64) ca
         fn wrapper(out_low: *u64, out_high: *u64, a_low: u64, a_high: u64, b_low: u64, b_high: u64) callconv(.c) void {
             const a: i128 = @bitCast(i128h.from_u64_pair(a_low, a_high));
             const b: i128 = @bitCast(i128h.from_u64_pair(b_low, b_high));
-            const result: u128 = @bitCast(op(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, in_process_host.ops()));
+            const raw = op(dec.RocDec{ .num = a }, dec.RocDec{ .num = b }, in_process_host.ops());
+            const result: u128 = @bitCast(if (@TypeOf(raw) == dec.RocDec) raw.num else raw);
             out_low.* = @truncate(result);
             out_high.* = i128h.hi64(result);
         }
@@ -2758,7 +2759,12 @@ test "numeric prefix wrappers return an owned rest slice and borrow the input" {
     try std.testing.expectEqual(@as(usize, 0), numPrefixRecordRestStr(&record).len());
     try std.testing.expect(source_str.isUnique());
 
-    const bytes = [_]u8{ '5', 0x0D, 0xFF, 'x', 'y', 'z' } ** 8;
+    const bytes = repeated: {
+        const pattern = [_]u8{ '5', 0x0D, 0xFF, 'x', 'y', 'z' };
+        var result: [pattern.len * (8)]@TypeOf(pattern[0]) = undefined;
+        for (0..(8)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], &pattern);
+        break :repeated result;
+    };
     const source_list = RocList.fromSlice(u8, &bytes, false, ops);
     defer source_list.decref(@alignOf(u8), @sizeOf(u8), false, null, list.rcNone, ops);
     roc_builtins_int_from_utf8_prefix(&record, source_list.bytes, source_list.length, source_list.capacity_or_alloc_ptr, 1, false, &num_prefix_test_layout);

@@ -14,7 +14,7 @@ pub const max_roc_alignment: std.mem.Alignment = .@"16";
 /// Helper for creating an Io.Writer.Allocating from a deprecated Managed(u8).
 /// Zig 0.16 removed Managed.writer(); this bridges the gap.
 pub fn managedWriter(managed: *std.array_list.Managed(u8)) std.Io.Writer.Allocating {
-    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity };
+    var unmanaged: std.ArrayList(u8) = .{ .items = managed.items, .capacity = managed.capacity, .pointer_stability = .{} };
     return std.Io.Writer.Allocating.fromArrayList(managed.allocator, &unmanaged);
 }
 
@@ -79,7 +79,7 @@ pub const NonEmptyRange = struct {
     pub fn toRange(self: NonEmptyRange, comptime Idx: type) SafeRange(Idx) {
         std.debug.assert(self.count > 0);
         return .{
-            .start = @enumFromInt(self.start),
+            .start = @fromBackingInt(@intCast(self.start)),
             .count = self.count,
         };
     }

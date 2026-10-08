@@ -146,9 +146,9 @@ pub const ColorPalette = struct {
     /// Get the appropriate color for an annotation.
     pub fn colorForAnnotation(self: ColorPalette, annotation: Annotation) []const u8 {
         const field = terminal_colors.get(annotation) orelse return "";
-        inline for (std.meta.fields(ColorPalette)) |palette_field| {
-            if (field == @field(PaletteField, palette_field.name)) {
-                return @field(self, palette_field.name);
+        inline for (@typeInfo(ColorPalette).@"struct".field_names) |palette_field_name| {
+            if (field == @field(PaletteField, palette_field_name)) {
+                return @field(self, palette_field_name);
             }
         }
         unreachable;

@@ -69,7 +69,7 @@ pub const Store = struct {
                 self.pos = content_end;
                 return .{
                     .encoded_start = @intCast(content_start - entry_header_size),
-                    .idx = @enumFromInt(@as(u32, @intCast(content_start))),
+                    .idx = @fromBackingInt(@intCast(@as(u32, @intCast(content_start)))),
                     .bytes = buffer_items[content_start..content_end],
                     .alignment = entry_alignment,
                 };
@@ -115,6 +115,7 @@ pub const Store = struct {
                     .items = .{
                         .items = items_ptr[0..@intCast(self.len)],
                         .capacity = @intCast(self.capacity),
+                        .pointer_stability = .{},
                     },
                 };
             }
@@ -157,6 +158,7 @@ pub const Store = struct {
                 .items = .{
                     .items = items,
                     .capacity = capacity,
+                    .pointer_stability = .{},
                 },
             };
         }
@@ -271,29 +273,29 @@ pub const Store = struct {
             assertAppendRange(expected_start, string.len, start, string.len);
         }
 
-        return @enumFromInt(idx);
+        return @fromBackingInt(@intCast(idx));
     }
 
     /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
-        const idx_usize: usize = @intFromEnum(idx);
+        const idx_usize: usize = @backingInt(idx);
         const len_start = idx_usize - entry_header_size;
         const str_len = std.mem.readInt(u32, self.buffer.items.items[len_start..][0..len_size], .little);
         return self.buffer.items.items[idx_usize .. idx_usize + str_len];
     }
 
     pub fn alignment(self: *const Store, idx: Idx) u32 {
-        const idx_usize: usize = @intFromEnum(idx);
+        const idx_usize: usize = @backingInt(idx);
         const alignment_start = idx_usize - alignment_size;
         return std.mem.readInt(u32, self.buffer.items.items[alignment_start..][0..alignment_size], .little);
     }
 
     fn requireAlignment(self: *Store, idx: Idx, required: u32) void {
         if (required == 0 or !std.math.isPowerOfTwo(required)) {
-            if (builtin.mode == .Debug) invariant("string literal alignment must be a nonzero power of two", .{});
+            if (builtin.mode == .debug) invariant("string literal alignment must be a nonzero power of two", .{});
             unreachable;
         }
-        const idx_usize: usize = @intFromEnum(idx);
+        const idx_usize: usize = @backingInt(idx);
         const alignment_start = idx_usize - alignment_size;
         const slot = self.buffer.items.items[alignment_start..][0..alignment_size];
         const current = std.mem.readInt(u32, slot, .little);
@@ -415,7 +417,7 @@ const StringLiteralPolicy = struct {
 
 fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
     if (value > std.math.maxInt(u32)) {
-        if (comptime builtin.mode == .Debug) {
+        if (comptime builtin.mode == .debug) {
             invariant("{s} exceeded u32 storage invariant", .{invariant_name});
         }
         unreachable;
@@ -424,7 +426,7 @@ fn checkedU32(value: usize, comptime invariant_name: []const u8) u32 {
 }
 
 fn assertAppendRange(expected_start: usize, expected_len: usize, actual_start: usize, actual_len: usize) void {
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.assert(actual_start == expected_start);
         std.debug.assert(actual_len == expected_len);
     } else if (actual_start != expected_start or actual_len != expected_len) {
@@ -489,9 +491,9 @@ test "store uses exact portable length-prefixed bytes" {
     const abc = try builder.insert(&store, gpa, "abc");
     const binary = try builder.insert(&store, gpa, "\x00\x01abc");
 
-    try testing.expectEqual(@as(u32, 8), @intFromEnum(empty));
-    try testing.expectEqual(@as(u32, 16), @intFromEnum(abc));
-    try testing.expectEqual(@as(u32, 27), @intFromEnum(binary));
+    try testing.expectEqual(@as(u32, 8), @backingInt(empty));
+    try testing.expectEqual(@as(u32, 16), @backingInt(abc));
+    try testing.expectEqual(@as(u32, 27), @backingInt(binary));
     try testing.expectEqualStrings("", store.get(empty));
     try testing.expectEqualStrings("abc", store.get(abc));
     try testing.expectEqualStrings("\x00\x01abc", store.get(binary));
@@ -640,7 +642,12 @@ test "Store comprehensive CompactWriter roundtrip" {
         "line1\nline2\r\nline3", // line breaks
         "tab\tseparated\tvalues", // tabs
         "quotes: 'single' and \"double\"", // quotes
-        "very long string " ** 50, // long string
+        repeated: {
+            const pattern = "very long string ";
+            var result: [pattern.len * (50)]@TypeOf(pattern[0]) = undefined;
+            for (0..(50)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+            break :repeated &result;
+        }, // long string
     };
 
     var indices = std.ArrayList(Idx).empty;
@@ -703,7 +710,7 @@ test "Store CompactWriter roundtrip" {
 
     const idx1 = try builder.insert(&original, gpa, "test1");
     const idx2 = try builder.insert(&original, gpa, "test2");
-    try std.testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
+    try std.testing.expect(@backingInt(idx1) < @backingInt(idx2));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -806,17 +813,17 @@ test "Store edge case indices CompactWriter roundtrip" {
     var previous_end: usize = 0;
 
     const idx1 = try builder.insert(&original, gpa, "first");
-    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "first".len), @intFromEnum(idx1));
+    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "first".len), @backingInt(idx1));
 
     const idx2 = try builder.insert(&original, gpa, "second");
-    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "second".len), @intFromEnum(idx2));
+    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "second".len), @backingInt(idx2));
 
     const idx3 = try builder.insert(&original, gpa, "");
-    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @intFromEnum(idx3));
+    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, "".len), @backingInt(idx3));
 
-    const long_str = "x" ** 1000;
-    const idx4 = try builder.insert(&original, gpa, long_str);
-    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @intFromEnum(idx4));
+    const long_str = @as([1000]u8, @splat('x'));
+    const idx4 = try builder.insert(&original, gpa, &long_str);
+    try std.testing.expectEqual(expectedNextStringContentStart(&previous_end, long_str.len), @backingInt(idx4));
 
     // Create a temp file
     var tmp_dir = std.testing.tmpDir(.{});
@@ -855,5 +862,5 @@ test "Store edge case indices CompactWriter roundtrip" {
     try std.testing.expectEqualStrings("first", deserialized.get(idx1));
     try std.testing.expectEqualStrings("second", deserialized.get(idx2));
     try std.testing.expectEqualStrings("", deserialized.get(idx3));
-    try std.testing.expectEqualStrings(long_str, deserialized.get(idx4));
+    try std.testing.expectEqualStrings(&long_str, deserialized.get(idx4));
 }

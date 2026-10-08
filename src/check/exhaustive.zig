@@ -69,7 +69,7 @@ fn exportBlockers(store: *TypeStore, blockers: *std.ArrayList(Var)) void {
 }
 
 fn exhaustiveInvariant(comptime message: []const u8, args: anytype) noreturn {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         base.invariant(message, args);
     }
     unreachable;
@@ -340,7 +340,7 @@ pub const TagId = enum(u32) {
     _,
 
     pub fn toInt(self: TagId) u32 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 };
 
@@ -1120,7 +1120,7 @@ fn buildUnionFromTagUnion(
         const arg_vars = type_store.sliceVars(tag.args);
         alternatives[i] = .{
             .name = .{ .tag = tag.name },
-            .tag_id = @enumFromInt(i),
+            .tag_id = @fromBackingInt(@intCast(i)),
             .arity = arg_vars.len,
         };
     }
@@ -1129,7 +1129,7 @@ fn buildUnionFromTagUnion(
     if (is_open) {
         alternatives[all_tags.items.len] = .{
             .name = .{ .tag = Ident.Idx.NONE }, // Represents "#Open"
-            .tag_id = @enumFromInt(all_tags.items.len),
+            .tag_id = @fromBackingInt(@intCast(all_tags.items.len)),
             .arity = 0,
         };
     }
@@ -1541,7 +1541,7 @@ fn isUnresolvedUnboundRigid(rigid: types.Rigid) bool {
 fn appendUniqueVar(gpa: std.mem.Allocator, out: *std.ArrayList(Var), var_: Var) Allocator.Error!void {
     const resolved_var = var_;
     for (out.items) |existing| {
-        if (@intFromEnum(existing) == @intFromEnum(resolved_var)) return;
+        if (@backingInt(existing) == @backingInt(resolved_var)) return;
     }
     try out.append(gpa, resolved_var);
 }
@@ -2149,7 +2149,7 @@ fn getCtorArgTypes(type_store: *TypeStore, builtin_idents: BuiltinIdents, type_v
             var current_tags = tag_union.tags;
             var current_ext = tag_union.ext;
             var current_offset: usize = 0;
-            const target_idx = @intFromEnum(tag_id);
+            const target_idx = @backingInt(tag_id);
 
             // Track seen extension variables to detect cycles
             var seen_exts = std.AutoHashMap(Var, void).init(type_store.gpa);
@@ -2691,7 +2691,7 @@ fn specializeByConstructorSketched(
         switch (first) {
             .ctor => |c| {
                 const pat_tag_id = tag_ids_by_name.get(c.tag_name.idx) orelse continue;
-                if (@intFromEnum(pat_tag_id) == @intFromEnum(tag_id)) {
+                if (@backingInt(pat_tag_id) == @backingInt(tag_id)) {
                     const new_row = try allocator.alloc(UnresolvedPattern, c.args.len + rest.len);
                     @memcpy(new_row[0..c.args.len], c.args);
                     @memcpy(new_row[c.args.len..], rest);
@@ -2699,7 +2699,7 @@ fn specializeByConstructorSketched(
                 }
             },
             .known_ctor => |kc| {
-                if (@intFromEnum(kc.tag_id) == @intFromEnum(tag_id)) {
+                if (@backingInt(kc.tag_id) == @backingInt(tag_id)) {
                     // For records, we need to match fields by name, not position.
                     // Different patterns may destructure different fields.
                     if (target_fields) |targets| {
@@ -4029,7 +4029,7 @@ pub fn checkMatch(
     for (ext_vars_to_close.items) |close_var| {
         var dominated = false;
         for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
+            if (@backingInt(close_var) == @backingInt(keep_var)) {
                 dominated = true;
                 break;
             }
@@ -4131,7 +4131,7 @@ pub fn checkDestructure(
     for (ext_vars_to_close.items) |close_var| {
         var dominated = false;
         for (ext_vars_to_keep_open.items) |keep_var| {
-            if (@intFromEnum(close_var) == @intFromEnum(keep_var)) {
+            if (@backingInt(close_var) == @backingInt(keep_var)) {
                 dominated = true;
                 break;
             }
@@ -4374,7 +4374,7 @@ fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error |
     var idents = try Ident.Store.initCapacity(std.testing.allocator, 1);
     defer idents.deinit(std.testing.allocator);
     const name = try idents.insert(std.testing.allocator, try Ident.from_bytes("field"));
-    const vars = [_]Var{@enumFromInt(1)};
+    const vars = [_]Var{@fromBackingInt(1)};
     var arena = base.SingleThreadArena.init(gpa);
     var transferred = false;
     defer if (!transferred) arena.deinit();
@@ -4426,7 +4426,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4509,7 +4509,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
 /// The module every type in these type-store fixtures is declared in. The
 /// fixtures have no module environment; the type store only compares module
 /// identities, so any one identity serves.
-const fixture_module: base.ModuleIdentity.Idx = @enumFromInt(1);
+const fixture_module: base.ModuleIdentity.Idx = @fromBackingInt(1);
 
 test "nominal views all inhabitedness modes solve recursive diamonds in graph-linear work" {
     try inhabitedGraphDiamondCase(std.testing.allocator, 128, false);
@@ -4527,7 +4527,7 @@ fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Er
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4617,7 +4617,7 @@ test "nominal views inhabitedness modes preserve leaf and row-cycle policies" {
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4725,7 +4725,7 @@ test "nominal views shared row tails expand once in either traversal order" {
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4774,7 +4774,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |item| {
+    inline for (base.structFields(BuiltinIdents)) |item| {
         if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4880,7 +4880,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
     var cache = NominalOpenCache.init(analysis_allocator);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |item| {
+    inline for (base.structFields(BuiltinIdents)) |item| {
         if (item.type == Ident.Idx) @field(test_idents, item.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -4963,7 +4963,8 @@ test "record tail blockers follow aliased required fields and preserve row polic
 }
 
 test "record tail blockers clean up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, recordTailBlockersCase, .{@as(usize, 2)});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), recordTailBlockersCase, .{@as(usize, 2)});
 }
 
 test "nominal views record tail emptiness removes impossible source constructor" {
@@ -4990,7 +4991,7 @@ test "nominal views inhabitedness graph publishes final recursive answers" {
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -5019,7 +5020,7 @@ test "inhabitedness memo caches complete roots not recursive assumptions" {
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;
@@ -5050,7 +5051,7 @@ test "inhabitedness memo preserves shared DAG queries and assumption isolation" 
     var cache = NominalOpenCache.init(gpa);
     defer cache.deinit();
     var test_idents: BuiltinIdents = undefined;
-    inline for (std.meta.fields(BuiltinIdents)) |field| {
+    inline for (base.structFields(BuiltinIdents)) |field| {
         if (field.type == Ident.Idx) @field(test_idents, field.name) = sentinel;
     }
     test_idents.idents = &idents;

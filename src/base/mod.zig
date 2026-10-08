@@ -46,6 +46,7 @@ pub const ModuleIdentity = @import("module_identity.zig");
 /// that already depend on `base`.
 pub const SingleThreadArena = @import("collections").SingleThreadArena;
 
+pub const DeterministicAllocator = @import("DeterministicAllocator.zig");
 pub const memory_fault = @import("memory_fault.zig");
 pub const process_memory = @import("process_memory.zig");
 pub const signal_handler = @import("signal_handler.zig");
@@ -100,6 +101,7 @@ test {
     std.testing.refAllDecls(cpu_count);
     std.testing.refAllDecls(TypeDigestHasher);
     std.testing.refAllDecls(@import("sha256.zig"));
+    std.testing.refAllDecls(DeterministicAllocator);
     std.testing.refAllDecls(module_path_mod);
     std.testing.refAllDecls(@import("roc_version.zig"));
 }
@@ -203,4 +205,17 @@ test "base tests" {
     std.testing.refAllDecls(@import("target.zig"));
     std.testing.refAllDecls(@import("url.zig"));
     std.testing.refAllDecls(@import("doc_comment.zig"));
+}
+
+/// A struct field's name and type, as `std.meta.fields` once reported them.
+pub const StructFieldInfo = struct { name: [:0]const u8, type: type };
+
+/// The fields of struct type `T` for comptime iteration.
+pub fn structFields(comptime T: type) [@typeInfo(T).@"struct".field_names.len]StructFieldInfo {
+    const info = @typeInfo(T).@"struct";
+    var fields: [info.field_names.len]StructFieldInfo = undefined;
+    for (info.field_names, info.field_types, 0..) |name, field_type, index| {
+        fields[index] = .{ .name = name, .type = field_type };
+    }
+    return fields;
 }
