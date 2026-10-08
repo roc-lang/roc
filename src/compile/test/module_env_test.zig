@@ -31,14 +31,14 @@ test "ModuleEnv.Serialized roundtrip" {
     original.ensureExposedSorted(gpa);
 
     try original.common.calcLineStarts(gpa);
-    try original.recordRejectedStaticDispatch(@enumFromInt(1234));
-    try original.recordBindingScheme(@enumFromInt(42));
-    try original.recordBindingScheme(@enumFromInt(7));
-    try original.recordBindingScheme(@enumFromInt(42));
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34, false, false);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(7), @enumFromInt(91), @enumFromInt(56), 78, true, true);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(13), 35, false, false);
-    try original.recordBindingSchemeCodecRequirement(@enumFromInt(42), @enumFromInt(90), @enumFromInt(12), 34, false, false);
+    try original.recordRejectedStaticDispatch(@fromBackingInt(@intCast(1234)));
+    try original.recordBindingScheme(@fromBackingInt(@intCast(42)));
+    try original.recordBindingScheme(@fromBackingInt(@intCast(7)));
+    try original.recordBindingScheme(@fromBackingInt(@intCast(42)));
+    try original.recordBindingSchemeCodecRequirement(@fromBackingInt(@intCast(42)), @fromBackingInt(@intCast(90)), @fromBackingInt(@intCast(12)), 34, false, false);
+    try original.recordBindingSchemeCodecRequirement(@fromBackingInt(@intCast(7)), @fromBackingInt(@intCast(91)), @fromBackingInt(@intCast(56)), 78, true, true);
+    try original.recordBindingSchemeCodecRequirement(@fromBackingInt(@intCast(42)), @fromBackingInt(@intCast(90)), @fromBackingInt(@intCast(13)), 35, false, false);
+    try original.recordBindingSchemeCodecRequirement(@fromBackingInt(@intCast(42)), @fromBackingInt(@intCast(90)), @fromBackingInt(@intCast(12)), 34, false, false);
     original.top_level_value_defs = .{ .span = .{ .start = 17, .len = 2 } };
     original.value_binding_defs = .{ .span = .{ .start = 23, .len = 4 } };
     _ = try original.provided_low_level_defs.append(gpa, .{
@@ -51,7 +51,7 @@ test "ModuleEnv.Serialized roundtrip" {
     });
 
     const import_json = try original.imports.getOrPut(gpa, &original.common, "json.Json");
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(try original.imports.getOrPut(gpa, &original.common, "core.List")));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(try original.imports.getOrPut(gpa, &original.common, "core.List")));
     const import_json_duplicate = try original.imports.getOrPut(gpa, &original.common, "json.Json");
     try std.testing.expectEqual(import_json, import_json_duplicate);
     try std.testing.expectEqual(@as(usize, 2), original.imports.imports.len());
@@ -112,31 +112,31 @@ test "ModuleEnv.Serialized roundtrip" {
     try std.testing.expectEqualStrings("core.List", env.common.strings.get(env.imports.imports.items.items[1]));
     try std.testing.expectEqual(@as(usize, 2), env.imports.map.count());
     try std.testing.expectEqual(@as(usize, 1), env.rejectedStaticDispatches().len);
-    try std.testing.expectEqual(@as(types.Var, @enumFromInt(1234)), env.rejectedStaticDispatches()[0].fnVar());
-    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(7)));
-    try std.testing.expect(env.nodeIsBindingScheme(@enumFromInt(42)));
-    try std.testing.expect(!env.nodeIsBindingScheme(@enumFromInt(41)));
+    try std.testing.expectEqual(@as(types.Var, @fromBackingInt(@intCast(1234))), env.rejectedStaticDispatches()[0].fnVar());
+    try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(7))));
+    try std.testing.expect(env.nodeIsBindingScheme(@fromBackingInt(@intCast(42))));
+    try std.testing.expect(!env.nodeIsBindingScheme(@fromBackingInt(@intCast(41))));
     try std.testing.expectEqual(@as(usize, 2), env.binding_schemes.items.items.len);
-    const codec_requirements_7 = env.bindingSchemeCodecRequirementsForNode(@enumFromInt(7));
+    const codec_requirements_7 = env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(7)));
     try std.testing.expectEqual(@as(usize, 1), codec_requirements_7.len);
     try std.testing.expectEqual(@as(u32, 91), codec_requirements_7[0].scheme_root);
     try std.testing.expectEqual(@as(u32, 56), codec_requirements_7[0].receiver_var);
     try std.testing.expectEqual(@as(u32, 78), codec_requirements_7[0].constraint_index);
     try std.testing.expectEqual(@as(u32, 1), codec_requirements_7[0].requires_instantiation);
     try std.testing.expectEqual(@as(u32, 1), codec_requirements_7[0].is_synthetic);
-    const codec_requirements_42 = env.bindingSchemeCodecRequirementsForNode(@enumFromInt(42));
+    const codec_requirements_42 = env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(42)));
     try std.testing.expectEqual(@as(usize, 2), codec_requirements_42.len);
     try std.testing.expectEqual(@as(u32, 90), codec_requirements_42[0].scheme_root);
     try std.testing.expectEqual(@as(u32, 12), codec_requirements_42[0].receiver_var);
     try std.testing.expectEqual(@as(u32, 34), codec_requirements_42[0].constraint_index);
     try std.testing.expectEqual(@as(u32, 13), codec_requirements_42[1].receiver_var);
     try std.testing.expectEqual(@as(u32, 35), codec_requirements_42[1].constraint_index);
-    try std.testing.expectEqual(@as(usize, 0), env.bindingSchemeCodecRequirementsForNode(@enumFromInt(41)).len);
+    try std.testing.expectEqual(@as(usize, 0), env.bindingSchemeCodecRequirementsForNode(@fromBackingInt(@intCast(41))).len);
     try std.testing.expectEqual(original.top_level_value_defs.span, env.top_level_value_defs.span);
     try std.testing.expectEqual(original.value_binding_defs.span, env.value_binding_defs.span);
-    try std.testing.expectEqual(base.LowLevel.num_int_add_wrap, env.providedLowLevelForDef(@enumFromInt(7)).?);
-    try std.testing.expectEqual(base.LowLevel.num_bitwise_xor, env.providedLowLevelForDef(@enumFromInt(11)).?);
-    try std.testing.expect(env.providedLowLevelForDef(@enumFromInt(9)) == null);
+    try std.testing.expectEqual(base.LowLevel.num_int_add_wrap, env.providedLowLevelForDef(@fromBackingInt(@intCast(7))).?);
+    try std.testing.expectEqual(base.LowLevel.num_bitwise_xor, env.providedLowLevelForDef(@fromBackingInt(@intCast(11))).?);
+    try std.testing.expect(env.providedLowLevelForDef(@fromBackingInt(@intCast(9))) == null);
 
     // Verify original data before serialization was correct
     // initCIRFields inserts the module name ("TestModule") into the interner, so we have 3 total: hello, world, TestModule
@@ -207,7 +207,7 @@ test "ModuleEnv.Serialized roundtrip" {
     // uses the serialized string index rather than reinterning its bytes.
     const json_string_idx = env.imports.imports.items.items[0];
     const import_json_cached = env.imports.map.get(json_string_idx).?;
-    try testing.expectEqual(@as(u32, 0), @intFromEnum(import_json_cached));
+    try testing.expectEqual(@as(u32, 0), @backingInt(import_json_cached));
 }
 
 test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
@@ -224,17 +224,17 @@ test "ModuleEnv.Serialized finalizes method metadata tables before writing" {
     const set_ident = try original.insertIdent(Ident.for_text("set"));
     const get_qualified = try original.insertIdent(Ident.for_text("Local.get"));
     const set_qualified = try original.insertIdent(Ident.for_text("Local.set"));
-    const owner_stmt: CIR.Statement.Idx = @enumFromInt(1);
+    const owner_stmt: CIR.Statement.Idx = @fromBackingInt(@intCast(1));
 
     try original.registerMethodIdentForOwner(owner_stmt, set_ident, set_qualified);
     try original.registerMethodDefForOwner(owner_stmt, set_ident, .{
-        .type_node_idx = @enumFromInt(2),
-        .def_idx = @enumFromInt(2),
+        .type_node_idx = @fromBackingInt(@intCast(2)),
+        .def_idx = @fromBackingInt(@intCast(2)),
     });
     try original.registerMethodIdentForOwner(owner_stmt, get_ident, get_qualified);
     try original.registerMethodDefForOwner(owner_stmt, get_ident, .{
-        .type_node_idx = @enumFromInt(1),
-        .def_idx = @enumFromInt(1),
+        .type_node_idx = @fromBackingInt(@intCast(1)),
+        .def_idx = @fromBackingInt(@intCast(1)),
     });
     original.finalizeMethodTables();
 
@@ -267,7 +267,7 @@ test "ModuleEnv.Serialized roundtrip preserves file dependency states" {
     try original.initCIRFields("Test");
 
     const present_idx = try original.recordFileDependency("data.txt", 0, 0);
-    const present_hash = [_]u8{0x11} ** 32;
+    const present_hash = @as([32]u8, @splat(0x11));
     original.setFileDependencyContentHash(present_idx, present_hash);
 
     const missing_idx = try original.recordFileDependency("missing.txt", 0, 0);
@@ -319,10 +319,10 @@ test "ModuleEnv pushExprTypesToSExprTree extracts and formats types" {
 
     const str_literal_idx = try env.insertString("hello");
     const str_ident = try env.insertIdent(Ident.for_text("Str"));
-    const builtin_ident = try env.internModuleIdentity(&([_]u8{0x66} ** 32), Ident.Idx.NONE);
+    const builtin_ident = try env.internModuleIdentity(&(@as([32]u8, @splat(0x66))), Ident.Idx.NONE);
 
     const segment_idx = try env.addExpr(.{ .e_str_segment = .{ .literal = str_literal_idx } }, base.Region.from_raw_offsets(0, 5));
-    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @intFromEnum(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
+    const expr_idx = try env.addExpr(.{ .e_str = .{ .span = Expr.Span{ .span = base.DataSpan{ .start = @backingInt(segment_idx), .len = 1 } } } }, base.Region.from_raw_offsets(0, 5));
 
     const segment_var = try env.types.freshFromContent(.err);
     try std.testing.expectEqual(ModuleEnv.varFrom(segment_idx), segment_var);

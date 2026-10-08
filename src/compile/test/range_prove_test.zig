@@ -56,7 +56,7 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
@@ -177,7 +177,7 @@ fn countArithmeticShape(store: *const lir.LirStore, layouts: *const layout.Store
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.c.getenv("RANGE_PROVE_DUMP_ALL") != null) std.debug.print("\n===== arithmetic candidate =====\n{s}\n", .{text});
         const selected = switch (arithmetic_selection) {
@@ -241,7 +241,7 @@ fn countMeetShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
         const selected = switch (meet_selection) {
@@ -275,7 +275,7 @@ fn countColdDefaults(store: *const lir.LirStore, layouts: *const layout.Store) h
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
         cold_shape = .{ .found = true, .cold_defaults = std.mem.count(u8, text, "default_cold=true") };
@@ -300,7 +300,7 @@ fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_with_capacity") == 0) continue;
         fill_shape = .{
@@ -425,7 +425,7 @@ fn countSearchShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0 or std.mem.count(u8, text, "i16_to_u64_wrap") == 0) continue;
         search_shape = .{
@@ -712,7 +712,7 @@ fn countSkipShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0 or std.mem.count(u8, text, "list_set") == 0) continue;
         skip_shape = .{
@@ -1021,7 +1021,7 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") < 3) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
@@ -1049,7 +1049,7 @@ fn countSimdConcatCounts(store: *const lir.LirStore, layouts: *const layout.Stor
     defer std.testing.allocator.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(std.testing.allocator, store, layouts, @enumFromInt(index), &writer);
+        try lir.DebugPrint.writeProc(std.testing.allocator, store, layouts, @fromBackingInt(@intCast(index)), &writer);
         simd_concat_ops += std.mem.count(u8, writer.buffered(), "low_level simd_concat_shift_bytes(");
         simd_constant_concats += std.mem.count(u8, writer.buffered(), " concat_count=");
     }
@@ -1116,7 +1116,7 @@ var guarded_proc_survives: bool = false;
 fn inspectGuardedWrapper(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
     guarded_proc_survives = false;
     for (0..store.procSpecCount()) |index| {
-        if (store.procDebugName(@enumFromInt(index))) |name| {
+        if (store.procDebugName(@fromBackingInt(@intCast(index)))) |name| {
             if (std.mem.eql(u8, name, "guarded")) guarded_proc_survives = true;
         }
     }
@@ -1190,7 +1190,7 @@ fn countSharedGetShape(store: *const lir.LirStore, layouts: *const layout.Store)
     const buf = try gpa.alloc(u8, 1 << 20);
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "read")) continue;
         var writer = std.Io.Writer.fixed(buf);
@@ -1261,7 +1261,7 @@ fn countMarkedShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, marked_op) == 0) continue;
         marked_shape = .{
@@ -1747,7 +1747,7 @@ fn countBareCompareShape(store: *const lir.LirStore, layouts: *const layout.Stor
     const buf = try gpa.alloc(u8, 1 << 22);
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(index)));
         var writer = std.Io.Writer.fixed(buf);
         try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
         const text = writer.buffered();

@@ -420,13 +420,13 @@ pub const MethodOwner = extern struct {
     /// An owner declared in another module, named by its content identity as
     /// this environment interned it.
     pub fn initImported(identity: base.ModuleIdentity.Idx, owner: CIR.Statement.Idx) MethodOwner {
-        return .{ .owner_module = @intFromEnum(identity), .owner = owner };
+        return .{ .owner_module = @backingInt(identity), .owner = owner };
     }
 
     /// The owning module's content identity, or null when it is this one.
     pub fn moduleIdentity(self: MethodOwner) ?base.ModuleIdentity.Idx {
         if (self.owner_module == self_module) return null;
-        return @enumFromInt(self.owner_module);
+        return @fromBackingInt(@intCast(self.owner_module));
     }
 
     pub fn eql(a: MethodOwner, b: MethodOwner) bool {
@@ -466,8 +466,8 @@ pub const MethodKey = extern struct {
             return if (a_module < b_module) .lt else .gt;
         }
 
-        const a_owner = @intFromEnum(a.owner);
-        const b_owner = @intFromEnum(b.owner);
+        const a_owner = @backingInt(a.owner);
+        const b_owner = @backingInt(b.owner);
         if (a_owner != b_owner) {
             return if (a_owner < b_owner) .lt else .gt;
         }
@@ -746,7 +746,7 @@ pub const RejectedStaticDispatch = extern struct {
     pub const SafeList = collections.SafeList(@This());
 
     pub fn fnVar(self: RejectedStaticDispatch) TypeVar {
-        return @enumFromInt(self.constraint_fn_var);
+        return @fromBackingInt(@intCast(self.constraint_fn_var));
     }
 };
 
@@ -763,11 +763,11 @@ pub const InspectOverrideInstance = extern struct {
     pub const SafeList = collections.SafeList(@This());
 
     pub fn def(self: InspectOverrideInstance) CIR.Def.Idx {
-        return @enumFromInt(self.def_idx);
+        return @fromBackingInt(@intCast(self.def_idx));
     }
 
     pub fn callableVar(self: InspectOverrideInstance) TypeVar {
-        return @enumFromInt(self.callable_var);
+        return @fromBackingInt(@intCast(self.callable_var));
     }
 };
 
@@ -811,18 +811,18 @@ pub const NumericSuffixTarget = extern struct {
 
     /// Decode the stored suffix target.
     pub fn target(self: NumericSuffixTarget) Target {
-        return switch (@as(Kind, @enumFromInt(self.kind))) {
-            .builtin => .{ .builtin = @enumFromInt(self.data1) },
-            .local => .{ .local = @enumFromInt(self.data1) },
+        return switch (@as(Kind, @fromBackingInt(@intCast(self.kind)))) {
+            .builtin => .{ .builtin = @fromBackingInt(@intCast(self.data1)) },
+            .local => .{ .local = @fromBackingInt(@intCast(self.data1)) },
             .external => .{ .external = .{
-                .import_idx = @enumFromInt(self.data1),
+                .import_idx = @fromBackingInt(@intCast(self.data1)),
                 .target_node_idx = self.data2,
             } },
             .external_identity => .{ .external_identity = .{
-                .module_identity = @enumFromInt(self.data1),
+                .module_identity = @fromBackingInt(@intCast(self.data1)),
                 .target_node_idx = self.data2,
             } },
-            .pending => .{ .pending = @enumFromInt(self.data1) },
+            .pending => .{ .pending = @fromBackingInt(@intCast(self.data1)) },
             .invalid => .invalid,
         };
     }
@@ -1364,7 +1364,7 @@ pub const DeferredImportRef = extern struct {
     /// goes through no module import.
     pub fn importIdx(self: @This()) ?CIR.Import.Idx {
         if (self.import_idx == no_import) return null;
-        return @enumFromInt(self.import_idx);
+        return @fromBackingInt(@intCast(self.import_idx));
     }
 
     /// The method registration this entry completes, or null when it
@@ -1372,8 +1372,8 @@ pub const DeferredImportRef = extern struct {
     pub fn methodBinding(self: @This()) ?MethodBinding {
         if (self.method_binding_type_node == no_method_binding) return null;
         return .{
-            .type_node_idx = @enumFromInt(self.method_binding_type_node),
-            .def_idx = @enumFromInt(self.method_binding_def),
+            .type_node_idx = @fromBackingInt(@intCast(self.method_binding_type_node)),
+            .def_idx = @fromBackingInt(@intCast(self.method_binding_def)),
         };
     }
 };
@@ -1531,7 +1531,7 @@ pub fn setTopLevelDemandDependencies(
 /// Return the producer-authored low-level implementation for `def_idx`.
 pub fn providedLowLevelForDef(self: *const Self, def_idx: CIR.Def.Idx) ?base.LowLevel {
     const entries = self.provided_low_level_defs.items.items;
-    const wanted: u32 = @intFromEnum(def_idx);
+    const wanted: u32 = @backingInt(def_idx);
     var low: usize = 0;
     var high: usize = entries.len;
     while (low < high) {
@@ -1638,7 +1638,7 @@ pub fn fileDependenciesSettled(self: *const Self) bool {
 
 /// Whether one recorded file import has been read.
 pub fn fileDependencySettled(self: *const Self, idx: FileDependency.SafeList.Idx) bool {
-    return self.file_dependencies.items.items[@intFromEnum(idx)].state != .pending;
+    return self.file_dependencies.items.items[@backingInt(idx)].state != .pending;
 }
 
 /// Record a relative file dependency before its final read state is known.
@@ -1648,7 +1648,7 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset
         .relative_path = path_idx,
         .state = .pending,
         ._padding = .{ 0, 0, 0 },
-        .content_hash = [_]u8{0} ** 32,
+        .content_hash = @as([32]u8, @splat(0)),
         .start_offset = start_offset,
         .end_offset = end_offset,
     });
@@ -1656,21 +1656,21 @@ pub fn recordFileDependency(self: *Self, relative_path: []const u8, start_offset
 
 /// Mark a previously recorded file dependency as missing.
 pub fn setFileDependencyMissing(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
     dep.state = .missing;
-    dep.content_hash = [_]u8{0} ** 32;
+    dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Mark a previously recorded file dependency as unreadable.
 pub fn setFileDependencyUnreadable(self: *Self, idx: FileDependency.SafeList.Idx) void {
-    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
     dep.state = .unreadable;
-    dep.content_hash = [_]u8{0} ** 32;
+    dep.content_hash = @as([32]u8, @splat(0));
 }
 
 /// Set the content hash for a previously recorded file dependency.
 pub fn setFileDependencyContentHash(self: *Self, idx: FileDependency.SafeList.Idx, content_hash: [32]u8) void {
-    const dep = &self.file_dependencies.items.items[@intFromEnum(idx)];
+    const dep = &self.file_dependencies.items.items[@backingInt(idx)];
     dep.state = .present;
     dep.content_hash = content_hash;
 }
@@ -1803,14 +1803,14 @@ pub fn publishScratchDiagnosticsFrom(self: *Self, start: u32) std.mem.Allocator.
     if (!existing_at_tail) {
         const existing = self.store.sliceDiagnostics(self.diagnostics);
         for (existing) |diagnostic_idx| {
-            _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
+            _ = self.store.index_data.appendAssumeCapacity(@backingInt(diagnostic_idx));
         }
     }
 
     var i: u32 = start;
     while (i < scratch_top) : (i += 1) {
         const diagnostic_idx = scratch.diagnostics.items.items[@intCast(i)];
-        _ = self.store.index_data.appendAssumeCapacity(@intFromEnum(diagnostic_idx));
+        _ = self.store.index_data.appendAssumeCapacity(@backingInt(diagnostic_idx));
     }
 
     scratch.diagnostics.clearFrom(start);
@@ -3935,7 +3935,7 @@ pub const Serialized = extern struct {
         self.display_module_name_idx_padding = 0;
         try self.module_identities.serialize(&env.module_identities, allocator, writer);
         try self.module_identity_displays.serialize(&env.module_identity_displays, allocator, writer);
-        self.self_module_identity_reserved = @intFromEnum(env.self_module_identity);
+        self.self_module_identity_reserved = @backingInt(env.self_module_identity);
         self.self_module_identity_padding = 0;
         self.evaluation_order_reserved = 0;
         self.top_level_demand_dependencies_ready = env.top_level_demand_dependencies_ready;
@@ -3945,7 +3945,7 @@ pub const Serialized = extern struct {
         self.idents = env.idents;
         // import_mapping is runtime-only and initialized fresh during deserialization
         self.import_mapping_reserved = .{ 0, 0, 0, 0, 0, 0 };
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             std.debug.assert(env.method_idents.sorted);
             std.debug.assert(env.method_idents.deduplicated);
             std.debug.assert(env.method_defs.sorted);
@@ -4016,7 +4016,7 @@ pub const Serialized = extern struct {
             .qualified_module_name = "",
             .module_identities = self.module_identities.deserialize(base_addr),
             .module_identity_displays = self.module_identity_displays.deserializeInto(base_addr),
-            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
             .diagnostics = self.diagnostics,
             .store = self.store.deserializeInto(base_addr, gpa),
             .evaluation_order = null,
@@ -4095,7 +4095,7 @@ pub const Serialized = extern struct {
             .module_identities = self.module_identities.deserialize(base_addr),
             // Copy so the display list can grow if runtime type copies add identities.
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
             .diagnostics = self.diagnostics,
             // Use deserializeWithCopy for NodeStore so regions can be extended
             .store = try self.store.deserializeWithCopy(base_addr, gpa),
@@ -4188,7 +4188,7 @@ pub const Serialized = extern struct {
             .qualified_module_name = "",
             .module_identities = module_identities,
             .module_identity_displays = try self.module_identity_displays.deserializeWithCopy(base_addr, gpa),
-            .self_module_identity = @enumFromInt(self.self_module_identity_reserved),
+            .self_module_identity = @fromBackingInt(@intCast(self.self_module_identity_reserved)),
             .diagnostics = self.diagnostics,
             .store = try self.store.deserializeOwned(base_addr, gpa),
             .evaluation_order = null,
@@ -4226,7 +4226,7 @@ pub const Serialized = extern struct {
 /// identifier. The basename is supplied by the cache consumer because its
 /// slice is not relocatable; it must never be replaced with a logical path.
 fn debugAssertModuleBasename(self: *const Self) void {
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.assert(!self.display_module_name_idx.isNone());
         std.debug.assert(std.mem.eql(
             u8,
@@ -4238,12 +4238,12 @@ fn debugAssertModuleBasename(self: *const Self) void {
 
 /// Convert a type into a node index
 pub fn nodeIdxFrom(idx: anytype) Node.Idx {
-    return @enumFromInt(@intFromEnum(idx));
+    return @fromBackingInt(@intCast(@backingInt(idx)));
 }
 
 /// Convert a type into a type var
 pub fn varFrom(idx: anytype) TypeVar {
-    return @enumFromInt(@intFromEnum(idx));
+    return @fromBackingInt(@intCast(@backingInt(idx)));
 }
 
 /// Record the checked iterator dispatch functions for a semantic `for` loop.
@@ -4260,19 +4260,19 @@ pub fn recordForLoopDispatchPlan(
     next_method: Ident.Idx,
     step_topology: IteratorStepTopology,
 ) std.mem.Allocator.Error!void {
-    const raw_node: u32 = @intFromEnum(node_idx);
-    const raw_pattern: u32 = @intFromEnum(pattern_idx);
-    const raw_iterable: u32 = @intFromEnum(iterable_idx);
+    const raw_node: u32 = @backingInt(node_idx);
+    const raw_pattern: u32 = @backingInt(pattern_idx);
+    const raw_iterable: u32 = @backingInt(iterable_idx);
     for (self.for_loop_dispatch_plans.items.items) |*plan| {
         if (plan.node_idx != raw_node) continue;
         plan.* = .{
             .node_idx = raw_node,
             .pattern_idx = raw_pattern,
             .iterable_idx = raw_iterable,
-            .iterator_var = @intFromEnum(iterator_var),
-            .step_var = @intFromEnum(step_var),
-            .iter_fn_var = @intFromEnum(iter_fn_var),
-            .next_fn_var = @intFromEnum(next_fn_var),
+            .iterator_var = @backingInt(iterator_var),
+            .step_var = @backingInt(step_var),
+            .iter_fn_var = @backingInt(iter_fn_var),
+            .next_fn_var = @backingInt(next_fn_var),
             .iter_method_ident = @bitCast(iter_method),
             .next_method_ident = @bitCast(next_method),
             .step_topology = step_topology,
@@ -4283,10 +4283,10 @@ pub fn recordForLoopDispatchPlan(
         .node_idx = raw_node,
         .pattern_idx = raw_pattern,
         .iterable_idx = raw_iterable,
-        .iterator_var = @intFromEnum(iterator_var),
-        .step_var = @intFromEnum(step_var),
-        .iter_fn_var = @intFromEnum(iter_fn_var),
-        .next_fn_var = @intFromEnum(next_fn_var),
+        .iterator_var = @backingInt(iterator_var),
+        .step_var = @backingInt(step_var),
+        .iter_fn_var = @backingInt(iter_fn_var),
+        .next_fn_var = @backingInt(next_fn_var),
         .iter_method_ident = @bitCast(iter_method),
         .next_method_ident = @bitCast(next_method),
         .step_topology = step_topology,
@@ -4310,7 +4310,7 @@ pub fn recordNumeralLiteral(
     had_decimal_point: bool,
     is_materialized: bool,
 ) std.mem.Allocator.Error!void {
-    const raw_node: u32 = @intFromEnum(node_idx);
+    const raw_node: u32 = @backingInt(node_idx);
     const digits_start: u32 = @intCast(self.numeral_digit_bytes.len());
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, before);
     _ = try self.numeral_digit_bytes.appendSlice(self.gpa, after);
@@ -4331,7 +4331,7 @@ pub fn recordNumeralLiteral(
 
 /// Return exact base-256 digits for a numeric source node.
 pub fn numeralLiteralForNode(self: *const Self, node_idx: Node.Idx) ?NumeralLiteral {
-    return findSortedByNode(NumeralLiteral, self.numeral_literals.items.items, @intFromEnum(node_idx));
+    return findSortedByNode(NumeralLiteral, self.numeral_literals.items.items, @backingInt(node_idx));
 }
 
 /// First index whose `node_idx` is >= `raw_node` in a node-sorted table.
@@ -4401,7 +4401,7 @@ pub fn recordBindingScheme(self: *Self, node_idx: Node.Idx) std.mem.Allocator.Er
         BindingScheme,
         &self.binding_schemes,
         self.gpa,
-        .{ .node_idx = @intFromEnum(node_idx) },
+        .{ .node_idx = @backingInt(node_idx) },
     );
 }
 
@@ -4412,7 +4412,7 @@ pub fn nodeIsBindingScheme(self: *const Self, node_idx: Node.Idx) bool {
     return findSortedByNode(
         BindingScheme,
         self.binding_schemes.items.items,
-        @intFromEnum(node_idx),
+        @backingInt(node_idx),
     ) != null;
 }
 
@@ -4429,9 +4429,9 @@ pub fn recordBindingSchemeCodecRequirement(
     is_synthetic: bool,
 ) std.mem.Allocator.Error!void {
     const entry = BindingSchemeCodecRequirement{
-        .node_idx = @intFromEnum(node_idx),
-        .scheme_root = @intFromEnum(scheme_root),
-        .receiver_var = @intFromEnum(receiver_var),
+        .node_idx = @backingInt(node_idx),
+        .scheme_root = @backingInt(scheme_root),
+        .receiver_var = @backingInt(receiver_var),
         .constraint_index = constraint_index,
         .requires_instantiation = @intFromBool(requires_instantiation),
         .is_synthetic = @intFromBool(is_synthetic),
@@ -4470,7 +4470,7 @@ pub fn bindingSchemeCodecRequirementsForNode(
     node_idx: Node.Idx,
 ) []const BindingSchemeCodecRequirement {
     const entries = self.binding_scheme_codec_requirements.items.items;
-    const raw_node = @intFromEnum(node_idx);
+    const raw_node = @backingInt(node_idx);
     const start = sortedNodeSlot(BindingSchemeCodecRequirement, entries, raw_node);
     const end = sortedNodeEndSlot(BindingSchemeCodecRequirement, entries, raw_node);
     return entries[start..end];
@@ -4517,7 +4517,7 @@ pub fn recordNumeralDispatchPlan(
         .numeral,
         target_var,
         fn_var,
-        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+        if (pattern_failure_owner) |expr_idx| @backingInt(expr_idx) else null,
     );
 }
 
@@ -4549,7 +4549,7 @@ pub fn recordQuoteDispatchPlan(
         .quote,
         target_var,
         fn_var,
-        if (pattern_failure_owner) |expr_idx| @intFromEnum(expr_idx) else null,
+        if (pattern_failure_owner) |expr_idx| @backingInt(expr_idx) else null,
     );
 }
 
@@ -4571,9 +4571,9 @@ pub fn recordSchemeUse(
     }
     _ = try self.scheme_uses.append(self.gpa, .{
         .node_idx = node_idx,
-        .slot_kind = @intFromEnum(slot),
+        .slot_kind = @backingInt(slot),
         .slot_data = slot_data,
-        .scheme_root = @intFromEnum(scheme_root),
+        .scheme_root = @backingInt(scheme_root),
         .pairs_start = pairs_start,
         .pairs_len = @intCast(pairs.len),
     });
@@ -4602,8 +4602,8 @@ pub fn recordGeneratedCodecDerivation(
 ) std.mem.Allocator.Error!void {
     var existing_index: ?usize = null;
     for (self.generated_codec_derivations.items.items, 0..) |existing, index| {
-        if (existing.kind == @intFromEnum(kind) and
-            existing.source_constraint_fn_var == @intFromEnum(source_constraint_fn_var))
+        if (existing.kind == @backingInt(kind) and
+            existing.source_constraint_fn_var == @backingInt(source_constraint_fn_var))
         {
             existing_index = index;
             break;
@@ -4619,21 +4619,21 @@ pub fn recordGeneratedCodecDerivation(
     const calls_start: u32 = @intCast(self.generated_codec_calls.items.items.len);
     _ = try self.generated_codec_calls.appendSlice(self.gpa, calls);
     const derivation = GeneratedCodecDerivation{
-        .kind = @intFromEnum(kind),
-        .source_constraint_fn_var = @intFromEnum(source_constraint_fn_var),
-        .source_runtime_fn_var = @intFromEnum(source_runtime_fn_var),
-        .source_shape_var = @intFromEnum(source_shape_var),
-        .source_body_shape_var = @intFromEnum(source_body_shape_var),
-        .source_encoding_var = @intFromEnum(source_encoding_var),
-        .source_state_var = @intFromEnum(source_state_var),
-        .source_error_var = @intFromEnum(source_error_var),
-        .constraint_fn_var = @intFromEnum(constraint_fn_var),
-        .runtime_fn_var = @intFromEnum(runtime_fn_var),
-        .shape_var = @intFromEnum(shape_var),
-        .body_shape_var = @intFromEnum(body_shape_var),
-        .encoding_var = @intFromEnum(encoding_var),
-        .state_var = @intFromEnum(state_var),
-        .error_var = @intFromEnum(error_var),
+        .kind = @backingInt(kind),
+        .source_constraint_fn_var = @backingInt(source_constraint_fn_var),
+        .source_runtime_fn_var = @backingInt(source_runtime_fn_var),
+        .source_shape_var = @backingInt(source_shape_var),
+        .source_body_shape_var = @backingInt(source_body_shape_var),
+        .source_encoding_var = @backingInt(source_encoding_var),
+        .source_state_var = @backingInt(source_state_var),
+        .source_error_var = @backingInt(source_error_var),
+        .constraint_fn_var = @backingInt(constraint_fn_var),
+        .runtime_fn_var = @backingInt(runtime_fn_var),
+        .shape_var = @backingInt(shape_var),
+        .body_shape_var = @backingInt(body_shape_var),
+        .encoding_var = @backingInt(encoding_var),
+        .state_var = @backingInt(state_var),
+        .error_var = @backingInt(error_var),
         .calls_start = calls_start,
         .calls_len = @intCast(calls.len),
     };
@@ -4647,7 +4647,7 @@ pub fn recordGeneratedCodecDerivation(
 /// Persist one checker-rejected static-dispatch obligation.
 pub fn recordRejectedStaticDispatch(self: *Self, constraint_fn_var: TypeVar) std.mem.Allocator.Error!void {
     _ = try self.rejected_static_dispatches.append(self.gpa, .{
-        .constraint_fn_var = @intFromEnum(constraint_fn_var),
+        .constraint_fn_var = @backingInt(constraint_fn_var),
     });
 }
 
@@ -4659,8 +4659,8 @@ pub fn rejectedStaticDispatches(self: *const Self) []const RejectedStaticDispatc
 /// Persist the use inspection makes of one `to_inspect` method.
 pub fn recordInspectOverrideInstance(self: *Self, def_idx: CIR.Def.Idx, callable_var: TypeVar) std.mem.Allocator.Error!void {
     _ = try self.inspect_override_instances.append(self.gpa, .{
-        .def_idx = @intFromEnum(def_idx),
-        .callable_var = @intFromEnum(callable_var),
+        .def_idx = @backingInt(def_idx),
+        .callable_var = @backingInt(callable_var),
     });
 }
 
@@ -4685,44 +4685,44 @@ pub fn recordNumericSuffixTarget(
     node_idx: Node.Idx,
     target: NumericSuffixTarget.Target,
 ) std.mem.Allocator.Error!void {
-    const raw_node: u32 = @intFromEnum(node_idx);
+    const raw_node: u32 = @backingInt(node_idx);
     const suffix_target = switch (target) {
         .builtin => |num_kind| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixTarget.Kind.builtin),
-            .data1 = @intFromEnum(num_kind),
+            .kind = @backingInt(NumericSuffixTarget.Kind.builtin),
+            .data1 = @backingInt(num_kind),
             .data2 = 0,
         },
         .local => |stmt_idx| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixTarget.Kind.local),
-            .data1 = @intFromEnum(stmt_idx),
+            .kind = @backingInt(NumericSuffixTarget.Kind.local),
+            .data1 = @backingInt(stmt_idx),
             .data2 = 0,
         },
         .external => |external| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixTarget.Kind.external),
-            .data1 = @intFromEnum(external.import_idx),
+            .kind = @backingInt(NumericSuffixTarget.Kind.external),
+            .data1 = @backingInt(external.import_idx),
             .data2 = external.target_node_idx,
         },
         .external_identity => |external| NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixTarget.Kind.external_identity),
-            .data1 = @intFromEnum(external.module_identity),
+            .kind = @backingInt(NumericSuffixTarget.Kind.external_identity),
+            .data1 = @backingInt(external.module_identity),
             .data2 = external.target_node_idx,
         },
         .pending => |ref| blk: {
-            self.deferred_import_refs.items.items[@intFromEnum(ref)].node_idx = raw_node;
+            self.deferred_import_refs.items.items[@backingInt(ref)].node_idx = raw_node;
             break :blk NumericSuffixTarget{
                 .node_idx = raw_node,
-                .kind = @intFromEnum(NumericSuffixTarget.Kind.pending),
-                .data1 = @intFromEnum(ref),
+                .kind = @backingInt(NumericSuffixTarget.Kind.pending),
+                .data1 = @backingInt(ref),
                 .data2 = 0,
             };
         },
         .invalid => NumericSuffixTarget{
             .node_idx = raw_node,
-            .kind = @intFromEnum(NumericSuffixTarget.Kind.invalid),
+            .kind = @backingInt(NumericSuffixTarget.Kind.invalid),
             .data1 = 0,
             .data2 = 0,
         },
@@ -4733,7 +4733,7 @@ pub fn recordNumericSuffixTarget(
 
 /// Return the scope-resolved type target for an explicit numeric suffix.
 pub fn numericSuffixTargetForNode(self: *const Self, node_idx: Node.Idx) ?NumericSuffixTarget {
-    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items.items, @intFromEnum(node_idx));
+    return findSortedByNode(NumericSuffixTarget, self.numeric_suffix_targets.items.items, @backingInt(node_idx));
 }
 
 /// Adds an identifier to the list of exposed items by its identifier index.
@@ -4774,7 +4774,7 @@ pub fn getExposedNodeIndexByStatementIdx(_: *const Self, stmt_idx: CIR.Statement
     // For auto-imported builtin types (Bool, Try, etc.), the statement index
     // IS the node/var index. This is because type declarations get type variables
     // indexed by their statement index, not by their position in arrays.
-    return @intFromEnum(stmt_idx);
+    return @backingInt(stmt_idx);
 }
 
 /// Ensures that the exposed items are sorted by identifier index.
@@ -4784,7 +4784,7 @@ pub fn ensureExposedSorted(self: *Self, allocator: std.mem.Allocator) void {
 
 /// Assert that nodes and regions are in sync
 pub inline fn debugAssertArraysInSync(self: *const Self) void {
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         const cir_nodes = self.store.nodes.items.len;
         const region_nodes = self.store.regions.len();
 
@@ -5022,7 +5022,7 @@ pub fn pushToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *SExprT
         }
 
         for (0..@intCast(self.external_decls.len())) |i| {
-            const external_decl = self.external_decls.get(@enumFromInt(i));
+            const external_decl = self.external_decls.get(@fromBackingInt(@intCast(i)));
             try external_decl.pushToSExprTree(self, tree);
         }
 
@@ -5039,7 +5039,7 @@ pub fn beginSExprNodeAt(self: *const Self, tree: *SExprTree, name: []const u8, i
 
 /// Append region information to an S-expression node for a given index.
 pub fn appendRegionInfoToSExprTree(self: *const Self, tree: *SExprTree, idx: anytype) std.mem.Allocator.Error!void {
-    const region = self.store.getNodeRegion(@enumFromInt(@intFromEnum(idx)));
+    const region = self.store.getNodeRegion(@fromBackingInt(@intCast(@backingInt(idx))));
     try self.appendRegionInfoToSExprTreeFromRegion(tree, region);
 }
 
@@ -5093,7 +5093,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const def_var = varFrom(def_idx);
 
             // Get the region for this definition
-            const pattern_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.pattern));
+            const pattern_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def.pattern)));
             const pattern_region = self.store.getRegionAt(pattern_node_idx);
 
             // Write the type to the buffer
@@ -5227,7 +5227,7 @@ pub fn pushTypesToSExprTree(self: *Self, maybe_expr_idx: ?CIR.Expr.Idx, tree: *S
             const expr_var = varFrom(def.expr);
 
             // Get the region for this expression
-            const expr_node_idx: CIR.Node.Idx = @enumFromInt(@intFromEnum(def.expr));
+            const expr_node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(@backingInt(def.expr)));
             const expr_region = self.store.getRegionAt(expr_node_idx);
 
             // Create a TypeWriter to format the type
@@ -5331,7 +5331,7 @@ pub fn initTypeWriter(self: *Self) std.mem.Allocator.Error!TypeWriter {
 pub fn typeWriterDefaultSource(ctx: *const anyopaque, id: types_mod.DefaultId) ?[]const u8 {
     const env: *const Self = @ptrCast(@alignCast(ctx));
     if (id.origin_module != env.selfModuleIdentity()) return null;
-    const region = env.store.getExprRegion(@as(CIR.Expr.Idx, @enumFromInt(id.expr_node)));
+    const region = env.store.getExprRegion(@as(CIR.Expr.Idx, @fromBackingInt(@intCast(id.expr_node))));
     const source = env.getSourceAll();
     if (region.start.offset > region.end.offset or region.end.offset > source.len) return null;
     const snippet = source[region.start.offset..region.end.offset];
@@ -5380,14 +5380,14 @@ pub fn internModuleIdentity(
         _ = try self.module_identity_displays.append(self.gpa, display);
     }
     std.debug.assert(self.module_identity_displays.len() == self.module_identities.count());
-    return @enumFromInt(id);
+    return @fromBackingInt(@intCast(id));
 }
 
 /// The content identity of the module an import resolved to, or null when the
 /// drain has not recorded one (a rejected import, or an env whose imports were
 /// never drained).
 pub fn importIdentity(self: *const Self, import_idx: CIR.Import.Idx) ?base.ModuleIdentity.Idx {
-    const idx: usize = @intFromEnum(import_idx);
+    const idx: usize = @backingInt(import_idx);
     if (idx >= self.import_identities.len()) return null;
     const identity = self.import_identities.items.items[idx];
     if (identity.isNone()) return null;
@@ -5402,7 +5402,7 @@ pub fn setImportIdentity(
     import_idx: CIR.Import.Idx,
     identity: base.ModuleIdentity.Idx,
 ) std.mem.Allocator.Error!void {
-    const idx: usize = @intFromEnum(import_idx);
+    const idx: usize = @backingInt(import_idx);
     while (self.import_identities.len() <= idx) {
         _ = try self.import_identities.append(self.gpa, base.ModuleIdentity.Idx.NONE);
     }
@@ -5412,13 +5412,13 @@ pub fn setImportIdentity(
 /// Look up a module content identity in this env's table without inserting.
 pub fn lookupModuleIdentity(self: *const Self, hash: *const base.ModuleIdentity.Hash) ?base.ModuleIdentity.Idx {
     const id = self.module_identities.lookup(hash) orelse return null;
-    return @enumFromInt(id);
+    return @fromBackingInt(@intCast(id));
 }
 
 /// The 32-byte content identity hash for an env-local identity index.
 pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *const base.ModuleIdentity.Hash {
     std.debug.assert(!idx.isNone());
-    const bytes = self.module_identities.getText(@intFromEnum(idx));
+    const bytes = self.module_identities.getText(@backingInt(idx));
     std.debug.assert(bytes.len == 32);
     return @ptrCast(bytes.ptr);
 }
@@ -5427,7 +5427,7 @@ pub fn moduleIdentityHash(self: *const Self, idx: base.ModuleIdentity.Idx) *cons
 /// use for identity decisions.
 pub fn moduleIdentityDisplayIdent(self: *const Self, idx: base.ModuleIdentity.Idx) Ident.Idx {
     std.debug.assert(!idx.isNone());
-    return self.module_identity_displays.items.items[@intFromEnum(idx)];
+    return self.module_identity_displays.items.items[@backingInt(idx)];
 }
 
 /// Display text for an env-local identity index. Diagnostics only.
@@ -5527,7 +5527,7 @@ pub fn appendMethodForMethodOwner(
     binding: MethodBinding,
 ) Allocator.Error!MethodTableIndex {
     std.debug.assert(self.method_idents.entries.items.len == self.method_defs.entries.items.len);
-    const index: MethodTableIndex = @enumFromInt(self.method_idents.entries.items.len);
+    const index: MethodTableIndex = @fromBackingInt(@intCast(self.method_idents.entries.items.len));
 
     try self.method_idents.entries.ensureUnusedCapacity(self.gpa, 1);
     try self.method_defs.entries.ensureUnusedCapacity(self.gpa, 1);
@@ -5546,7 +5546,7 @@ pub fn replaceMethodAt(
     qualified_ident: Ident.Idx,
     binding: MethodBinding,
 ) void {
-    const table_index: usize = @intFromEnum(index);
+    const table_index: usize = @backingInt(index);
     const key = MethodKey.init(owner, method_ident);
     std.debug.assert(MethodKey.order(self.method_idents.entries.items[table_index].key, key) == .eq);
     std.debug.assert(MethodKey.order(self.method_defs.entries.items[table_index].key, key) == .eq);
@@ -5610,7 +5610,7 @@ pub fn lookupMethodBindingFromOwnerAndMethodEnvsConst(
 ) ?MethodBinding {
     const method_name = method_source_env.getIdent(method_ident);
     const local_method_ident = self.common.findIdent(method_name) orelse return null;
-    const owner: CIR.Statement.Idx = @enumFromInt(source_decl orelse return null);
+    const owner: CIR.Statement.Idx = @fromBackingInt(@intCast(source_decl orelse return null));
 
     // The owner is this environment's own declaration when the two
     // environments are the same one, and otherwise the content identity this
@@ -5697,7 +5697,7 @@ test "NumeralLiteral: serialized bytes are a function of the recorded literals" 
     const loaded = serialized.deserializeInto(@intFromPtr(ones_bytes.ptr));
     try std.testing.expectEqual(@as(u64, 5), loaded.len());
     for (0..5) |i| {
-        const literal = loaded.get(@enumFromInt(@as(u32, @intCast(i)))).*;
+        const literal = loaded.get(@fromBackingInt(@intCast(@as(u32, @intCast(i))))).*;
         try std.testing.expectEqual(@as(u32, @intCast(i)), literal.node_idx);
         try std.testing.expectEqual(@as(u64, i), literal.after_decimal_digit_count);
         try std.testing.expect(literal.isMaterialized());

@@ -34,7 +34,7 @@ const ProcScan = struct {
         try stack.append(allocator, body);
 
         while (stack.pop()) |stmt_id| {
-            const index = @intFromEnum(stmt_id);
+            const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
             switch (store.getCFStmt(stmt_id)) {
@@ -147,7 +147,7 @@ fn expectFoldCollapsedToCallFreeIndexLoop(
     // and leaves `sum_list` as a wrapper the inline plan then dissolves.
     var collapsed_fold_procs: usize = 0;
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "sum_list") and
             !std.mem.eql(u8, name, "Builtin.List.fold")) continue;

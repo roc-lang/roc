@@ -757,7 +757,7 @@ pub const MachOWriter = struct {
         if (is_extern) return @intCast(symbol_index_remap[@as(usize, @intCast(symbol_idx))]);
 
         const section = self.symbols.items[symbol_idx].section;
-        if (builtin.mode == .Debug and section == 0) {
+        if (builtin.mode == .debug and section == 0) {
             invariant("Mach-O invariant violated: local relocation targets undefined symbol {d}", .{symbol_idx});
         }
         if (section == 0) unreachable;
@@ -766,7 +766,7 @@ pub const MachOWriter = struct {
 
     fn localRelocationValue(self: *const Self, symbol_idx: u32, addend: i64) i64 {
         const symbol = self.symbols.items[symbol_idx];
-        if (builtin.mode == .Debug and symbol.section == 0) {
+        if (builtin.mode == .debug and symbol.section == 0) {
             invariant("Mach-O invariant violated: local relocation value requested for undefined symbol {d}", .{symbol_idx});
         }
         if (symbol.section == 0) unreachable;

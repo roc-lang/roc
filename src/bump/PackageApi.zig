@@ -189,14 +189,14 @@ pub fn allocator(self: *PackageApi) std.mem.Allocator {
 
 /// Append a type to the pool and return its id.
 pub fn addType(self: *PackageApi, ty: ApiType) std.mem.Allocator.Error!TypeId {
-    const id: TypeId = @enumFromInt(self.types.items.len);
+    const id: TypeId = @fromBackingInt(@intCast(self.types.items.len));
     try self.types.append(self.arena.allocator(), ty);
     return id;
 }
 
 /// The pooled type for an id (mutable; normalization patches variables).
 pub fn getType(self: *const PackageApi, id: TypeId) *ApiType {
-    return &self.types.items[@intFromEnum(id)];
+    return &self.types.items[@backingInt(id)];
 }
 
 /// Returns the index of the added module.

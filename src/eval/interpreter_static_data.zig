@@ -90,7 +90,7 @@ pub fn writeCallableHeaders(exports: []const backend.StaticDataExport, image: *c
             const header: *Interpreter.StaticCallableHeader = @ptrFromInt(allocation - @sizeOf(Interpreter.StaticCallableHeader));
             header.* = .{
                 .owner = owner,
-                .proc_id = @intFromEnum(relocation.procedure orelse invariant("interpreter callable omitted its procedure")),
+                .proc_id = @backingInt(relocation.procedure orelse invariant("interpreter callable omitted its procedure")),
             };
         }
     }

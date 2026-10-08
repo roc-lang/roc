@@ -2,7 +2,7 @@
 //! Taken from the anyline library: https://codeberg.org/TheShinx317/anyline
 const std = @import("std");
 
-const windows = @cImport(@cInclude("windows.h"));
+const windows = @import("windows_c");
 
 output_mode: windows.DWORD,
 input_mode: windows.DWORD,

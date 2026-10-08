@@ -8,7 +8,6 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const build_options = @import("build_options");
 const CoreCtx = @import("ctx").CoreCtx;
 const unbundle = @import("unbundle");
 const Allocator = std.mem.Allocator;
@@ -44,6 +43,12 @@ fn classifyInstallOs(os: std.Target.Os.Tag) InstallOs {
         .openbsd,
         .netbsd,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -194,7 +199,7 @@ pub fn installRootDir(roc_ctx: CoreCtx, allocator: Allocator) (Allocator.Error |
 
 /// The compiler-version namespace directory under the install root.
 pub fn versionDir(allocator: Allocator, install_root: []const u8) Allocator.Error![]u8 {
-    return std.fs.path.join(allocator, &.{ install_root, build_options.compiler_version });
+    return std.fs.path.join(allocator, &.{ install_root, @import("compiler_version").compiler_version });
 }
 
 /// All the paths that make up one install entry.

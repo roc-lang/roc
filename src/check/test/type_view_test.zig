@@ -12,7 +12,7 @@ const testing = std.testing;
 /// The module every type in these type-store fixtures is declared in. The
 /// fixtures have no module environment; the type store only compares module
 /// identities, so any one identity serves.
-const fixture_module: base.ModuleIdentity.Idx = @enumFromInt(1);
+const fixture_module: base.ModuleIdentity.Idx = @fromBackingInt(1);
 
 const Fixture = struct {
     store: types.Store,
@@ -69,7 +69,7 @@ fn tupleChildren(reader: *Reader, root: Var) std.mem.Allocator.Error![]const Var
 fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) (std.mem.Allocator.Error || base.Ident.Error)!exhaustive.BuiltinIdents {
     const sentinel = try f.ident("NotNumeric");
     var result: exhaustive.BuiltinIdents = undefined;
-    inline for (std.meta.fields(exhaustive.BuiltinIdents)) |field| {
+    inline for (base.structFields(exhaustive.BuiltinIdents)) |field| {
         if (field.type == base.Ident.Idx) @field(result, field.name) = sentinel;
     }
     result.idents = &f.idents;

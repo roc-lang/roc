@@ -174,7 +174,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             reverse: bool,
 
             fn push(self: *Iterator, node: *const anyopaque, base: u32) void {
-                if (@import("builtin").mode == .Debug) iterator_node_visits.increment();
+                if (@import("builtin").mode == .debug) iterator_node_visits.increment();
                 self.frames[self.len] = .{ .node = node, .base = base };
                 self.len += 1;
             }
@@ -224,7 +224,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         }
 
         fn rangeHasValue(maybe_node: ?*const anyopaque, depth: u8, base: u64, start: u64, end: u64) bool {
-            if (@import("builtin").mode == .Debug) range_query_node_visits.increment();
+            if (@import("builtin").mode == .debug) range_query_node_visits.increment();
             const node = maybe_node orelse return false;
             const width = @as(u64, 1) << @as(u6, @intCast(leaf_bits + @as(usize, depth) * radix_bits));
             if (end <= base or start >= base + width) return false;
@@ -252,7 +252,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             if (std.meta.eql(self.get(index), value)) return;
             const required_depth = depthFor(index);
             while (self.depth < required_depth) {
-                var children = [_]?*const anyopaque{null} ** radix;
+                var children = @as([radix]?*const anyopaque, @splat(null));
                 children[0] = self.root;
                 const branch = try self.allocator.create(Branch);
                 branch.* = .{ .children = children };
@@ -269,7 +269,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             if (std.meta.eql(self.get(index), value)) return;
             const required_depth = depthFor(index);
             while (self.depth < required_depth) {
-                var children = [_]?*const anyopaque{null} ** radix;
+                var children = @as([radix]?*const anyopaque, @splat(null));
                 children[0] = self.root;
                 const branch = try self.allocator.create(Branch);
                 branch.* = .{ .children = children };
@@ -308,7 +308,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             comptime emitFn: fn (@TypeOf(context), u32, T, T) Allocator.Error!void,
         ) Allocator.Error!void {
             if (lhs == rhs or lhs == null) return;
-            if (@import("builtin").mode == .Debug) difference_node_visits.increment();
+            if (@import("builtin").mode == .debug) difference_node_visits.increment();
             if (depth == 0) {
                 const left: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const right: ?*const Leaf = @ptrCast(@alignCast(rhs));
@@ -365,7 +365,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
             value: T,
         ) Allocator.Error!?*const anyopaque {
             if (depth == 0) {
-                var values = [_]T{empty} ** radix;
+                var values = @as([radix]T, @splat(empty));
                 if (maybe_node) |node| {
                     const leaf: *const Leaf = @ptrCast(@alignCast(node));
                     values = leaf.values;
@@ -384,7 +384,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                 return leaf;
             }
 
-            var children = [_]?*const anyopaque{null} ** radix;
+            var children = @as([radix]?*const anyopaque, @splat(null));
             if (maybe_node) |node| {
                 const branch: *const Branch = @ptrCast(@alignCast(node));
                 children = branch.children;
@@ -414,7 +414,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                     @as(*Leaf, @ptrCast(@alignCast(@constCast(node))))
                 else blk: {
                     const fresh = try self.allocator.create(Leaf);
-                    fresh.* = .{ .values = [_]T{empty} ** radix };
+                    fresh.* = .{ .values = @as([radix]T, @splat(empty)) };
                     break :blk fresh;
                 };
                 leaf.values[index & radix_mask] = value;
@@ -428,7 +428,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
                 @as(*Branch, @ptrCast(@alignCast(@constCast(node))))
             else blk: {
                 const fresh = try self.allocator.create(Branch);
-                fresh.* = .{ .children = [_]?*const anyopaque{null} ** radix };
+                fresh.* = .{ .children = @as([radix]?*const anyopaque, @splat(null)) };
                 break :blk fresh;
             };
             const shift: u5 = @intCast(leaf_bits + (depth - 1) * radix_bits);
@@ -450,7 +450,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         ) Allocator.Error!?*const anyopaque {
             if (lhs == rhs) return lhs;
             if (lhs == null or rhs == null) return null;
-            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
+            if (@import("builtin").mode == .debug) structural_node_visits.increment();
 
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
@@ -497,7 +497,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         ) Allocator.Error!?*const anyopaque {
             if (lhs == rhs or rhs == null) return lhs;
             if (lhs == null) return rhs;
-            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
+            if (@import("builtin").mode == .debug) structural_node_visits.increment();
 
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
@@ -531,7 +531,7 @@ pub fn Snapshot(comptime T: type, comptime empty: T) type {
         fn eqlNode(lhs: ?*const anyopaque, rhs: ?*const anyopaque, depth: usize) bool {
             if (lhs == rhs) return true;
             if (lhs == null or rhs == null) return false;
-            if (@import("builtin").mode == .Debug) structural_node_visits.increment();
+            if (@import("builtin").mode == .debug) structural_node_visits.increment();
             if (depth == 0) {
                 const lhs_leaf: *const Leaf = @ptrCast(@alignCast(lhs.?));
                 const rhs_leaf: *const Leaf = @ptrCast(@alignCast(rhs.?));
@@ -620,7 +620,7 @@ test "sparse range queries are exact across tree boundaries and shared updates" 
     // A nearly full u32 range containing no entries must not scan its width.
     const before = range_query_node_visits.read();
     try std.testing.expect(!original.hasNonEmptyInRange(100000, std.math.maxInt(u32)));
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         try std.testing.expect(range_query_node_visits.read() - before <= 2 * 8 * 11);
     }
     for (keys) |key| try changed.put(key, 0);
@@ -653,7 +653,7 @@ test "sparse iteration preserves forks and skips absent history" {
     var changed_iter = changed.iterator();
     try std.testing.expectEqual(Sparse.Iterator.Entry{ .index = 99999, .value = -1 }, changed_iter.next().?);
     try std.testing.expectEqual(null, changed_iter.next());
-    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 11);
+    if (@import("builtin").mode == .debug) try std.testing.expect(iterator_node_visits.read() - before <= 11);
 }
 
 test "sparse structural difference skips shared subtrees and preserves exact values" {
@@ -686,7 +686,7 @@ test "sparse structural difference skips shared subtrees and preserves exact val
     // Only the changed leaf and its two ancestors are visited. All other
     // leaves share pointers, so even their callbacks are skipped.
     try std.testing.expectEqual(@as(usize, 8), difference.calls);
-    if (@import("builtin").mode == .Debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits.read() - before);
+    if (@import("builtin").mode == .debug) try std.testing.expectEqual(@as(u64, 3), difference_node_visits.read() - before);
 
     difference.entries.clearRetainingCapacity();
     difference.calls = 0;
@@ -757,5 +757,5 @@ test "sparse range iteration excludes populated subtrees and preserves exact bou
     const before = iterator_node_visits.read();
     var empty = snapshot.iteratorRange(8192, 65536);
     try std.testing.expectEqual(null, empty.next());
-    if (@import("builtin").mode == .Debug) try std.testing.expect(iterator_node_visits.read() - before <= 2 * 11);
+    if (@import("builtin").mode == .debug) try std.testing.expect(iterator_node_visits.read() - before <= 2 * 11);
 }

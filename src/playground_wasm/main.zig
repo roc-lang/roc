@@ -17,7 +17,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const base = @import("base");
-const build_options = @import("build_options");
 const parse = @import("parse");
 const reporting = @import("reporting");
 const eval = @import("eval");
@@ -540,25 +539,25 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
 
     // Check if buffer is large enough for the length prefix (u32)
     if (response_slice.len < @sizeOf(u32)) {
-        return @intFromEnum(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.response_buffer_too_small);
     }
 
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, message_slice, .{}) catch {
         // Write error response. This will also write the length prefix.
-        writeErrorResponse(response_slice, ResponseStatus.ERROR, "Invalid JSON message") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.ERROR, "Invalid JSON message") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
     defer parsed.deinit();
 
     const root = parsed.value;
     const message_type_str = root.object.get("type") orelse {
-        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Missing message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Missing message type") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
 
     const message_type = MessageType.fromString(message_type_str.string) orelse {
-        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Unknown message type") catch return @intFromEnum(WasmError.response_buffer_too_small);
-        return @intFromEnum(WasmError.success);
+        writeErrorResponse(response_slice, ResponseStatus.INVALID_MESSAGE, "Unknown message type") catch return @backingInt(WasmError.response_buffer_too_small);
+        return @backingInt(WasmError.success);
     };
 
     // Handle message based on current state
@@ -569,9 +568,9 @@ export fn processMessage(message_ptr: [*]const u8, message_len: usize, response_
         .REPL_ACTIVE => handleReplState(message_type, root, response_slice),
     };
 
-    return if (result) |_| @intFromEnum(WasmError.success) else |err| switch (err) {
-        error.OutOfBufferSpace => @intFromEnum(WasmError.response_buffer_too_small),
-        error.WriteFailed, error.OutOfMemory => @intFromEnum(WasmError.internal_error),
+    return if (result) |_| @backingInt(WasmError.success) else |err| switch (err) {
+        error.OutOfBufferSpace => @backingInt(WasmError.response_buffer_too_small),
+        error.WriteFailed, error.OutOfMemory => @backingInt(WasmError.internal_error),
     };
 }
 
@@ -580,7 +579,7 @@ fn handleStartState(message_type: MessageType, _: std.json.Value, response_buffe
     switch (message_type) {
         .INIT => {
             current_state = .READY;
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .LOAD_SOURCE,
@@ -660,7 +659,7 @@ fn handleReadyState(message_type: MessageType, root: std.json.Value, response_bu
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .INIT,
@@ -713,7 +712,7 @@ fn handleLoadedState(message_type: MessageType, message_json: std.json.Value, re
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .INIT, .LOAD_SOURCE, .INIT_REPL, .REPL_STEP, .CLEAR_REPL => {
@@ -755,7 +754,7 @@ fn handleReplState(message_type: MessageType, root: std.json.Value, response_buf
 
             current_state = .READY;
 
-            const compiler_version = build_options.compiler_version;
+            const compiler_version = @import("compiler_version").compiler_version;
             try writeSuccessResponse(response_buffer, compiler_version, null);
         },
         .QUERY_CIR => {
@@ -826,7 +825,7 @@ fn resolveReplInputKind(line: []const u8) std.mem.Allocator.Error!?ReplInputKind
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     return switch (statement) {
         .expr => .expression,
         .decl,
@@ -858,7 +857,7 @@ fn replDefinitionIdentity(line: []const u8) std.mem.Allocator.Error!?ReplDefinit
     defer ast.deinit();
     if (ast.tokenize_diagnostics.items.len > 0 or ast.parse_diagnostics.items.len > 0) return null;
 
-    const statement = ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    const statement = ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
     return switch (statement) {
         .decl => |decl| blk: {
             const pattern = ast.store.getPattern(decl.pattern);
@@ -1339,7 +1338,7 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
 
     logDebug("compileSource: Loading builtin indices\n", .{});
     const builtin_indices = compiled_builtins.builtinIndices(can.CIR);
-    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@intFromEnum(builtin_indices.bool_type)});
+    logDebug("compileSource: Builtin indices loaded, bool_type={}\n", .{@backingInt(builtin_indices.bool_type)});
 
     const builtin_module = try getCachedBuiltinModule();
 
@@ -1349,8 +1348,8 @@ fn compileSourceWithValidation(source: []const u8, module_name: []const u8, vali
     const bool_stmt_in_builtin_module = builtin_indices.bool_type;
     const try_stmt_in_builtin_module = builtin_indices.try_type;
 
-    logDebug("compileSource: Using Bool statement from Builtin module, idx={}\n", .{@intFromEnum(bool_stmt_in_builtin_module)});
-    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@intFromEnum(try_stmt_in_builtin_module)});
+    logDebug("compileSource: Using Bool statement from Builtin module, idx={}\n", .{@backingInt(bool_stmt_in_builtin_module)});
+    logDebug("compileSource: Using Result statement from Builtin module, idx={}\n", .{@backingInt(try_stmt_in_builtin_module)});
     logDebug("compileSource: Builtin injection complete\n", .{});
 
     // Store bool_stmt and builtin_types in result for later use (e.g., in test runner)
@@ -1610,7 +1609,7 @@ fn writeReplInitResponse(response_buffer: []u8) ResponseWriteError!void {
     const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL initialized\",\"repl_info\":{");
-    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.print("\"compiler_version\":\"{s}\",", .{@import("compiler_version").compiler_version});
     try w.writeAll("\"state\":\"REPL_ACTIVE\"");
     try w.writeAll("}}");
 
@@ -1660,7 +1659,7 @@ fn writeReplClearResponse(response_buffer: []u8) ResponseWriteError!void {
     const w = &resp_writer.interface;
 
     try w.writeAll("{\"status\":\"SUCCESS\",\"message\":\"REPL cleared\",\"repl_info\":{");
-    try w.print("\"compiler_version\":\"{s}\",", .{build_options.compiler_version});
+    try w.print("\"compiler_version\":\"{s}\",", .{@import("compiler_version").compiler_version});
     try w.writeAll("\"state\":\"REPL_ACTIVE\"");
     try w.writeAll("}}");
 
@@ -2216,7 +2215,7 @@ export fn processAndRespond(message_ptr: [*]const u8, message_len: usize) ?[*:0]
 
     // If processMessage itself failed, create a dynamic error string using the length-prefix pattern.
     if (result_code != 0) {
-        const error_message = switch (@as(WasmError, @enumFromInt(result_code))) {
+        const error_message = switch (@as(WasmError, @fromBackingInt(@intCast(result_code)))) {
             .invalid_json => "Invalid JSON message",
             .missing_message_type => "Missing message type",
             .unknown_message_type => "Unknown message type",

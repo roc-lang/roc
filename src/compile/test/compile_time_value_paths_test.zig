@@ -92,7 +92,7 @@ fn lowerBothPaths(gpa: std.mem.Allocator, arena: std.mem.Allocator, tmp_dir: std
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(gpa, gpa, io),
     );
@@ -194,10 +194,10 @@ test "two equal compile-time tables freeze to one backing in the continued runti
     var descriptors: usize = 0;
     for (frozen.exports) |item| {
         if (item.value_id) |slot| {
-            const layout_idx = continued.lir_result.static_data_values.items[@intFromEnum(slot)].layout_idx;
+            const layout_idx = continued.lir_result.static_data_values.items[@backingInt(slot)].layout_idx;
             if (continued.lir_result.layouts.getLayout(layout_idx).tag != .list) continue;
             try std.testing.expectEqual(@as(usize, 1), item.relocations.len);
-            if (descriptors < descriptor_targets.len) descriptor_targets[descriptors] = @intFromEnum(item.relocations[0].target.data_symbol);
+            if (descriptors < descriptor_targets.len) descriptor_targets[descriptors] = @backingInt(item.relocations[0].target.data_symbol);
             descriptors += 1;
         } else if (item.bytes.len >= 4000) {
             backings += 1;

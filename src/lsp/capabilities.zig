@@ -6,9 +6,9 @@ const SemanticType = @import("semantic_tokens.zig").SemanticType;
 /// Token data refers to a type by its index here, so each entry is the name of
 /// the `SemanticType` whose value is that index.
 pub const TOKEN_TYPES = blk: {
-    const types = @typeInfo(SemanticType).@"enum".fields;
-    var names: [types.len][]const u8 = undefined;
-    for (types) |semantic_type| names[semantic_type.value] = semantic_type.name;
+    const info = @typeInfo(SemanticType).@"enum";
+    var names: [info.field_names.len][]const u8 = undefined;
+    for (info.field_names, info.field_values) |name, value| names[value] = name;
     break :blk names;
 };
 
@@ -38,7 +38,7 @@ pub const ServerCapabilities = struct {
 
     pub const TextDocumentSyncOptions = struct {
         openClose: bool = false,
-        change: u32 = @intFromEnum(TextDocumentSyncKind.none),
+        change: u32 = @backingInt(TextDocumentSyncKind.none),
     };
 
     pub const TextDocumentSyncKind = enum(u32) {
@@ -81,7 +81,7 @@ pub fn buildCapabilities() ServerCapabilities {
     return .{
         .textDocumentSync = .{
             .openClose = true,
-            .change = @intFromEnum(ServerCapabilities.TextDocumentSyncKind.incremental),
+            .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
         .semanticTokensProvider = .{
             .legend = .{

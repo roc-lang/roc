@@ -85,7 +85,7 @@ pub fn canonicalizeExpr(
 ) std.mem.Allocator.Error!Can.CanonicalizedExpr {
     var czer = try Can.initModule(roc_ctx, module_env, parse_ast, context);
     defer czer.deinit();
-    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
     const result = try czer.canonicalizeExpr(expr_idx);
     if (module_env.store.scratch != null) {
         module_env.diagnostics = try module_env.store.diagnosticSpanFrom(0);

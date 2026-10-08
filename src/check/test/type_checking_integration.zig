@@ -3805,15 +3805,15 @@ test "typed method definition entries expose finalized owner-method keys" {
 
     const method_ident = try env.insertIdent(Ident.for_text("get"));
     const other_method_ident = try env.insertIdent(Ident.for_text("set"));
-    const owner: can.CIR.Statement.Idx = @enumFromInt(1);
+    const owner: can.CIR.Statement.Idx = @fromBackingInt(@intCast(1));
 
     try env.registerMethodDefForOwner(owner, method_ident, .{
-        .type_node_idx = @enumFromInt(1),
-        .def_idx = @enumFromInt(1),
+        .type_node_idx = @fromBackingInt(@intCast(1)),
+        .def_idx = @fromBackingInt(@intCast(1)),
     });
     try env.registerMethodDefForOwner(owner, other_method_ident, .{
-        .type_node_idx = @enumFromInt(2),
-        .def_idx = @enumFromInt(2),
+        .type_node_idx = @fromBackingInt(@intCast(2)),
+        .def_idx = @fromBackingInt(@intCast(2)),
     });
 
     const source_modules = [_]TypedCIR.Modules.SourceModule{
@@ -9491,7 +9491,7 @@ const PolarityTestGraph = struct {
             }
             return self.collect(store, store.getAliasBackingVar(content.alias));
         }
-        try self.add(@intFromEnum(std.meta.activeTag(content)));
+        try self.add(@backingInt(std.meta.activeTag(content)));
         switch (content) {
             .flex, .rigid => {
                 var index: usize = 0;
@@ -9505,7 +9505,7 @@ const PolarityTestGraph = struct {
                 }
             },
             .structure => |structure| {
-                try self.add(@intFromEnum(std.meta.activeTag(structure)));
+                try self.add(@backingInt(std.meta.activeTag(structure)));
                 switch (structure) {
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
                         try self.add(func.args.count);
@@ -12270,8 +12270,8 @@ test "check type - generated principality under optional exact annotations" {
     // an independent TestEnv.
     for (0..8) |raw_combination| {
         const combination: u3 = @intCast(raw_combination);
-        const weak: GeneratedWeakLiteral = @enumFromInt(combination & 0b001);
-        const wrapper: GeneratedResultWrapper = @enumFromInt((combination >> 1) & 0b001);
+        const weak: GeneratedWeakLiteral = @fromBackingInt(@intCast(combination & 0b001));
+        const wrapper: GeneratedResultWrapper = @fromBackingInt(@intCast((combination >> 1) & 0b001));
         const transitive = combination & 0b100 != 0;
 
         const inferred_source = try generatedPrincipalitySource(
@@ -13995,7 +13995,7 @@ test "check type - polarity - nominal declarations close direct and alias rows" 
     var count: usize = 0;
     for (env.module_env.store.sliceStatements(env.module_env.all_statements)) |statement| {
         if (env.module_env.store.getStatement(statement) != .s_nominal_decl) continue;
-        const index = env.module_env.types.lookupNominalDeclByKey(env.module_env.selfModuleIdentity(), @intFromEnum(statement)).?;
+        const index = env.module_env.types.lookupNominalDeclByKey(env.module_env.selfModuleIdentity(), @backingInt(statement)).?;
         var graph: PolarityTestGraph = .{};
         defer graph.deinit();
         try graph.collect(&env.module_env.types, env.module_env.types.getNominalDecl(index).backing);

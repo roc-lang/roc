@@ -21,8 +21,9 @@ pub fn canMiss(
 ) std.mem.Allocator.Error!bool {
     // A pattern can miss when any component can, so components are checked
     // from a worklist in any order.
-    var stack_allocator_state = std.heap.stackFallback(1024, allocator);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [1024]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, allocator);
+    const stack_allocator = stack_allocator_state.allocator();
     var pending = std.ArrayList(Adapter.PatternId).empty;
     defer pending.deinit(stack_allocator);
     try pending.append(stack_allocator, pattern_id);
@@ -98,7 +99,7 @@ const TestAdapter = struct {
     pub const PatternId = TestPatternId;
 
     fn pattern(id: PatternId) TestPattern {
-        return test_patterns[@intFromEnum(id)];
+        return test_patterns[@backingInt(id)];
     }
 
     pub fn patternClass(_: @This(), id: PatternId) PatternClass {

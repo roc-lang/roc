@@ -146,7 +146,7 @@ pub const SigTable = struct {
     pub const all_owned: SigTable = .{};
 
     pub fn get(self: SigTable, proc: LIR.LirProcSpecId) RcSig {
-        const idx = @intFromEnum(proc);
+        const idx = @backingInt(proc);
         if (idx >= self.sigs.len) return RcSig.all_owned;
         return self.sigs[idx];
     }
@@ -155,7 +155,7 @@ pub const SigTable = struct {
         const start: usize = @intCast(sig.outcomes.start);
         const len: usize = @intCast(sig.outcomes.len);
         if (start > self.outcomes.len or len > self.outcomes.len - start) {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 base.invariant("ARC signature outcome span exceeded its table", .{});
             }
             unreachable;
@@ -167,7 +167,7 @@ pub const SigTable = struct {
         const start: usize = @intCast(sig.ret_conditions.start);
         const len: usize = @intCast(sig.ret_conditions.len);
         if (start > self.ret_conditions.len or len > self.ret_conditions.len - start) {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 base.invariant("ARC signature return-condition span exceeded its table", .{});
             }
             unreachable;
@@ -199,7 +199,7 @@ test "borrowed param bits round-trip" {
 
 test "empty signature table answers all-owned" {
     const table = SigTable.all_owned;
-    const sig = table.get(@enumFromInt(7));
+    const sig = table.get(@fromBackingInt(@intCast(7)));
     try std.testing.expectEqual(@as(ParamMask, 0), sig.borrowed_params);
     try std.testing.expectEqual(Mode.owned, sig.ret_mode);
     try std.testing.expectEqual(false, sig.ret_unique);

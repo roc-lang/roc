@@ -124,7 +124,7 @@ pub const Header = extern struct {
     magic: u32,
     format_version: u32,
     image_size: u64,
-    _padding: [8]u8 = [_]u8{0} ** 8,
+    _padding: [8]u8 = @as([8]u8, @splat(0)),
     root_procs: ArrayRef,
     platform_entrypoints: ArrayRef,
     boxy_worker_procs: ArrayRef,
@@ -969,9 +969,9 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 37);
-    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 16);
-    std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 37);
+    std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 16);
+    std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
     // The header is authored field by field in image storage and is part of a
     // persisted image's bytes, so every byte of it must belong to a field.
@@ -1249,6 +1249,7 @@ fn arrayListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usiz
     return .{
         .items = ptr[0..len],
         .capacity = capacity,
+        .pointer_stability = .{},
     };
 }
 
@@ -1265,10 +1266,7 @@ fn guardedListFromRef(
 fn safeListFromRef(comptime T: type, base_ptr: [*]align(1) u8, image_size: usize, ref: ArrayRef) ImageError!collections.SafeList(T) {
     const list = try arrayListFromRef(T, base_ptr, image_size, ref);
     return .{
-        .items = .{
-            .items = list.items,
-            .capacity = list.capacity,
-        },
+        .items = list,
     };
 }
 
@@ -1349,15 +1347,15 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_hidden_desc_sources.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_erased_arg_layouts.len);
 
-    try lowered.boxy_desc_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try lowered.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     try lowered.boxy_payload_steps.append(allocator, .{ .dynamic = .{
         .op = .copy,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     } });
     try lowered.boxy_method_arg_layouts.append(allocator, .zst);
     try lowered.boxy_erased_arg_layouts.append(allocator, .u64);
     try lowered.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
-    try lowered.boxy_dict_refs.append(allocator, .{ .static = @enumFromInt(fixtureTableIndex(0)) });
+    try lowered.boxy_dict_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     try lowered.boxy_tag_variants.append(allocator, .{
         .name = try lowered.store.insertBoxyName("Ok"),
         .discriminant = 0,
@@ -1367,11 +1365,11 @@ test "LIR image views empty and populated boxy tables" {
     });
     try lowered.boxy_tag_payload_descs.append(allocator, .{
         .payload_index = 0,
-        .desc = .{ .static = @enumFromInt(fixtureTableIndex(0)) },
+        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
     });
     try lowered.boxy_method_slots.append(allocator, .{
-        .method = @enumFromInt(fixtureTableIndex(0)),
-        .proc = @enumFromInt(fixtureTableIndex(0)),
+        .method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
+        .proc = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .adapter = .{
             .arg_layouts = .{ .start = 0, .len = 1 },
             .arg_descs = .{ .start = 0, .len = 1 },
@@ -1380,7 +1378,7 @@ test "LIR image views empty and populated boxy tables" {
             .hidden_desc_sources = .{ .start = 0, .len = 1 },
         },
     });
-    try lowered.boxy_worker_procs.append(allocator, @enumFromInt(fixtureTableIndex(0)));
+    try lowered.boxy_worker_procs.append(allocator, @fromBackingInt(@intCast(fixtureTableIndex(0))));
     try lowered.boxy_type_descs.append(allocator, .{
         .payload_layout = .zst,
         .contains_refcounted = true,
@@ -1389,7 +1387,7 @@ test "LIR image views empty and populated boxy tables" {
         .tag_variants = .{ .start = 0, .len = 1 },
         .copy_plan = .{ .start = 0, .len = 1 },
         .presence_slot_present_discriminant = 1,
-        .inspect_method = @enumFromInt(fixtureTableIndex(0)),
+        .inspect_method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     });
     try lowered.boxy_dicts.append(allocator, .{
         .method_slots = .{ .start = 0, .len = 1 },
@@ -1450,7 +1448,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_erased_arg_layouts.len);
     try std.testing.expect(populated_view.boxy_type_descs[0].contains_refcounted);
     try std.testing.expectEqual(@as(?u32, 1), populated_view.boxy_type_descs[0].presence_slot_present_discriminant);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_type_descs[0].inspect_method.?));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(populated_view.boxy_type_descs[0].inspect_method.?));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_variants[0].discriminant);
     try std.testing.expectEqualStrings("Ok", populated_view.store.getBoxyName(populated_view.boxy_tag_variants[0].name));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_payload_descs[0].payload_index);
@@ -1460,7 +1458,7 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.boxy_erased_arg_layouts[0]);
     try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(populated_view.boxy_worker_procs[0]));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(populated_view.boxy_worker_procs[0]));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_method_hidden_desc_sources[0].slot);
     try std.testing.expectEqual(@as(u32, 7), populated_view.layouts.struct_fields.fieldItem(.index, struct_field_idx));
     try std.testing.expectEqual(layout_mod.Idx.str, populated_view.layouts.struct_fields.fieldItem(.layout, struct_field_idx));
@@ -1491,15 +1489,20 @@ test "boxy sidecar blob carries only the names its tables reach" {
     });
     try lowered.boxy_field_names.appendSlice(gpa, &.{ count, ok });
     try std.testing.expectEqual(ok, try lowered.store.insertBoxyName("Ok"));
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(ok));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(count));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(ok));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(count));
 
     var blob = try buildSidecarBlob(gpa, &lowered);
     defer blob.deinit(gpa);
 
     // Adding unrelated literals must not change any sidecar byte or identity.
     _ = try lowered.store.insertString("count");
-    _ = try lowered.store.insertStringViewAligned("unrelated backing" ** 4096, 0, 17, 16);
+    _ = try lowered.store.insertStringViewAligned(repeated: {
+        const pattern = "unrelated backing";
+        var result: [pattern.len * (4096)]@TypeOf(pattern[0]) = undefined;
+        for (0..(4096)) |i| @memcpy(result[i * pattern.len ..][0..pattern.len], pattern);
+        break :repeated &result;
+    }, 0, 17, 16);
     var after = try buildSidecarBlob(gpa, &lowered);
     defer after.deinit(gpa);
     try std.testing.expectEqualSlices(u8, blob.bytes, after.bytes);
@@ -1545,10 +1548,10 @@ test "boxy sidecar bytes do not depend on what table storage held before" {
         @memset(std.mem.asBytes(slot), stale);
         slot.* = .{
             .key = .{ .arg_index = 1, .descriptor_index = 2 },
-            .local = @enumFromInt(3),
+            .local = @fromBackingInt(3),
             .source_descriptor_index = 4,
             .source_nested_index = 5,
-            .source_tag_name = @enumFromInt(6),
+            .source_tag_name = @fromBackingInt(6),
             .read = .tag_payload,
         };
 
@@ -1733,8 +1736,8 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
     for (roots, 0..) |root, index| {
         const assign = store.getCFStmt(root).assign_ref;
-        try std.testing.expectEqual(prefix.locals + index, @intFromEnum(assign.target));
-        try std.testing.expectEqual(prefix.cf_stmts + index, @intFromEnum(assign.next));
+        try std.testing.expectEqual(prefix.locals + index, @backingInt(assign.target));
+        try std.testing.expectEqual(prefix.cf_stmts + index, @backingInt(assign.next));
         try std.testing.expectEqual(assign.target, store.getCFStmt(assign.next).ret.value);
     }
 
@@ -1800,12 +1803,12 @@ test "LIR image copies and round-trips every populated store field" {
         fn guarded(comptime FieldT: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!FieldT {
             const T = std.meta.Child(FieldT.Slice);
             const slice = try distinct(T, alloc, count, seed);
-            return FieldT.fromArrayList(.{ .items = slice, .capacity = count });
+            return FieldT.fromArrayList(.{ .items = slice, .capacity = count, .pointer_stability = .{} });
         }
         /// Build a populated `SafeList(T)` backed by the fixed buffer.
         fn safeList(comptime T: type, alloc: std.mem.Allocator, count: usize, seed: u8) std.mem.Allocator.Error!collections.SafeList(T) {
             const slice = try distinct(T, alloc, count, seed);
-            return .{ .items = .{ .items = slice, .capacity = count } };
+            return .{ .items = .{ .items = slice, .capacity = count, .pointer_stability = .{} } };
         }
         /// A per-field-and-index distinctive *value* of `T`. Filling raw bytes
         /// instead would write bit patterns no value of the type can hold—an
@@ -1816,7 +1819,7 @@ test "LIR image copies and round-trips every populated store field" {
             if (T == bool) return ordinal & 1 == 1;
             const info = @typeInfo(T);
             if (info == .int) return @truncate(ordinal);
-            if (info == .@"enum") return @enumFromInt(@as(info.@"enum".tag_type, @truncate(ordinal)));
+            if (info == .@"enum") return @fromBackingInt(@intCast(@as(info.@"enum".tag_type, @truncate(ordinal))));
             @compileError("distinctValue: unhandled field type " ++ @typeName(T));
         }
         /// Build a populated `SafeMultiList(T)` backed by the fixed buffer,
@@ -1826,10 +1829,10 @@ test "LIR image copies and round-trips every populated store field" {
             var mal: std.MultiArrayList(T) = .{};
             try mal.resize(alloc, count);
             const slice = mal.slice();
-            inline for (std.meta.fields(T), 0..) |field, field_index| {
-                const column = slice.items(@field(std.MultiArrayList(T).Field, field.name));
+            inline for (@typeInfo(T).@"struct".field_names, 0..) |field_name, field_index| {
+                const column = slice.items(@field(std.MultiArrayList(T).Field, field_name));
                 for (column, 0..) |*value, i| {
-                    value.* = distinctValue(field.type, seed + field_index * 64 + i);
+                    value.* = distinctValue(@FieldType(T, field_name), seed + field_index * 64 + i);
                 }
             }
             return .{ .items = mal };
@@ -1855,7 +1858,7 @@ test "LIR image copies and round-trips every populated store field" {
         @field(store, fname) = try h.guarded(@FieldType(LirStore, fname), source_allocator, 2 + i, @intCast(0x20 + i));
     }
     store.next_synthetic_symbol = 0x0123_4567_89ab_cdef;
-    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24 } } };
+    store.strings = .{ .buffer = .{ .items = .{ .items = try h.distinct(u8, source_allocator, 24, 0x90), .capacity = 24, .pointer_stability = .{} } } };
 
     const boxy_name = try store.insertBoxyName("Only");
     const unicode_name = try store.insertBoxyName("étiquette");
@@ -1867,7 +1870,7 @@ test "LIR image copies and round-trips every populated store field" {
     var layouts = layout_mod.Store{
         .allocator = gpa,
         .layouts = try h.safeList(layout_mod.Layout, source_allocator, 3, 0x40),
-        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4 },
+        .resolved_list_layouts = .{ .items = try h.distinct(?layout_mod.Idx, source_allocator, 4, 0x50), .capacity = 4, .pointer_stability = .{} },
         .tuple_elems = try h.safeList(layout_mod.Idx, source_allocator, 5, 0x60),
         .struct_fields = try h.multiList(layout_mod.StructField, source_allocator, 6, 0x70),
         .struct_field_offsets = try h.safeList(layout_mod.WidthValues(u32), source_allocator, 6, 0x74),
@@ -1891,7 +1894,7 @@ test "LIR image copies and round-trips every populated store field" {
     var lowered = try Program.Result.init(source_allocator, target_usize);
     lowered.store = store;
     lowered.layouts = layouts;
-    lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len };
+    lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len, .pointer_stability = .{} };
     const copied = try copyProgramIntoBuffer(fba, base_ptr, buffer.len, .mapped, &lowered, entrypoints);
     try copied.fillHeader(header, fba_state.end_index);
 
@@ -1994,16 +1997,16 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
     const worker = try program.store.addProcSpec(.{ .name = program.store.freshSyntheticSymbol(), .identity = LIR.ProcIdentity.forTest(2), .args = .empty(), .body = null, .ret_layout = .zst }, .none);
     const memory = try allocator.alignedAlloc(u8, .@"16", 16384);
     defer allocator.free(memory);
     var fixed = std.heap.FixedBufferAllocator.init(memory);
-    var bytes = [_]u8{0} ** 32;
+    var bytes = @as([32]u8, @splat(0));
     const graph = [_]Program.StaticDataExport{
         .{ .symbol_name = "value", .value_id = value_slot, .bytes = &bytes, .alignment = 8, .relocations = &.{
-            .{ .offset = 0, .target_symbol_name = "backing", .target = .{ .data_symbol = @enumFromInt(1) }, .addend = 2 },
+            .{ .offset = 0, .target_symbol_name = "backing", .target = .{ .data_symbol = @fromBackingInt(@intCast(1)) }, .addend = 2 },
             .{ .offset = 8, .target_symbol_name = "worker", .kind = .function_pointer, .procedure = worker, .callable_capture_offset = 24 },
             .{ .offset = 16, .target_symbol_name = "drop", .kind = .function_pointer, .rc_helper = .{ .op = .decref, .layout_idx = .str } },
         } },
@@ -2015,7 +2018,7 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     defer StaticDataImage.deinit(allocator, viewed);
     try std.testing.expectEqual(@as(u8, 0), viewed[0].bytes[0]);
     try std.testing.expectEqualStrings("frozen data", viewed[1].bytes);
-    try std.testing.expectEqual(@as(Program.StaticDataSymbolId, @enumFromInt(1)), viewed[0].relocations[0].target.data_symbol);
+    try std.testing.expectEqual(@as(Program.StaticDataSymbolId, @fromBackingInt(@intCast(1))), viewed[0].relocations[0].target.data_symbol);
     try std.testing.expectEqual(@as(i64, 2), viewed[0].relocations[0].addend);
     try std.testing.expectEqual(@as(?LIR.LirProcSpecId, worker), viewed[0].relocations[1].procedure);
     try std.testing.expectEqual(@as(?u32, 24), viewed[0].relocations[1].callable_capture_offset);
@@ -2025,7 +2028,7 @@ test "mapped frozen graph preserves explicit data callable and helper relocation
     const relocations = try sliceFromRef(StaticDataImage.Relocation, memory.ptr, fixed.end_index, rows[0].relocations);
     relocations[2].rc_layout = @intCast(program.layouts.layoutCount());
     try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
-    relocations[2].rc_layout = @intFromEnum(layout_mod.Idx.str);
+    relocations[2].rc_layout = @backingInt(layout_mod.Idx.str);
     rows[0].value_id = 1;
     try std.testing.expectError(error.InvalidLirImage, StaticDataImage.view(allocator, memory.ptr, fixed.end_index, copied, @intCast(program.static_data_values.items.len), program.store.procSpecCount(), program.layouts.layoutCount(), 8));
 }
@@ -2034,7 +2037,7 @@ test "mapped frozen graph rejects a consumer pointer width mismatch" {
     const allocator = std.testing.allocator;
     var program = try Program.Result.init(allocator, .u64);
     defer program.deinit();
-    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u8 });
     const memory = try allocator.alignedAlloc(u8, .@"16", 65536);
     defer allocator.free(memory);
@@ -2058,7 +2061,7 @@ test "in-place frozen image retains existing LIR arrays" {
     const header = try image_allocator.create(Header);
     var program = try Program.Result.init(image_allocator, .native);
     defer program.deinit();
-    const value_slot: LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const value_slot: LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(image_allocator, .{ .initializer = null, .layout_idx = .u64 });
     const local = try program.store.addLocal(.{ .layout_idx = .u64 });
     const ret = try program.store.addCFStmt(.{ .ret = .{ .value = local } }, .test_fixture);

@@ -138,10 +138,10 @@ pub fn deinit(self: *AST) void {
 /// record and the env renders the identical report without the AST.
 pub const ResolvedDiagnostic = struct {
     stage: Stage,
-    /// `@intFromEnum` of `tokenize.Diagnostic.Tag` or `AST.Diagnostic.Tag`,
+    /// `@backingInt` of `tokenize.Diagnostic.Tag` or `AST.Diagnostic.Tag`,
     /// selected by `stage`.
     tag: u16,
-    /// `@intFromEnum` of the `Token.Tag` at the diagnostic's first token.
+    /// `@backingInt` of the `Token.Tag` at the diagnostic's first token.
     /// Unused by a tokenizer diagnostic, which records `.EndOfFile`.
     token_tag: u16,
     region: base.Region,
@@ -154,8 +154,8 @@ pub const ResolvedDiagnostic = struct {
 pub fn resolveTokenizeDiagnostic(_: *AST, diagnostic: tokenize.Diagnostic) ResolvedDiagnostic {
     return .{
         .stage = .tokenize,
-        .tag = @intFromEnum(diagnostic.tag),
-        .token_tag = @intFromEnum(Token.Tag.EndOfFile),
+        .tag = @backingInt(diagnostic.tag),
+        .token_tag = @backingInt(Token.Tag.EndOfFile),
         .region = diagnostic.region,
     };
 }
@@ -171,8 +171,8 @@ pub fn resolveParseDiagnostic(self: *AST, diagnostic: Diagnostic) ResolvedDiagno
 
     return .{
         .stage = .parse,
-        .tag = @intFromEnum(diagnostic.tag),
-        .token_tag = @intFromEnum(token_tag),
+        .tag = @backingInt(diagnostic.tag),
+        .token_tag = @backingInt(token_tag),
         .region = .{
             .start = .{ .offset = @min(raw_region.start.offset, source_len) },
             .end = .{ .offset = @min(@max(raw_region.end.offset, raw_region.start.offset), source_len) },
@@ -189,12 +189,12 @@ pub fn resolvedDiagnosticToReport(
     filename: []const u8,
 ) Allocator.Error!reporting.Report {
     return switch (resolved.stage) {
-        .tokenize => tokenizeReport(@enumFromInt(resolved.tag), resolved.region, env, allocator, filename),
+        .tokenize => tokenizeReport(@fromBackingInt(@intCast(resolved.tag)), resolved.region, env, allocator, filename),
         .parse => parseReport(
             .{
                 .env = env,
-                .tag = @enumFromInt(resolved.tag),
-                .token_tag = @enumFromInt(resolved.token_tag),
+                .tag = @fromBackingInt(@intCast(resolved.tag)),
+                .token_tag = @fromBackingInt(@intCast(resolved.token_tag)),
                 .allocator = allocator,
                 .filename = filename,
                 .region = resolved.region,
@@ -504,7 +504,7 @@ pub fn parseDiagnosticToReport(self: *AST, env: *const CommonEnv, diagnostic: Di
     return parseReport(.{
         .env = env,
         .tag = diagnostic.tag,
-        .token_tag = @enumFromInt(resolved.token_tag),
+        .token_tag = @fromBackingInt(@intCast(resolved.token_tag)),
         .allocator = allocator,
         .filename = filename,
         .region = resolved.region,
@@ -806,9 +806,9 @@ pub fn hasMainBangDecl(self: *const AST) bool {
     const ident = self.env.findIdent("main!") orelse return false;
     var decls = self.decl_index.scopeValueDecls(self.store.getFile().scope, ident).iter();
     while (decls.next()) |decl_idx| {
-        const decl = self.decl_index.decls.items[@intFromEnum(decl_idx)];
+        const decl = self.decl_index.decls.items[@backingInt(decl_idx)];
         if (decl.kind != .value) continue;
-        const pattern = self.store.getPattern(@enumFromInt(decl.pattern.?));
+        const pattern = self.store.getPattern(@fromBackingInt(@intCast(decl.pattern.?)));
         if (pattern == .ident) return true;
     }
     return false;
@@ -1196,7 +1196,7 @@ pub const Statement = union(enum) {
                 {
                     const header = try tree.beginNamedNode("header");
                     // Check if the type header node is malformed before calling getTypeHeader
-                    const header_node = ast.store.nodes.get(@enumFromInt(@intFromEnum(a.header)));
+                    const header_node = ast.store.nodes.get(@fromBackingInt(@intCast(@backingInt(a.header))));
                     if (header_node.tag == .malformed) {
                         // Handle malformed type header by creating a placeholder
                         try ast.appendRegionInfoToSexprTree(env, tree, header_node.region);

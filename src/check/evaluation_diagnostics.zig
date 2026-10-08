@@ -147,12 +147,12 @@ test "evaluation diagnostics retain exact checked text across serialization" {
         const type_text = try source.putExtraString("[Left(Str), Right(U64)]");
         const missing = try source.putExtraString("Right(_)");
         try source.missing_patterns_backing.append(missing);
-        try source.appendPendingStaticExhaustiveness(allocator, .match, .empirical, .{ .match_expr = @enumFromInt(3) }, base.Region.zero(), .{ .non_exhaustive_match = .{
-            .match_expr = @enumFromInt(3),
+        try source.appendPendingStaticExhaustiveness(allocator, .match, .empirical, .{ .match_expr = @fromBackingInt(@intCast(3)) }, base.Region.zero(), .{ .non_exhaustive_match = .{
+            .match_expr = @fromBackingInt(@intCast(3)),
             .condition_type = type_text,
             .missing_patterns = .{ .start = 0, .count = 1 },
         } });
-        source.assignPendingStaticExhaustivenessSite(.{ .match_expr = @enumFromInt(3) }, @enumFromInt(2));
+        source.assignPendingStaticExhaustivenessSite(.{ .match_expr = @fromBackingInt(@intCast(3)) }, @fromBackingInt(@intCast(2)));
         break :blk try Templates.fromStore(allocator, &source);
     };
     defer templates.deinit(allocator);
@@ -169,13 +169,13 @@ test "evaluation diagnostics retain exact checked text across serialization" {
     try std.testing.expectEqual(display, restored_names.get(qualified).?);
     var evaluation = try round_trip.loaded.instantiate(allocator);
     defer evaluation.deinit(allocator);
-    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailureRetaining(allocator, @enumFromInt(2), true));
+    try std.testing.expect(try evaluation.appendEmpiricalExhaustivenessFailureRetaining(allocator, @fromBackingInt(@intCast(2)), true));
     try std.testing.expectEqual(@as(usize, 1), evaluation.pending_static_exhaustiveness.items.len);
     var retained = try Templates.fromStore(allocator, &evaluation);
     defer retained.deinit(allocator);
     var second = try retained.instantiate(allocator);
     defer second.deinit(allocator);
-    try std.testing.expect(try second.appendEmpiricalExhaustivenessFailure(allocator, @enumFromInt(2)));
+    try std.testing.expect(try second.appendEmpiricalExhaustivenessFailure(allocator, @fromBackingInt(@intCast(2))));
     try std.testing.expectEqual(@as(usize, 0), second.problems.items.len);
     try std.testing.expectEqual(@as(usize, 0), second.pending_static_exhaustiveness.items.len);
     const diagnostic = evaluation.problems.items[0].non_exhaustive_match;

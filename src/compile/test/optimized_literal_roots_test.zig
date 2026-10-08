@@ -15,7 +15,7 @@ const is_freestanding = @import("../threading.zig").is_freestanding;
 fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
         if (std.mem.find(u8, name, fragment) != null) count += 1;
     }
     return count;
@@ -87,7 +87,7 @@ test "an optimized runtime program reads a generic function's custom literal con
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );

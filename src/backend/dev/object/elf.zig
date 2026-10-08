@@ -456,7 +456,7 @@ pub const ElfWriter = struct {
         ehdr.e_ident[4] = ELF.CLASS_64;
         ehdr.e_ident[5] = ELF.DATA_LSB;
         ehdr.e_ident[6] = ELF.VERSION_CURRENT;
-        ehdr.e_ident[7] = @intFromEnum(self.osabi);
+        ehdr.e_ident[7] = @backingInt(self.osabi);
         @memset(ehdr.e_ident[8..16], 0);
 
         output.appendSliceAssumeCapacity(std.mem.asBytes(&ehdr));
