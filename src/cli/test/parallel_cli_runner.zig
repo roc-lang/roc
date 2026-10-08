@@ -390,6 +390,7 @@ const CustomCase = enum {
     cli_cache_roots_distinct,
     watch_inputs_reject_absolute_import,
     absolute_platform_path_check_build_reject,
+    replaced_url_platform_runs_offline,
     watch_completed_run_refresh_reruns,
     hot_reload_dev_shim,
     hot_reload_model_boundary,
@@ -2087,6 +2088,11 @@ const subcommand_cases = [_]CliCase{
     // `roc build` must report the same "absolute platform path" error that
     // `roc run` reports, instead of accepting the app.
     .{ .id = 0, .suite = .subcommands, .name = "issue 11714: check and build reject an absolute platform path", .body = .{ .custom = .absolute_platform_path_check_build_reject } },
+    // Repro for https://github.com/roc-lang/roc/issues/12104: when
+    // `--replace-dep` replaces an app's URL platform with a local one, the
+    // default run modes must link the local platform's host and never fetch
+    // the declared URL.
+    .{ .id = 0, .suite = .subcommands, .name = "issue 12104: run modes use a replaced URL platform without fetching it", .body = .{ .custom = .replaced_url_platform_runs_offline } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check --watch reruns when completed child snapshot is stale", .skip = .{ .windows = "watch refresh race test uses a POSIX wrapper script" }, .body = .{ .custom = .watch_completed_run_refresh_reruns } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads dev shim code", .skip = .{ .windows = "generated hot-reload test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_dev_shim } },
     .{ .id = 0, .suite = .subcommands, .name = "roc --watch hot reloads app-provided Model through Box", .skip = .{ .windows = "generated hot-reload model test platform uses POSIX host code" }, .body = .{ .custom = .hot_reload_model_boundary } },
@@ -4541,6 +4547,7 @@ fn runCustomCase(
         .cli_cache_roots_distinct => customCliCacheRootsDistinct(io, allocator, &timer),
         .watch_inputs_reject_absolute_import => customWatchInputsRejectAbsoluteImport(io, allocator, &env, &timer, timeout_ms),
         .absolute_platform_path_check_build_reject => customAbsolutePlatformPathCheckBuildReject(io, allocator, &env, &timer, timeout_ms),
+        .replaced_url_platform_runs_offline => customReplacedUrlPlatformRunsOffline(io, allocator, &env, &timer, timeout_ms),
         .watch_completed_run_refresh_reruns => customWatchCompletedRunRefreshReruns(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_dev_shim => customHotReloadDevShim(io, allocator, &env, &timer, timeout_ms),
         .hot_reload_model_boundary => customHotReloadModelBoundary(io, allocator, &env, &timer, timeout_ms),
@@ -4990,6 +4997,61 @@ fn customAbsolutePlatformPathCheckBuildReject(
     }
     if (std.mem.find(u8, build_result.stderr, "absolute platform path") == null) {
         return failureFromRun(allocator, timer, build_result, "roc build stderr did not contain absolute platform path");
+    }
+
+    return null;
+}
+
+// Nothing listens on the loopback discard port, so any attempt to fetch this
+// declared platform fails; a run can only succeed by using the replacement.
+const unreachable_platform_url = "http://127.0.0.1:9/fx/1.0.0/AEjfyaMFFbh8FJrkkHJy68riVNPr3Qp6c6PawWQjBwMH.tar.zst";
+
+fn customReplacedUrlPlatformRunsOffline(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "app.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate app path: {}", .{err});
+    defer allocator.free(app_path);
+
+    const platform_path = std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "main.roc" }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to allocate platform path: {}", .{err});
+    defer allocator.free(platform_path);
+
+    const app_source =
+        "app [main!] { pf: platform \"" ++ unreachable_platform_url ++ "\" }\n" ++
+        "\n" ++
+        "import pf.Stdout\n" ++
+        "\n" ++
+        "main! = || {\n" ++
+        "    Stdout.line!(\"replaced platform ran\")\n" ++
+        "}\n";
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app_path, .data = app_source }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write app: {}", .{err});
+
+    for ([_][]const u8{ "--opt=dev", "--opt=interpreter" }) |opt| {
+        const child_timeout_ms = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before command started");
+
+        const result = runRawInEnv(
+            io,
+            allocator,
+            env,
+            &.{ roc_binary_path, opt, "--no-color", "--replace-dep", unreachable_platform_url, platform_path, app_path },
+            project_root_path,
+            null,
+            child_timeout_ms,
+        ) catch |err| return customInfraFailure(allocator, timer, "roc {s} spawn error: {}", .{ opt, err });
+
+        if (checkExitExpectation(allocator, result, .success)) |message| {
+            return failureFromRun(allocator, timer, result, message);
+        }
+        if (std.mem.find(u8, result.stdout, "replaced platform ran") == null) {
+            return failureFromRun(allocator, timer, result, "run stdout did not contain the app's output");
+        }
     }
 
     return null;
