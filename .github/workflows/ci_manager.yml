@@ -18,9 +18,9 @@ name: CI Manager
 #
 #   static-checks ────────────────────────────┐ (gates macOS + Windows)
 #   check-changes ─┬─> linux-extra-checks     │
-#                  ├─> minici-build-linux ───>│ minici-linux   (3 shards)
-#                  ├─> minici-build-macos <───┤ minici-macos   (2 shards)
-#                  └─> minici-build-windows <─┘ minici-windows (3 shards)
+#                  ├─> minici-build-linux ───>│ minici-linux   (4 shards)
+#                  ├─> minici-build-macos <───┤ minici-macos   (3 shards)
+#                  └─> minici-build-windows <─┘ minici-windows (5 shards)
 #   everything above ─> finish (the only required check)
 #
 # `static-checks` runs on every PR, including docs-only ones. The MiniCI lanes
@@ -676,6 +676,11 @@ jobs:
       matrix:
         include:
           - minici_shard: macos-core
+            valgrind: false
+            shim_archive: false
+            llvm_float_bits: false
+            web_wasm: false
+          - minici_shard: macos-eval
             valgrind: false
             shim_archive: false
             llvm_float_bits: true
