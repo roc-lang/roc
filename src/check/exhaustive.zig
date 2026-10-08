@@ -4963,7 +4963,8 @@ test "record tail blockers follow aliased required fields and preserve row polic
 }
 
 test "record tail blockers clean up every allocation failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, recordTailBlockersCase, .{@as(usize, 2)});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), recordTailBlockersCase, .{@as(usize, 2)});
 }
 
 test "nominal views record tail emptiness removes impossible source constructor" {
