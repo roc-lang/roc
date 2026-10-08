@@ -54,7 +54,7 @@ pub const ResourceError = Allocator.Error;
 /// Prepare pointer layouts serially; every accepted wrapper returns its box.
 pub fn prepareLayouts(store: *const LirStore, layouts: *layout_mod.Store) ResourceError!void {
     for (0..store.procSpecCount()) |index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(index));
         const proc = store.getProcSpec(proc_id);
         if (proc.body == null or proc.hosted != null or proc.abi != .roc) continue;
         const ret = layouts.getLayout(proc.ret_layout);
@@ -72,7 +72,7 @@ pub fn run(store: *LirStore, layouts: *layout_mod.Store) ResourceError!void {
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(proc_index);
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(proc_index));
         try runProcWithScratch(store, layouts, proc_id, store.allocator, &analysis);
     }
 }
@@ -206,20 +206,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
@@ -310,20 +298,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
@@ -416,20 +392,8 @@ const Transform = struct {
         const payload_ptr = try self.addLocal(ptr_layout);
         const store_unit = try self.addLocal(.zst);
 
-        const load_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = unbox_stmt.target,
-            .op = .ptr_load,
-            .rc_effect = LowLevelOp.ptr_load.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{payload_ptr}),
-            .next = unbox_stmt.next,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
-        const cast_stmt_id = try self.store.addCFStmt(.{ .assign_low_level = .{
-            .target = payload_ptr,
-            .op = .ptr_cast,
-            .rc_effect = LowLevelOp.ptr_cast.rcEffect(),
-            .args = try self.store.addLocalSpan(&.{result_box}),
-            .next = load_stmt_id,
-        } }, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const load_stmt_id = try self.store.addLowLevelStmt(unbox_stmt.target, .ptr_load, &.{payload_ptr}, unbox_stmt.next, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
+        const cast_stmt_id = try self.store.addLowLevelStmt(payload_ptr, .ptr_cast, &.{result_box}, load_stmt_id, reuseOrigin(self.store.stmtOrigin(unbox_stmt_id)));
 
         try self.store.replaceCFStmt(unbox_stmt_id, .{ .assign_low_level = .{
             .target = result_box,
@@ -613,7 +577,7 @@ const Transform = struct {
             if (stmt == .jump) {
                 if (stmt.jump.target == join_id) count += 1;
             } else {
-                try body_clone.appendSuccessorsWithAllocator(self.store, &work, stmt_id, self.scratch_allocator);
+                try body_clone.appendSuccessors(self.store, &work, stmt_id, self.scratch_allocator);
             }
         }
 
@@ -654,6 +618,8 @@ const Transform = struct {
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .boxy_tag_match,
@@ -727,7 +693,7 @@ fn testZst(store: *LirStore, target: LocalId, next: CFStmtId) ResourceError!CFSt
 }
 
 fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
-    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(next_join_point.*));
     next_join_point.* += 1;
     return id;
 }

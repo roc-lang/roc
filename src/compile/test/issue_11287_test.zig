@@ -15,7 +15,7 @@ const hosted_symbol = "roc_stdout_report";
 fn expectHostedArgKeepsCheckedHostAbiLayout(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found: usize = 0;
     for (store.getProcSpecs(), 0..) |_, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const spec = store.getProcSpec(proc_id);
         const hosted = spec.hosted orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
@@ -46,7 +46,7 @@ fn expectReturnAbi(lowered: *const lir.CheckedPipeline.LoweredProgram) harness.L
     const result = &lowered.lir_result;
     var found: usize = 0;
     for (result.store.getProcSpecs(), 0..) |_, index| {
-        const spec = result.store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        const spec = result.store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         if (spec.hosted) |hosted| {
             if (!std.mem.eql(u8, result.store.getString(hosted.symbol), "roc_stdout_line")) continue;
             const value = result.layouts.getLayout(spec.ret_layout);
@@ -201,7 +201,7 @@ test "issue 11287: LSS passes the exact owned argument to the host" {
 fn expectHostedArg32(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
     var found: usize = 0;
     for (store.getProcSpecs(), 0..) |_, index| {
-        const spec = store.getProcSpec(@enumFromInt(@as(u32, @intCast(index))));
+        const spec = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
         const hosted = spec.hosted orelse continue;
         if (!std.mem.eql(u8, store.getString(hosted.symbol), hosted_symbol)) continue;
         const args = store.getLocalSpan(spec.args);

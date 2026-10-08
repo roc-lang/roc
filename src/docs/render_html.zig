@@ -13,6 +13,42 @@ const DocType = DocModel.DocType;
 /// Errors that can occur while rendering HTML documentation.
 pub const RenderError = Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.OpenError || std.Io.Dir.WriteFileError || std.Io.File.OpenError || std.Io.File.Writer.Error || std.Io.Writer.Error;
 
+/// Creates `sub_path` (and any missing parents) under `dir`, treating an
+/// already existing directory as success.
+fn createDirPathIfMissing(dir: std.Io.Dir, io: std.Io, sub_path: []const u8) std.Io.Dir.CreateDirPathError!void {
+    dir.createDirPath(io, sub_path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        error.AccessDenied,
+        error.AntivirusInterference,
+        error.BadPathName,
+        error.Canceled,
+        error.DeviceBusy,
+        error.DiskQuota,
+        error.FileBusy,
+        error.FileLocksUnsupported,
+        error.FileNotFound,
+        error.FileTooBig,
+        error.IsDir,
+        error.LinkQuotaExceeded,
+        error.NameTooLong,
+        error.NetworkNotFound,
+        error.NoDevice,
+        error.NoSpaceLeft,
+        error.NotDir,
+        error.PermissionDenied,
+        error.PipeBusy,
+        error.ProcessFdQuotaExceeded,
+        error.ReadOnlyFileSystem,
+        error.Streaming,
+        error.SymLinkLoop,
+        error.SystemFdQuotaExceeded,
+        error.SystemResources,
+        error.Unexpected,
+        error.WouldBlock,
+        => return err,
+    };
+}
+
 /// Synthetic `data-module-name` used for the Language Reference sidebar entry,
 /// chosen so it cannot collide with a real module name.
 const langref_sidebar_id = "__lang_ref__";
@@ -487,37 +523,7 @@ pub fn renderPackageDocs(
     langref: ?*const render_markdown.LangRef,
 ) RenderError!void {
     // Ensure the output directory exists
-    std.Io.Dir.cwd().createDirPath(io, output_dir_path) catch |err| switch (err) {
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-        error.PathAlreadyExists => {},
-    };
+    try createDirPathIfMissing(std.Io.Dir.cwd(), io, output_dir_path);
 
     var output_dir = try std.Io.Dir.cwd().openDir(io, output_dir_path, .{});
     defer output_dir.close(io);
@@ -568,37 +574,7 @@ fn writeLangRefPages(
     dir: std.Io.Dir,
     langref: *const render_markdown.LangRef,
 ) RenderError!void {
-    dir.createDirPath(io, "langref") catch |err| switch (err) {
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-        error.PathAlreadyExists => {},
-    };
+    try createDirPathIfMissing(dir, io, "langref");
     var sub_dir = try dir.openDir(io, "langref", .{});
     defer sub_dir.close(io);
 
@@ -610,37 +586,7 @@ fn writeLangRefPages(
 
         // Each article gets its own directory so the page can be `index.html`,
         // giving the extensionless `/langref/<slug>` URL. Slugs are filename-safe.
-        sub_dir.createDirPath(io, article.slug) catch |err| switch (err) {
-            error.PathAlreadyExists => {},
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.Canceled,
-            error.DeviceBusy,
-            error.DiskQuota,
-            error.FileBusy,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileTooBig,
-            error.IsDir,
-            error.LinkQuotaExceeded,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoDevice,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.Streaming,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.Unexpected,
-            error.WouldBlock,
-            => return err,
-        };
+        try createDirPathIfMissing(sub_dir, io, article.slug);
         var article_dir = try sub_dir.openDir(io, article.slug, .{});
         defer article_dir.close(io);
         try writeLangRefArticlePage(ctx, gpa, io, article_dir, langref, article, "index.html");
@@ -732,37 +678,7 @@ fn writePackageIndex(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir:
 
 fn writeModulePage(ctx: *const RenderContext, gpa: Allocator, io: std.Io, dir: std.Io.Dir, mod: *const DocModel.ModuleDocs) RenderError!void {
     // Create module subdirectory
-    dir.createDirPath(io, mod.name) catch |err| switch (err) {
-        error.AccessDenied,
-        error.AntivirusInterference,
-        error.BadPathName,
-        error.Canceled,
-        error.DeviceBusy,
-        error.DiskQuota,
-        error.FileBusy,
-        error.FileLocksUnsupported,
-        error.FileNotFound,
-        error.FileTooBig,
-        error.IsDir,
-        error.LinkQuotaExceeded,
-        error.NameTooLong,
-        error.NetworkNotFound,
-        error.NoDevice,
-        error.NoSpaceLeft,
-        error.NotDir,
-        error.PermissionDenied,
-        error.PipeBusy,
-        error.ProcessFdQuotaExceeded,
-        error.ReadOnlyFileSystem,
-        error.Streaming,
-        error.SymLinkLoop,
-        error.SystemFdQuotaExceeded,
-        error.SystemResources,
-        error.Unexpected,
-        error.WouldBlock,
-        => return err,
-        error.PathAlreadyExists => {},
-    };
+    try createDirPathIfMissing(dir, io, mod.name);
 
     var sub_dir = try dir.openDir(io, mod.name, .{});
     defer sub_dir.close(io);
@@ -976,22 +892,6 @@ fn writeFooter(w: Writer) error{WriteFailed}!void {
     try writeDocsStreamEnd(w);
     try w.writeAll("        </div>\n");
     try w.writeAll("        <footer><p>Made by people who like to make nice things.</p></footer>\n");
-}
-
-fn sortSidebarNodeChildren(node: *SidebarNode) void {
-    std.mem.sortUnstable(*SidebarNode, node.children.items, {}, lessThanSidebarNode);
-
-    for (node.children.items) |child| {
-        sortSidebarNodeChildren(child);
-    }
-}
-
-fn lessThanSidebarNode(_: void, a: *SidebarNode, b: *SidebarNode) bool {
-    // Types come first
-    if (a.is_type and !b.is_type) return true;
-    if (!a.is_type and b.is_type) return false;
-    // Then sort alphabetically
-    return std.mem.order(u8, a.name, b.name) == .lt;
 }
 
 const EntryTree = struct {
@@ -3288,12 +3188,12 @@ test "builtin_nested_type_owners lists every numeric type under Num" {
     // to the table—otherwise its external links would 404 at `…/U8`.
     const tt = @import("types").types;
     inline for (.{ tt.Int.Precision, tt.Frac.Precision }) |Precision| {
-        inline for (@typeInfo(Precision).@"enum".fields) |field| {
+        inline for (@typeInfo(Precision).@"enum".field_names) |field_name| {
             var owner: ?[]const u8 = null;
             for (builtin_nested_type_owners) |nested| {
                 // Enum fields are lower-case (`u8`, `dec`); the docs names are
                 // capitalized (`U8`, `Dec`).
-                if (std.ascii.eqlIgnoreCase(nested.name, field.name)) {
+                if (std.ascii.eqlIgnoreCase(nested.name, field_name)) {
                     owner = nested.owner;
                     break;
                 }
@@ -3305,7 +3205,7 @@ test "builtin_nested_type_owners lists every numeric type under Num" {
                     "numeric type '{s}' is missing from builtin_nested_type_owners " ++
                         "in render_html.zig; add it (owner \"Num\") so external doc " ++
                         "links resolve to the right page.\n",
-                    .{field.name},
+                    .{field_name},
                 );
                 return error.NumericTypeMissingFromTable;
             }

@@ -25,12 +25,21 @@ const shallow_stack_bytes = 2 * 1024 * 1024;
 /// state, so its ownership facts cost the square of its depth.
 const loop_depth = 300;
 
-/// Lowering a custom-parser chain for compile-time evaluation relates each
-/// level's codec contract type, which holds every level inside it.
+/// Each level of a custom-parser chain asks for the parser of a record holding
+/// the next level, and keying each level's checked types walks every level
+/// inside it, so the chain's compilation costs the square of its depth.
 const codec_chain_depth = 100;
 
 fn repeat(comptime text: []const u8, comptime count: usize) []const u8 {
-    return text ** count;
+    const result = comptime repeated: {
+        // Zig 0.17 constructs these 5,000-level fixtures with a loop instead
+        // of array repetition. Raise only source generation's comptime budget.
+        @setEvalBranchQuota(1_000_000);
+        var buffer: [text.len * count]u8 = undefined;
+        for (0..count) |i| @memcpy(buffer[i * text.len ..][0..text.len], text);
+        break :repeated buffer;
+    };
+    return &result;
 }
 
 /// `format` printed with `args(i)` for each `i` below `n`, written into one
@@ -420,7 +429,7 @@ const cases = [_]TestCase{
         .source_kind = .module,
         .source = codecChain(codec_chain_depth),
         .expected = .{ .inspect_str = "\"err\"" },
-        .stack_bytes = shallow_stack_bytes,
+        .stack_bytes = stack_bytes,
     },
     .{
         .name = "issue 11698: deeply nested records",

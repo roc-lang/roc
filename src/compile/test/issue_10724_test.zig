@@ -71,7 +71,7 @@ test "issue 10724: dispatch whose argument is a canonicalization error reports i
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
     );

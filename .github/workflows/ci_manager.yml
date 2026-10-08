@@ -157,7 +157,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -184,6 +184,36 @@ jobs:
       - name: Run tidy unit tests
         if: ${{ !cancelled() }}
         run: zig build run-test-zig-tidy-unit
+
+      # Uses real generated compiler options and an empty dependency bundle;
+      # no Roc CLI compilation or published LLVM bundle is needed.
+      - name: Check compiler artifact identities
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_compiler_artifact_identity.py zig \
+            --work-dir "$RUNNER_TEMP/roc-compiler-artifact-identity"
+
+      # Two std-only test producers exercise report isolation and dynamic
+      # filtering without compiling Roc or linking a dependency bundle.
+      - name: Check independent unit-test reports
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/roc-test-report-deps/include" "$RUNNER_TEMP/roc-test-report-deps/lib"
+          python3 ci/test_unit_report_isolation.py zig \
+            --work-dir "$RUNNER_TEMP/roc-test-reports" -- \
+            "-Droc-deps-path=$RUNNER_TEMP/roc-test-report-deps" \
+            -j2 --cache-poison=disallowed
+
+      # Exercises the production display-version reader in source archives,
+      # ordinary checkouts and worktrees without compiling Roc.
+      - name: Check cached Git display metadata
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python3 ci/test_build_version_metadata.py zig \
+            --work-dir "$RUNNER_TEMP/roc-git-display-metadata" -- -j2
 
       - name: Install actionlint
         if: ${{ !cancelled() }}
@@ -223,7 +253,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -268,7 +298,7 @@ jobs:
       # rebuild everything that embeds the wasm32 builtins through eval.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 
@@ -336,11 +366,20 @@ jobs:
       # Streaming tar into zstd also avoids writing an uncompressed tar the size
       # of `.zig-cache` next to it. zstd is preinstalled on all three runner
       # images.
+      #
+      # Windows runners' tar cannot recreate symlinks on extraction, and the
+      # build cache holds some (a versioned shared library such as the glibc
+      # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
+      # so there the artifact stores each link's target file instead.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
-          tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            tar --dereference -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          else
+            tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+          fi
 
       # Packing is the disk high-water mark of this job. Report free space and
       # the packed size here, where the peak actually is.
@@ -443,7 +482,7 @@ jobs:
       # `minici-build-linux`), so the restored cache hits.
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
           use-tool-cache: 'true'
 
@@ -513,6 +552,12 @@ jobs:
       - name: Run echo.wasm integration test
         if: matrix.web_wasm
         run: zig build run-test-echo-wasm
+
+      # www.roc-lang.org refuses an echo.wasm over Cloudflare's 25 MiB asset
+      # limit; catch growth here rather than in the website's nightly bump.
+      - name: Check echo.wasm size
+        if: matrix.web_wasm
+        run: zig build check-echo-wasm-size
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
@@ -584,6 +629,32 @@ jobs:
             Write-Host ("::warning::.zig-cache is {0} MB after this shard, over the {1} MB post-shard warning threshold." -f $totalMb, $limitMb)
           }
 
+      - name: Collect macOS compiler crash reports
+        if: failure() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          from pathlib import Path
+          import shutil
+
+          output = Path("zig-out/minici/crash-reports")
+          output.mkdir(parents=True, exist_ok=True)
+          programs = ("roc", "eval-test-runner", "lambda-mono-differential-runner")
+          roots = (Path.home() / "Library/Logs/DiagnosticReports",
+                   Path("/Library/Logs/DiagnosticReports"))
+          for index, root in enumerate(roots):
+              if not root.is_dir():
+                  continue
+              for report in root.rglob("*"):
+                  if report.is_file() and any(report.name.startswith(name + "-") or
+                                              report.name.startswith(name + "_")
+                                              for name in programs):
+                      shutil.copy2(report, output / (str(index) + "-" + report.name))
+                      print("Collected " + str(report))
+          PYTHON
+
       - name: Upload MiniCI report and logs
         if: failure()
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
@@ -619,7 +690,8 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: windows-2025
-    timeout-minutes: 120
+    # Two evaluator workers use less memory and need a longer job budget.
+    timeout-minutes: ${{ matrix.minici_shard == 'windows-eval' && 180 || 120 }}
     env: *minici_shard_env
     strategy:
       fail-fast: false

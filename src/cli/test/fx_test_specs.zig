@@ -176,6 +176,26 @@ pub const io_spec_tests = [_]TestSpec{
         .description = "Runtime 128-bit division, remainder and modulo agree across backends and keep the operands' full width",
     },
     .{
+        .roc_file = "test/fx/runtime_i128_to_float.roc",
+        .io_spec = "0<3|1>unsigned: 3e20 3e20|1>signed: -3e20 -3e20|1>highest: 3.402823669209385e38 inf",
+        .description = "Runtime 128-bit integer to float conversions agree across backends and keep the operand's full width",
+    },
+    .{
+        .roc_file = "test/fx/runtime_abs_diff.roc",
+        .io_spec = "0<3|1>f64: 1.25 1.25|1>f32: 1.25 1.25|1>i128: 340282366920938463463374607431768211455 340282366920938463463374607431768211455|1>i8: 255 255",
+        .description = "Runtime abs_diff keeps a float difference's fraction and an integer difference wider than the signed operand type",
+    },
+    .{
+        .roc_file = "test/fx/runtime_float_abs_negative_zero.roc",
+        .io_spec = "0<3|1>f64: 9223372036854775808 0 0|1>f32: 2147483648 0 0|1>negative: 1.5 1.5",
+        .description = "Runtime float abs clears the sign of negative zero on every backend",
+    },
+    .{
+        .roc_file = "test/fx/runtime_float_libcalls.roc",
+        .io_spec = "0<3|1>rem: 1.5 1.5 -1.5|1>div_trunc: 3 3|1>floor: Ok(7) Ok(7)|1>ceiling: Ok(8) Ok(8)",
+        .description = "Runtime float remainder and rounding, which compiled code calls the C math library for, agree across backends",
+    },
+    .{
         .roc_file = "test/fx/runtime_zst_list_ownership.roc",
         .io_spec = "0<3|1>append: 2|1>literal: 3|1>concat: 5|1>repeat: 3|1>first: ok",
         .description = "Zero-sized-element lists keep their length through reserve/append/concat and strand no allocation",
@@ -593,6 +613,11 @@ pub const io_spec_tests = [_]TestSpec{
         .roc_file = "test/fx/float_comparison.roc",
         .io_spec = "1>3.14 > 0.0: True|1>0.0 < 3.14: True|1>3.14 >= 3.14: True",
         .description = "Regression test: F64 comparisons use float instructions, not integer bit-pattern",
+    },
+    .{
+        .roc_file = "test/fx/numeric_abs_runtime.roc",
+        .io_spec = "1>I128 highest abs_diff lowest: 340282366920938463463374607431768211455|1>I128 lowest abs_diff highest: 340282366920938463463374607431768211455|1>I128 highest abs_diff -1: 170141183460469231731687303715884105728|1>F64 7.5 abs_diff 2.25: 5.25|1>F64 2.25 abs_diff 7.5: 5.25|1>F64 -0.5 abs_diff 2.25: 2.75|1>F64 abs of -0: 0|1>F32 7.5 abs_diff 2.25: 5.25|1>F32 abs of -0: 0",
+        .description = "Regression test: float abs_diff keeps fractions, I128.abs_diff spans the whole range, and abs clears negative zero's sign",
     },
     .{
         .roc_file = "test/fx/many_args.roc",

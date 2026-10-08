@@ -175,7 +175,7 @@ fn expectBlockRequirement(value: []const u8, expected_mismatches: usize, compile
         const platform = coord.executableRootCheckedArtifact();
         for (platform.resolved_value_refs.records) |ref| {
             if (ref.ref != .platform_required_checked_error) continue;
-            const expr = platform.checked_bodies.stored_exprs.items[@intFromEnum(ref.expr)];
+            const expr = platform.checked_bodies.stored_exprs.items[@backingInt(ref.expr)];
             try std.testing.expect(expr.data == .runtime_error);
             try std.testing.expect(expr.diverges and expr.diverges_without_inline_expects);
             try std.testing.expect(!expr.evaluation_may_be_elided_for_inspect);

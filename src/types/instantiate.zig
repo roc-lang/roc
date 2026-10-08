@@ -50,6 +50,17 @@ pub const AdapterReachPosition = enum {
     nested,
 };
 
+/// A requirement callable an instantiation deferred copying, and the
+/// placeholder its copied requirements name instead.
+pub const DeferredCallable = struct {
+    placeholder: Var,
+    /// The callable's resolved variable in the instantiated scheme.
+    source: Var,
+    /// Whether the instantiation would have copied the callable's root even
+    /// where it is not generalized (an explicit scheme requirement's).
+    force_root_copy: bool,
+};
+
 /// The explicit declaration-backed opening operation (issue #9983): make a
 /// fresh copy of `decl`'s backing template with the application's actual
 /// `args` substituted for the declaration's formals, positionally.
@@ -209,6 +220,8 @@ const FlexLikeFrame = struct {
     /// `Scratch.pending_parts`.
     parts_base: u32 = 0,
     part_idx: u32 = 0,
+    /// Whether a collected constraint names a deferred callable.
+    has_deferred: bool = false,
     stage: Stage = .dispatch_fn,
 
     const Stage = enum {
@@ -331,6 +344,24 @@ pub const Instantiator = struct {
     /// is not quantified, so each use must see the same node, including a
     /// function node's effect kind and effect dependencies.
     copy_scheme_structure: bool = false,
+    /// Set by a caller that knows the next scheme root it instantiates has no
+    /// monomorphic structural node from which a generalized variable is
+    /// reachable, so that root's reachability walk can be skipped. It
+    /// applies to that one root only.
+    skip_generalized_reachability: bool = false,
+    /// Whether the reachability of the scheme root being instantiated was
+    /// skipped, so no monomorphic node is copied for it.
+    reach_known_empty: bool = false,
+    /// After `instantiateTypeScheme` walked a root's reachability: whether a
+    /// monomorphic structural node reaches a generalized variable.
+    monomorphic_reach: bool = false,
+    /// When set, a copied requirement whose callable is generalized and not
+    /// yet copied keeps naming the scheme's callable instead of a copy, and
+    /// the store index of that copied requirement is recorded here; nothing
+    /// reachable only through the callable is copied. The caller names each
+    /// recorded requirement's callable afterwards (`DeferredCallable`).
+    /// Requirements with interpolation parts are always copied.
+    deferred_slots: ?*std.ArrayListUnmanaged(u32) = null,
     /// Source vars this instantiation must SHARE rather than copy, mapped to
     /// themselves in `var_map` before the walk starts. Used by a predeclared
     /// scheme for an annotation with `_` inference holes: a hole's type is
@@ -459,6 +490,10 @@ pub const Instantiator = struct {
         /// In this mode, rigids present in the provided map are substituted,
         /// and any other rigids are instantiated as fresh rigid variables.
         substitute_rigids_fresh: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
+
+        /// Expected shape context substitutes declaration parameters with
+        /// owned context copies while flexing other rigid leaves.
+        substitute_rigids_flex: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
     };
 
     /// How to instantiate polarity vars: the marker rigids (named
@@ -556,11 +591,33 @@ pub const Instantiator = struct {
         self: *Self,
         initial_var: Var,
     ) std.mem.Allocator.Error!Var {
-        try self.computeGeneralizedReachability(initial_var);
+        if (self.skip_generalized_reachability) {
+            self.skip_generalized_reachability = false;
+            self.reach_known_empty = true;
+        } else {
+            try self.computeGeneralizedReachability(initial_var);
+            self.reach_known_empty = false;
+        }
         const previous = self.copy_scheme_structure;
         self.copy_scheme_structure = true;
         defer self.copy_scheme_structure = previous;
         return self.instantiateVarHelp(initial_var, true);
+    }
+
+    /// Copy a requirement callable that an instantiation of a type scheme
+    /// deferred (`deferred_callables`), continuing that instantiation: this
+    /// instantiator's `var_map` holds what it copied, and the scheme's
+    /// reachability is known to be empty.
+    pub fn instantiateDeferredCallable(
+        self: *Self,
+        deferred: DeferredCallable,
+    ) std.mem.Allocator.Error!Var {
+        self.reach_known_empty = true;
+        self.current_reach = .nested;
+        const previous = self.copy_scheme_structure;
+        self.copy_scheme_structure = true;
+        defer self.copy_scheme_structure = previous;
+        return self.instantiateVarHelp(deferred.source, deferred.force_root_copy);
     }
 
     /// Fill `Scratch.reach_state` for every node reachable from `root`: true
@@ -587,20 +644,16 @@ pub const Instantiator = struct {
         while (machine.reach_stack.pop()) |parent| {
             const resolved = self.store.resolveVar(parent);
             switch (resolved.desc.content) {
-                .flex => |flex| {
+                inline .flex, .rigid => |flex| {
                     if (resolved.desc.rank != .generalized) continue;
                     try self.visitReachConstraints(parent, flex.constraints);
-                },
-                .rigid => |rigid| {
-                    if (resolved.desc.rank != .generalized) continue;
-                    try self.visitReachConstraints(parent, rigid.constraints);
                 },
                 .alias => |alias| {
                     var arg_span = alias.vars.nonempty;
                     arg_span.dropFirstElem();
                     var i: u32 = 0;
                     while (i < arg_span.count) : (i += 1) {
-                        try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(arg_span.start) + i]);
+                        try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(arg_span.start) + i]);
                     }
                     try self.visitReachChild(parent, self.store.getAliasBackingVar(alias));
                 },
@@ -620,7 +673,7 @@ pub const Instantiator = struct {
                     .tag_union => |tag_union| {
                         var i: u32 = 0;
                         while (i < tag_union.tags.count) : (i += 1) {
-                            const tag = self.store.tags.get(@enumFromInt(@intFromEnum(tag_union.tags.start) + i));
+                            const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(tag_union.tags.start) + i)));
                             try self.visitReachVars(parent, tag.args);
                         }
                         try self.visitReachChild(parent, tag_union.ext);
@@ -646,19 +699,34 @@ pub const Instantiator = struct {
                 edge_idx = edge.next;
             }
         }
+
+        self.monomorphic_reach = false;
+        var reached = reach_state.iterator();
+        while (reached.next()) |entry| {
+            if (!entry.value_ptr.*) continue;
+            const resolved = self.store.resolveVar(entry.key_ptr.*);
+            if (resolved.desc.rank == .generalized) continue;
+            switch (resolved.desc.content) {
+                .alias, .structure => {
+                    self.monomorphic_reach = true;
+                    break;
+                },
+                .flex, .rigid, .field_presence, .err => {},
+            }
+        }
     }
 
     fn visitReachVars(self: *Self, parent: Var, vars: Var.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < vars.count) : (i += 1) {
-            try self.visitReachChild(parent, self.store.vars.items.items[@intFromEnum(vars.start) + i]);
+            try self.visitReachChild(parent, self.store.vars.items.items[@backingInt(vars.start) + i]);
         }
     }
 
     fn visitReachFields(self: *Self, parent: Var, fields: RecordField.SafeMultiList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < fields.count) : (i += 1) {
-            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(fields.start) + i));
+            const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(fields.start) + i)));
             try self.visitReachChild(parent, field.presence.typeVar());
             if (field.presence.presenceVar()) |presence_var| {
                 try self.visitReachChild(parent, presence_var);
@@ -669,7 +737,7 @@ pub const Instantiator = struct {
     fn visitReachConstraints(self: *Self, parent: Var, constraints: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try self.visitReachChild(parent, constraint.fn_var);
             if (constraint.interpolation.isPresent()) {
                 const metadata = constraint.interpolation;
@@ -801,7 +869,7 @@ pub const Instantiator = struct {
         const allocator = self.store.gpa;
         var i: u32 = 0;
         while (i < constraints.len()) : (i += 1) {
-            const constraint = self.store.static_dispatch_constraints.items.items[@intFromEnum(constraints.start) + i];
+            const constraint = self.store.static_dispatch_constraints.items.items[@backingInt(constraints.start) + i];
             try pending.append(allocator, .{ .var_ = constraint.fn_var, .polarity = polarity, .reach = .nested });
             if (constraint.interpolation.isPresent()) {
                 const metadata = constraint.interpolation;
@@ -927,7 +995,7 @@ pub const Instantiator = struct {
         }
         if (!force_root_copy and self.rank_behavior == .respect_rank and resolved.desc.rank != .generalized) {
             const copy_structure = self.copy_scheme_structure and switch (resolved.desc.content) {
-                .alias, .structure => machine.reach_state.?.get(resolved_var) orelse false,
+                .alias, .structure => !self.reach_known_empty and (machine.reach_state.?.get(resolved_var) orelse false),
                 .flex, .rigid, .field_presence, .err => false,
             };
             if (!copy_structure and !is_polarity_marker) {
@@ -958,7 +1026,7 @@ pub const Instantiator = struct {
                         const positive = switch (self.polarity_var_behavior) {
                             .close, .preserve => false,
                             .resolve_by_polarity, .preserve_output, .defer_open => self.marker_choices.?.get(resolved_var) orelse
-                                std.debug.panic("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
+                                base.invariant("compiler invariant violated: polarity marker reached by instantiation has no marker choice", .{}),
                         };
                         const opened = self.polarity_var_behavior == .resolve_by_polarity and positive;
                         const marker_content: Content = switch (self.polarity_var_behavior) {
@@ -1035,6 +1103,14 @@ pub const Instantiator = struct {
                             }
                             break :blk .rigid;
                         },
+                        .substitute_rigids_flex => |rigid_subs| {
+                            if (rigid_subs.get(rigid.name)) |existing_var| {
+                                try self.var_map.put(resolved_var, existing_var);
+                                try machine.value_stack.append(self.store.gpa, existing_var);
+                                return true;
+                            }
+                            break :blk .flex;
+                        },
                     }
                 };
 
@@ -1063,7 +1139,7 @@ pub const Instantiator = struct {
                         .rigid => .rigid,
                     },
                     .name = rigid.name,
-                    .cons_start = @intFromEnum(rigid.constraints.start),
+                    .cons_start = @backingInt(rigid.constraints.start),
                     .cons_len = @intCast(rigid.constraints.len()),
                     .cons_base = @intCast(machine.pending_constraints.items.len),
                 } });
@@ -1089,7 +1165,7 @@ pub const Instantiator = struct {
                     },
                     .result = .flex,
                     .name = flex.name,
-                    .cons_start = @intFromEnum(flex.constraints.start),
+                    .cons_start = @backingInt(flex.constraints.start),
                     .cons_len = @intCast(flex.constraints.len()),
                     .cons_base = @intCast(machine.pending_constraints.items.len),
                 } });
@@ -1107,7 +1183,7 @@ pub const Instantiator = struct {
                         .flags = flags,
                     },
                     .alias = alias,
-                    .args_start = @intFromEnum(arg_span.start),
+                    .args_start = @backingInt(arg_span.start),
                     .args_count = arg_span.count,
                     .vars_base = @intCast(machine.value_stack.items.len),
                     .saved_reach = self.current_reach,
@@ -1145,7 +1221,7 @@ pub const Instantiator = struct {
                                 .fresh_var = fresh_var,
                                 .flags = flags,
                             },
-                            .elems_start = @intFromEnum(tuple.elems.start),
+                            .elems_start = @backingInt(tuple.elems.start),
                             .elems_count = tuple.elems.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                         } });
@@ -1164,7 +1240,7 @@ pub const Instantiator = struct {
                                 .flags = flags,
                             },
                             .nominal = nominal,
-                            .args_start = @intFromEnum(arg_span.start),
+                            .args_start = @backingInt(arg_span.start),
                             .args_count = arg_span.count,
                             .vars_base = @intCast(machine.value_stack.items.len),
                             .saved_reach = self.current_reach,
@@ -1297,6 +1373,7 @@ pub const Instantiator = struct {
                             machine.pending_constraints.items[frame.cons_base..],
                         );
                         machine.pending_constraints.items.len = frame.cons_base;
+                        if (frame.has_deferred) try self.recordDeferredSlots(fresh_range);
                         const fresh_content = switch (frame.result) {
                             .flex => Content{ .flex = Flex{ .name = frame.name, .constraints = fresh_range } },
                             .rigid => Content{ .rigid = Rigid{ .name = frame.name.?, .constraints = fresh_range } },
@@ -1306,6 +1383,14 @@ pub const Instantiator = struct {
                     }
                     const constraint = self.store.static_dispatch_constraints.items.items[frame.cons_start + frame.cons_idx];
                     frame.stage = .await_fn;
+                    if (self.deferredCallable(constraint)) |source| {
+                        frame.has_deferred = true;
+                        try machine.value_stack.append(self.store.gpa, source);
+                        continue;
+                    }
+                    if (std.debug.runtime_safety and self.store.resolveVar(constraint.fn_var).desc.flags.deferred_callable) {
+                        base.invariant("an instantiation reached a deferred requirement callable before its use linked it", .{});
+                    }
                     self.current_reach = .nested;
                     if (!try self.requestVar(constraint.fn_var, false)) return false;
                 },
@@ -1367,6 +1452,28 @@ pub const Instantiator = struct {
                     frame.stage = .dispatch_fn;
                 },
             }
+        }
+    }
+
+    /// The scheme's callable a copy of `constraint` keeps naming, when its
+    /// copy is deferred: deferral is on, the callable is generalized, and
+    /// this instantiation has not copied it.
+    fn deferredCallable(self: *Self, constraint: StaticDispatchConstraint) ?Var {
+        if (self.deferred_slots == null or constraint.interpolation.isPresent()) return null;
+        const resolved = self.store.resolveVar(constraint.fn_var);
+        if (resolved.desc.rank != .generalized) return null;
+        if (self.var_map.contains(resolved.var_)) return null;
+        return resolved.var_;
+    }
+
+    /// Record the store index of every requirement in a just-copied run
+    /// whose callable is deferred: it still names a generalized variable.
+    fn recordDeferredSlots(self: *Self, range: StaticDispatchConstraint.SafeList.Range) std.mem.Allocator.Error!void {
+        const slots = self.deferred_slots.?;
+        const start: u32 = @backingInt(range.start);
+        for (self.store.sliceStaticDispatchConstraints(range), 0..) |constraint, offset| {
+            if (self.store.resolveVar(constraint.fn_var).desc.rank != .generalized) continue;
+            try slots.append(self.store.gpa, start + @as(u32, @intCast(offset)));
         }
     }
 
@@ -1469,7 +1576,7 @@ pub const Instantiator = struct {
         while (true) {
             const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
             if (arrived < args_count) {
-                const arg_var = self.store.vars.items.items[@intFromEnum(frame.func.args.start) + arrived];
+                const arg_var = self.store.vars.items.items[@backingInt(frame.func.args.start) + arrived];
                 // Each function establishes its own input position. No
                 // position inside a function is adapter-reachable: the adapter
                 // re-tags the result it is generated for, never a row inside a
@@ -1487,7 +1594,7 @@ pub const Instantiator = struct {
                 continue;
             }
             if (arrived < args_count + 1 + deps_count) {
-                const dep_var = self.store.vars.items.items[@intFromEnum(frame.func.effect_deps.start) + (arrived - args_count - 1)];
+                const dep_var = self.store.vars.items.items[@backingInt(frame.func.effect_deps.start) + (arrived - args_count - 1)];
                 self.current_polarity = frame.saved_polarity;
                 self.current_reach = .nested;
                 if (!try self.requestVar(dep_var, false)) return false;
@@ -1526,7 +1633,7 @@ pub const Instantiator = struct {
                         // Indexing through the run's start only happens when
                         // the record has fields; start may be undefined when
                         // count is 0.
-                        const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(frame.source_fields.start) + frame.field_idx));
+                        const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(frame.source_fields.start) + frame.field_idx)));
                         const child_var = switch (frame.field_axis) {
                             .type_var => blk: {
                                 if (field.presence.presenceVar() != null) {
@@ -1577,7 +1684,7 @@ pub const Instantiator = struct {
         for (0..source_fields.count) |i| {
             // The loop body runs only for a non-empty run, so reading the
             // run's start here never reads an empty range's undefined start.
-            const field = self.store.record_fields.get(@enumFromInt(@intFromEnum(source_fields.start) + i));
+            const field = self.store.record_fields.get(@fromBackingInt(@intCast(@backingInt(source_fields.start) + i)));
             const fresh_type_var = machine.value_stack.items[vars_idx];
             vars_idx += 1;
             const fresh_presence = if (field.presence.presenceVar()) |_| blk: {
@@ -1603,11 +1710,7 @@ pub const Instantiator = struct {
                     if (frame.tag_idx == frame.source_tags.count) {
                         // Sort the fresh tags alphabetically by name before appending.
                         // This ensures tag discriminants are consistent after instantiation.
-                        std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], @as(*const Self, self), struct {
-                            fn less(instantiator: *const Self, a: Tag, b: Tag) bool {
-                                return std.mem.order(u8, instantiator.getIdentText(a.name), instantiator.getIdentText(b.name)) == .lt;
-                            }
-                        }.less);
+                        std.mem.sort(Tag, machine.pending_tags.items[frame.tags_base..], self.idents, comptime Tag.sortByNameAsc);
                         frame.tags_range = try self.store.appendTags(machine.pending_tags.items[frame.tags_base..]);
                         machine.pending_tags.items.len = frame.tags_base;
                         frame.stage = .await_ext;
@@ -1619,12 +1722,12 @@ pub const Instantiator = struct {
                     }
                     // Indexing through the run's start only happens when the
                     // union has tags; start may be undefined when count is 0.
-                    const tag = self.store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
+                    const tag = self.store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const arrived: u32 = @intCast(machine.value_stack.items.len - frame.vars_base);
                     if (arrived < tag.args.count) {
                         // Indexing through tag.args.start only happens when the
                         // tag has payloads; start may be undefined when count is 0.
-                        const arg_var = self.store.vars.items.items[@intFromEnum(tag.args.start) + arrived];
+                        const arg_var = self.store.vars.items.items[@backingInt(tag.args.start) + arrived];
                         self.current_reach = .nested;
                         if (!try self.requestVar(arg_var, false)) return false;
                         continue;
@@ -1679,6 +1782,10 @@ pub const Instantiator = struct {
         force_root_copy: bool,
     ) std.mem.Allocator.Error!StaticDispatchConstraint {
         var result = constraint;
+        if (self.deferredCallable(constraint)) |source| {
+            result.fn_var = source;
+            return result;
+        }
         result.fn_var = try self.instantiateVarHelp(constraint.fn_var, force_root_copy);
         result.interpolation = try self.instantiateInterpolationMetadata(constraint.interpolation);
         return result;

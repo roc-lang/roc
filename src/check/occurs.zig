@@ -192,8 +192,8 @@ const CheckOccurs = struct {
                                                     const decl = self.types_store.getNominalDecl(decl_idx);
                                                     try self.pushVarToProcess(decl.backing, Edge.nominal);
                                                 } else if (nominal_type.sourceDecl().present) {
-                                                    if (builtin.mode == .Debug) {
-                                                        std.debug.panic(
+                                                    if (builtin.mode == .debug) {
+                                                        base.invariant(
                                                             "occurs invariant violated: nominal application with source declaration has no declaration table entry",
                                                             .{},
                                                         );
@@ -934,7 +934,7 @@ test "occursDeclarationGraph: valid recursion through a tag payload" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const backing = try types_store.fresh();
     // Recursive reference: an app of the same declaration inside the payload.
@@ -965,7 +965,7 @@ test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const backing = try types_store.fresh();
     const rec_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
@@ -994,7 +994,7 @@ test "occursDeclarationGraph: mutual recursion closes by declaration key" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     // Reserve backing vars for both declarations first.
     const t_backing = try types_store.fresh();
@@ -1039,7 +1039,7 @@ test "occursDeclarationGraph: anonymous recursion inside a template is rejected"
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const inner = try types_store.fresh();
     const ext = try types_store.fresh();

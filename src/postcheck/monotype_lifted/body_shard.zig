@@ -71,7 +71,7 @@ const Relocation = struct {
     }
 
     fn id(self: *const Relocation, comptime field: []const u8, item: anytype) @TypeOf(item) {
-        return @enumFromInt(self.index(field, @intFromEnum(item)));
+        return @fromBackingInt(@intCast(self.index(field, @backingInt(item))));
     }
 
     fn span(self: *const Relocation, comptime field: []const u8, item: anytype) @TypeOf(item) {
@@ -140,23 +140,23 @@ const Relocation = struct {
         if (T == ast.LocalId) return self.id("locals", item);
         if (T == ast.StringLiteralId) return self.id("string_literals", item);
         if (T == ast.InlineScopeId) return if (item == ast.InlineScopeId.none) item else self.id("inline_scopes", item);
-        if (T == Common.Symbol) return @enumFromInt(@intFromEnum(item) + if (@intFromEnum(item) >= self.symbol_start) self.symbol_offset else @as(u32, 0));
-        if (T == ast.JoinPointId) return @enumFromInt(@intFromEnum(item) + if (@intFromEnum(item) >= self.join_start) self.join_offset else @as(u32, 0));
+        if (T == Common.Symbol) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.symbol_start) self.symbol_offset else @as(u32, 0)));
+        if (T == ast.JoinPointId) return @fromBackingInt(@intCast(@backingInt(item) + if (@backingInt(item) >= self.join_start) self.join_offset else @as(u32, 0)));
         if (T == ast.Span(void)) @compileError("body spans must be relocated through their owning field");
         const info = @typeInfo(T);
         if (comptime std.meta.activeTag(info) == .@"struct") {
             var result = item;
-            inline for (std.meta.fields(T)) |field| {
-                @field(result, field.name) = self.member(T, field.name, @field(item, field.name));
+            inline for (@typeInfo(T).@"struct".field_names) |field_name| {
+                @field(result, field_name) = self.member(T, field_name, @field(item, field_name));
             }
             return result;
         }
         if (comptime std.meta.activeTag(info) == .@"union") {
             const Tag = info.@"union".tag_type orelse return item;
             const active = std.meta.activeTag(item);
-            inline for (info.@"union".fields) |field| {
-                if (active == @field(Tag, field.name)) {
-                    return @unionInit(T, field.name, self.member(T, field.name, @field(item, field.name)));
+            inline for (info.@"union".field_names) |field_name| {
+                if (active == @field(Tag, field_name)) {
+                    return @unionInit(T, field_name, self.member(T, field_name, @field(item, field_name)));
                 }
             }
             unreachable;
@@ -260,22 +260,22 @@ test "body shard relocation distinguishes typed pools and preserves frozen IDs" 
     const pat_span: ast.Span(ast.PatId) = .{ .start = 2, .len = 1 };
     try std.testing.expectEqual(@as(u32, 12), relocation.span("expr_ids", expr_span).start);
     try std.testing.expectEqual(@as(u32, 42), relocation.span("pat_ids", pat_span).start);
-    try std.testing.expectEqual(@as(ast.ExprId, @enumFromInt(1)), relocation.value(@as(ast.ExprId, @enumFromInt(1))));
-    try std.testing.expectEqual(@as(Mono.FnId, @enumFromInt(2)), relocation.value(@as(Mono.FnId, @enumFromInt(2))));
-    try std.testing.expectEqual(@as(ast.FnId, @enumFromInt(2)), relocation.value(@as(ast.FnId, @enumFromInt(2))));
-    try std.testing.expectEqual(@as(Common.ComptimeValueRootId, @enumFromInt(2)), relocation.value(@as(Common.ComptimeValueRootId, @enumFromInt(2))));
-    const expr: ast.Expr = .{ .ty = @enumFromInt(2), .data = .{ .jump = .{
-        .target = @enumFromInt(80),
+    try std.testing.expectEqual(@as(ast.ExprId, @fromBackingInt(@intCast(1))), relocation.value(@as(ast.ExprId, @fromBackingInt(@intCast(1)))));
+    try std.testing.expectEqual(@as(Mono.FnId, @fromBackingInt(@intCast(2))), relocation.value(@as(Mono.FnId, @fromBackingInt(@intCast(2)))));
+    try std.testing.expectEqual(@as(ast.FnId, @fromBackingInt(@intCast(2))), relocation.value(@as(ast.FnId, @fromBackingInt(@intCast(2)))));
+    try std.testing.expectEqual(@as(Common.ComptimeValueRootId, @fromBackingInt(@intCast(2))), relocation.value(@as(Common.ComptimeValueRootId, @fromBackingInt(@intCast(2)))));
+    const expr: ast.Expr = .{ .ty = @fromBackingInt(@intCast(2)), .data = .{ .jump = .{
+        .target = @fromBackingInt(@intCast(80)),
         .args = expr_span,
     } } };
     const relocated = relocation.value(expr);
     try std.testing.expectEqual(expr.ty, relocated.ty);
-    try std.testing.expectEqual(@as(ast.JoinPointId, @enumFromInt(110)), relocated.data.jump.target);
+    try std.testing.expectEqual(@as(ast.JoinPointId, @fromBackingInt(@intCast(110))), relocated.data.jump.target);
     try std.testing.expectEqual(@as(u32, 12), relocated.data.jump.args.start);
     const pat: ast.Pat = .{ .ty = expr.ty, .data = .{ .tuple = pat_span } };
     try std.testing.expectEqual(@as(u32, 42), relocation.value(pat).data.tuple.start);
-    const stmt: ast.Stmt = .{ .expr = @enumFromInt(2) };
-    try std.testing.expectEqual(@as(ast.ExprId, @enumFromInt(12)), relocation.value(stmt).expr);
+    const stmt: ast.Stmt = .{ .expr = @fromBackingInt(@intCast(2)) };
+    try std.testing.expectEqual(@as(ast.ExprId, @fromBackingInt(@intCast(12))), relocation.value(stmt).expr);
 }
 
 test "body shard relocation preserves metadata sentinels and donor values" {
@@ -292,29 +292,29 @@ test "body shard relocation preserves metadata sentinels and donor values" {
         .join_start = 80,
         .join_offset = 30,
     };
-    const original = [_]?ast.ExprId{ @enumFromInt(1), null, @enumFromInt(2), @enumFromInt(9) };
+    const original = [_]?ast.ExprId{ @fromBackingInt(@intCast(1)), null, @fromBackingInt(@intCast(2)), @fromBackingInt(@intCast(9)) };
     const references = relocation.value(original);
     try std.testing.expectEqualDeep(
-        [_]?ast.ExprId{ @enumFromInt(1), null, @enumFromInt(12), @enumFromInt(19) },
+        [_]?ast.ExprId{ @fromBackingInt(@intCast(1)), null, @fromBackingInt(@intCast(12)), @fromBackingInt(@intCast(19)) },
         references,
     );
-    try std.testing.expectEqual(@as(ast.ExprId, @enumFromInt(2)), original[2].?);
+    try std.testing.expectEqual(@as(ast.ExprId, @fromBackingInt(@intCast(2))), original[2].?);
 
     var scope: ast.InlineScope = .{
-        .source_symbol = @enumFromInt(50),
+        .source_symbol = @fromBackingInt(@intCast(50)),
         .source_loc = .{ .file = 70, .line = 80, .column = 90 },
         .call_site = .{ .file = 100, .line = 110, .column = 120 },
     };
     const source_loc = scope.source_loc;
     const call_site = scope.call_site;
     scope = relocation.value(scope);
-    try std.testing.expectEqual(@as(Common.Symbol, @enumFromInt(70)), scope.source_symbol);
+    try std.testing.expectEqual(@as(Common.Symbol, @fromBackingInt(@intCast(70))), scope.source_symbol);
     try std.testing.expectEqual(ast.InlineScopeId.none, scope.parent);
     try std.testing.expectEqualDeep(source_loc, scope.source_loc);
     try std.testing.expectEqualDeep(call_site, scope.call_site);
 
-    var empty: ast.Expr = .{ .ty = @enumFromInt(8), .data = .{ .tuple = .{ .start = 99, .len = 0 } } };
+    var empty: ast.Expr = .{ .ty = @fromBackingInt(@intCast(8)), .data = .{ .tuple = .{ .start = 99, .len = 0 } } };
     empty = relocation.value(empty);
-    try std.testing.expectEqual(@as(@TypeOf(empty.ty), @enumFromInt(8)), empty.ty);
+    try std.testing.expectEqual(@as(@TypeOf(empty.ty), @fromBackingInt(@intCast(8))), empty.ty);
     try std.testing.expectEqualDeep(ast.Span(ast.ExprId).empty(), empty.data.tuple);
 }

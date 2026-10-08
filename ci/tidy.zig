@@ -92,6 +92,11 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
         gpa.free(paths);
     }
 
+    var zon_buffer: [64 * 1024]u8 = undefined;
+    const zon_text = try std.Io.Dir.cwd().readFile(io, zig_version_source, &zon_buffer);
+    const zig_version = minimumZigVersion(zon_text) orelse
+        std.debug.panic("{s} does not state a minimum_zig_version", .{zig_version_source});
+
     for (paths) |file_path| {
         const bytes_read = (std.Io.Dir.cwd().readFile(io, file_path, file_buffer) catch |err| {
             std.debug.print("Error reading {s}: {}\n", .{ file_path, err });
@@ -116,6 +121,7 @@ fn runTidy(gpa: Allocator, io: std.Io) !void {
 
         const source_file = SourceFile{ .path = file_path, .text = file_buffer[0..bytes_read :0] };
         try tidyFile(gpa, &counter, source_file, &errors);
+        tidyZigVersionPins(source_file, zig_version, &errors);
         if (std.mem.eql(u8, file_path, glossary_path)) {
             tidyGlossaryLinks(io, source_file, &errors);
         }
@@ -145,6 +151,132 @@ fn checkNoCommittedScratchFiles(paths: []const []const u8, errors: *Errors) void
             .{line},
         );
     }
+}
+
+/// The file whose `minimum_zig_version` is the one Zig version pin the
+/// toolchain itself enforces.
+const zig_version_source = "build.zig.zon";
+
+fn minimumZigVersion(zon_text: []const u8) ?[]const u8 {
+    _, const rest = cut(zon_text, ".minimum_zig_version = \"") orelse return null;
+    const version, _ = cut(rest, "\"") orelse return null;
+    return version;
+}
+
+/// A Zig version some file pins, and where in the file.
+const ZigPin = struct { offset: usize, version: []const u8 };
+
+/// The `version:` input of each `setup-zig` step in a GitHub workflow. A step
+/// with no such input yields an empty version.
+const SetupZigPins = struct {
+    text: []const u8,
+    pos: usize = 0,
+
+    fn next(pins: *SetupZigPins) ?ZigPin {
+        var step_offset: ?usize = null;
+        while (pins.pos < pins.text.len) {
+            const line_start = pins.pos;
+            const line_end = std.mem.findScalarPos(u8, pins.text, line_start, '\n') orelse pins.text.len;
+            const line = std.mem.trim(u8, pins.text[line_start..line_end], " \t\r");
+            if (step_offset) |offset| {
+                // The next step begins before this one named a version.
+                if (std.mem.startsWith(u8, line, "- ")) return .{ .offset = offset, .version = "" };
+                pins.pos = @min(line_end + 1, pins.text.len);
+                if (std.mem.startsWith(u8, line, "version:")) {
+                    return .{ .offset = line_start, .version = std.mem.trim(u8, line["version:".len..], " \t\"'") };
+                }
+            } else {
+                pins.pos = @min(line_end + 1, pins.text.len);
+                const is_comment = std.mem.startsWith(u8, line, "#");
+                if (!is_comment and std.mem.find(u8, line, "uses:") != null and std.mem.find(u8, line, "/setup-zig@") != null) {
+                    step_offset = line_start;
+                }
+            }
+        }
+        return if (step_offset) |offset| .{ .offset = offset, .version = "" } else null;
+    }
+};
+
+/// The `<major>_<minor>` of the `pkgs.zig_<major>_<minor>` package a Nix flake selects.
+fn flakeZigPin(text: []const u8) ?ZigPin {
+    // A flake may instead build Zig from a local `zig-<major>.<minor>.nix` derivation.
+    for ([_][]const u8{ "pkgs.zig_", "./zig-" }) |prefix| {
+        const start = (std.mem.find(u8, text, prefix) orelse continue) + prefix.len;
+        var end = start;
+        while (end < text.len and (std.ascii.isDigit(text[end]) or text[end] == '_' or text[end] == '.')) end += 1;
+        return .{ .offset = start, .version = std.mem.trimEnd(u8, text[start..end], ".") };
+    }
+    return null;
+}
+
+/// Whether nixpkgs' `<major>_<minor>` spelling names the major and minor of `version`.
+fn isMajorMinorOf(pin: []const u8, version: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, version, '.');
+    const major = parts.next() orelse return false;
+    const minor = parts.next() orelse return false;
+    const pin_major, const pin_minor = cut(pin, "_") orelse cut(pin, ".") orelse return false;
+    return std.mem.eql(u8, pin_major, major) and std.mem.eql(u8, pin_minor, minor);
+}
+
+/// Every place besides `build.zig.zon` that pins a Zig toolchain names the
+/// version the zon requires: the `version:` input of each `setup-zig` workflow
+/// step, and the package `src/flake.nix` selects. A version bump that misses
+/// one fails here instead of running that CI job or dev shell on another Zig.
+fn tidyZigVersionPins(file: SourceFile, required: []const u8, errors: *Errors) void {
+    if (std.mem.startsWith(u8, file.path, ".github/workflows/")) {
+        var pins = SetupZigPins{ .text = file.text };
+        while (pins.next()) |pin| {
+            if (std.mem.eql(u8, pin.version, required)) continue;
+            errors.emit(
+                "{s}:{d}: error: this setup-zig step installs Zig `{s}`, but {s} requires {s}\n",
+                .{ file.path, file.lineNumber(pin.offset), pin.version, zig_version_source, required },
+            );
+        }
+    } else if (std.mem.eql(u8, file.path, "src/flake.nix")) {
+        const pin = flakeZigPin(file.text) orelse {
+            errors.emit("{s}: error: no `pkgs.zig_<major>_<minor>` package to compare with the Zig version {s} requires\n", .{ file.path, zig_version_source });
+            return;
+        };
+        if (isMajorMinorOf(pin.version, required)) return;
+        errors.emit(
+            "{s}:{d}: error: the dev shell uses `pkgs.zig_{s}`, but {s} requires Zig {s}\n",
+            .{ file.path, file.lineNumber(pin.offset), pin.version, zig_version_source, required },
+        );
+    }
+}
+
+test "setup-zig version pins are read from each workflow step" {
+    var pins = SetupZigPins{ .text =
+        \\jobs:
+        \\  build:
+        \\    steps:
+        \\      - uses: actions/checkout@abc # ratchet:actions/checkout@v6
+        \\      - uses: xyzzylabs/setup-zig@09d8 # ratchet:xyzzylabs/setup-zig@v1.0.2
+        \\        with:
+        \\          version: 0.16.0
+        \\          use-cache: false
+        \\      # - uses: xyzzylabs/setup-zig@old
+        \\      - name: Zig
+        \\        uses: xyzzylabs/setup-zig@09d8
+        \\      - uses: xyzzylabs/setup-zig@09d8
+        \\        with:
+        \\          version: "0.15.2"
+        \\
+    };
+    try std.testing.expectEqualStrings("0.16.0", pins.next().?.version);
+    try std.testing.expectEqualStrings("", pins.next().?.version);
+    try std.testing.expectEqualStrings("0.15.2", pins.next().?.version);
+    try std.testing.expectEqual(@as(?ZigPin, null), pins.next());
+}
+
+test "a flake's Zig package is compared by major and minor version" {
+    try std.testing.expectEqualStrings("0.16.0", minimumZigVersion("    .minimum_zig_version = \"0.16.0\",\n").?);
+    try std.testing.expectEqualStrings("0_16", flakeZigPin("        zig = pkgs.zig_0_16;\n").?.version);
+    try std.testing.expect(isMajorMinorOf("0_16", "0.16.0"));
+    try std.testing.expect(isMajorMinorOf("0_16", "0.16.3"));
+    try std.testing.expect(!isMajorMinorOf("0_15", "0.16.0"));
+    try std.testing.expect(!isMajorMinorOf("0_1", "0.16.0"));
+    try std.testing.expect(!isMajorMinorOf("", "0.16.0"));
 }
 
 const glossary_path = "Glossary.md";
@@ -436,7 +568,7 @@ fn tidyFile(
         tidyBannedIndexOf(file, errors);
         tidyBannedCoreCtxCreation(file, errors);
 
-        var tree = try std.zig.Ast.parse(gpa, file.text, .zig);
+        var tree = try std.zig.Ast.parse(gpa, file.text, .{ .mode = .zig });
         defer tree.deinit(gpa);
 
         tidyDeadDeclarations(file, &tree, counter, errors);
@@ -714,7 +846,6 @@ fn tidyBannedStdIo(file: SourceFile, errors: *Errors) void {
         "src/mir/",
         "src/lir/",
         "src/layout/",
-        "src/values/",
         "src/backend/",
         "src/target/",
         "src/eval/",
@@ -1055,14 +1186,14 @@ fn tidyAst(
         const node: u32 = @intCast(node_usize);
         if (isBinOp(tag)) { // Forbid mixing bitops and arithmetics without parentheses.
             // In Zig 0.15, binary operations use node_and_node data layout
-            const data = tree.nodeData(@enumFromInt(node));
+            const data = tree.nodeData(@fromBackingInt(@intCast(node)));
             const children = data.node_and_node;
             inline for (children) |child| {
-                const child_tag = tags[@intFromEnum(child)];
+                const child_tag = tags[@backingInt(child)];
                 if ((isBinOpBitwise(tag) and isBinOpArithmetic(child_tag)) or
                     (isBinOpArithmetic(tag) and isBinOpBitwise(child_tag)))
                 {
-                    const token_opening = tree.nodeMainToken(@enumFromInt(node));
+                    const token_opening = tree.nodeMainToken(@fromBackingInt(@intCast(node)));
                     const line_opening = tree.tokenLocation(0, token_opening).line;
                     errors.addAmbiguousPrecedence(file, line_opening);
                 }
@@ -1099,7 +1230,7 @@ fn tidyInferredErrorUnion(file: SourceFile, tree: *const Ast, errors: *Errors) v
         // here (that would double-count).
         if (tag != .fn_proto and tag != .fn_proto_multi and tag != .fn_proto_one and tag != .fn_proto_simple) continue;
 
-        const node: Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const node: Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
         const fn_proto = tree.fullFnProto(&buffer, node) orelse continue;
         const return_type = fn_proto.ast.return_type.unwrap() orelse continue;
 
@@ -1220,6 +1351,35 @@ const DeadFilesDetector = struct {
 
         try detector.recordQuotedZigPaths(gpa, file.path, file.text, "@import(\"", false);
         try detector.recordQuotedZigPaths(gpa, file.path, file.text, "b.path(\"", true);
+        // The build scripts also name source roots as plain repository paths:
+        // the module table's `.root = "src/..."` entries and the paths
+        // build.zig passes to its helpers.
+        if (std.mem.eql(u8, file.path, "build.zig") or std.mem.eql(u8, file.path, "src/build/modules.zig")) {
+            try detector.recordRepoPathLiterals(gpa, file.path, file.text);
+        }
+    }
+
+    /// Record each string literal in `text` that is a repository path to a
+    /// Zig file under src/ or test/.
+    fn recordRepoPathLiterals(detector: *DeadFilesDetector, gpa: Allocator, file_path: []const u8, text: []const u8) Allocator.Error!void {
+        var rest: []const u8 = text;
+        for (0..16384) |_| {
+            const open = std.mem.indexOfScalar(u8, rest, '"') orelse return;
+            rest = rest[open + 1 ..];
+            const close = std.mem.indexOfScalar(u8, rest, '"') orelse return;
+            const literal = rest[0..close];
+            rest = rest[close + 1 ..];
+            if (!std.mem.endsWith(u8, literal, ".zig")) continue;
+            if (!std.mem.startsWith(u8, literal, "src/") and !std.mem.startsWith(u8, literal, "test/")) continue;
+            // A format string such as "src/fuzz-{s}.zig" names no single file.
+            const is_path = for (literal) |byte| {
+                if (!std.ascii.isAlphanumeric(byte) and byte != '_' and byte != '-' and byte != '.' and byte != '/') break false;
+            } else true;
+            if (!is_path) continue;
+            (try detector.fileState(gpa, literal)).import_count += 1;
+        } else {
+            std.debug.panic("file with too many string literals: {s}", .{file_path});
+        }
     }
 
     fn finish(detector: *DeadFilesDetector, errors: *Errors) void {

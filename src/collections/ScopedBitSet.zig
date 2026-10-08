@@ -158,7 +158,7 @@ test "ScopedBitSet randomized scopes agree with independent bit sets" {
     const gpa = std.testing.allocator;
     var actual = try Self.initEmpty(gpa, 257);
     defer actual.deinit(gpa);
-    var expected: [8]std.bit_set.IntegerBitSet(257) = @splat(.initEmpty());
+    var expected: [8]std.bit_set.IntegerBitSet(257) = @splat(.empty);
     var scopes: [7]Scope = undefined;
     var depth: usize = 0;
     var prng = std.Random.DefaultPrng.init(11128);
@@ -168,7 +168,7 @@ test "ScopedBitSet randomized scopes agree with independent bit sets" {
             0 => if (depth < scopes.len) {
                 scopes[depth] = actual.enterScope();
                 depth += 1;
-                expected[depth] = .initEmpty();
+                expected[depth] = .empty;
             },
             1 => if (depth > 0) {
                 depth -= 1;
@@ -176,7 +176,7 @@ test "ScopedBitSet randomized scopes agree with independent bit sets" {
             },
             2 => {
                 actual.unsetAll();
-                expected[depth] = .initEmpty();
+                expected[depth] = .empty;
             },
             else => {
                 const bit = random.uintLessThan(usize, 257);

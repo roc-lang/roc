@@ -501,7 +501,7 @@ const Extractor = struct {
 
         var emitter = can.RocEmitter.init(self.gpa, module_env);
         defer emitter.deinit();
-        emitter.emitExprWithLexicographicRecords(@enumFromInt(default.expr_node)) catch |err| switch (err) {
+        emitter.emitExprWithLexicographicRecords(@fromBackingInt(@intCast(default.expr_node))) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoSpaceLeft => return self.fail(.unpublished_public_type, "default literal could not be rendered canonically"),
         };
@@ -596,7 +596,7 @@ const Extractor = struct {
         source_decl: ?u32,
     ) Allocator.Error!?[]const u8 {
         const raw_statement = source_decl orelse return null;
-        const statement: can.CIR.Statement.Idx = @enumFromInt(raw_statement);
+        const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(raw_statement));
 
         const current = self.inputs[self.current_input];
         if (publicInputOwnsType(current, owner_module, statement)) {
@@ -662,9 +662,7 @@ const Extractor = struct {
 fn typeDeclName(module_env: *const ModuleEnv, statement_idx: can.CIR.Statement.Idx) ?[]const u8 {
     const statement = module_env.store.getStatement(statement_idx);
     const header_idx = switch (statement) {
-        .s_alias_decl => |decl| decl.header,
-        .s_nominal_decl => |decl| decl.header,
-        .s_where_alias_decl => |decl| decl.header,
+        inline .s_alias_decl, .s_nominal_decl, .s_where_alias_decl => |decl| decl.header,
         .s_decl,
         .s_var,
         .s_var_uninitialized,

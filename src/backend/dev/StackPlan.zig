@@ -44,7 +44,7 @@ pub const Indexes = struct {
 
     /// The node planned for `stmt`.
     pub fn nodeOf(self: *const Indexes, stmt: lir.CFStmtId) ?u32 {
-        const raw = @intFromEnum(stmt);
+        const raw = @backingInt(stmt);
         if (raw >= self.node_of_stmt.items.len) return null;
         const index = self.node_of_stmt.items[raw];
         return if (index == none) null else index;
@@ -52,7 +52,7 @@ pub const Indexes = struct {
 
     /// Record `stmt`'s node.
     pub fn setNode(self: *Indexes, stmt: lir.CFStmtId, index: u32) Allocator.Error!void {
-        const raw = @intFromEnum(stmt);
+        const raw = @backingInt(stmt);
         if (raw >= self.node_of_stmt.items.len) {
             const old_len = self.node_of_stmt.items.len;
             try self.node_of_stmt.resize(self.allocator, @max(raw + 1, old_len * 2));
@@ -63,7 +63,7 @@ pub const Indexes = struct {
 
     /// Empty the statement nodes `planned` recorded and the joins.
     pub fn clear(self: *Indexes, planned: []const lir.CFStmtId) void {
-        for (planned) |stmt| self.node_of_stmt.items[@intFromEnum(stmt)] = none;
+        for (planned) |stmt| self.node_of_stmt.items[@backingInt(stmt)] = none;
         self.joins.clearRetainingCapacity();
     }
 };
@@ -148,7 +148,7 @@ pub fn deinit(self: *Self) void {
 /// Release the analysis storage and return the local index column holding
 /// no entries, for the next plan.
 pub fn deinitKeepingLocalIndices(self: *Self) std.ArrayList(u32) {
-    for (self.values.items) |v| self.local_indices.items[@intFromEnum(v.local)] = none;
+    for (self.values.items) |v| self.local_indices.items[@backingInt(v.local)] = none;
     const local_indices = self.local_indices;
     self.deinitAnalysis();
     return local_indices;
@@ -164,7 +164,7 @@ fn deinitAnalysis(self: *Self) void {
 /// Intern a local in the compact procedure domain.
 pub fn local(self: *Self, id: lir.LocalId) Allocator.Error!u32 {
     if (self.localIndex(id)) |index| return index;
-    const raw = @intFromEnum(id);
+    const raw = @backingInt(id);
     if (raw >= self.local_indices.items.len) {
         const old_len = self.local_indices.items.len;
         try self.local_indices.resize(self.allocator, @max(raw + 1, old_len * 2));
@@ -177,7 +177,7 @@ pub fn local(self: *Self, id: lir.LocalId) Allocator.Error!u32 {
 }
 /// The index of an interned local.
 pub fn localIndex(self: *const Self, id: lir.LocalId) ?u32 {
-    const raw = @intFromEnum(id);
+    const raw = @backingInt(id);
     if (raw >= self.local_indices.items.len) return null;
     const index = self.local_indices.items[raw];
     return if (index == none) null else index;
@@ -775,7 +775,7 @@ fn reservationsOverlap(tree: *const Reservations, ranges: []const Range) bool {
 }
 
 fn testLocal(index: u32) lir.LocalId {
-    return @enumFromInt(index);
+    return @fromBackingInt(@intCast(index));
 }
 
 // The oracle deliberately uses dense statement-level fixed-point equations,
@@ -788,9 +788,9 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
         defer plan.deinit();
         const count = 20;
         const locals_count = 7;
-        var reads = [_]u8{0} ** count;
-        var writes = [_]u8{0} ** count;
-        var successors = [_]u32{0} ** count;
+        var reads = @as([count]u8, @splat(0));
+        var writes = @as([count]u8, @splat(0));
+        var successors = @as([count]u32, @splat(0));
         for (0..count) |_| _ = try plan.node();
         for (0..locals_count) |i| {
             try plan.access(0, testLocal(@intCast(i)), false, true);
@@ -816,8 +816,8 @@ test "stack plan matches exact liveness on generated typed scalar graphs" {
                 successors[i] |= @as(u32, 1) << @intCast(next);
             }
         }
-        var live_in = [_]u8{0} ** count;
-        var live_out = [_]u8{0} ** count;
+        var live_in = @as([count]u8, @splat(0));
+        var live_out = @as([count]u8, @splat(0));
         var changed = true;
         while (changed) {
             changed = false;

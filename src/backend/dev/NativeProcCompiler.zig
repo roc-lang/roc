@@ -35,11 +35,11 @@ pub const Metrics = struct {
 
     /// Combine work counters while preserving the maximum retained wave size.
     pub fn add(self: *Metrics, other: Metrics) void {
-        inline for (@typeInfo(Metrics).@"struct".fields) |field| {
-            if (comptime std.mem.eql(u8, field.name, "peak_inflight_fragments")) {
-                @field(self, field.name) = @max(@field(self, field.name), @field(other, field.name));
+        inline for (@typeInfo(Metrics).@"struct".field_names) |field_name| {
+            if (comptime std.mem.eql(u8, field_name, "peak_inflight_fragments")) {
+                @field(self, field_name) = @max(@field(self, field_name), @field(other, field_name));
             } else {
-                @field(self, field.name) +|= @field(other, field.name);
+                @field(self, field_name) +|= @field(other, field_name);
             }
         }
     }
@@ -112,7 +112,7 @@ pub const Retained = struct {
 fn invariant(err: (Artifact.ExtractError || Artifact.AssembleError)) Allocator.Error {
     return switch (err) {
         error.OutOfMemory => error.OutOfMemory,
-        else => std.debug.panic("native fragment compiler invariant: {s}", .{@errorName(err)}),
+        else => base.invariant("native fragment compiler invariant: {s}", .{@errorName(err)}),
     };
 }
 
@@ -308,7 +308,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     defer demanded.deinit(allocator);
     var identities = std.AutoHashMap(lir.ProcIdentity, ProcId).init(allocator);
     defer identities.deinit();
-    for (specs, 0..) |spec, i| try identities.putNoClobber(spec.identity, @enumFromInt(i));
+    for (specs, 0..) |spec, i| try identities.putNoClobber(spec.identity, @fromBackingInt(@intCast(i)));
     var cached_procs = std.AutoHashMap(lir.ProcIdentity, *const Procedure).init(allocator);
     defer cached_procs.deinit();
     var cached_helpers = std.AutoHashMap(u64, *const Helper).init(allocator);
@@ -342,10 +342,10 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
         };
         while (cursor < demand.len and count < wave_capacity) : (cursor += 1) {
             const id = demand[cursor];
-            if (demanded.isSet(@intFromEnum(id))) continue;
-            demanded.set(@intFromEnum(id));
+            if (demanded.isSet(@backingInt(id))) continue;
+            demanded.set(@backingInt(id));
             if (destination.compiledProcSymbol(id) != null) continue;
-            const spec = specs[@intFromEnum(id)];
+            const spec = specs[@backingInt(id)];
             storage[count] = .{ .source = destination, .data = &data, .proc = id };
             const job = &storage[count];
             count += 1;
@@ -365,7 +365,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
             Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
             const id = job.proc.?;
-            const spec = specs[@intFromEnum(id)];
+            const spec = specs[@backingInt(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
             account(&metrics, fragment, job.reused, false);
             job.fragment = null;

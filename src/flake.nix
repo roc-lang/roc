@@ -66,7 +66,7 @@
           libdwarf
           (pcConfigAlias "dwarf" libdwarf.dev "libdwarf")
         ];
-        zig = pkgs.zig_0_16;
+        zig = pkgs.callPackage ./zig-0.17.nix { };
         dependencies = [
           zig
           pkgs.zls
@@ -101,7 +101,7 @@
           export -f covcmd
 
           cicmd() {
-            zig build run-fmt-zig && zig build run-check-zig-lints && zig build roc && zig build run-check-snapshots && zig build run-test-zig && zig build run-test-playground && zig build run-coverage-parser
+            zig build minici
           }
           export -f cicmd
         '';
@@ -109,6 +109,7 @@
       in
       {
         packages = {
+          inherit zig;
           default = self.packages.${system}.roc;
           roc = pkgs.stdenv.mkDerivation (finalAttrs: {
             pname = "roc";
@@ -177,9 +178,7 @@
             echo "  zon2nix = nix run github:Cloudef/zig2nix -- zon2nix"
             echo ""
 
-            unset NIX_CFLAGS_COMPILE
-            unset NIX_LDFLAGS
-          ''; # unset to fix: Unrecognized C flag from NIX_CFLAGS_COMPILE: -fmacro-prefix-map
+          '';
         };
         formatter = pkgs.nixfmt-tree;
       }
