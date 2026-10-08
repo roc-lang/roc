@@ -487,6 +487,18 @@ pub const BuildEnv = struct {
         return platform.root_file;
     }
 
+    /// The verified content hash of the selected platform's bundle, or null
+    /// when the platform is not a downloaded bundle. The platform's directory
+    /// in the package cache is content-addressed by this hash, so it
+    /// identifies every file in that directory.
+    pub fn getPlatformBundleHash(self: *const BuildEnv) ?[]const u8 {
+        const name = self.selected_platform_package_name orelse return null;
+        const platform = self.packages.get(name) orelse return null;
+        std.debug.assert(platform.kind == .platform);
+        const url = platform.url orelse return null;
+        return url.hash;
+    }
+
     /// Set the target for this build environment.
     /// Must be called before compileDiscovered() if target needs to change after discovery.
     pub fn setTarget(self: *BuildEnv, target: roc_target.RocTarget) void {
@@ -562,7 +574,7 @@ pub const BuildEnv = struct {
             // dangling pointer for deinit to double-free.
             self.root_url = null;
         }
-        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.root_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     /// Declare that an explicitly supplied `--main` came from this bundle
@@ -573,7 +585,7 @@ pub const BuildEnv = struct {
             existing.deinit(self.gpa);
             self.main_url = null;
         }
-        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id });
+        self.main_url = try package_source.UrlSource.init(self.gpa, .{ .url = url, .url_id = parsed.url_id, .hash = parsed.hash });
     }
 
     pub fn setWatchInputTracking(self: *BuildEnv, enabled: bool) void {
@@ -1807,6 +1819,7 @@ pub const BuildEnv = struct {
             const url_view: ?package_source.UrlSourceView = if (package.url) |url| .{
                 .url = url.url,
                 .url_id = url.url_id,
+                .hash = url.hash,
             } else null;
             const root_file_state: ?watch_inputs.State = if (self.track_watch_inputs)
                 if (url_view == null)
