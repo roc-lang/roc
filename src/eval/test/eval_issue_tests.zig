@@ -4895,4 +4895,28 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "5" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `Dict.update` hands the alteration the stored list, which the
+        // dictionary's entries still hold. Once the call to the lookup is
+        // inlined, the lookup's result is born unique as a whole, but the list
+        // inside it is not, so appending to it must copy rather than write in
+        // place.
+        .name = "issue 12127: appending to a list updated in place inside a dictionary copies the shared list",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |xs|
+        \\    xs.fold(Dict.empty(), |d, s| d.update(s, |ov| match ov {
+        \\        Ok(vs) => Ok(vs.append(""))
+        \\        Err(Missing) => Ok([""])
+        \\    }))
+        \\        .get("v")
+        \\        .ok_or([])
+        \\        .len()
+        \\
+        \\main = count(["v", "v", "v"])
+        ,
+        .expected = .{ .inspect_str = "3" },
+    },
 };

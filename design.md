@@ -19776,9 +19776,15 @@ read of the source, and a view that some statement consumes is retained
 there and hands the retained unit on, so it follows the alias rule. A
 low-level op that neither allocates nor checks and whose result is its one
 consumed argument's own unit passes the value through and is an alias of
-that argument. A tag birth without a refcounted payload has every payload
-field vacuously unique, so an error-path return never vetoes the fields the
-success path carries. A borrowed argument position the callee only reads
+that argument. A field of a value with several definitions is unique only
+when every definition vouches for it. A tag birth without a refcounted
+payload has every payload field vacuously unique, so an error-path return
+never vetoes the fields the success path carries. A call vouches for exactly
+the fields its callee's signature returns unique or names in a conditional
+row: a callee's result born unique as a whole may still hold fields that
+other values share. A definition that states nothing about the fields (a
+field take, an opaque op's result, a non-aggregate alias) vetoes every
+field. A borrowed argument position the callee only reads
 (`read_only_params`: no consuming use, no holder-adding occurrence) adds no
 holder to the caller's argument; every other borrowed position is treated
 as a holder that may outlive the call.
