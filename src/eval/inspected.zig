@@ -3138,7 +3138,7 @@ fn runBoolRootCalls(
         var spawned: usize = 0;
         var spawn_error: ?std.Thread.SpawnError = null;
         while (spawned < worker_count) : (spawned += 1) {
-            threads[spawned] = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, boolRootWorker, .{&worker_args[spawned]}) catch |err| {
+            threads[spawned] = std.Thread.spawn(.{ .stack_size = base.stack_budget.spawnStackSize() }, boolRootWorker, .{&worker_args[spawned]}) catch |err| {
                 spawn_error = err;
                 break;
             };

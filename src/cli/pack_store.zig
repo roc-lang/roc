@@ -263,7 +263,8 @@ test "object cache semantic offers select compatible relations in either order" 
         }
     };
     for ([_]bool{ false, true }) |reverse| {
-        try std.testing.checkAllAllocationFailures(std.testing.allocator, Attempt.run, .{reverse});
+        var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
+        try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{reverse});
     }
 }
 
