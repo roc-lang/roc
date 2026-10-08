@@ -2559,7 +2559,7 @@ pub const Coordinator = struct {
             try self.workers.ensureTotalCapacity(self.gpa, n);
             var i: usize = 0;
             while (i < n) : (i += 1) {
-                const th = std.Thread.spawn(.{ .stack_size = base.stack_budget.roc_stack_size }, workerThread, .{ self, i }) catch |err| {
+                const th = std.Thread.spawn(.{ .stack_size = base.stack_budget.spawnStackSize() }, workerThread, .{ self, i }) catch |err| {
                     // A partially started pool must not outlive a failed start.
                     self.shutdown();
                     return err;

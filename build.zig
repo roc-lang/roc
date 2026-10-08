@@ -1881,7 +1881,10 @@ pub fn build(b: *std.Build) void {
     })) catch @panic("OOM");
 
     // Path to bundled Darwin sysroot with libSystem.tbd stub
-    build_options.addOptionPathDirectory("darwin_sysroot", b.path("src/cli/darwin"));
+    // This must be absolute: `roc` resolves it at run time from whatever
+    // directory it was started in, and `addOptionPathDirectory` bakes in the
+    // checkout-relative path, which only resolves from the repository root.
+    build_options.addOption([]const u8, "darwin_sysroot", b.root.joinString(b.allocator, "src/cli/darwin") catch @panic("OOM"));
 
     // We use zstd for `roc bundle` and `roc unbundle` and downloading .tar.zst bundles.
     const zstd = b.dependency("zstd", .{

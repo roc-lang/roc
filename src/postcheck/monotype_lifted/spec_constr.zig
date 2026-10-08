@@ -17156,7 +17156,8 @@ fn checkSpecConstrCommitAllocationFailure(allocator: Allocator) (Allocator.Error
 }
 
 test "staged SpecConstr changed shard commit allocation failures release owners" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, checkSpecConstrCommitAllocationFailure, .{});
+    var deterministic = @import("base").DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), checkSpecConstrCommitAllocationFailure, .{});
 }
 
 fn checkSpecConstrRequestAllocationFailure(allocator: Allocator) (Allocator.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
