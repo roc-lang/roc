@@ -936,6 +936,17 @@ checker recovery. The recovery rules:
 - A lambda parameter pattern that the lambda's annotation rejects binds
   nothing, so the lambda is erroneous, exactly as when the pattern fails its
   own check.
+- An annotation whose generated type is erroneous (for example, it names an
+  undeclared type) declares no type, and nothing may be related to it. Checking
+  records this on the annotation itself (`CIR.Annotation.erroneous`) as soon as
+  it generates the annotation's type, before any body or use is related to it,
+  so the record is available in every module that can see the definition. The
+  definition's right-hand side becomes the runtime error, a method included,
+  and a static dispatch that selects a method with such an annotation is
+  rejected exactly as one selecting an annotation-only declaration is: its
+  constraint callable is never related to the erroneous type, which would
+  otherwise reach the instantiation that the dispatch belongs to while every
+  type that instantiation's owner publishes stays error-free.
 - A pattern matched against an erroneous value binds nothing, because the
   value crashes before any pattern sees it. This is one rule wherever a
   pattern meets a value: a binding whose right-hand side is erroneous, every
@@ -11184,6 +11195,12 @@ Other solved-graph mutations:
   instead. `checkIteratorForLoop` also consumes an explicit rejected pattern
   result to retire the loop and reject its iterator plans without poisoning
   the independently checked iterable.
+- `rejectValuelessMethodDispatch` for a method whose annotation is erroneous
+  (`markStaticDispatchFnRejected`)—mechanism: diagnostic recovery after an
+  already-reported error (Every Rejection Is Explicit Recovery, above). The
+  rejection reads the explicit `CIR.Annotation.erroneous` record, which only an
+  annotation that already produced a diagnostic carries, so no error-free
+  program's typechecking or checked-module output changes.
 - `checkMatchExpr`'s branch-pattern target—mechanism: diagnostic recovery after
   an already-reported error. An erroneous scrutinee cannot relate the branch
   patterns to each other, so they unify against a shared fresh variable instead
@@ -14047,7 +14064,9 @@ poisoned body, checked at the annotation's type, only when that annotation
 itself declares a function: a bare `_` hole declares no callable type, and a
 function shape filled into it by the erroneous body is not a declaration, so
 such a method's bound expression becomes the runtime error like an unannotated
-one. Such a declaration
+one. An annotation that is itself erroneous (for example, one naming an
+undeclared type) declares no type either, so its method's bound expression
+becomes the runtime error too. Such a declaration
 is still *declared*, so `MethodRegistry` records its `(MethodOwner,
 MethodNameId)` key with no target rather than omitting it, and
 `lookupCheckedMethodTarget` answers `rejected` instead of "no such method".
@@ -14354,7 +14373,16 @@ specialization evidence. Boxy gives each independent callable contract its own
 hidden dictionary, so one target worker can be invoked with different adapters
 and nested dictionaries. The checked owner parameter and contract index identify
 those dictionaries across forwarding and lexical capture. Side vectors are interned and omitted when all selected
-target schemas authorize callable derivation. Omitting an evidence payload does
+target schemas authorize callable derivation. A procedure target authorizes it
+only when its own signature reaches every quantified variable of its scheme
+(`CheckedProcedureTemplate.callable_determines_scheme`). A variable that only a
+requirement's callable mentions, such as the error row of a forwarded method's
+result in `is_ok = |x| checked_send(x).is_ok()`, is fixed only by the selected
+targets' complete evidence chain, which a callable alone cannot supply, so every
+independent callable of such a target carries its own contract. A selected
+contract supplies its own checked instantiation and substitution, which
+Monotype uses for that call exactly as the primary use uses its own; an
+iterator `for` plan's calls consume the same entries. Omitting an evidence payload does
 not omit its callable relation: Monotype relates every independent callable
 recorded in the schema to a fresh instantiation of the selected declaration,
 including variables reachable only through those callables, before sealing a
