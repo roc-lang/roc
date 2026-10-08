@@ -62,12 +62,16 @@ pub const Plan = struct {
             }
             entry.value_ptr.* = item.source;
             _ = files.addCopyFile(item.source, item.path);
+            // Declared paths use the host separator, but aliases are written
+            // with '/', so compare in normalized form.
+            const normalized = b.allocator.dupe(u8, item.path) catch @panic("OOM");
+            std.mem.replaceScalar(u8, normalized, '\\', '/');
             for (self.aliases) |alias| {
-                if (item.path.len > alias.source.len and
-                    std.mem.startsWith(u8, item.path, alias.source) and
-                    item.path[alias.source.len] == '/')
+                if (normalized.len > alias.source.len and
+                    std.mem.startsWith(u8, normalized, alias.source) and
+                    normalized[alias.source.len] == '/')
                 {
-                    _ = files.addCopyFile(item.source, b.fmt("{s}/{s}", .{ alias.destination, item.path[alias.source.len + 1 ..] }));
+                    _ = files.addCopyFile(item.source, b.fmt("{s}/{s}", .{ alias.destination, normalized[alias.source.len + 1 ..] }));
                 }
             }
         }
