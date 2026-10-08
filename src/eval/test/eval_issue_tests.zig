@@ -4870,4 +4870,29 @@ pub const tests = [_]TestCase{
         ,
         .expected = .{ .inspect_str = "A" },
     },
+    .{
+        // https://github.com/roc-lang/roc/issues/12127
+        // `go` captures `kinds`, so `contains` at the tag union's structural
+        // equality is owned by the `go` specialization that lowers it. The
+        // recursive call lowers a second, identical `go` first; the outer
+        // `go`'s own `contains` must not reuse the copy owned by the inner
+        // one, which is discarded when the two merge.
+        .name = "issue 12127: closed direct call does not reuse a caller-owned specialization from another owner",
+        .source_kind = .module,
+        .source =
+        \\count : List(Str) -> U64
+        \\count = |argv| {
+        \\    kinds = Dict.empty().insert("v", Value).insert("f", Flag)
+        \\    go = |args, acc|
+        \\        match args {
+        \\            [] => acc
+        \\            [a, .. as rest] => go(rest, if [Value].contains(kinds.get(a).ok_or(Flag)) acc + 2 else acc + 1)
+        \\        }
+        \\    go(argv, 0)
+        \\}
+        \\
+        \\main = count(["v", "f", "v"])
+        ,
+        .expected = .{ .inspect_str = "5" },
+    },
 };

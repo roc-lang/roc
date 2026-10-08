@@ -14244,7 +14244,13 @@ the identity `(target template, target-instantiated checked callable,
 nested-evidence identity, method scope)`. Closed checked callable and evidence
 identities are interned in CheckedModule, so the first request creates or loads
 the specialization and every repeated call is an O(1) hit before durable type
-or evidence digests are rebuilt. Graph-participating targets consume their
+or evidence digests are rebuilt. That identity is complete only for a
+specialization independent of the caller's local context. A caller-owned
+specialization (structural evidence lowered inside a local procedure context,
+or evidence naming a local procedure) also belongs to its lexical owner and
+lexical context, so the O(1) memo never records it; each repeated request takes
+the template lookup, which reuses it only from inside its lexical owner and
+only at an equal lexical context. Graph-participating targets consume their
 producer-authored graph protocol instead of taking this sealed-interface path.
 
 Nothing else exists. Absent an explicit checker-authored callable path,

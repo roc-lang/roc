@@ -4116,7 +4116,9 @@ const GeneratedTryTypeAddress = struct {
 /// procedure call. `evidence` is an interned producer identity in `module`;
 /// the plan's closed callable type is likewise structurally interned there.
 /// The method scope remains part of specialization identity because imported
-/// bodies resolve compiler-generated method calls in that scope.
+/// bodies resolve compiler-generated method calls in that scope. The key is a
+/// complete identity only for specializations independent of the caller's
+/// local context, so caller-owned specializations are never stored under it.
 const ClosedDirectCallIdentity = struct {
     callable: CheckedTypeAddress,
     evidence: static_dispatch.EvidenceNodeId,
@@ -32943,10 +32945,20 @@ const BodyContext = struct {
                     Common.invariant("closed direct call created a draft function without a specialization record"),
                 .final => null,
             };
-            try self.draft.closed_direct_specializations.put(direct_key, .{
-                .slot = created,
-                .draft_spec = draft_spec,
-            });
+            // A caller-owned specialization's identity also includes its
+            // lexical owner and lexical context, which this key does not
+            // carry. Repeated requests for one reach it through the
+            // template lookup, which checks both.
+            const caller_owned = if (draft_spec) |raw_spec|
+                self.draft.template_specs.items[raw_spec].local_context_dependent
+            else
+                false;
+            if (!caller_owned) {
+                try self.draft.closed_direct_specializations.put(direct_key, .{
+                    .slot = created,
+                    .draft_spec = draft_spec,
+                });
+            }
             break :blk created;
         };
         const completed_callable_node = try self.draftFnSlotTypeNode(slot, callable_node);
