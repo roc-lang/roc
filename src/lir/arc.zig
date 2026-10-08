@@ -1323,6 +1323,8 @@ const VariantTable = struct {
             .hosted = source_spec.hosted,
             .tail_transform = source_spec.tail_transform,
             .tail_group = source_spec.tail_group,
+            // The variant's body is the source's, so it has the source's shapes.
+            .shapes = source_spec.shapes,
             .stack_probe = source_spec.stack_probe,
         }, store.procLoc(callee));
         try store.copyProcDebugInfo(variant, callee);
@@ -17741,6 +17743,45 @@ test "RC specialization: identical demand vectors share one variant" {
     try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
     try f.expectRc(value_a, 0, 0, 0);
     try f.expectRc(value_b, 0, 0, 0);
+}
+
+test "RC specialization: a variant carries its source's procedure shapes" {
+    var f = try ArcTest.init(testing.allocator);
+    defer f.deinit();
+
+    // Repro for https://github.com/roc-lang/roc/issues/12127: later passes
+    // admit a procedure by its recorded shapes (immortal-local elision reads
+    // `static_literal`), and a variant runs the source's body, so it must
+    // record the same shapes.
+    const param = try f.local(.str);
+    const callee_ret = try f.ret(param);
+    const callee_body = try f.expectStmt(param, callee_ret);
+    const callee = try f.addProc(&.{param}, callee_body, .str);
+    f.store.getProcSpecPtr(callee).shapes.static_literal = true;
+    f.store.getProcSpecPtr(callee).shapes.switch_stmt = true;
+
+    const value = try f.local(.str);
+    const result = try f.local(.str);
+    const done = try f.local(.i64);
+    const ret = try f.ret(done);
+    const done_assign = try f.assignI64(done, 1, ret);
+    const call = try f.store.addCFStmt(.{ .assign_call = .{
+        .target = result,
+        .proc = callee,
+        .args = try f.span(&.{value}),
+        .next = done_assign,
+    } }, .test_fixture);
+    const body = try f.assignStr(value, "arg", call);
+    _ = try f.addProc(&.{}, body, .i64);
+
+    const base_proc_count = f.store.procSpecCount();
+    try insert(&f.store, &f.layouts, .{ .specialize = true });
+
+    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+    const variant: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(base_proc_count))));
+    const shapes = f.store.getProcSpec(variant).shapes;
+    try testing.expect(shapes.static_literal);
+    try testing.expect(shapes.switch_stmt);
 }
 
 test "RC interprocedural: borrowed parameter passed through emits no RC statements" {
