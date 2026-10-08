@@ -67,7 +67,7 @@ pub const Plan = struct {
                     std.mem.startsWith(u8, item.path, alias.source) and
                     item.path[alias.source.len] == '/')
                 {
-                    _ = files.addCopyFile(item.source, b.pathJoin(&.{ alias.destination, item.path[alias.source.len + 1 ..] }));
+                    _ = files.addCopyFile(item.source, b.fmt("{s}/{s}", .{ alias.destination, item.path[alias.source.len + 1 ..] }));
                 }
             }
         }
