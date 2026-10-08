@@ -9323,7 +9323,8 @@ test "issue 11362: generated iterator index follows roots provenance and duplica
 }
 
 test "issue 11362: generated iterator index releases allocations on failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testGeneratedIteratorMigration, .{});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testGeneratedIteratorMigration, .{});
 }
 
 fn assertGeneratedIteratorIndexConsistent(graph: *InstGraph) void {
