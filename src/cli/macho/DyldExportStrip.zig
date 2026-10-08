@@ -16,6 +16,79 @@
 //! dyld's weak-coalescing pass. This is the same end state Apple's linker
 //! produces for `-no_exported_symbols` plus hidden visibility. It applies
 //! only to executables; a dylib's exports are its interface and must stay.
+//!
+//! ## What removing this step would take
+//!
+//! Measured with Zig 0.17.0 and the roc-bootstrap `zig-0.17.0` archives: the
+//! linked aarch64-macos roc executable exports 58,041 symbols and its
+//! weak-bind opcodes name 9,362 distinct symbols. Removing this rewrite needs
+//! both numbers brought down by other means, in three parts.
+//!
+//! 1. Hidden visibility for every C and C++ input. This part is under Roc's
+//!    control, and it removes nearly all exports and weak binds:
+//!    - roc-bootstrap: add `-fvisibility=hidden` (and, for C++,
+//!      `-fvisibility-inlines-hidden`) to the compiler command in
+//!      `nix/stages/cross-cmake.sh`, which covers LLVM, LLD, Binaryen and
+//!      zlib. The compiler command rather than CMAKE_<LANG>_FLAGS, because
+//!      `binaryen.sh` replaces those flags. Its zstd stage also needs
+//!      `-DZSTDLIB_VISIBLE= -DZSTDLIB_HIDDEN= -DZSTDERRORLIB_VISIBILITY=
+//!      -DZDICTLIB_VISIBILITY=`, since zstd's headers otherwise mark its API
+//!      with explicit default visibility, which takes precedence over the flag.
+//!    - The zstd roc builds itself: the allyourcodebase/zstd package offers no
+//!      way to pass C flags, so roc would build zstd from the upstream
+//!      facebook/zstd source it already pins, with the same flag plus
+//!      `-DZSTDLIB_VISIBLE= -DZSTDERRORLIB_VISIBLE= -DZDICTLIB_VISIBLE=`.
+//!    - `src/build/zig_llvm.cpp` and `src/build/zig_binaryen.cpp`: add
+//!      `-fvisibility=hidden` to `exe_cflags` in build.zig.
+//!    - `src/eval/host_trampoline.S`: mark both trampoline symbols
+//!      `.private_extern` on Mach-O (`.hidden` on ELF).
+//!    Verified so far: the roc-side changes remove every export roc's own
+//!    code contributed (638), and Binaryen compiled with the bootstrap change
+//!    goes from 8,965 exports and 5,495 weak-bound symbols to none. LLVM, LLD
+//!    and zlib are built the same way and are expected to follow; that is not
+//!    yet measured.
+//!
+//! 2. Exports no compile flag of roc's controls. After part 1, the remaining
+//!    exports would be `__mh_execute_header` and `___dso_handle`, which Zig's
+//!    Mach-O linker defines; `_main`, which Zig's start code exports; and the
+//!    12 replaceable `operator new`/`operator delete` functions of the libc++
+//!    Zig builds, which clang gives default visibility regardless of
+//!    -fvisibility (only `-fvisibility-global-new-delete=force-hidden` hides
+//!    them, and Zig compiles its libc++ itself). Getting rid of these needs
+//!    Zig's linker to support restricting an executable's exports, as Apple's
+//!    linker does with `-no_exported_symbols` or `-exported_symbols_list`.
+//!    In Zig 0.17.0, `zig cc` accepts `-exported_symbols_list` and parses it
+//!    into the linker's export-name list, but only the Wasm linker reads that
+//!    list, and neither `zig build-exe` nor `std.Build.Step.Compile` offers an
+//!    option for it. Roc builds the CLI through `std.Build`, so it would need
+//!    both the Mach-O linker to apply the list and a `std.Build` option to
+//!    pass it. These 15 symbols cost dyld little, so a CI check that permits
+//!    exactly them would be a reasonable alternative to that.
+//!
+//! 3. Weak binds to hidden symbols. Even with every input hidden, about 30
+//!    weak-bound symbols remain besides 11 of the allocation functions above:
+//!    symbols of Zig's libc++ (stream vtables, locale facet `id`s,
+//!    `basic_string` destructors), reached from libc++ itself, LLVM, LLD and
+//!    Binaryen, and Binaryen's exception typeinfo, which exception tables
+//!    reach through the GOT. All of them are hidden. Zig's Mach-O linker writes a weak bind for
+//!    every weak symbol reached through a GOT, stub or thread-local pointer
+//!    regardless of its visibility (`src/link/MachO/dyld_info/bind.zig`); for
+//!    a data relocation it writes one only when the symbol is exported or
+//!    imported. Apple's linker writes no weak binds for hidden symbols. The
+//!    count is too small to matter for launch time, but dyld can resolve a
+//!    weak bind to a same-named definition exported by another loaded image,
+//!    and roc loads CoreFoundation, which is believed to load the system's
+//!    libc++.1.dylib, which exports symbols with these exact names. Some of
+//!    roc's references to, for example, a locale facet `id` could then reach
+//!    Apple's copy while its own libc++ uses its copy. That has not been
+//!    tested on macOS. Removing this rewrite without that risk needs Zig's
+//!    linker to stop writing weak binds for symbols the executable does not
+//!    export, or to offer an option for that.
+//!
+//! With all three in place, this rewrite and its re-signing could be replaced
+//! by a CI check that reads the linked executable's export trie and fails on
+//! anything beyond the symbols part 2 leaves (none, if Zig's linker can
+//! restrict exports).
 
 const std = @import("std");
 const macho = std.macho;

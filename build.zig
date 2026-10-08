@@ -2260,7 +2260,8 @@ pub fn build(b: *std.Build) void {
     // all of that on every launch—~540M instructions before main() runs
     // (#10992). Every install of the roc CLI for a macOS target goes through
     // this tool, which removes the export trie and weak-bind info and
-    // rewrites the ad-hoc code signature.
+    // rewrites the ad-hoc code signature. src/cli/macho/DyldExportStrip.zig
+    // describes what removing this step would take.
     const dyld_export_strip_module = b.createModule(.{
         .root_source_file = b.path("src/cli/macho/DyldExportStrip.zig"),
         .imports = &.{
