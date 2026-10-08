@@ -117,10 +117,12 @@ fn reserveUniqueTestDir(io: std.Io, allocator: std.mem.Allocator, namespace: []c
         // monotonic counter to produce a unique-ish temp-dir suffix.
         var prng = std.Random.DefaultPrng.init(@as(u64, std.testing.random_seed) ^ cache_dir_id);
         const random = prng.random().int(u64);
-        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x}-{d}", .{
+        // Keep the leaf short: on Windows the compiled test executables live
+        // several directories below it, and the total path must stay under
+        // MAX_PATH (260), which the fixture root's own prefix already uses up.
+        const cache_leaf = try std.fmt.allocPrint(allocator, "{d}-{x:0>8}", .{
             cache_dir_id,
-            random,
-            cache_dir_id,
+            @as(u32, @truncate(random)),
         });
         defer allocator.free(cache_leaf);
 

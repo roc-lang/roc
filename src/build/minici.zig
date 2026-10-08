@@ -1633,6 +1633,17 @@ fn memoryAwareBuildJobs(_: std.Io, _: std.mem.Allocator, env: *const std.process
     return budget;
 }
 
+/// Parallel job limit for run phases that may still compile. Run phases
+/// normally execute prebuilt runners, but some (for example the test-wiring
+/// check) build a debug compiler of their own. On Windows, running those
+/// builds at full width has exhausted the hosted runner's memory
+/// (`std::bad_alloc` inside zig.exe), so cap them there. `MINICI_MAX_CPUS=N`
+/// overrides the cap.
+fn runPhaseJobs(env: *const std.process.Environ.Map) ?usize {
+    if (envCpuOverride(env)) |n| return if (builtin.os.tag == .windows) n else null;
+    return if (builtin.os.tag == .windows) 2 else null;
+}
+
 const workflow_shard_key = "minici_shard:";
 
 /// Returns one message per problem with the `minici_shard:` keys in `text`: a
@@ -1772,7 +1783,7 @@ pub fn main(init: std.process.Init) !void {
             try std.fmt.allocPrint(allocator, "{s}/{s}.json", .{ raw_dir, job.name })
         else
             null;
-        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, null, stats_path, job.args);
+        const argv = try buildCommand(allocator, zig_exe, build_args, job.name, runPhaseJobs(init.environ_map), stats_path, job.args);
         const progress = Progress{ .current = job_index + 2, .total = total_phases };
         printRunStart(progress, job.name);
         const skip_reason: ?[]const u8 = if (!selected_jobs.includes(job_index))

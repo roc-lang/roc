@@ -426,7 +426,9 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true' && !github.event.pull_request.draft
     name: minici-build (windows-2025)
     runs-on: windows-2025
-    timeout-minutes: 120
+    # The Zig 0.17 build takes about 110 to 120 minutes here (the eval runner
+    # alone about 35), so 120 leaves no margin; windows-eval has the same headroom.
+    timeout-minutes: 180
     steps: *minici_build_steps
 
   # Each shard runs the MiniCI jobs that src/build/minici.zig assigns to its
