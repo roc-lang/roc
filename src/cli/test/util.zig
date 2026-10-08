@@ -73,11 +73,14 @@ pub fn putIsolatedTempEnv(env_map: *std.process.Environ.Map, temp_dir: []const u
 }
 
 /// Absolute path to the declared compiler artifact used by CLI tests.
-pub const roc_binary_path = blk: {
-    const options = @import("fixture_options");
-    if (std.fs.path.isAbsolute(options.roc_binary_build_path)) break :blk options.roc_binary_build_path;
-    break :blk options.build_root ++ "/" ++ options.roc_binary_build_path;
-};
+pub const roc_binary_path = buildOutputPath(@import("fixture_options").roc_binary_build_path);
+
+/// Absolute path to a build output. Zig names an output relative to the build
+/// runner's directory, while tests run in prepared fixture roots.
+pub fn buildOutputPath(comptime path: []const u8) []const u8 {
+    if (comptime std.fs.path.isAbsolute(path)) return path;
+    return @import("fixture_options").build_root ++ "/" ++ path;
+}
 
 /// Errors that can occur while setting up a temporary CLI test directory.
 pub const TestDirError = std.mem.Allocator.Error || std.Io.Dir.CreateDirPathError || std.Io.Dir.CreateDirError || std.Io.Dir.RealPathFileAllocError;
