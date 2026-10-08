@@ -3019,7 +3019,19 @@ pub fn getAnnotation(store: *const NodeStore, annotation: CIR.Annotation.Idx) CI
         .mentions_type_var = p.flags.mentions_type_var,
         .introduces_type_var = p.flags.introduces_type_var,
         .contains_underscore = p.flags.contains_underscore,
+        .erroneous = p.flags.erroneous,
     };
+}
+
+/// Records that type checking generated an erroneous type for `annotation`.
+pub fn markAnnotationErroneous(store: *NodeStore, annotation: CIR.Annotation.Idx) void {
+    const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(annotation)));
+    var node = store.nodes.get(node_idx);
+    std.debug.assert(node.tag == .annotation);
+    var payload = node.getPayload();
+    payload.annotation.flags.erroneous = true;
+    node.setPayload(payload);
+    store.nodes.set(node_idx, node);
 }
 
 /// Retrieves an exposed item from the store.

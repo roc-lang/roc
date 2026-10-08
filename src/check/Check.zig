@@ -19613,6 +19613,15 @@ fn generateAnnotationType(self: *Self, annotation_idx: CIR.Annotation.Idx, env: 
 
     // Redirect the root annotation to inner annotation
     _ = try self.unify(annotation_var, ModuleEnv.varFrom(annotation.anno), env);
+
+    // An erroneous annotation declares no type. Record that on the annotation
+    // itself, before anything is related to it, so every consumer (including
+    // importers, which read this module's annotations) can refuse to relate
+    // anything to it.
+    self.var_set.clearRetainingCapacity();
+    if (try self.varContainsError(annotation_var, &self.var_set)) {
+        self.cir.store.markAnnotationErroneous(annotation_idx);
+    }
 }
 
 /// One implicitly opened tag-union extension minted while generating an
@@ -24609,10 +24618,16 @@ const ExprCheckFrame = struct {
                 // child. The kept wrapper's checked type is the annotation's, so
                 // this requires an annotation that itself declares a function; a
                 // wrapper whose function shape came only from a `_` hole filled by
-                // the erroneous body has no declared callable type. Other annotated
-                // values are the executable boundary and must themselves become
-                // the runtime error.
-                const is_method_callable = isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
+                // the erroneous body has no declared callable type, and neither
+                // does an annotation that is itself erroneous (for example, one
+                // naming an undeclared type). Other annotated values are the
+                // executable boundary and must themselves become the runtime error.
+                const annotation_erroneous = if (self.annotation) |annotation_idx|
+                    checker.cir.store.getAnnotation(annotation_idx).erroneous
+                else
+                    false;
+                const is_method_callable = !annotation_erroneous and
+                    isFunctionDef(&checker.cir.store, checker.cir.store.getExpr(self.expr_idx)) and
                     checker.varIsFunctionType(anno_vars.anno_var_backup) and
                     checker.exprDefinesMethod(self.expr_idx);
                 if (!is_method_callable) {
@@ -30078,7 +30093,9 @@ fn rejectValuelessMethodDispatch(
     env: *Env,
     failure_expr: ?CIR.Expr.Idx,
 ) Allocator.Error!bool {
-    if (hostedDeclarationIsNotEffectful(lookup.env, lookup.binding.def_idx)) {
+    if (hostedDeclarationIsNotEffectful(lookup.env, lookup.binding.def_idx) or
+        methodAnnotationErroneous(lookup))
+    {
         try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
         try self.markStaticDispatchRejected(constraint);
         return true;
@@ -30094,6 +30111,16 @@ fn rejectValuelessMethodDispatch(
     try self.poisonConstraintFailure(dispatcher_var, constraint, env, failure_expr);
     try self.markStaticDispatchRejected(constraint);
     return true;
+}
+
+/// A method whose annotation is erroneous has no declared type, so relating a
+/// dispatch's constraint callable to it would carry the error into every
+/// instantiation that dispatch reaches. The dispatch is rejected instead. The
+/// method's own module records this on the annotation when it generates the
+/// annotation's type, which happens before any dispatch can select the method.
+fn methodAnnotationErroneous(lookup: StaticDispatchMethodBinding) bool {
+    const annotation_idx = lookup.env.store.getDef(lookup.binding.def_idx).annotation orelse return false;
+    return lookup.env.store.getAnnotation(annotation_idx).erroneous;
 }
 
 fn lookupStaticDispatchMethodBinding(

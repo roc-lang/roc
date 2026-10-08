@@ -50805,15 +50805,18 @@ const BodyContext = struct {
         self: *BodyContext,
         target: *const SpecEvidenceTarget,
     ) static_dispatch.ProcedureEvidenceSchema {
-        const params = switch (target.target.kind) {
+        return switch (target.target.kind) {
             .procedure => |procedure| blk: {
                 const template = target.view.templates.get(procedure.template.template);
-                break :blk target.view.templates.evidenceParams(&template);
+                const schema = static_dispatch.procedureEvidenceSchema(target.view.templates.evidenceParams(&template));
+                // A signature that leaves a scheme variable to the target's
+                // nested evidence cannot supply an independent callable's
+                // substitution; checking records that callable's own contract.
+                break :blk if (schema == .from_callable and !template.callable_determines_scheme) .requires_record else schema;
             },
-            .local_proc => |local| self.scopeSchema(target.view, local.dispatch_scope).params,
+            .local_proc => |local| static_dispatch.procedureEvidenceSchema(self.scopeSchema(target.view, local.dispatch_scope).params),
             .structural => Common.invariant("structural evidence target reached callable nested-evidence classification"),
         };
-        return static_dispatch.procedureEvidenceSchema(params);
     }
 
     const DependentCallableEvidenceError = error{RequiresRecordSynthesis};
@@ -51071,7 +51074,7 @@ const BodyContext = struct {
                                 null
                             else
                                 target.instantiation,
-                            .substitution = if (dependent.independent_callable)
+                            .substitution = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
                                 null
                             else
                                 target.substitution,
@@ -61408,6 +61411,10 @@ const BodyContext = struct {
                         null
                     else
                         target.instantiation,
+                    .substitution = if (dependent.independent_callable and selectCallableContract(entry, dependent.callable_contract) == null)
+                        null
+                    else
+                        target.substitution,
                     .local_proc_context = target.local_proc_context,
                 },
                 .structural, .from_callable, .from_scheme, .unreachable_value, .checked_error => Common.invariant("iterator dispatch evidence was not a resolved callable target"),
