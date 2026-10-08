@@ -2503,7 +2503,7 @@ fn entrypointAbiDigestFromLirData(
 fn interpreterExeLinkInputsIdentity(
     ctx: *CliCtx,
     shim_kind: ShimLibraryKind,
-    link_spec: roc_target.TargetLinkSpec,
+    link_items: []const roc_target.LinkItem,
     platform_dir: []const u8,
     files_dir: []const u8,
     target: RocTarget,
@@ -2515,7 +2515,7 @@ fn interpreterExeLinkInputsIdentity(
     updateHashBytes(&hasher, @tagName(target));
 
     const target_name = @tagName(target);
-    for (link_spec.items) |item| {
+    for (link_items) |item| {
         switch (item) {
             .file_path => |file_name| {
                 const full_path = try std.fs.path.join(ctx.arena, &.{ platform_dir, files_dir, target_name, file_name });
@@ -2924,6 +2924,55 @@ fn resolveInstalledEntry(ctx: *CliCtx, name: []const u8) (CliError || Allocator.
     return .{ .paths = entry, .kind = kind, .artifact_path = artifact_path, .url = manifest_url };
 }
 
+/// The platform package resolution selected, with the targets configuration
+/// every command that links or runs an app chooses its target from.
+const PlatformTargets = struct {
+    root_file: []const u8,
+    config: roc_target.TargetsConfig,
+};
+
+/// Require that discovery selected a platform declaring a targets section.
+fn requirePlatformTargets(ctx: *CliCtx, build_env: *const BuildEnv, app_path: []const u8) CliMainError!PlatformTargets {
+    const root_file = build_env.getPlatformRootFile() orelse {
+        try renderProblem(ctx, .{
+            .no_platform_found = .{ .app_path = app_path },
+        });
+        return error.NoPlatformSource;
+    };
+    const config = build_env.getPlatformTargetsConfig() orelse {
+        renderValidationError(ctx, .{
+            .missing_targets_section = .{ .platform_path = root_file },
+        });
+        return error.PlatformNotSupported;
+    };
+    return .{ .root_file = root_file, .config = config };
+}
+
+/// The host inputs a shim run links for its selected target, copied out of
+/// the build environment that resolved the platform so they outlive it.
+const RunPlatformLink = struct {
+    target: RocTarget,
+    items: []const roc_target.LinkItem,
+    platform_dir: []const u8,
+    files_dir: []const u8,
+
+    fn init(arena: Allocator, platform: PlatformTargets, link_spec: roc_target.TargetLinkSpec) Allocator.Error!RunPlatformLink {
+        const items = try arena.alloc(roc_target.LinkItem, link_spec.items.len);
+        for (link_spec.items, items) |item, *copy| {
+            copy.* = switch (item) {
+                .file_path => |path| .{ .file_path = try arena.dupe(u8, path) },
+                .app, .win_gui => item,
+            };
+        }
+        return .{
+            .target = link_spec.target,
+            .items = items,
+            .platform_dir = try arena.dupe(u8, std.fs.path.dirname(platform.root_file) orelse "."),
+            .files_dir = try arena.dupe(u8, platform.config.inputs_dir orelse "targets"),
+        };
+    }
+};
+
 fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8) CliMainError!void {
     const trace = tracy.trace(@src());
     defer trace.end();
@@ -2985,60 +3034,6 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         return ctx.fail(.{ .cache_dir_unavailable = .{ .reason = @errorName(err) } });
     };
 
-    // Resolve platform paths from the app header before linking the host shim.
-    const platform_paths = try resolvePlatformPaths(ctx, args.path);
-
-    // Validate platform header and get link spec
-    var link_spec: ?roc_target.TargetLinkSpec = null;
-    var targets_config: ?roc_target.TargetsConfig = null;
-    if (platform_paths.platform_source_path) |platform_source| {
-        if (platform_validation.validatePlatformHeader(
-            ctx.arena,
-            ctx.io.std_io,
-            platform_source,
-            ctx.io.stderr(),
-            ctx.reportConfig(.stderr),
-        )) |validation| {
-            targets_config = validation.config;
-
-            const selected = try selectRunPlatformTarget(ctx, validation.config, platform_source, args.target);
-            link_spec = selected.link_spec;
-        } else |err| {
-            switch (err) {
-                error.MissingTargetsSection => {
-                    ctx.io.stderr().print("Error: Platform is missing a targets section.\n\n", .{}) catch {};
-                    ctx.io.stderr().print("All platforms must have a 'targets:' section in their header\n", .{}) catch {};
-                    ctx.io.stderr().print("that specifies which targets are supported and what files to link.\n", .{}) catch {};
-                    return error.PlatformNotSupported;
-                },
-                error.ParseError => {
-                    // validatePlatformHeader already rendered the syntax
-                    // diagnostics; stop here so we don't fall through and
-                    // print a misleading "no compatible target" error too.
-                    return error.PlatformNotSupported;
-                },
-                error.FileReadError,
-                error.MissingFilesDirectory,
-                error.MissingTargetFile,
-                error.OutOfMemory,
-                error.UnsupportedTarget,
-                => {
-                    std.log.debug("Could not validate platform header: {}", .{err});
-                },
-            }
-        }
-    }
-
-    // All platforms must have a targets section with a link spec for a compatible target
-    const validated_link_spec = link_spec orelse {
-        ctx.io.stderr().print("Error: Platform does not support any target compatible with this system.\n\n", .{}) catch {};
-        ctx.io.stderr().print("The platform's targets section must specify files to link for\n", .{}) catch {};
-        ctx.io.stderr().print("the current system. Check the platform header for supported targets.\n", .{}) catch {};
-        return error.PlatformNotSupported;
-    };
-
-    // Lower before linking so the host shim uses checked entrypoint metadata
-    // rather than rediscovering roots from platform source syntax after checking.
     var reporter = makeReporter(ctx, "roc", args.timings);
     defer reporter.deinit();
     reporter.start();
@@ -3054,49 +3049,70 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
     var checked_host_identity: [32]u8 = undefined;
     var diagnostics = CheckDiagnosticCounts{};
 
-    switch (args.opt) {
-        .dev => {
-            lowered_result = try lowerLirWithBuildEnv(
-                ctx,
-                ctx.gpa,
-                .{ .dev_run_image = .{ .target = validated_link_spec.target, .hot_reload = args.watch } },
-                args.path,
-                null,
-                null,
-                args.max_threads,
-                args.opt,
-                currentRuntimeSpecializationStrategy(args.specialization_strategy),
-                resolutionConfigFromLimits(args.resolve_limits),
-                !args.no_cache,
-                &reporter,
-            );
-            const result = if (lowered_result) |*value| value else unreachable;
-            entrypoint_names = result.entrypoint_names;
-            hosted_symbols = result.hosted_symbols;
-            checked_host_identity = result.checked_host_identity;
-            diagnostics = result.counts;
-        },
-        .interpreter => {
-            const shm_result = try buildLirImageWithBuildEnv(
-                ctx,
-                args.path,
-                null,
-                null,
-                args.max_threads,
-                args.opt,
-                currentRuntimeSpecializationStrategy(args.specialization_strategy),
-                resolutionConfigFromLimits(args.resolve_limits),
-                !args.no_cache,
-                &reporter,
-            );
-            shm_handle_opt = shm_result.handle;
-            entrypoint_names = shm_result.entrypoint_names;
-            hosted_symbols = shm_result.hosted_symbols;
-            checked_host_identity = shm_result.checked_host_identity;
-            diagnostics = shm_result.diagnostics;
-        },
-        .size, .speed => unreachable,
-    }
+    // The platform is the one package resolution selected, after applying
+    // `--replace-dep`, so the host linked below belongs to the platform the
+    // app was checked against. Lowering precedes linking so the host shim uses
+    // checked entrypoint metadata.
+    const platform_link = blk: {
+        var build_env = try initRunBuildEnv(ctx, .{
+            .source_dir_override = null,
+            .synthetic_default_app = null,
+            .max_threads = args.max_threads,
+            .resolution_config = resolutionConfigFromLimits(args.resolve_limits),
+            .enable_checked_cache = !args.no_cache,
+            .reporter = &reporter,
+        });
+        defer build_env.deinit();
+        try discoverRunDependencies(ctx, &build_env, args.path, args.path, &reporter);
+
+        const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+        const selected = try selectRunPlatformTarget(ctx, platform.config, platform.root_file, args.target);
+        build_env.setTarget(selected.target);
+        build_env.setValidateTargetFilesForSelectedTarget(true);
+
+        const specialization_strategy = currentRuntimeSpecializationStrategy(args.specialization_strategy);
+        switch (args.opt) {
+            .dev => {
+                lowered_result = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .{ .dev_run_image = .{ .target = selected.target, .hot_reload = args.watch } },
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                );
+                const result = if (lowered_result) |*value| value else unreachable;
+                entrypoint_names = result.entrypoint_names;
+                hosted_symbols = result.hosted_symbols;
+                checked_host_identity = result.checked_host_identity;
+                diagnostics = result.counts;
+            },
+            .interpreter => {
+                var lowered = try lowerDiscoveredLir(
+                    ctx,
+                    &build_env,
+                    ctx.gpa,
+                    .lir_image,
+                    args.path,
+                    args.opt,
+                    specialization_strategy,
+                    &reporter,
+                );
+                defer lowered.deinit();
+                const shm_result = try publishLirImage(ctx, &lowered);
+                shm_handle_opt = shm_result.handle;
+                entrypoint_names = shm_result.entrypoint_names;
+                hosted_symbols = shm_result.hosted_symbols;
+                checked_host_identity = shm_result.checked_host_identity;
+                diagnostics = shm_result.diagnostics;
+            },
+            .size, .speed => unreachable,
+        }
+
+        break :blk try RunPlatformLink.init(ctx.arena, platform, selected.link_spec);
+    };
 
     reporter.finish();
 
@@ -3107,7 +3123,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         unreachable;
     }
 
-    const selected_target = validated_link_spec.target;
+    const selected_target = platform_link.target;
     const enable_debug = builtin.mode == .debug;
     const shim_kind: ShimLibraryKind = switch (args.opt) {
         .dev => .machine_code,
@@ -3115,17 +3131,14 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         .size, .speed => unreachable,
     };
 
-    const platform_dir = if (platform_paths.platform_source_path) |p|
-        std.fs.path.dirname(p) orelse "."
-    else
-        ".";
-    const files_dir = if (targets_config) |cfg| cfg.inputs_dir orelse "targets" else "targets";
+    const platform_dir = platform_link.platform_dir;
+    const files_dir = platform_link.files_dir;
     const target_name = @tagName(selected_target);
 
     const link_inputs_identity = try interpreterExeLinkInputsIdentity(
         ctx,
         shim_kind,
-        validated_link_spec,
+        platform_link.items,
         platform_dir,
         files_dir,
         selected_target,
@@ -3262,7 +3275,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         // Process each link item in order
         var host_input_paths = std.ArrayList([]const u8).empty;
 
-        for (validated_link_spec.items) |item| {
+        for (platform_link.items) |item| {
             switch (item) {
                 .file_path => |file_name| {
                     // Resolve path: platform_dir / files_dir / target_name / file_name
@@ -3301,7 +3314,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
 
         // Carry the target's runtime ABI into the linker without reconstructing
         // it from the object format or platform inputs.
-        const target_abi = linker.TargetAbi.fromRocTarget(validated_link_spec.target);
+        const target_abi = linker.TargetAbi.fromRocTarget(platform_link.target);
         std.log.debug("Target ABI: {?}", .{target_abi});
 
         // No pre/post files needed - everything comes from link spec in order
@@ -3360,7 +3373,7 @@ fn rocRunSharedMemoryShim(ctx: *CliCtx, args: cli_args.RunArgs, arg0: []const u8
         linker.link(ctx, link_config) catch |err| {
             return ctx.fail(.{ .linker_failed = .{
                 .err = err,
-                .target = @tagName(validated_link_spec.target),
+                .target = @tagName(platform_link.target),
             } });
         };
 
@@ -6768,24 +6781,44 @@ fn lowerLirWithBuildEnv(
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
 ) CliMainError!LoweredCoordinatorResult {
-    var build_env = try initCliBuildEnv(ctx, .{
-        .runtime_lowering = checkedRuntimeLoweringConfig(
-            .{ .platform_entrypoints = artifact },
-            opt,
-            specialization_strategy,
-            base.target.TargetUsize.native,
-            false,
-        ),
-        .max_threads = max_threads,
-        .no_cache = !enable_checked_cache,
-        .timings = if (reporter) |r| r.always else false,
-        .resolution_config = resolution_config,
-        .track_watch_inputs = true,
+    var build_env = try initRunBuildEnv(ctx, .{
         .source_dir_override = source_dir_override,
-        .post_check_publication_mode = .executable_artifacts,
+        .synthetic_default_app = synthetic_default_app,
+        .max_threads = max_threads,
+        .resolution_config = resolution_config,
+        .enable_checked_cache = enable_checked_cache,
+        .reporter = reporter,
     });
     defer build_env.deinit();
-    if (synthetic_default_app) |mapping| {
+    const display_path = runDisplayPath(roc_file_path, synthetic_default_app);
+    try discoverRunDependencies(ctx, &build_env, roc_file_path, display_path, reporter);
+    return lowerDiscoveredLir(ctx, &build_env, lir_allocator, artifact, display_path, opt, specialization_strategy, reporter);
+}
+
+/// What configures the build environment behind a run's checked program.
+const RunBuildEnvOptions = struct {
+    source_dir_override: ?[]const u8,
+    synthetic_default_app: ?SyntheticDefaultAppMapping,
+    max_threads: ?usize,
+    resolution_config: compile.package_resolution.Config,
+    enable_checked_cache: bool,
+    reporter: ?*progress.Reporter,
+};
+
+/// The build environment for a run, before its runtime artifact is chosen.
+/// The artifact's target comes from the resolved platform, so
+/// `lowerDiscoveredLir` configures runtime lowering after discovery.
+fn initRunBuildEnv(ctx: *CliCtx, opts: RunBuildEnvOptions) CliMainError!BuildEnv {
+    var build_env = try initCliBuildEnv(ctx, .{
+        .max_threads = opts.max_threads,
+        .no_cache = !opts.enable_checked_cache,
+        .timings = if (opts.reporter) |r| r.always else false,
+        .resolution_config = opts.resolution_config,
+        .track_watch_inputs = true,
+        .source_dir_override = opts.source_dir_override,
+        .post_check_publication_mode = .executable_artifacts,
+    });
+    if (opts.synthetic_default_app) |mapping| {
         // Diagnostics for a staged default app must point at the user's real
         // file (and its real line numbers) rather than the staged copy; the
         // mapping also pins the stable synthetic package identities.
@@ -6796,13 +6829,28 @@ fn lowerLirWithBuildEnv(
             mapping.header_lines,
         );
     }
+    return build_env;
+}
 
-    const display_path = if (synthetic_default_app) |mapping| mapping.original_path else roc_file_path;
+/// The path a run's diagnostics name: the user's file for a staged default
+/// app, otherwise the file being run.
+fn runDisplayPath(roc_file_path: []const u8, synthetic_default_app: ?SyntheticDefaultAppMapping) []const u8 {
+    return if (synthetic_default_app) |mapping| mapping.original_path else roc_file_path;
+}
 
+/// Resolve a run's dependency graph, applying `--replace-dep`, and require an
+/// app root. Afterwards the build environment holds the selected platform.
+fn discoverRunDependencies(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    roc_file_path: []const u8,
+    display_path: []const u8,
+    reporter: ?*progress.Reporter,
+) CliMainError!void {
     if (reporter) |r| r.begin("Resolving Dependencies");
     build_env.discoverDependencies(roc_file_path) catch |err| {
         if (reporter) |r| r.fail();
-        _ = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
+        _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
         return switch (err) {
             error.OutOfMemory => error.OutOfMemory,
             error.FileNotFound => ctx.fail(.{ .file_not_found = .{
@@ -6851,15 +6899,35 @@ fn lowerLirWithBuildEnv(
         }
     }
     if (reporter) |r| r.end();
+}
+
+/// Check and lower a discovered run to its runtime artifact.
+fn lowerDiscoveredLir(
+    ctx: *CliCtx,
+    build_env: *BuildEnv,
+    lir_allocator: Allocator,
+    artifact: PlatformEntrypointArtifact,
+    display_path: []const u8,
+    opt: cli_args.OptLevel,
+    specialization_strategy: base.SpecializationStrategy,
+    reporter: ?*progress.Reporter,
+) CliMainError!LoweredCoordinatorResult {
+    build_env.setRuntimeLowering(checkedRuntimeLoweringConfig(
+        .{ .platform_entrypoints = artifact },
+        opt,
+        specialization_strategy,
+        base.target.TargetUsize.native,
+        false,
+    ));
 
     if (reporter) |r| r.begin("Type Checking");
     build_env.compileDiscovered() catch |err| {
         if (reporter) |r| r.fail();
-        _ = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
+        _ = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
         return err;
     };
 
-    const counts = try renderDrainedBuildEnvReports(ctx, &build_env, display_path);
+    const counts = try renderDrainedBuildEnvReports(ctx, build_env, display_path);
     const watch_inputs = try build_env.collectWatchInputStates();
     errdefer compile.watch_inputs.deinit(ctx.gpa, watch_inputs);
 
@@ -6964,15 +7032,6 @@ pub fn buildLirImageWithBuildEnv(
     enable_checked_cache: bool,
     reporter: ?*progress.Reporter,
 ) CliMainError!SharedMemoryResult {
-    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
-    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
-    const page_size = try SharedMemoryAllocator.getSystemPageSize();
-    var shm = try createSharedMemory(ctx.io.std_io, page_size);
-    errdefer shm.deinit(ctx.gpa);
-
-    const shm_allocator = shm.allocator();
-    const image_header = try shm_allocator.create(lir.LirImage.Header);
-
     var lowered_result = try lowerLirWithBuildEnv(
         ctx,
         ctx.gpa,
@@ -6988,6 +7047,20 @@ pub fn buildLirImageWithBuildEnv(
         reporter,
     );
     defer lowered_result.deinit();
+    return publishLirImage(ctx, &lowered_result);
+}
+
+/// Copy a run lowered to `.lir_image` into new shared memory for the
+/// interpreter shim to map.
+fn publishLirImage(ctx: *CliCtx, lowered_result: *const LoweredCoordinatorResult) CliMainError!SharedMemoryResult {
+    // Create shared memory with SharedMemoryAllocator, trying progressively smaller
+    // sizes if larger ones fail (e.g., due to valgrind or overcommit-disabled Linux)
+    const page_size = try SharedMemoryAllocator.getSystemPageSize();
+    var shm = try createSharedMemory(ctx.io.std_io, page_size);
+    errdefer shm.deinit(ctx.gpa);
+
+    const shm_allocator = shm.allocator();
+    const image_header = try shm_allocator.create(lir.LirImage.Header);
 
     const lowered = &lowered_result.lowered;
     const platform_entrypoints = try lowered.platformEntrypoints(ctx.gpa);
@@ -7011,145 +7084,6 @@ pub fn buildLirImageWithBuildEnv(
         lowered_result.hosted_symbols,
         lowered_result.checked_host_identity,
     );
-}
-
-/// Platform resolution result containing the platform source path
-pub const PlatformPaths = struct {
-    platform_source_path: ?[]const u8, // Optional - may not exist for some platforms
-};
-
-/// Resolve platform specification from a Roc file to find both host library and platform source.
-/// Returns PlatformPaths with arena-allocated paths (no need to free).
-pub fn resolvePlatformPaths(ctx: *CliCtx, roc_file_path: []const u8) (CliError || Allocator.Error)!PlatformPaths {
-    const header_info = try parseCliAppHeader(ctx, roc_file_path);
-    const app_dir = std.fs.path.dirname(roc_file_path) orelse ".";
-    return resolvePlatformRefToPaths(ctx, header_info.platform_ref, roc_file_path, app_dir);
-}
-
-fn parseCliAppHeader(ctx: *CliCtx, app_file_path: []const u8) (Allocator.Error || error{CliError})!compile.app_header.AppHeaderInfo {
-    var source_reports = std.ArrayList(reporting.Report).empty;
-    defer {
-        for (source_reports.items) |*report| report.deinit();
-        source_reports.deinit(ctx.gpa);
-    }
-    return compile.app_header.parseAppHeaderReporting(ctx.coreCtx(), ctx.gpa, ctx.arena, app_file_path, &source_reports) catch |err| switch (err) {
-        error.SourceTokenizationFailed => blk: {
-            for (source_reports.items) |*report| {
-                reporting.renderReportWithConfig(report, ctx.io.stderr(), ctx.reportConfig(.stderr)) catch |render_err| switch (render_err) {
-                    error.OutOfMemory => return error.OutOfMemory,
-                    error.WriteFailed => return error.CliError,
-                };
-            }
-            break :blk error.CliError;
-        },
-        error.OutOfMemory => error.OutOfMemory,
-        error.NotAnAppHeader => ctx.fail(.{ .expected_app_header = .{
-            .path = app_file_path,
-            .found = "non-app",
-        } }),
-        error.FileNotFound => ctx.fail(.{ .file_not_found = .{
-            .path = app_file_path,
-            .context = .source_file,
-        } }),
-        error.AccessDenied => ctx.fail(.{ .file_read_failed = .{
-            .path = app_file_path,
-            .err = error.AccessDenied,
-        } }),
-        error.StreamTooLong => ctx.fail(.{ .file_read_failed = .{
-            .path = app_file_path,
-            .err = error.StreamTooLong,
-        } }),
-        error.IoError => ctx.fail(.{ .file_read_failed = .{
-            .path = app_file_path,
-            .err = error.ReadFailed,
-        } }),
-    };
-}
-
-fn resolvePlatformRefToPaths(
-    ctx: *CliCtx,
-    platform_ref: compile.app_header.PlatformRef,
-    app_file_path: []const u8,
-    base_dir: []const u8,
-) (CliError || Allocator.Error)!PlatformPaths {
-    return switch (platform_ref) {
-        .none => ctx.fail(.{ .expected_platform_string = .{ .path = app_file_path } }),
-        .path_or_url => |platform_spec| resolvePlatformSpecToPaths(ctx, platform_spec, base_dir),
-        .compiler_owned => |platform| blk: {
-            const materialized = compile.compiler_platforms.materialize(ctx.arena, ctx.coreCtx(), null, platform) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.NoHomeDirectory => return ctx.fail(.{ .cache_dir_unavailable = .{
-                    .reason = "Could not determine cache directory",
-                } }),
-                error.AccessDenied => return ctx.fail(.{ .file_write_failed = .{
-                    .path = compile.compiler_platforms.identity(platform),
-                    .err = error.AccessDenied,
-                } }),
-                else => return ctx.fail(.{ .file_write_failed = .{
-                    .path = compile.compiler_platforms.identity(platform),
-                    .err = error.WriteFailed,
-                } }),
-            };
-            break :blk .{ .platform_source_path = materialized.root_file };
-        },
-    };
-}
-
-/// Check if platform spec is an absolute path and reject it.
-/// Uses CliCtx for error reporting.
-fn validatePlatformSpec(ctx: *CliCtx, platform_spec: []const u8) CliError!void {
-    if (std.fs.path.isAbsolute(platform_spec)) {
-        return ctx.fail(.{ .absolute_platform_path = .{ .platform_spec = platform_spec } });
-    }
-}
-
-/// Resolve a platform specification to a platform source path.
-/// Uses CliCtx for error reporting.
-fn resolvePlatformSpecToPaths(ctx: *CliCtx, platform_spec: []const u8, base_dir: []const u8) CliError!PlatformPaths {
-    // Handle URL-based platforms
-    if (std.mem.startsWith(u8, platform_spec, "http")) {
-        return resolveUrlPlatform(ctx, platform_spec) catch |err| switch (err) {
-            error.CliError => return error.CliError,
-            error.OutOfMemory => return ctx.fail(.{ .cache_dir_unavailable = .{
-                .reason = "Out of memory while resolving URL platform",
-            } }),
-        };
-    }
-
-    // Check for absolute paths and reject them
-    try validatePlatformSpec(ctx, platform_spec);
-
-    // Try to interpret as a file path (must be relative, resolve relative to base_dir)
-    const resolved_path = std.fs.path.join(ctx.arena, &.{ base_dir, platform_spec }) catch {
-        return ctx.fail(.{ .file_read_failed = .{
-            .path = platform_spec,
-            .err = error.OutOfMemory,
-        } });
-    };
-
-    std.Io.Dir.cwd().access(ctx.io.std_io, resolved_path, .{}) catch {
-        return ctx.fail(.{ .platform_not_found = .{
-            .app_path = base_dir,
-            .platform_path = resolved_path,
-        } });
-    };
-
-    // Platform spec should point to a .roc file
-    if (std.mem.endsWith(u8, resolved_path, ".roc")) {
-        return PlatformPaths{
-            .platform_source_path = ctx.arena.dupe(u8, resolved_path) catch {
-                return ctx.fail(.{ .file_read_failed = .{
-                    .path = resolved_path,
-                    .err = error.OutOfMemory,
-                } });
-            },
-        };
-    } else {
-        // Non-.roc file path - not supported
-        return ctx.fail(.{ .platform_validation_failed = .{
-            .message = "Platform path must end with .roc",
-        } });
-    }
 }
 
 /// Get the roc cache directory for downloaded packages, creating it if needed.
@@ -7700,15 +7634,6 @@ fn rocInstall(ctx: *CliCtx, args: cli_args.InstallArgs) CliMainError!void {
         .executable => try ctx.io.stdout().print("Installed {s}. Run it with: roc run {s}\n", .{ args.shorthand, args.shorthand }),
         .glue => try ctx.io.stdout().print("Installed {s}. Use it with: roc glue {s} <output-dir> <platform>\n", .{ args.shorthand, args.shorthand }),
     }
-}
-
-/// Resolve a URL platform specification by downloading and caching the bundle.
-/// The URL must point to a .tar.zst bundle with a base58-encoded BLAKE3 hash filename.
-fn resolveUrlPlatform(ctx: *CliCtx, url: []const u8) (CliError || error{OutOfMemory})!PlatformPaths {
-    const resolved = try resolveUrlBundle(ctx, url);
-    return PlatformPaths{
-        .platform_source_path = resolved.source_path,
-    };
 }
 
 /// Path of a complete copy of the selected shim library that the calling build
@@ -10501,14 +10426,10 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
     };
     reporter.end();
 
-    const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-    const platform_source = build_env.getPlatformRootFile();
-    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
+    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+    const targets_config = platform.config;
+    const platform_source = platform.root_file;
+    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
 
     const selected = if (args.require_host_runnable_output)
         try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
@@ -10859,14 +10780,10 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     };
     reporter.end();
 
-    const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-    const platform_source = build_env.getPlatformRootFile();
-    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
+    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+    const targets_config = platform.config;
+    const platform_source = platform.root_file;
+    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
 
     const selected = if (args.require_host_runnable_output)
         try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)
@@ -11278,14 +11195,10 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
     };
     reporter.end();
 
-    const targets_config = build_env.getPlatformTargetsConfig() orelse {
-        try renderProblem(ctx, .{
-            .no_platform_found = .{ .app_path = args.path },
-        });
-        return error.NoPlatformSource;
-    };
-    const platform_source = build_env.getPlatformRootFile();
-    const platform_dir = if (platform_source) |path| std.fs.path.dirname(path) orelse "." else ".";
+    const platform = try requirePlatformTargets(ctx, &build_env, args.path);
+    const targets_config = platform.config;
+    const platform_source = platform.root_file;
+    const platform_dir = std.fs.path.dirname(platform_source) orelse ".";
 
     const selected = if (args.require_host_runnable_output)
         try selectRunPlatformTarget(ctx, targets_config, platform_source, args.target)

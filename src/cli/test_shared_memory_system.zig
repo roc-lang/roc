@@ -1,16 +1,11 @@
-//! Tests for CLI platform resolution that do not cross the post-check lowering boundary
+//! Tests for LIR images published through shared memory
 
 const std = @import("std");
-const build_options = @import("build_options");
 const testing = std.testing;
-const main = @import("main.zig");
 const base = @import("base");
 const eval = @import("eval");
 const lir = @import("lir");
 const test_helpers = eval.Inspected;
-const cli_context = @import("CliCtx.zig");
-const CliCtx = cli_context.CliCtx;
-const Io = cli_context.Io;
 
 const SharedMemorySystemTestError = test_helpers.TestHelperError || eval.BuiltinModules.InitError || lir.LirImage.ImageError || error{
     TestExpectedEqual,
@@ -28,134 +23,6 @@ fn sharedPrePublishedBuiltin() SharedMemorySystemTestError!test_helpers.PrePubli
         .indices = shared_test_builtins.?.builtin_indices,
         .artifact = &shared_test_builtins.?.checked_artifact,
     };
-}
-
-test "platform resolution - basic cli platform" {
-    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
-    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
-    const gpa = gpa_impl.allocator();
-    var arena_impl = base.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    // Create a CLI context for error reporting
-    var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(gpa, arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Create a temporary Roc file with cli platform
-    var temp_dir = testing.tmpDir(.{});
-    defer temp_dir.cleanup();
-
-    const roc_content =
-        \\app "test"
-        \\    packages { pf: platform "cli" }
-        \\    imports [pf.Task]
-        \\    provides [main] to pf
-        \\
-        \\main = "Hello, World!"
-    ;
-
-    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
-    defer roc_file.close(std.testing.io);
-    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
-
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
-    defer gpa.free(roc_path);
-
-    // This should return CliError since we don't have the actual CLI platform installed
-    const result = main.resolvePlatformPaths(&ctx, roc_path);
-    try testing.expectError(error.CliError, result);
-}
-
-test "platform resolution - no platform in file" {
-    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
-    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
-    const gpa = gpa_impl.allocator();
-    var arena_impl = base.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    // Create a CLI context for error reporting
-    var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(gpa, arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Create a temporary Roc file without platform specification
-    var temp_dir = testing.tmpDir(.{});
-    defer temp_dir.cleanup();
-
-    const roc_content =
-        \\# Just a simple expression
-        \\42 + 58
-    ;
-
-    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
-    defer roc_file.close(std.testing.io);
-    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
-
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
-    defer gpa.free(roc_path);
-
-    const result = main.resolvePlatformPaths(&ctx, roc_path);
-    try testing.expectError(error.CliError, result);
-}
-
-test "platform resolution - file not found" {
-    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
-    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
-    const gpa = gpa_impl.allocator();
-    var arena_impl = base.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    // Create a CLI context for error reporting
-    var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(gpa, arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    const result = main.resolvePlatformPaths(&ctx, "nonexistent.roc");
-    try testing.expectError(error.CliError, result);
-}
-
-test "platform resolution - insecure HTTP URL rejected" {
-    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
-    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
-    const gpa = gpa_impl.allocator();
-    var arena_impl = base.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    // Create a CLI context for error reporting
-    var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(gpa, arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    // Create a temporary Roc file with insecure HTTP URL (not localhost)
-    // This should be rejected for security - only HTTPS or localhost HTTP allowed
-    var temp_dir = testing.tmpDir(.{});
-    defer temp_dir.cleanup();
-
-    const roc_content =
-        \\app [main] { pf: platform "http://example.com/abc123.tar.zst" }
-        \\
-        \\main = "Hello, World!"
-    ;
-
-    var roc_file = temp_dir.dir.createFile(std.testing.io, "test.roc", .{}) catch unreachable;
-    defer roc_file.close(std.testing.io);
-    roc_file.writeStreamingAll(std.testing.io, roc_content) catch unreachable;
-
-    const roc_path = try temp_dir.dir.realPathFileAlloc(std.testing.io, "test.roc", gpa);
-    defer gpa.free(roc_path);
-
-    // Insecure HTTP URLs (not localhost) should fail validation
-    const result = main.resolvePlatformPaths(&ctx, roc_path);
-    try testing.expectError(error.CliError, result);
 }
 
 fn compileLirImageForSharedTest(
@@ -279,22 +146,6 @@ test "integration - one LIR image resolves layouts for both pointer widths" {
     const size64 = view64.layouts.layoutSize(view64.layouts.getLayout(ret_layout));
     try testing.expectEqual(@as(u32, 12), size32);
     try testing.expectEqual(@as(u32, 24), size64);
-}
-
-test "integration - error handling for non-existent file" {
-    var gpa_impl = std.heap.DebugAllocator(.{ .stack_trace_frames = build_options.debug_gpa_stack_trace_frames }){};
-    defer _ = build_options.debugGpaOk(gpa_impl.deinit());
-    const gpa = gpa_impl.allocator();
-    var arena_impl = base.SingleThreadArena.init(gpa);
-    defer arena_impl.deinit();
-    const arena = arena_impl.allocator();
-
-    var io = Io.create(std.testing.io);
-    var ctx = CliCtx.init(gpa, arena, &io, .run);
-    ctx.initIo();
-    defer ctx.deinit();
-
-    try testing.expectError(error.CliError, main.resolvePlatformPaths(&ctx, "does/not/exist.roc"));
 }
 
 test "integration - automatic module dependency ordering" {

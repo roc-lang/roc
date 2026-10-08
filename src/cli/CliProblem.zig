@@ -171,12 +171,6 @@ pub const CliProblem = union(enum) {
         platform_path: []const u8,
     },
 
-    /// Platform file not found
-    platform_not_found: struct {
-        app_path: []const u8,
-        platform_path: []const u8,
-    },
-
     /// Platform source file missing
     platform_source_not_found: struct {
         platform_path: []const u8,
@@ -198,16 +192,6 @@ pub const CliProblem = union(enum) {
     /// Circular dependency in platform modules
     circular_platform_dependency: struct {
         module_chain: []const []const u8,
-    },
-
-    /// Platform validation failed (wraps targets_validator result)
-    platform_validation_failed: struct {
-        message: []const u8,
-    },
-
-    /// Absolute path used for platform (not allowed)
-    absolute_platform_path: struct {
-        platform_spec: []const u8,
     },
 
     /// Invalid app header - missing platform package declaration
@@ -401,7 +385,6 @@ pub const CliProblem = union(enum) {
         return switch (self) {
             // Fatal errors - cannot continue
             .file_not_found,
-            .platform_not_found,
             .no_platform_found,
             .platform_requires_app,
             .build_not_supported_for_headerless,
@@ -424,8 +407,6 @@ pub const CliProblem = union(enum) {
             .missing_platform_module,
             .missing_type_in_module,
             .circular_platform_dependency,
-            .platform_validation_failed,
-            .absolute_platform_path,
             .invalid_app_header,
             .object_compilation_failed,
             .shim_generation_failed,
@@ -465,13 +446,10 @@ pub const CliProblem = union(enum) {
             .cache_dir_unavailable => |info| try createCacheDirUnavailableReport(allocator, info),
             .no_platform_found => |info| try createNoPlatformFoundReport(allocator, info),
             .platform_requires_app => |info| try createPlatformRequiresAppReport(allocator, info),
-            .platform_not_found => |info| try createPlatformNotFoundReport(allocator, info),
             .platform_source_not_found => |info| try createPlatformSourceNotFoundReport(allocator, info),
             .missing_platform_module => |info| try createMissingPlatformModuleReport(allocator, info),
             .missing_type_in_module => |info| try createMissingTypeInModuleReport(allocator, info),
             .circular_platform_dependency => |info| try createCircularPlatformDependencyReport(allocator, info),
-            .platform_validation_failed => |info| try createPlatformValidationFailedReport(allocator, info),
-            .absolute_platform_path => |info| try createAbsolutePlatformPathReport(allocator, info),
             .invalid_app_header => |info| try createInvalidAppHeaderReport(allocator, info),
             .build_not_supported_for_headerless => |info| try createBuildNotSupportedForHeaderlessReport(allocator, info),
             .unsupported_default_platform_target => |info| try createUnsupportedDefaultPlatformTargetReport(allocator, info),
@@ -624,17 +602,6 @@ fn createPlatformRequiresAppReport(allocator: Allocator, info: anytype) Allocato
     return report;
 }
 
-fn createPlatformNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Platform Not Found", "I could not find the platform file.", .fatal);
-
-    try report.document.addText("    ");
-    try report.document.addAnnotated(info.platform_path, .path);
-    try report.document.addLineBreaks(2);
-    try report.document.addText("Please check that the platform path is correct and the file exists.");
-
-    return report;
-}
-
 fn createPlatformSourceNotFoundReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
     var report = try Report.init(allocator, "Platform Source Not Found", "Could not find the platform source file.", .runtime_error);
 
@@ -681,27 +648,6 @@ fn createCircularPlatformDependencyReport(allocator: Allocator, info: anytype) A
         try report.document.addText(" -> ");
     }
     try report.document.addText("(cycle)");
-
-    return report;
-}
-
-fn createPlatformValidationFailedReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    const headline = try std.fmt.allocPrint(allocator, "{s}.", .{info.message});
-    defer allocator.free(headline);
-    const report = try Report.init(allocator, "Platform Validation Failed", headline, .runtime_error);
-
-    return report;
-}
-
-fn createAbsolutePlatformPathReport(allocator: Allocator, info: anytype) Allocator.Error!Report {
-    var report = try Report.init(allocator, "Absolute Platform Path", "Absolute paths are not allowed for platform specifications.", .runtime_error);
-
-    try report.document.addText("    ");
-    try report.document.addAnnotated(info.platform_spec, .path);
-    try report.document.addLineBreaks(2);
-    try report.document.addText("Tip: Use a relative path like ");
-    try report.document.addAnnotated("../path/to/platform", .emphasized);
-    try report.document.addText(" or a URL.");
 
     return report;
 }
