@@ -15450,7 +15450,9 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
+    // Heap-layout dependent remaps would vary the allocation count between runs.
+    var deterministic = base.DeterministicAllocator.init(allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
@@ -15458,7 +15460,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             try lowerer.verifyMaterializedDecisions();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Verify.run, .{&solved});
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();
