@@ -71,9 +71,14 @@ pub const BuiltinFn = enum {
     str_with_ascii_lowercased,
     str_with_ascii_uppercased,
     str_from_utf8_lossy,
+    str_from_utf8_validated,
+    str_from_utf16_le_short,
+    str_from_utf16_be_short,
+    str_from_utf32_le_short,
+    str_from_utf32_be_short,
+
     str_from_utf8,
     str_from_utf8_result,
-    str_from_utf8_parts,
     str_escape_and_quote,
     crash_str,
     dbg_str,
@@ -107,10 +112,8 @@ pub const BuiltinFn = enum {
     list_incref,
     list_incref_single_thread,
     list_decref_str,
-    list_decref_flat_list,
     list_decref_with,
     list_decref_with_single_thread,
-    list_free_flat_list,
     list_free_with,
     box_prepare_update,
     box_unbox_owned,
@@ -159,7 +162,6 @@ pub const BuiltinFn = enum {
     i128_to_dec_try_unsafe,
     u128_to_dec_try_unsafe,
     dec_mul,
-    dec_mul_saturated,
     dec_div,
     dec_div_trunc,
     dec_pow,
@@ -231,16 +233,16 @@ pub const BuiltinFn = enum {
     u64_mod_by,
 
     const symbol_names = blk: {
-        var result: [std.meta.fields(BuiltinFn).len][:0]const u8 = undefined;
+        var result: [@typeInfo(BuiltinFn).@"enum".field_names.len][:0]const u8 = undefined;
         for (std.meta.tags(BuiltinFn)) |builtin| {
-            result[@intFromEnum(builtin)] = symbol_prefix ++ @tagName(builtin);
+            result[@backingInt(builtin)] = symbol_prefix ++ @tagName(builtin);
         }
         break :blk result;
     };
 
     /// The linker symbol this builtin is exported and resolved under.
     pub fn symbolName(self: BuiltinFn) [:0]const u8 {
-        return symbol_names[@intFromEnum(self)];
+        return symbol_names[@backingInt(self)];
     }
 
     /// The builtin a linker symbol names, if any.
@@ -255,16 +257,16 @@ pub const BuiltinFn = enum {
     }
 
     const wrapper_addresses = blk: {
-        var result: [std.meta.fields(BuiltinFn).len]*const anyopaque = undefined;
+        var result: [@typeInfo(BuiltinFn).@"enum".field_names.len]*const anyopaque = undefined;
         for (std.meta.tags(BuiltinFn)) |builtin| {
-            result[@intFromEnum(builtin)] = @ptrCast(wrapper(builtin));
+            result[@backingInt(builtin)] = @ptrCast(wrapper(builtin));
         }
         break :blk result;
     };
 
     /// Address of the wrapper function (dev-JIT native calls and symbol resolution).
     pub fn wrapperAddress(self: BuiltinFn) usize {
-        return @intFromPtr(wrapper_addresses[@intFromEnum(self)]);
+        return @intFromPtr(wrapper_addresses[@backingInt(self)]);
     }
 
     /// Which linkable builtins payloads carry a builtin's wrapper.
@@ -279,7 +281,7 @@ pub const BuiltinFn = enum {
 
     const payload_by_builtin = blk: {
         @setEvalBranchQuota(10_000);
-        var result = [_]Payload{.full} ** std.meta.fields(BuiltinFn).len;
+        var result = @as([@typeInfo(BuiltinFn).@"enum".field_names.len]Payload, @splat(.full));
         for ([_]BuiltinFn{
             .allocate_with_refcount,
             .box_decref_with,
@@ -316,13 +318,11 @@ pub const BuiltinFn = enum {
             .list_append_sublist,
             .list_append_unsafe,
             .list_concat,
-            .list_decref_flat_list,
             .list_decref_str,
             .list_decref_with,
             .list_decref_with_single_thread,
             .list_drop_at,
             .list_eq,
-            .list_free_flat_list,
             .list_free_with,
             .list_incref,
             .list_incref_single_thread,
@@ -363,7 +363,12 @@ pub const BuiltinFn = enum {
             .str_from_literal,
             .str_from_utf8,
             .str_from_utf8_lossy,
-            .str_from_utf8_parts,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+
             .str_from_utf8_result,
             .str_join_with,
             .str_release_excess_capacity,
@@ -385,14 +390,14 @@ pub const BuiltinFn = enum {
             .u32_mod_by,
             .u64_mod_by,
             .u8_mod_by,
-        }) |builtin| result[@intFromEnum(builtin)] = .core;
+        }) |builtin| result[@backingInt(builtin)] = .core;
 
         for ([_]BuiltinFn{
             .hot_reload_enter,
             .hot_reload_erased_callable_drop,
             .hot_reload_leave,
             .hot_reload_retain_current,
-        }) |builtin| result[@intFromEnum(builtin)] = .jit_only;
+        }) |builtin| result[@backingInt(builtin)] = .jit_only;
 
         break :blk result;
     };
@@ -401,7 +406,7 @@ pub const BuiltinFn = enum {
     /// `.full`: exported by the full payload and absent from the core one,
     /// the right default for a newly added builtin.
     pub fn payload(self: BuiltinFn) Payload {
-        return payload_by_builtin[@intFromEnum(self)];
+        return payload_by_builtin[@backingInt(self)];
     }
 };
 
@@ -481,23 +486,6 @@ pub const core_root_symbols: std.StaticStringMap(void) = blk: {
     break :blk std.StaticStringMap(void).initComptime(frozen);
 };
 
-/// Fully qualified names of annotation-only Builtin.roc declarations that are
-/// compiler intrinsics rather than low-level-op wrappers: checking and
-/// post-check lowering handle them from checked data, so canonicalization
-/// exempts them from the rule that every annotation-only builtin def must map
-/// to a low-level op.
-pub const intrinsic_annotation_names = [_][]const u8{
-    "Builtin.Str.inspect",
-    "Builtin.Str.Utf8Problem.is_eq",
-    "Builtin.Encoding.ParseTagUnionSpec.parse",
-    "Builtin.Encoding.FieldName.FieldNames.rename_fields",
-    "Builtin.Encoding.FieldName.FieldNames.shortest_name",
-    "Builtin.Encoding.FieldName.FieldNames.longest_name",
-    "Builtin.Encoding.FieldName.FieldNames.iter",
-    "Builtin.Encoding.FieldName.FieldNames.for_size",
-    "Builtin.Encoding.FieldName.name",
-};
-
 comptime {
     @setEvalBranchQuota(200_000);
     // Every member is backed by a wrapper with the exact symbol name.
@@ -508,11 +496,11 @@ comptime {
         }
     }
     // Every wrapper is registered as a member.
-    for (@typeInfo(dev_wrappers).@"struct".decls) |decl| {
-        if (!std.mem.startsWith(u8, decl.name, symbol_prefix)) continue;
-        if (@typeInfo(@TypeOf(@field(dev_wrappers, decl.name))) != .@"fn") continue;
-        if (!@hasField(BuiltinFn, decl.name[symbol_prefix.len..])) {
-            @compileError("dev_wrappers." ++ decl.name ++ " is not registered; add BuiltinFn." ++ decl.name[symbol_prefix.len..] ++ " to builtin_registry.zig");
+    for (@typeInfo(dev_wrappers).@"struct".decl_names) |decl| {
+        if (!std.mem.startsWith(u8, decl, symbol_prefix)) continue;
+        if (@typeInfo(@TypeOf(@field(dev_wrappers, decl))) != .@"fn") continue;
+        if (!@hasField(BuiltinFn, decl[symbol_prefix.len..])) {
+            @compileError("dev_wrappers." ++ decl ++ " is not registered; add BuiltinFn." ++ decl[symbol_prefix.len..] ++ " to builtin_registry.zig");
         }
     }
 }

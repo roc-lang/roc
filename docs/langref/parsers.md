@@ -128,3 +128,19 @@ parse_headers = Encoding.HttpHeader.parser_for()
 ```
 
 Formats can be implemented in packages, too, without any changes to the types they parse.
+
+## Performance
+
+A parser reads its input directly into the Roc value being parsed. It doesn't first build some
+general-purpose representation of the input (like a tree of JSON values) and then convert that
+into the type you asked for. So parsing a JSON object into a record doesn't allocate anything
+except what the record itself needs, such as its strings and lists.
+
+That works because each parser is built specifically for one type, using
+[static dispatch](static-dispatch#performance). The parser for `{ name : Str, age : U64 }` knows at
+compile time that it's looking for exactly those two fields, and it calls the format's methods for
+reading a string and a number directly. When the parser is a top-level constant, all of that
+assembly happens [at compile time](#parsers-at-compile-time).
+
+Encoding works the same way: `Json.to_str` writes the JSON text directly from the value, without
+building an intermediate representation first.

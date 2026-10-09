@@ -56,7 +56,7 @@ NO CHANGE
 				(p-assign (ident "name"))))
 		(s-let
 			(p-assign (ident "#interp_1"))
-			(e-dispatch-call (method "to_str") (constraint-fn-var 226)
+			(e-dispatch-call (method "to_str") (constraint-fn-var 230)
 				(receiver
 					(e-lookup-local
 						(p-assign (ident "age"))))
@@ -74,5 +74,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ age: a, name: _field } -> b where [a.to_str : a -> _ret, b.from_interpolation : Str, Iter((_field, Str)) -> b]"))
+(expr (type "{ age: a, name: b } -> c where [a.to_str : a -> b, c.from_interpolation : List(Str) -> Try(List(b) -> c, [InvalidInterpolation(Str)])]"))
 ~~~

@@ -94,13 +94,13 @@ test "issue 11908: packed source numeral lists preserve scalar bits" {
         .{ .name = "I16", .scalar = .i16, .values = "-32768,32767", .expected = "\x00\x80\xff\x7f" },
         .{ .name = "U32", .scalar = .u32, .values = "4294967295", .expected = "\xff\xff\xff\xff" },
         .{ .name = "I32", .scalar = .i32, .values = "-2147483648", .expected = "\x00\x00\x00\x80" },
-        .{ .name = "U64", .scalar = .u64, .values = "18446744073709551615", .expected = "\xff" ** 8 },
-        .{ .name = "I64", .scalar = .i64, .values = "-9223372036854775808", .expected = "\x00" ** 7 ++ "\x80" },
-        .{ .name = "U128", .scalar = .u128, .values = "340282366920938463463374607431768211455", .expected = "\xff" ** 16 },
-        .{ .name = "I128", .scalar = .i128, .values = "-170141183460469231731687303715884105728", .expected = "\x00" ** 15 ++ "\x80" },
+        .{ .name = "U64", .scalar = .u64, .values = "18446744073709551615", .expected = "\xff\xff\xff\xff\xff\xff\xff\xff" },
+        .{ .name = "I64", .scalar = .i64, .values = "-9223372036854775808", .expected = "\x00\x00\x00\x00\x00\x00\x00\x80" },
+        .{ .name = "U128", .scalar = .u128, .values = "340282366920938463463374607431768211455", .expected = "\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff" },
+        .{ .name = "I128", .scalar = .i128, .values = "-170141183460469231731687303715884105728", .expected = "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x80" },
         .{ .name = "F32", .scalar = .f32, .values = "-0.0,1.5", .expected = "\x00\x00\x00\x80\x00\x00\xc0\x3f" },
-        .{ .name = "F64", .scalar = .f64, .values = "-0.0,1.5", .expected = "\x00" ** 7 ++ "\x80\x00\x00\x00\x00\x00\x00\xf8\x3f" },
-        .{ .name = "Dec", .scalar = .dec, .values = "0.000000000000000001,-0.000000000000000001", .expected = "\x01" ++ "\x00" ** 15 ++ "\xff" ** 16 },
+        .{ .name = "F64", .scalar = .f64, .values = "-0.0,1.5", .expected = "\x00\x00\x00\x00\x00\x00\x00\x80\x00\x00\x00\x00\x00\x00\xf8\x3f" },
+        .{ .name = "Dec", .scalar = .dec, .values = "0.000000000000000001,-0.000000000000000001", .expected = "\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff\xff" },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(std.testing.allocator, "module [values]\nvalues : List({s})\nvalues = [{s}]\n", .{ case.name, case.values });

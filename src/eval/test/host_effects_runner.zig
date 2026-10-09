@@ -166,7 +166,7 @@ fn appendEncodedRun(
     run: RuntimeHostEnv.RecordedRun,
 ) Allocator.Error!void {
     const header: BackendRunHeader = .{
-        .termination = @intFromEnum(run.termination),
+        .termination = @backingInt(run.termination),
         .event_count = @intCast(run.events.len),
         .allocation_count = run.allocation_count,
     };
@@ -227,7 +227,7 @@ fn decodeRun(buf: []const u8, gpa: std.mem.Allocator) ?RuntimeHostEnv.RecordedRu
     }
 
     return .{
-        .termination = @enumFromInt(header.termination),
+        .termination = @fromBackingInt(@intCast(header.termination)),
         .events = events,
         .allocation_count = header.allocation_count,
     };
@@ -368,10 +368,10 @@ fn runInterpreter(allocator: std.mem.Allocator, lowered: *const LoweredProgram) 
 
 fn boxyNativeFnTable() BoxyNativeFnTable {
     var table: BoxyNativeFnTable = undefined;
-    inline for (@typeInfo(BoxyBuiltinFn).@"enum".fields) |field| {
-        const boxy_fn: BoxyBuiltinFn = @enumFromInt(field.value);
+    inline for (@typeInfo(BoxyBuiltinFn).@"enum".field_values) |field_value| {
+        const boxy_fn: BoxyBuiltinFn = @fromBackingInt(@intCast(field_value));
         const name = comptime boxy_fn.symbolName();
-        table[field.value] = @intFromPtr(&@field(eval.boxy_abi, name));
+        table[field_value] = @intFromPtr(&@field(eval.boxy_abi, name));
     }
     return table;
 }
@@ -607,7 +607,7 @@ fn appendOutcomeBytes(
     }
 
     var header: WireHeader = .{
-        .status = @intFromEnum(outcome.status),
+        .status = @backingInt(outcome.status),
         .duration_ns = duration_ns,
         .message_len = if (outcome.message) |msg| @intCast(msg.len) else 0,
         .backend_statuses = undefined,
@@ -617,7 +617,7 @@ fn appendOutcomeBytes(
     };
 
     for (outcome.backends, 0..) |backend_detail, i| {
-        header.backend_statuses[i] = @intFromEnum(backend_detail.status);
+        header.backend_statuses[i] = @backingInt(backend_detail.status);
         header.backend_durations[i] = backend_detail.duration_ns;
         header.backend_message_lens[i] = if (backend_detail.message) |msg| @intCast(msg.len) else 0;
         if (backend_detail.run) |run| {
@@ -666,7 +666,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     for (0..NUM_BACKENDS) |i| {
         const backend_message = harness.readStr(buf, &offset, header.backend_message_lens[i], gpa);
         backends[i] = .{
-            .status = @enumFromInt(header.backend_statuses[i]),
+            .status = @fromBackingInt(@intCast(header.backend_statuses[i])),
             .run = null,
             .message = backend_message,
             .duration_ns = header.backend_durations[i],
@@ -684,7 +684,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     }
 
     return .{
-        .status = @enumFromInt(header.status),
+        .status = @fromBackingInt(@intCast(header.status)),
         .message = message,
         .duration_ns = header.duration_ns,
         .backends = backends,

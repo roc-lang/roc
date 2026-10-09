@@ -24,17 +24,13 @@ TYPE MISMATCH - generalize_alias_in_tuple.md:7:14:7:17
 		(title "Type Mismatch")
 		(region (start 7 14) (end 7 17))
 		(headline
-			(reflow "This string literal is being used where a non-string type is needed."))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
 		(document
 			(source-region (file "generalize_alias_in_tuple.md") (start 7 14) (end 7 17) (annotation error) (line-text "    (a(1), a(\"x\"), b(2))"))
 			(line-break)
-			(reflow "The type was determined to be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -124,15 +120,15 @@ main = {
 					(p-assign (ident "t"))))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 241)
+					(e-call (constraint-fn-var 245)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-runtime-error (tag "erroneous_value_expr")))
-					(e-call (constraint-fn-var 250)
+					(e-call (constraint-fn-var 254)
 						(e-lookup-local
 							(p-assign (ident "a")))
 						(e-runtime-error (tag "erroneous_value_expr")))
-					(e-call (constraint-fn-var 258)
+					(e-call (constraint-fn-var 262)
 						(e-lookup-local
 							(p-assign (ident "b")))
 						(e-num (value "2"))))))))

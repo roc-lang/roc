@@ -11,26 +11,9 @@ match list {
 }
 ~~~
 # EXPECTED
-POLYMORPHIC VALUE - list_destructure_scoping.md:1:1:4:2
+NIL
 # PROBLEMS
-~~~clojure
-(reports
-	(report
-		(severity runtime_error)
-		(title "Polymorphic Value")
-		(region (start 1 1) (end 4 2))
-		(headline
-			(reflow "This top-level value still has an unresolved polymorphic type."))
-		(document
-			(source-region (file "list_destructure_scoping.md") (start 1 1) (end 4 2) (annotation error) (line-text "match list {\n    [first] => first\n    [first, second] => first + second\n}"))
-			(line-break)
-			(line-break)
-			(reflow "Its type is:")
-			(line-break)
-			(annotated code-block "a where [a.plus : a, a -> a]")
-			(line-break)
-			(reflow "Add an annotation or use this value in a way that fixes its concrete type."))))
-~~~
+NIL
 # TOKENS
 ~~~zig
 KwMatch,LowerIdent,OpenCurly,
@@ -87,15 +70,13 @@ match list {
 								(p-assign (ident "first"))
 								(p-assign (ident "second"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 218)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "second"))))))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-lookup-local
+							(p-assign (ident "second")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "a where [a.plus : a, a -> a]"))
+(expr (type "_a"))
 ~~~

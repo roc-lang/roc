@@ -36,66 +36,19 @@ pub const DebugReloc = struct {
     addend: u64,
 };
 
+/// The DWARF debug sections an object carries, borrowed from the caller, and
+/// the relocations saying what each address field inside them refers to.
+pub const DebugSections = struct {
+    line: []const u8 = &.{},
+    abbrev: []const u8 = &.{},
+    info: []const u8 = &.{},
+    line_relocs: []const DebugReloc = &.{},
+    info_relocs: []const DebugReloc = &.{},
+};
+
 pub const ElfWriter = elf.ElfWriter;
 pub const MachOWriter = macho.MachOWriter;
 pub const CoffWriter = coff.CoffWriter;
-
-/// Target object format based on operating system
-pub const ObjectFormat = enum {
-    elf,
-    macho,
-    coff,
-
-    pub fn fromTarget(target: anytype) ObjectFormat {
-        // Check if it's a Zig target or base.target.Target
-        const os_tag = if (@hasField(@TypeOf(target), "os"))
-            target.os.tag
-        else if (@hasField(@TypeOf(target), "os_tag"))
-            target.os_tag
-        else
-            @compileError("Unknown target type");
-
-        return switch (os_tag) {
-            .linux, .freebsd, .openbsd, .netbsd => .elf,
-            .macos, .ios, .tvos, .watchos => .macho,
-            .windows => .coff,
-            .freestanding,
-            .other,
-            .contiki,
-            .fuchsia,
-            .hermit,
-            .managarm,
-            .haiku,
-            .hurd,
-            .illumos,
-            .plan9,
-            .rtems,
-            .serenity,
-            .dragonfly,
-            .driverkit,
-            .maccatalyst,
-            .visionos,
-            .uefi,
-            .@"3ds",
-            .ps3,
-            .ps4,
-            .ps5,
-            .psp,
-            .vita,
-            .emscripten,
-            .wasi,
-            .amdhsa,
-            .amdpal,
-            .cuda,
-            .mesa3d,
-            .nvcl,
-            .opencl,
-            .opengl,
-            .vulkan,
-            => .elf,
-        };
-    }
-};
 
 test "object module imports" {
     std.testing.refAllDecls(@This());

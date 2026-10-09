@@ -10,7 +10,7 @@ Maybe(a) := [Some(a), None]
 some1 : a -> Maybe(a)
 some1 = |a| Maybe.Some(a)
 
-none1 : Maybe(_a)
+none1 : Maybe(_)
 none1 = Maybe.None
 
 some2 = |a| Maybe.Some(a)
@@ -26,7 +26,7 @@ NIL
 UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,OpColonEqual,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,
 LowerIdent,OpColon,LowerIdent,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
-LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,NamedUnderscore,CloseRound,
+LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,Underscore,CloseRound,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
 LowerIdent,OpAssign,OpBar,LowerIdent,OpBar,UpperIdent,NoSpaceDotUpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,
 LowerIdent,OpAssign,UpperIdent,NoSpaceDotUpperIdent,
@@ -64,7 +64,7 @@ EndOfFile,
 		(s-type-anno (name "none1")
 			(ty-apply
 				(ty (name "Maybe"))
-				(underscore-ty-var (raw "_a"))))
+				(_)))
 		(s-decl
 			(p-ident (raw "none1"))
 			(e-tag (raw "Maybe.None")))
@@ -108,7 +108,7 @@ NO CHANGE
 			(e-tag (name "None")))
 		(annotation
 			(ty-apply (name "Maybe") (local)
-				(ty-rigid-var (name "_a")))))
+				(ty-underscore))))
 	(d-let
 		(p-assign (ident "some2"))
 		(e-lambda
@@ -137,7 +137,7 @@ NO CHANGE
 (inferred-types
 	(defs
 		(patt (type "a -> Maybe(a)"))
-		(patt (type "Maybe([])"))
+		(patt (type "Maybe(a)"))
 		(patt (type "a -> Maybe(a)"))
 		(patt (type "Maybe(a)")))
 	(type_decls
@@ -147,7 +147,7 @@ NO CHANGE
 					(ty-rigid-var (name "a"))))))
 	(expressions
 		(expr (type "a -> Maybe(a)"))
-		(expr (type "Maybe([])"))
+		(expr (type "Maybe(a)"))
 		(expr (type "a -> Maybe(a)"))
 		(expr (type "Maybe(a)"))))
 ~~~

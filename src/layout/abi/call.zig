@@ -151,6 +151,8 @@ pub const Target = enum {
     x86_64_sysv,
     x86_64_windows,
     wasm32,
+    /// WebAssembly 1.0 C ABI, with vector arguments scalarized by lane.
+    wasm32v1,
     wasm64,
 };
 
@@ -159,6 +161,12 @@ pub fn aarch64Target(os: std.Target.Os.Tag) Target {
     return switch (os) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .aarch64_macho,
         .windows => .aarch64_windows,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,
@@ -200,7 +208,7 @@ pub fn aarch64Target(os: std.Target.Os.Tag) Target {
 fn isAarch64(target: Target) bool {
     return switch (target) {
         .aarch64, .aarch64_macho, .aarch64_windows => true,
-        .x86_64_sysv, .x86_64_windows, .wasm32, .wasm64 => false,
+        .x86_64_sysv, .x86_64_windows, .wasm32, .wasm32v1, .wasm64 => false,
     };
 }
 
@@ -347,7 +355,7 @@ pub fn assignPhysicalArgs(
     arg_idxs: []const Idx,
 ) std.mem.Allocator.Error!PhysicalCall {
     std.debug.assert(lowered.args.len == arg_idxs.len);
-    std.debug.assert(target != .wasm32 and target != .wasm64);
+    std.debug.assert(target != .wasm32 and target != .wasm32v1 and target != .wasm64);
 
     const args = try arena.alloc(PhysicalArg, lowered.args.len);
     var gp_used: u32 = 0;
@@ -361,7 +369,7 @@ pub fn assignPhysicalArgs(
             win_position = 1;
         },
         .aarch64, .aarch64_macho, .aarch64_windows => {}, // AAPCS64 uses the dedicated x8 indirect-result register.
-        .wasm32, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable,
     };
     if (lowered.leading_ops) switch (target) {
         .x86_64_windows => {
@@ -369,7 +377,7 @@ pub fn assignPhysicalArgs(
             win_position += 1;
         },
         .x86_64_sysv, .aarch64, .aarch64_macho, .aarch64_windows => gp_used += 1,
-        .wasm32, .wasm64 => unreachable,
+        .wasm32, .wasm32v1, .wasm64 => unreachable,
     };
 
     for (lowered.args, arg_idxs, args) |placement, arg_idx, *assigned| {
@@ -404,7 +412,7 @@ pub fn assignPhysicalArgs(
                     win_position += 1;
                     gp_used = win_position;
                 },
-                .wasm32, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable,
             },
             .registers => |registers| switch (target) {
                 .x86_64_windows => {
@@ -480,7 +488,7 @@ pub fn assignPhysicalArgs(
                         }
                     }
                 },
-                .wasm32, .wasm64 => unreachable,
+                .wasm32, .wasm32v1, .wasm64 => unreachable,
             },
         }
     }
@@ -528,7 +536,8 @@ fn placementFor(
         .aarch64, .aarch64_macho, .aarch64_windows => placementAarch64(arena, store, target, idx, ctx, extend),
         .x86_64_sysv => placementSysV(arena, store, idx, ctx, extend),
         .x86_64_windows => placementWin64(arena, store, idx, ctx, extend),
-        .wasm32, .wasm64 => placementWasm(arena, store, idx),
+        .wasm32, .wasm64 => placementWasm(arena, store, idx, ctx, true),
+        .wasm32v1 => placementWasm(arena, store, idx, ctx, false),
     };
 }
 
@@ -726,7 +735,7 @@ fn placementWin64(
 ) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
     switch (x86_64.classifyWindows(store, idx)) {
-        .memory => return .indirect,
+        .memory, .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
         .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
         .sse => return onePiece(arena, .float, 0, @intCast(@min(@as(u32, 16), size)), .none),
         // Win64 passes a scalar 128-bit integer in memory but returns it in
@@ -747,11 +756,10 @@ fn placementWin64(
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
-        .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
     }
 }
 
-fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.mem.Allocator.Error!Placement {
+fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx, ctx: Context, simd_enabled: bool) std.mem.Allocator.Error!Placement {
     switch (wasm.classifyType(store, idx)) {
         .indirect => return .indirect,
         .direct => |direct_idx| {
@@ -763,6 +771,18 @@ fn placementWasm(arena: std.mem.Allocator, store: *const Store, idx: Idx) std.me
             if (wasm.lowerAsDoubleI64(store, direct_idx)) {
                 // A value wider than 64 bits is passed as two i64s.
                 return integerPieces(arena, size, .piecewise, .none);
+            }
+            if (is_vector and !simd_enabled) {
+                // LLVM's wasm MVP legalization passes each vector lane as a
+                // scalar argument and writes vector returns through an sret pointer.
+                if (ctx == .ret) return .indirect;
+                const kind = dlay.getScalar().getVector();
+                const width = kind.laneBits() / 8;
+                const pieces = try arena.alloc(RegPiece, kind.laneCount());
+                for (pieces, 0..) |*piece, lane| {
+                    piece.* = .{ .class = .integer, .offset = @intCast(lane * width), .size = width };
+                }
+                return .{ .registers = .{ .pieces = pieces } };
             }
             if (is_vector) {
                 const pieces = try arena.alloc(RegPiece, 1);
@@ -885,8 +905,8 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var elem_idx_opt: ?Idx = null;
     var i: u32 = 0;
     while (store.layouts.len() <= target_elem_idx_int) : (i += 1) {
-        const idx = try store.insertLayout(layout.Layout.list(@enumFromInt(i)));
-        if (@intFromEnum(idx) == target_elem_idx_int) elem_idx_opt = idx;
+        const idx = try store.insertLayout(layout.Layout.list(@fromBackingInt(@intCast(i))));
+        if (@backingInt(idx) == target_elem_idx_int) elem_idx_opt = idx;
     }
     const elem_idx = elem_idx_opt.?;
 

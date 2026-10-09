@@ -75,5 +75,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "{ first_name: _field, last_name: _field2, .. } -> a where [a.from_interpolation : Str, Iter((_field, Str)) -> a]"))
+(expr (type "{ first_name: a, last_name: a, .. } -> b where [b.from_interpolation : List(Str) -> Try(List(a) -> b, [InvalidInterpolation(Str)])]"))
 ~~~

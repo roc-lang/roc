@@ -5,7 +5,7 @@ const shim_symbols = @import("shim_symbols");
 const abi = @import("roc_platform_abi.zig");
 
 var failure_count: usize = 0;
-var report: [512]u8 = [_]u8{0} ** 512;
+var report: [512]u8 = @as([512]u8, @splat(0));
 var report_len: usize = 0;
 var alloc_count: usize = 0;
 var dealloc_count: usize = 0;

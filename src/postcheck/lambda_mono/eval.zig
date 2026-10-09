@@ -482,8 +482,7 @@ pub const Evaluator = struct {
                 self.return_type = self.exprType(value_expr);
                 return error.Returned;
             },
-            .uninitialized => return .uninitialized,
-            .uninitialized_payload => return .uninitialized,
+            .uninitialized, .uninitialized_payload => return .uninitialized,
             .if_initialized_payload => |switch_| return try self.evalInitializedPayload(frame, switch_),
             .try_sequence => |seq| return try self.evalTrySequence(frame, expr.ty, seq),
             .try_record_sequence => |seq| return try self.evalTryRecordSequence(frame, expr.ty, seq),
@@ -680,7 +679,7 @@ pub const Evaluator = struct {
     fn sameVariant(self: *Evaluator, a: Type.FnVariantId, b: Type.FnVariantId) bool {
         if (a == b) return true;
         const variants = self.program.types.view().fn_variants;
-        return std.meta.eql(variants[@intFromEnum(a)].source, variants[@intFromEnum(b)].source);
+        return std.meta.eql(variants[@backingInt(a)].source, variants[@backingInt(b)].source);
     }
 
     fn evalFieldAccess(
@@ -1370,7 +1369,7 @@ pub const Evaluator = struct {
         return switch (prim) {
             inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128 => |p| blk: {
                 const T = intType(p);
-                const U = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+                const U = @Int(.unsigned, @typeInfo(T).int.bits);
                 const narrowed: U = @truncate(@as(u128, @bitCast(bits)));
                 const typed: T = @bitCast(narrowed);
                 break :blk makeInt(T, typed);
@@ -1450,7 +1449,7 @@ pub const Evaluator = struct {
             .num_count_trailing_zero_bits => self.numBitCount(args, arg_types, .count_trailing_zeros),
 
             .num_from_le_bytes_unchecked => self.evalNumFromLeBytes(args, result_ty),
-            .simd_load_16_unchecked => self.evalSimdLoad(args, result_ty),
+            .simd_load_16_unchecked => self.evalSimdLoad(args, arg_types[0], result_ty),
             .simd_store_16_unchecked => self.evalSimdStore(args),
             .simd_append_16 => self.evalSimdAppend(args),
             .simd_splat,
@@ -1557,6 +1556,12 @@ pub const Evaluator = struct {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -2312,7 +2317,7 @@ pub const Evaluator = struct {
             .shl => av << shift,
             .shr => av >> shift,
             .shr_zf => blk: {
-                const U = std.meta.Int(.unsigned, max_bits);
+                const U = @Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
         };
@@ -2382,7 +2387,7 @@ pub const Evaluator = struct {
         for (0..@min(args.len, operands.len)) |i| {
             operands[i] = valueBits(args[i]) catch return self.unsupported_("SIMD operand without integer bits");
         }
-        const simd_op: builtins.simd.Op = @enumFromInt(op.simdOpIndex() orelse unreachable);
+        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(op.simdOpIndex() orelse unreachable));
         const result_bits = builtins.simd.eval(simd_op, source, destination, operands[0], operands[1], operands[2]);
         if (destination_kind != null) return .{ .int = @bitCast(result_bits) };
         return self.canonicalInt(result_prim, @bitCast(result_bits));
@@ -2403,22 +2408,31 @@ pub const Evaluator = struct {
                     const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("from_le_bytes byte without integer bits");
                     value |= @as(u128, @as(u8, @truncate(byte_bits))) << @intCast(i * 8);
                 }
-                break :blk makeInt(T, @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
+                break :blk makeInt(T, @bitCast(@as(@Int(.unsigned, @bitSizeOf(T)), @truncate(value))));
             },
             .bool, .str, .u8, .i8, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => self.unsupported_("from_le_bytes on non-multi-byte-integer type"),
         };
     }
 
-    fn evalSimdLoad(self: *Evaluator, args: []const Value, result_ty: Type.TypeId) EvalError!Value {
+    fn evalSimdLoad(self: *Evaluator, args: []const Value, list_ty: Type.TypeId, result_ty: Type.TypeId) EvalError!Value {
         const result_prim = self.primitiveOf(result_ty) orelse return self.unsupported_("SIMD load result without primitive type");
         if (simdKindForPrimitive(result_prim) == null) return self.unsupported_("SIMD load result without vector type");
         if (args[0] != .list) return self.unsupported_("SIMD load from non-list value");
-        const bytes = args[0].list;
+        const list_type = self.structural(list_ty);
+        if (list_type != .list) return self.unsupported_("SIMD load without list type");
+        const element_prim = self.primitiveOf(list_type.list) orelse return self.unsupported_("SIMD load without primitive element type");
+        const lane_bits: usize = switch (element_prim) {
+            .u8 => 8,
+            .u16 => 16,
+            .u32 => 32,
+            .bool, .str, .i8, .i16, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => return self.unsupported_("SIMD load with unsupported element type"),
+        };
+        const units = args[0].list;
         const index: usize = @intCast(valueBits(args[1]) catch return self.unsupported_("SIMD load index without integer bits"));
         var bits: u128 = 0;
-        for (0..16) |i| {
-            const byte_bits = valueBits(bytes[index + i]) catch return self.unsupported_("SIMD load byte without integer bits");
-            bits |= @as(u128, @truncate(byte_bits)) << @intCast(i * 8);
+        for (0..128 / lane_bits) |i| {
+            const unit_bits = valueBits(units[index + i]) catch return self.unsupported_("SIMD load unit without integer bits");
+            bits |= unit_bits << @intCast(i * lane_bits);
         }
         return .{ .int = @bitCast(bits) };
     }
@@ -2591,6 +2605,12 @@ pub const Evaluator = struct {
             str_split_last,
             str_from_utf8,
             str_from_utf8_lossy,
+            str_from_utf8_validated,
+            str_from_utf16_le_short,
+            str_from_utf16_be_short,
+            str_from_utf32_le_short,
+            str_from_utf32_be_short,
+
             str_is_eq_static_small,
             str_static_small_word_eq,
             str_static_small_word_caseless_eq,
@@ -2651,6 +2671,16 @@ pub const Evaluator = struct {
             .str_split_first => return try self.strSplitFirst(result_ty, args[0].str, args[1].str),
             .str_split_last => return try self.strSplitLast(result_ty, args[0].str, args[1].str),
             .str_from_utf8 => return try self.strFromUtf8(result_ty, args[0]),
+            .str_from_utf8_validated => {
+                const elems = args[0].list;
+                const bytes = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
+                for (elems, 0..) |elem, i| bytes[i] = readInt(u8, elem);
+                return .{ .str = bytes };
+            },
+            .str_from_utf16_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16LeShort, args[0]),
+            .str_from_utf16_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf16BeShort, args[0]),
+            .str_from_utf32_le_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32LeShort, args[0]),
+            .str_from_utf32_be_short => return try self.strFromWideUtfShort(builtins.str.fromUtf32BeShort, args[0]),
             .str_from_utf8_lossy => {
                 const elems = args[0].list;
                 const buf = arena.alloc(u8, elems.len) catch return error.OutOfMemory;
@@ -2664,6 +2694,15 @@ pub const Evaluator = struct {
             .str_static_small_word_caseless_eq,
             => return self.unsupported_("static small string dispatch op"),
         }
+    }
+
+    fn strFromWideUtfShort(self: *Evaluator, comptime decode: anytype, input: Value) EvalError!Value {
+        const bytes = self.alloc().alloc(u8, input.list.len) catch return error.OutOfMemory;
+        for (input.list, 0..) |value, i| bytes[i] = readInt(u8, value);
+        const list = builtins.list.RocList{ .bytes = bytes.ptr, .length = bytes.len, .capacity_or_alloc_ptr = builtins.list.RocList.encodeCapacity(bytes.len) };
+        const decoded = decode(list, self.getOps());
+        defer decoded.decref(self.getOps());
+        return .{ .str = self.alloc().dupe(u8, decoded.asSlice()) catch return error.OutOfMemory };
     }
 
     fn mapAscii(self: *Evaluator, source: []const u8, comptime f: fn (u8) u8) EvalError![]const u8 {
@@ -3275,7 +3314,7 @@ pub const Evaluator = struct {
     /// of them crashes, and `roc_crashed` never returns, so reaching this is a
     /// bug in the evaluator.
     fn rocCrashedFn(_: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {
-        std.debug.panic("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
+        base.invariant("lambda mono evaluator invariant violated: a builtin crashed: {s}", .{bytes[0..len]});
     }
 };
 
@@ -3365,7 +3404,7 @@ fn decTrunc(x: i128) i128 {
 /// Zero-extend the operand-width bit pattern of `x` into an i128 so a result
 /// primitive of a different signedness can re-canonicalize it.
 fn bitsOf(comptime T: type, x: T) i128 {
-    const U = std.meta.Int(.unsigned, @typeInfo(T).int.bits);
+    const U = @Int(.unsigned, @typeInfo(T).int.bits);
     return @bitCast(@as(u128, @as(U, @bitCast(x))));
 }
 
@@ -3457,7 +3496,7 @@ fn floatToIntTryPrim(comptime F: type, comptime dst: Primitive, value: F) ?i128 
 fn floatToIntWrapPrim(comptime F: type, comptime dst: Primitive, value: F) i128 {
     const T = intType(dst);
     const info = @typeInfo(T).int;
-    const U = std.meta.Int(.unsigned, info.bits);
+    const U = @Int(.unsigned, info.bits);
     const raw_bits = builtins.numeric_conversions.floatToIntWrapBits(
         F,
         value,
@@ -3621,7 +3660,7 @@ test "oracle demands declared roots once without executing representation witnes
     const produced = try program.addExpr(.{ .ty = bool_ty, .data = .{ .int_lit = .{ .bytes = @bitCast(@as(i128, 1)), .kind = .i128 } } });
     const witness = try program.addExpr(.{ .ty = bool_ty, .data = .@"unreachable" });
     const producer_index = program.rootCount();
-    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @enumFromInt(91) }, .const_locator = null };
+    const root: Common.ComptimeValueRoot = .{ .module = .{}, .root = .{ .checked = @fromBackingInt(@intCast(91)) }, .const_locator = null };
     // Neither checked identity nor descriptor-table ordinal is a producer index.
     _ = try program.addComptimeValueRoot(.{ .module = .{ .bytes = @splat(1) }, .root = root.root, .const_locator = null });
     const producer_fn = try program.addFn(.{ .symbol = undefined, .args = .empty(), .body = .{ .roc = produced }, .ret = bool_ty });

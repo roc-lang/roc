@@ -191,7 +191,7 @@ expect result == result
 				(e-lambda
 					(args
 						(p-assign (ident "n")))
-					(e-dispatch-call (method "is_gt") (constraint-fn-var 263)
+					(e-dispatch-call (method "is_gt") (constraint-fn-var 267)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "n"))))
@@ -236,7 +236,11 @@ expect result == result
 					(e-lookup-local
 						(p-assign (ident "w")))))))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-lookup-local
+				(p-assign (ident "result")))
+			(e-lookup-local
+				(p-assign (ident "result"))))))
 ~~~
 # TYPES
 ~~~clojure

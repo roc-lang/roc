@@ -734,7 +734,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 428)
+								(e-call (constraint-fn-var 430)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -759,7 +759,7 @@ closure_arg = |xs| {
 				(e-match
 					(match
 						(cond
-							(e-call (constraint-fn-var 468)
+							(e-call (constraint-fn-var 463)
 								(e-lookup-local
 									(p-assign (ident "parse")))
 								(e-lookup-local
@@ -792,7 +792,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-call (constraint-fn-var 508)
+								(e-call (constraint-fn-var 496)
 									(e-lookup-local
 										(p-assign (ident "parse")))
 									(e-lookup-local
@@ -814,7 +814,7 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 556)
+				(e-call (constraint-fn-var 537)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
@@ -832,7 +832,7 @@ closure_arg = |xs| {
 					(e-match
 						(match
 							(cond
-								(e-dispatch-call (method "first") (constraint-fn-var 557)
+								(e-dispatch-call (method "first") (constraint-fn-var 538)
 									(receiver
 										(e-lookup-local
 											(p-assign (ident "xs"))))
@@ -854,14 +854,22 @@ closure_arg = |xs| {
 									(value
 										(e-return
 											(e-runtime-error (tag "erroneous_value_expr")))))))))
-				(e-call (constraint-fn-var 602)
+				(e-call (constraint-fn-var 576)
 					(e-lookup-external
 						(builtin))
 					(e-lookup-local
 						(p-assign (ident "xs")))))))
 	(d-let
 		(p-assign (ident "closure_arg"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-lambda
+			(args
+				(p-assign (ident "xs")))
+			(e-block
+				(s-let
+					(p-assign (ident "ys"))
+					(e-lookup-local
+						(p-assign (ident "xs"))))
+				(e-runtime-error (tag "erroneous_value_expr"))))))
 ~~~
 # TYPES
 ~~~clojure
@@ -871,11 +879,11 @@ closure_arg = |xs| {
 		(patt (type "Str -> Str"))
 		(patt (type "Str -> Str"))
 		(patt (type "List(item) -> U64"))
-		(patt (type "List(List(U64)) -> Error")))
+		(patt (type "List(List(U64)) -> _ret")))
 	(expressions
 		(expr (type "Str -> Try(Str, [BadInput])"))
 		(expr (type "Str -> Str"))
 		(expr (type "Str -> Str"))
 		(expr (type "List(item) -> U64"))
-		(expr (type "List(List(U64)) -> Error"))))
+		(expr (type "List(List(U64)) -> _ret"))))
 ~~~

@@ -46,7 +46,7 @@ main = {
 # EXPECTED
 TYPE MISMATCH - Adv.md:17:28:17:31
 MISSING METHOD - Adv.md:23:17:23:28
-MISSING METHOD - Adv.md:28:21:28:27
+TYPE NOT DETERMINED - Adv.md:28:13:28:20
 # PROBLEMS
 ~~~clojure
 (reports
@@ -101,37 +101,37 @@ MISSING METHOD - Adv.md:28:21:28:27
 			(reflow "associated with it in the type's declaration.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 28 21) (end 28 27))
+		(title "Type Not Determined")
+		(region (start 28 13) (end 28 20))
 		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "update")
-			(reflow " ")
-			(reflow "method is being called on a value whose type doesn't have that method."))
+			(reflow "Nothing in this program determines the type of this string:"))
 		(document
-			(source-region (file "Adv.md") (start 28 21) (end 28 27) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
+			(source-region (file "Adv.md") (start 28 13) (end 28 20) (annotation error) (line-text "\tnext_val = \"Hello\".update(100)"))
 			(line-break)
-			(reflow "The value's type, which does not have a method named ")
-			(annotated code "update")
-			(reflow ",")
-			(reflow " ")
-			(reflow "is:")
+			(reflow "Its type needs all of these:")
 			(line-break)
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "Str")
+			(text "a where [a.update : a, b -> _ret]")
 			(annotation-end)
+			(line-break)
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "update")
+			(reflow " ")
+			(reflow "method to use.")
 			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "For this to work, the type would need to have a method named")
+			(reflow "None of the built-in string types")
+			(reflow " ")
+			(reflow "have a method named")
 			(reflow " ")
 			(annotated code "update")
-			(reflow " ")
-			(reflow "associated with it in the type's declaration."))))
+			(reflow "."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -446,7 +446,7 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_str") (constraint-fn-var 464)
+				(e-dispatch-call (method "update_str") (constraint-fn-var 445)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "val"))))
@@ -467,14 +467,17 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-runtime-error (tag "erroneous_value_use"))))
+				(e-runtime-error (tag "erroneous_value_expr")
+					(e-lookup-local
+						(p-assign (ident "val")))
+					(e-num (value "100"))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "mismatch3"))
 		(e-block
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update") (constraint-fn-var 525)
+				(e-dispatch-call (method "update") (constraint-fn-var 497)
 					(receiver
 						(e-runtime-error (tag "erroneous_value_expr")))
 					(args
@@ -494,9 +497,9 @@ main = {
 								(e-literal (string "hello")))))))
 			(s-let
 				(p-assign (ident "next_val"))
-				(e-dispatch-call (method "update_u64") (constraint-fn-var 571)
+				(e-dispatch-call (method "update_u64") (constraint-fn-var 534)
 					(receiver
-						(e-dispatch-call (method "update_str") (constraint-fn-var 559)
+						(e-dispatch-call (method "update_str") (constraint-fn-var 522)
 							(receiver
 								(e-lookup-local
 									(p-assign (ident "val"))))
@@ -507,12 +510,12 @@ main = {
 						(e-num (value "20")))))
 			(e-tuple
 				(elems
-					(e-dispatch-call (method "to_str") (constraint-fn-var 581)
+					(e-dispatch-call (method "to_str") (constraint-fn-var 544)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))
 						(args))
-					(e-dispatch-call (method "to_u64") (constraint-fn-var 584)
+					(e-dispatch-call (method "to_u64") (constraint-fn-var 547)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "next_val"))))

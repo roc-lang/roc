@@ -111,7 +111,7 @@ test "fractional literal - NaN handling" {
     const parse_ast = test_env.parse_ast;
 
     // Check if it parsed as an identifier instead of a number
-    const expr: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const expr: parse.AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
     const parsed_expr = parse_ast.store.getExpr(expr);
 
     // NaN parses as a tag expression, not a numeric literal
@@ -129,7 +129,7 @@ test "fractional literal - infinity handling" {
     const parse_ast = test_env.parse_ast;
 
     // Check if it parsed as an identifier instead of a number
-    const expr: parse.AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+    const expr: parse.AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
     const parsed_expr = parse_ast.store.getExpr(expr);
 
     // Infinity parses as a tag expression, not a numeric literal

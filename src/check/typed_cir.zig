@@ -181,10 +181,6 @@ pub const Modules = struct {
         self.allocator.free(self.modules);
     }
 
-    pub fn moduleCount(self: @This()) usize {
-        return self.modules.len;
-    }
-
     pub fn module(self: @This(), module_idx: u32) Module {
         return .{
             .allocator = self.allocator,
@@ -213,7 +209,7 @@ pub fn prepareRuntimeEnv(allocator: Allocator, env: *ModuleEnv) Allocator.Error!
 fn ensureModuleNameIdents(env: *ModuleEnv) Allocator.Error!void {
     if (env.display_module_name_idx.isNone()) {
         if (env.module_name.len == 0) {
-            std.debug.panic("typed_cir invariant violated: missing module_name for env with no display_module_name_idx", .{});
+            base.invariant("typed_cir invariant violated: missing module_name for env with no display_module_name_idx", .{});
         }
 
         env.display_module_name_idx = try env.insertIdent(base.Ident.for_text(env.module_name));
@@ -225,17 +221,6 @@ pub const Module = struct {
     allocator: Allocator,
     module_idx: u32,
     data_store: *ModuleData,
-
-    /// Function-shape view read from checked function types.
-    pub const FnShape = struct {
-        args: []Var,
-        ret: Var,
-
-        /// Release the owned argument slice for a function-shape snapshot.
-        pub fn deinit(self: *@This(), allocator: Allocator) void {
-            allocator.free(self.args);
-        }
-    };
 
     fn env(self: @This()) *ModuleEnv {
         return self.data_store.env;
@@ -333,18 +318,9 @@ pub const Module = struct {
         return self.data_store.top_level_defs_by_ident.get(ident);
     }
 
-    /// Return the checked module's method identifier table for tooling and lowering.
-    pub fn methodIdentEntries(self: @This()) []const ModuleEnv.MethodIdents.Entry {
-        if (@import("builtin").mode == .Debug) {
-            std.debug.assert(self.env().method_idents.sorted);
-            std.debug.assert(self.env().method_idents.deduplicated);
-        }
-        return self.env().method_idents.entries.items;
-    }
-
     /// Return the checked module's method definition table for static-dispatch lowering.
     pub fn methodDefEntries(self: @This()) []const ModuleEnv.MethodDefs.Entry {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.assert(self.env().method_defs.sorted);
             std.debug.assert(self.env().method_defs.deduplicated);
         }
@@ -353,106 +329,6 @@ pub const Module = struct {
 
     pub fn exprType(_: @This(), idx: CIR.Expr.Idx) Var {
         return ModuleEnv.varFrom(idx);
-    }
-
-    pub fn exprHasErrType(self: @This(), idx: CIR.Expr.Idx) bool {
-        return self.typeStoreConst().resolveVar(self.exprType(idx)).desc.content == .err;
-    }
-
-    /// Flatten a checked function type into its argument list and final return var.
-    pub fn fnShape(self: @This(), fn_var: Var) Allocator.Error!FnShape {
-        var args = std.ArrayList(Var).empty;
-        errdefer args.deinit(self.allocator);
-        const ret = try self.appendFnArgs(&args, fn_var);
-        return .{
-            .args = try args.toOwnedSlice(self.allocator),
-            .ret = ret,
-        };
-    }
-
-    /// Return the checked source-level function boundary for a lambda definition.
-    pub fn lambdaFnShape(self: @This(), fn_var: Var, explicit_arg_count: usize) Allocator.Error!FnShape {
-        var args = std.ArrayList(Var).empty;
-        errdefer args.deinit(self.allocator);
-
-        const store = self.typeStoreConst();
-        var current = fn_var;
-        var saw_fn_node = false;
-
-        while (true) {
-            const resolved = store.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    current = store.getAliasBackingVar(alias);
-                    continue;
-                },
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        saw_fn_node = true;
-                        const current_args = store.sliceVars(func.args);
-                        const prev_len = args.items.len;
-                        try args.appendSlice(self.allocator, current_args);
-
-                        if (explicit_arg_count != 0 and prev_len < explicit_arg_count and args.items.len > explicit_arg_count) {
-                            std.debug.panic(
-                                "typed_cir invariant violated: lambda boundary split function arg group while building source function shape",
-                                .{},
-                            );
-                        }
-
-                        if (explicit_arg_count == 0 or args.items.len >= explicit_arg_count) {
-                            return .{
-                                .args = try args.toOwnedSlice(self.allocator),
-                                .ret = func.ret,
-                            };
-                        }
-
-                        const ret = func.ret;
-                        const ret_resolved = store.resolveVar(ret);
-                        switch (ret_resolved.desc.content) {
-                            .alias => |alias| current = store.getAliasBackingVar(alias),
-                            .structure => |ret_flat| switch (ret_flat) {
-                                .fn_pure, .fn_effectful, .fn_unbound => current = ret,
-                                .record,
-                                .tuple,
-                                .nominal_type,
-                                .empty_record,
-                                .tag_union,
-                                .empty_tag_union,
-                                => std.debug.panic(
-                                    "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
-                                    .{},
-                                ),
-                            },
-                            .flex, .rigid, .field_presence, .err => std.debug.panic(
-                                "typed_cir invariant violated: lambda boundary expected more function args when building source function shape",
-                                .{},
-                            ),
-                        }
-                    },
-                    .record,
-                    .tuple,
-                    .nominal_type,
-                    .empty_record,
-                    .tag_union,
-                    .empty_tag_union,
-                    => std.debug.panic(
-                        "typed_cir invariant violated: expected function type when building source function shape",
-                        .{},
-                    ),
-                },
-                .flex, .rigid, .field_presence, .err => std.debug.panic(
-                    "typed_cir invariant violated: expected function type when building source function shape",
-                    .{},
-                ),
-            }
-        }
-
-        if (!saw_fn_node) unreachable;
-    }
-
-    pub fn sourceVarRoot(self: @This(), var_: Var) Var {
-        return self.typeStoreConst().resolveVar(var_).var_;
     }
 
     pub fn expr(self: @This(), idx: CIR.Expr.Idx) Expr {
@@ -473,14 +349,6 @@ pub const Module = struct {
             .idx = idx,
             .data = self.env().store.getPattern(idx),
         };
-    }
-
-    pub fn typeAnnoType(_: @This(), idx: CIR.TypeAnno.Idx) Var {
-        return ModuleEnv.varFrom(idx);
-    }
-
-    pub fn exprIdxFromTypeVar(_: @This(), var_: Var) ?CIR.Expr.Idx {
-        return @enumFromInt(@intFromEnum(ModuleEnv.nodeIdxFrom(var_)));
     }
 
     pub fn getStatement(self: @This(), idx: CIR.Statement.Idx) CIR.Statement {
@@ -545,54 +413,6 @@ pub const Module = struct {
 
     pub fn sliceMatchBranchPatterns(self: @This(), span: CIR.Expr.Match.BranchPattern.Span) []const CIR.Expr.Match.BranchPattern.Idx {
         return self.env().store.sliceMatchBranchPatterns(span);
-    }
-
-    fn appendFnArgs(self: @This(), args: *std.ArrayList(Var), fn_var: Var) Allocator.Error!Var {
-        const store = self.typeStoreConst();
-        var current = fn_var;
-        while (true) {
-            const resolved = store.resolveVar(current);
-            switch (resolved.desc.content) {
-                .alias => |alias| {
-                    current = store.getAliasBackingVar(alias);
-                },
-                .structure => |flat| switch (flat) {
-                    .fn_pure, .fn_effectful, .fn_unbound => |func| {
-                        try args.appendSlice(self.allocator, store.sliceVars(func.args));
-                        const ret = func.ret;
-                        const ret_resolved = store.resolveVar(ret);
-                        switch (ret_resolved.desc.content) {
-                            .alias => |alias| current = store.getAliasBackingVar(alias),
-                            .structure => |ret_flat| switch (ret_flat) {
-                                .fn_pure, .fn_effectful, .fn_unbound => current = ret,
-                                .record,
-                                .tuple,
-                                .nominal_type,
-                                .empty_record,
-                                .tag_union,
-                                .empty_tag_union,
-                                => return ret,
-                            },
-                            .flex, .rigid, .field_presence, .err => return ret,
-                        }
-                    },
-                    .record,
-                    .tuple,
-                    .nominal_type,
-                    .empty_record,
-                    .tag_union,
-                    .empty_tag_union,
-                    => std.debug.panic(
-                        "typed_cir invariant violated: expected function type when building source function shape",
-                        .{},
-                    ),
-                },
-                .flex, .rigid, .field_presence, .err => std.debug.panic(
-                    "typed_cir invariant violated: expected function type when building source function shape",
-                    .{},
-                ),
-            }
-        }
     }
 };
 

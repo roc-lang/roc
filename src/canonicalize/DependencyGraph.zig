@@ -187,10 +187,10 @@ pub fn collectDependencies(
 
     const DependencySort = struct {
         fn lessThan(_: void, a: Dependency, b: Dependency) bool {
-            const a_dependent = @intFromEnum(a.dependent);
-            const b_dependent = @intFromEnum(b.dependent);
+            const a_dependent = @backingInt(a.dependent);
+            const b_dependent = @backingInt(b.dependent);
             if (a_dependent != b_dependent) return a_dependent < b_dependent;
-            return @intFromEnum(a.dependency) < @intFromEnum(b.dependency);
+            return @backingInt(a.dependency) < @backingInt(b.dependency);
         }
     };
     std.mem.sort(Dependency, dependencies.items.items, {}, DependencySort.lessThan);
@@ -215,15 +215,15 @@ pub fn hasDependency(
     dependent: CIR.Def.Idx,
     dependency: CIR.Def.Idx,
 ) bool {
-    const dependent_raw = @intFromEnum(dependent);
-    const dependency_raw = @intFromEnum(dependency);
+    const dependent_raw = @backingInt(dependent);
+    const dependency_raw = @backingInt(dependency);
     var low: usize = 0;
     var high: usize = dependencies.len;
     while (low < high) {
         const mid = low + (high - low) / 2;
         const candidate = dependencies[mid];
-        const candidate_dependent = @intFromEnum(candidate.dependent);
-        const candidate_dependency = @intFromEnum(candidate.dependency);
+        const candidate_dependent = @backingInt(candidate.dependent);
+        const candidate_dependency = @backingInt(candidate.dependency);
         if (candidate_dependent < dependent_raw or
             (candidate_dependent == dependent_raw and candidate_dependency < dependency_raw))
         {
@@ -363,12 +363,12 @@ const DemandAnalyzer = struct {
         }
 
         for (cir.scheme_uses.items.items, 0..) |record, record_index| {
-            switch (@as(ModuleEnv.SchemeUseRecord.Slot, @enumFromInt(record.slot_kind))) {
+            switch (@as(ModuleEnv.SchemeUseRecord.Slot, @fromBackingInt(@intCast(record.slot_kind)))) {
                 .value_use, .shared_value_use => {
-                    const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @enumFromInt(record.node_idx));
+                    const entry = try analyzer.scheme_use_by_node.getOrPut(allocator, @fromBackingInt(@intCast(record.node_idx)));
                     if (!entry.found_existing) entry.value_ptr.* = @intCast(record_index);
                 },
-                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .where_method_use => {},
+                .nested_function_use, .dispatch_target, .recursive_dispatch_target, .recursive_reference, .recursive_value_reference, .where_method_use => {},
             }
         }
 
@@ -932,20 +932,13 @@ const DemandAnalyzer = struct {
                 try walk.push(self.allocator, .{ .visit_pattern = for_stmt.patt });
                 try walk.push(self.allocator, .{ .visit = for_stmt.expr });
             },
-            .s_while => |while_stmt| {
+            inline .s_while, .s_infinite_loop, .s_breakable_loop => |while_stmt| {
                 try walk.push(self.allocator, .{ .visit = while_stmt.body });
                 try walk.push(self.allocator, .{ .visit = while_stmt.cond });
             },
-            .s_infinite_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
-            .s_breakable_loop => |loop_stmt| {
-                try walk.push(self.allocator, .{ .visit = loop_stmt.body });
-                try walk.push(self.allocator, .{ .visit = loop_stmt.cond });
-            },
             .s_return => |ret| try walk.push(self.allocator, .{ .visit = ret.expr }),
-            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+            .s_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
+            .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
         }
     }
 
@@ -1022,11 +1015,7 @@ const DemandAnalyzer = struct {
                 if (record.ext) |ext_idx| try walk.push(self.allocator, .{ .visit = ext_idx });
             },
             .e_field_access => |access| try walk.push(self.allocator, .{ .visit = access.receiver }),
-            .e_method_call => |call| {
-                try self.pushExprSpanReversed(walk, call.args);
-                try walk.push(self.allocator, .{ .visit = call.receiver });
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try self.pushExprSpanReversed(walk, call.args);
                 try walk.push(self.allocator, .{ .visit = call.receiver });
             },
@@ -1127,8 +1116,8 @@ const DemandAnalyzer = struct {
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try self.pushExprSpanReversed(walk, runtime_error.evaluated),
         }
     }
 
@@ -1258,8 +1247,8 @@ const DemandAnalyzer = struct {
         const pairs = self.cir.scheme_use_pairs.items.items[record.pairs_start .. record.pairs_start + record.pairs_len];
         const old_root = self.cir.types.resolveVar(fn_var).var_;
         for (pairs) |pair| {
-            if (self.cir.types.resolveVar(@enumFromInt(pair.old_var)).var_ == old_root) {
-                return @enumFromInt(pair.fresh_var);
+            if (self.cir.types.resolveVar(@fromBackingInt(@intCast(pair.old_var))).var_ == old_root) {
+                return @fromBackingInt(@intCast(pair.fresh_var));
             }
         }
         return fn_var;
@@ -1286,8 +1275,9 @@ const DemandAnalyzer = struct {
     fn patternBinds(self: *DemandAnalyzer, root: CIR.Pattern.Idx, needle: CIR.Pattern.Idx) bool {
         if (root == needle) return true;
 
-        var stack_allocator_state = std.heap.stackFallback(2048, self.allocator);
-        const stack_allocator = stack_allocator_state.get();
+        var stack_allocator_state_buffer: [2048]u8 align(@alignOf(usize)) = undefined;
+        var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+        const stack_allocator = stack_allocator_state.allocator();
         var pending: std.ArrayList(CIR.Pattern.Idx) = .empty;
         defer pending.deinit(stack_allocator);
 
@@ -1315,9 +1305,7 @@ fn appendChildPatterns(
                 try out.append(allocator, arg);
             }
         },
-        .nominal => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .nominal_external => |nominal| try out.append(allocator, nominal.backing_pattern),
-        .deferred_import_ref => |deferred| try out.append(allocator, deferred.backing_pattern),
+        inline .nominal, .nominal_external, .deferred_import_ref => |nominal| try out.append(allocator, nominal.backing_pattern),
         .record_destructure => |record| {
             for (cir.store.sliceRecordDestructs(record.destructs)) |destruct_idx| {
                 const destruct = cir.store.getRecordDestruct(destruct_idx);
@@ -1504,89 +1492,6 @@ pub fn computeSCCs(
     };
 }
 
-/// Returns indices of all top-level constants (definitions that are not functions).
-///
-/// This is used to identify definitions that should be evaluated at compile time,
-/// as opposed to functions which are only evaluated when called.
-pub fn getTopLevelConstants(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error![]const CIR.Def.Idx {
-    const defs_slice = cir.store.sliceDefs(all_defs);
-
-    var constants: std.ArrayList(CIR.Def.Idx) = .empty;
-    errdefer constants.deinit(allocator);
-
-    for (defs_slice) |def_idx| {
-        const def = cir.store.getDef(def_idx);
-        const expr = cir.store.getExpr(def.expr);
-
-        const tag = std.meta.activeTag(expr);
-        const is_constant = tag != .e_lambda and
-            tag != .e_closure and
-            tag != .e_anno_only and
-            tag != .e_derived_method and
-            tag != .e_hosted_lambda;
-
-        if (is_constant) {
-            try constants.append(allocator, def_idx);
-        }
-    }
-
-    return constants.toOwnedSlice(allocator);
-}
-
-/// Returns constants in dependency order (dependencies first).
-///
-/// This computes the strongly connected components (SCCs) for only the constant
-/// definitions, returning them in topological order so that each constant can
-/// be evaluated after all its dependencies have been evaluated.
-pub fn getConstantsInDependencyOrder(
-    cir: *const ModuleEnv,
-    all_defs: CIR.Def.Span,
-    allocator: std.mem.Allocator,
-) std.mem.Allocator.Error!EvaluationOrder {
-    // Get only the constant definitions
-    const constants = try getTopLevelConstants(cir, all_defs, allocator);
-    defer allocator.free(constants);
-
-    if (constants.len == 0) {
-        return EvaluationOrder{
-            .sccs = &[_]SCC{},
-            .allocator = allocator,
-        };
-    }
-
-    // Build a dependency graph for just the constants
-    var graph = DependencyGraph.init(allocator, constants);
-    errdefer graph.deinit();
-
-    const defs_slice = cir.store.sliceDefs(all_defs);
-    var analyzer = try DemandAnalyzer.init(cir, defs_slice, constants, &.{}, allocator);
-    defer analyzer.deinit();
-
-    try analyzer.computeSummaries();
-
-    for (constants) |def_idx| {
-        var deps = DemandSummary{};
-        defer deps.deinit(allocator);
-
-        try analyzer.collectDefDependencies(def_idx, &deps);
-        try analyzer.expandDeps(&deps);
-
-        var dep_iter = deps.deps.keyIterator();
-        while (dep_iter.next()) |dep_def_idx| {
-            try graph.addEdge(def_idx, dep_def_idx.*);
-        }
-    }
-
-    // Compute SCCs using Tarjan's algorithm
-    const result = try computeSCCs(&graph, allocator);
-    graph.deinit();
-    return result;
-}
-
 /// Collect every top-level def referenced anywhere in `root_expr`'s expression
 /// tree—including nested lambda bodies and blocks—into `out` (deduplicated).
 ///
@@ -1689,11 +1594,7 @@ pub fn collectNameReferences(
                 }
             },
             .e_field_access => |access| try scratch_stack.append(allocator, access.receiver),
-            .e_method_call => |call| {
-                try scratch_stack.append(allocator, call.receiver);
-                for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
-            },
-            .e_dispatch_call => |call| {
+            inline .e_method_call, .e_dispatch_call => |call| {
                 try scratch_stack.append(allocator, call.receiver);
                 for (cir.store.sliceExpr(call.args)) |arg| try scratch_stack.append(allocator, arg);
             },
@@ -1728,9 +1629,7 @@ pub fn collectNameReferences(
                         .s_decl => |decl| try scratch_stack.append(allocator, decl.expr),
                         .s_var => |var_stmt| try scratch_stack.append(allocator, var_stmt.expr),
                         .s_var_uninitialized => {},
-                        .s_reassign => |reassign| try scratch_stack.append(allocator, reassign.expr),
-                        .s_dbg => |dbg| try scratch_stack.append(allocator, dbg.expr),
-                        .s_expr => |expr_stmt| try scratch_stack.append(allocator, expr_stmt.expr),
+                        inline .s_reassign, .s_dbg, .s_expr => |reassign| try scratch_stack.append(allocator, reassign.expr),
                         .s_expect => |expect| try scratch_stack.append(allocator, expect.body),
                         .s_for => |for_stmt| {
                             try scratch_stack.append(allocator, for_stmt.expr);
@@ -1749,7 +1648,8 @@ pub fn collectNameReferences(
                             try scratch_stack.append(allocator, loop_stmt.body);
                         },
                         .s_return => |ret| try scratch_stack.append(allocator, ret.expr),
-                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_runtime_error, .s_break => {},
+                        .s_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
+                        .s_import, .s_alias_decl, .s_nominal_decl, .s_where_alias_decl, .s_type_anno, .s_type_var_alias, .s_crash, .s_break => {},
                     }
                 }
                 try scratch_stack.append(allocator, block.final_expr);
@@ -1815,8 +1715,8 @@ pub fn collectNameReferences(
             .e_lookup_associated_resolved,
             .e_lookup_required,
             .e_crash,
-            .e_runtime_error,
             => {},
+            .e_runtime_error => |runtime_error| try scratch_stack.appendSlice(allocator, cir.store.sliceExpr(runtime_error.evaluated)),
         }
     }
 }
@@ -2086,7 +1986,7 @@ const TarjanState = struct {
             std.debug.assert(self.on_stack.remove(w));
             try scc_defs.append(self.allocator, w);
 
-            if (@intFromEnum(w) == @intFromEnum(v)) break;
+            if (@backingInt(w) == @backingInt(v)) break;
         }
 
         // Check if this SCC is recursive
@@ -2096,7 +1996,7 @@ const TarjanState = struct {
                 const node = scc_defs.items[0];
                 const deps = graph.getDependencies(node);
                 for (deps) |dep| {
-                    if (@intFromEnum(dep) == @intFromEnum(node)) break :blk true;
+                    if (@backingInt(dep) == @backingInt(node)) break :blk true;
                 }
             }
             break :blk false;
@@ -2118,8 +2018,9 @@ const TarjanState = struct {
             next_dependency: usize,
         };
 
-        var stack_allocator_state = std.heap.stackFallback(4096, self.allocator);
-        const stack_allocator = stack_allocator_state.get();
+        var stack_allocator_state_buffer: [4096]u8 align(@alignOf(usize)) = undefined;
+        var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+        const stack_allocator = stack_allocator_state.allocator();
         var dfs_stack: std.ArrayList(DfsFrame) = .empty;
         defer dfs_stack.deinit(stack_allocator);
 

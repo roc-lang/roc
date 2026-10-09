@@ -50,5 +50,5 @@ NO CHANGE
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_arg -> (_arg2 -> Error)"))
+(expr (type "_arg -> (_arg2 -> _ret)"))
 ~~~

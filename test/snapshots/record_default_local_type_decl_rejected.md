@@ -122,7 +122,7 @@ f = |n| {
 								(fields
 									(field (name "a")
 										(e-num (value "1"))))))))
-				(e-call (constraint-fn-var 240)
+				(e-call (constraint-fn-var 245)
 					(e-lookup-local
 						(p-assign (ident "g")))
 					(e-empty_record)))))

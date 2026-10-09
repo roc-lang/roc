@@ -27,13 +27,13 @@ const Allocation = struct {
 };
 
 const ContractEnv = struct {
-    allocations: [max_allocations]Allocation = [_]Allocation{.{}} ** max_allocations,
+    allocations: [max_allocations]Allocation = @as([max_allocations]Allocation, @splat(.{})),
     alloc_count: usize = 0,
     dealloc_count: usize = 0,
     live_alloc_count: usize = 0,
     allocator_error_count: usize = 0,
     failure_count: usize = 0,
-    report: [1024]u8 = [_]u8{0} ** 1024,
+    report: [1024]u8 = @as([1024]u8, @splat(0)),
     report_len: usize = 0,
 
     fn fail(self: *ContractEnv, comptime fmt: []const u8, args: anytype) void {
@@ -309,7 +309,7 @@ fn runAppModelContract() void {
         contract_env.fail("render title mismatch len={}", .{title_slice.len});
     }
     if (view.lifecycle.tag != .Ready) {
-        contract_env.fail("render lifecycle expected Ready got {}", .{@intFromEnum(view.lifecycle.tag)});
+        contract_env.fail("render lifecycle expected Ready got {}", .{@backingInt(view.lifecycle.tag)});
     }
     if (view.messages.length != 0) {
         contract_env.fail("render messages expected empty got {}", .{view.messages.length});

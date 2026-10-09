@@ -58,6 +58,8 @@ pub const BuiltinIndices = struct {
     http_header_encoding_type: Statement.Idx,
     http_header_type: Statement.Idx,
     utf8_problem_type: Statement.Idx,
+    utf16_problem_type: Statement.Idx,
+    utf32_problem_type: Statement.Idx,
     range_type: Statement.Idx,
     u8_type: Statement.Idx,
     i8_type: Statement.Idx,
@@ -113,6 +115,8 @@ pub const BuiltinIndices = struct {
     http_header_encoding_ident: Ident.Idx,
     http_header_ident: Ident.Idx,
     utf8_problem_ident: Ident.Idx,
+    utf16_problem_ident: Ident.Idx,
+    utf32_problem_ident: Ident.Idx,
     range_ident: Ident.Idx,
     u8_ident: Ident.Idx,
     i8_ident: Ident.Idx,
@@ -146,17 +150,6 @@ pub const BuiltinIndices = struct {
     // Tag idents for Try type
     ok_ident: Ident.Idx,
     err_ident: Ident.Idx,
-
-    /// Convert a nominal type's ident to a NumKind, if it's a builtin numeric type.
-    /// This allows direct ident comparison instead of string comparison for type identification.
-    pub fn numKindFromIdent(self: BuiltinIndices, ident: Ident.Idx) ?NumKind {
-        inline for (builtin_type_specs) |spec| {
-            if (spec.num_kind) |num_kind| {
-                if (ident.eql(@field(self, spec.ident_field))) return num_kind;
-            }
-        }
-        return null;
-    }
 };
 
 /// How the builtin compiler should locate a type declaration in Builtin.roc.
@@ -270,6 +263,8 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "HttpHeaderEncoding", .qualified_name = "Builtin.Encoding.HttpHeaderEncoding", .type_field = "http_header_encoding_type", .ident_field = "http_header_encoding_ident", .lookup = .{ .qualified = "Builtin.Encoding.HttpHeaderEncoding" }, .auto_import = false, .internal_kind = .http_header },
     .{ .display_name = "HttpHeader", .qualified_name = "Builtin.Encoding.HttpHeader", .type_field = "http_header_type", .ident_field = "http_header_ident", .lookup = .{ .nested = .{ .parent = "Encoding", .name = "HttpHeader" } }, .auto_import = false },
     .{ .display_name = "Utf8Problem", .qualified_name = "Builtin.Str.Utf8Problem", .type_field = "utf8_problem_type", .ident_field = "utf8_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf8Problem" } } },
+    .{ .display_name = "Utf16Problem", .qualified_name = "Builtin.Str.Utf16Problem", .type_field = "utf16_problem_type", .ident_field = "utf16_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf16Problem" } } },
+    .{ .display_name = "Utf32Problem", .qualified_name = "Builtin.Str.Utf32Problem", .type_field = "utf32_problem_type", .ident_field = "utf32_problem_ident", .lookup = .{ .nested = .{ .parent = "Str", .name = "Utf32Problem" } } },
     .{ .display_name = "Range", .qualified_name = "Builtin.Num.Range", .type_field = "range_type", .ident_field = "range_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "Range" } } },
     .{ .display_name = "U8", .qualified_name = "Builtin.Num.U8", .type_field = "u8_type", .ident_field = "u8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "U8" } }, .num_kind = .u8 },
     .{ .display_name = "I8", .qualified_name = "Builtin.Num.I8", .type_field = "i8_type", .ident_field = "i8_ident", .lookup = .{ .nested = .{ .parent = "Num", .name = "I8" } }, .num_kind = .i8 },
@@ -301,6 +296,15 @@ pub const builtin_type_specs = [_]BuiltinTypeSpec{
     .{ .display_name = "Digest", .qualified_name = "Builtin.Crypto.BLAKE3.Digest", .type_field = "crypto_blake3_digest_type", .ident_field = "crypto_blake3_digest_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Digest" }, .auto_import = false },
     .{ .display_name = "Hasher", .qualified_name = "Builtin.Crypto.BLAKE3.Hasher", .type_field = "crypto_blake3_hasher_type", .ident_field = "crypto_blake3_hasher_ident", .lookup = .{ .qualified = "Builtin.Crypto.BLAKE3.Hasher" }, .auto_import = false },
 };
+
+/// The registry entry for the builtin type whose `BuiltinIndices` statement
+/// field is `type_field`. Its `display_name` and `qualified_name` are the only
+/// spellings of the type's name the compiler interns.
+pub fn builtinTypeSpec(comptime type_field: []const u8) BuiltinTypeSpec {
+    return comptime for (builtin_type_specs) |spec| {
+        if (std.mem.eql(u8, spec.type_field, type_field)) break spec;
+    } else @compileError("no builtin type spec has the type field '" ++ type_field ++ "'");
+}
 
 /// Nominal declarations that only group nested builtin types rather than representing builtin types.
 pub const builtin_type_container_names = [_][]const u8{
@@ -362,9 +366,9 @@ pub const BUILTIN_INDICES_LAYOUT_HASH: u64 = blk: {
     var hash = hashBytes(hash_offset, "roc-builtin-indices-layout-v1");
     hash = hashInt(hash, @sizeOf(BuiltinIndices));
     hash = hashInt(hash, @alignOf(BuiltinIndices));
-    for (@typeInfo(BuiltinIndices).@"struct".fields) |field| {
-        hash = hashBytes(hash, field.name);
-        hash = hashBytes(hash, @typeName(field.type));
+    for (@typeInfo(BuiltinIndices).@"struct".field_names, @typeInfo(BuiltinIndices).@"struct".field_types) |field_name, field_type| {
+        hash = hashBytes(hash, field_name);
+        hash = hashBytes(hash, @typeName(field_type));
     }
     break :blk hash;
 };
@@ -393,17 +397,17 @@ pub const Def = struct {
             if (encoded[0] == 0) {
                 return .let;
             } else if (encoded[0] == 1) {
-                return .{ .stmt = @as(TypeVar, @enumFromInt(encoded[1])) };
+                return .{ .stmt = @as(TypeVar, @fromBackingInt(@intCast(encoded[1]))) };
             } else {
-                return .{ .ignored = @as(TypeVar, @enumFromInt(encoded[1])) };
+                return .{ .ignored = @as(TypeVar, @fromBackingInt(@intCast(encoded[1]))) };
             }
         }
 
         pub fn encode(self: Kind) [2]u32 {
             switch (self) {
                 .let => return .{ 0, 0 },
-                .stmt => |ty_var| return .{ 1, @intFromEnum(ty_var) },
-                .ignored => |ty_var| return .{ 2, @intFromEnum(ty_var) },
+                .stmt => |ty_var| return .{ 1, @backingInt(ty_var) },
+                .ignored => |ty_var| return .{ 2, @backingInt(ty_var) },
             }
         }
     };
@@ -421,7 +425,7 @@ pub const Def = struct {
 
         // Safety check: verify pattern index points to actual pattern node
         // This prevents crashes from cross-module node index issues
-        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @enumFromInt(@intFromEnum(self.pattern));
+        const pattern_node_idx: @TypeOf(cir.store.nodes).Idx = @fromBackingInt(@intCast(@backingInt(self.pattern)));
         const pattern_node = cir.store.nodes.get(pattern_node_idx);
         const is_valid_pattern = pattern_node.tag == .pattern_identifier or
             pattern_node.tag == .pattern_var_identifier or
@@ -471,11 +475,10 @@ pub const TypeHeader = struct {
     args: TypeAnno.Span,
 
     pub fn pushToSExprTree(self: *const TypeHeader, cir: anytype, tree: anytype, idx: TypeHeader.Idx) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("ty-header");
+        const begin = try tree.beginNamedNode("ty-header");
 
         // Get the region for this TypeHeader
-        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+        const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
         const region = cir.store.getRegionAt(node_idx);
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -485,8 +488,7 @@ pub const TypeHeader = struct {
         const attrs = tree.beginNode();
 
         if (self.args.span.len > 0) {
-            const args_begin = tree.beginNode();
-            try tree.pushStaticAtom("ty-args");
+            const args_begin = try tree.beginNamedNode("ty-args");
             const args_attrs = tree.beginNode();
             for (cir.store.sliceTypeAnnos(self.args)) |anno_idx| {
                 try cir.store.getTypeAnno(anno_idx).pushToSExprTree(cir, tree, anno_idx);
@@ -542,11 +544,10 @@ pub const WhereClause = union(enum) {
     pub fn pushToSExprTree(self: *const WhereClause, cir: anytype, tree: anytype, idx: WhereClause.Idx) Allocator.Error!void {
         switch (self.*) {
             .w_method => |method| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("method");
+                const begin = try tree.beginNamedNode("method");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -560,11 +561,10 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_alias => |alias| {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("alias");
+                const begin = try tree.beginNamedNode("alias");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
@@ -574,16 +574,14 @@ pub const WhereClause = union(enum) {
                 try tree.endNode(begin, attrs);
             },
             .w_malformed => {
-                const begin = tree.beginNode();
-                try tree.pushStaticAtom("malformed");
+                const begin = try tree.beginNamedNode("malformed");
 
                 // Get the region for this WhereClause
-                const node_idx: Node.Idx = @enumFromInt(@intFromEnum(idx));
+                const node_idx: Node.Idx = @fromBackingInt(@intCast(@backingInt(idx)));
                 const region = cir.store.getRegionAt(node_idx);
                 try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
 
-                const attrs = tree.beginNode();
-                try tree.endNode(begin, attrs);
+                try tree.endNodeWithoutChildren(begin);
             },
         }
     }
@@ -626,8 +624,7 @@ pub const Annotation = struct {
     pub fn pushToSExprTree(self: *const @This(), env: anytype, tree: *SExprTree, idx: Annotation.Idx) Allocator.Error!void {
         const annotation = self.*;
 
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("annotation");
+        const begin = try tree.beginNamedNode("annotation");
         const attrs = tree.beginNode();
 
         // Get the region for this Annotation
@@ -639,8 +636,7 @@ pub const Annotation = struct {
 
         // Append where clause
         if (annotation.where) |where_span| {
-            const where_begin = tree.beginNode();
-            try tree.pushStaticAtom("where");
+            const where_begin = try tree.beginNamedNode("where");
             const where_attrs = tree.beginNode();
             const where_clauses = env.store.sliceWhereClauses(where_span);
             for (where_clauses) |clause_idx| {
@@ -667,8 +663,7 @@ pub const ExposedItem = struct {
     kind: Kind,
 
     pub fn pushToSExprTree(self: *const ExposedItem, _: anytype, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("exposed");
+        const begin = try tree.beginNamedNode("exposed");
 
         const name_str = cir.getIdent(self.name);
         try tree.pushStringPair("name", name_str);
@@ -680,8 +675,7 @@ pub const ExposedItem = struct {
 
         try tree.pushBoolPair("wildcard", self.is_wildcard);
 
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -811,49 +805,6 @@ pub const NumKind = enum {
     dec,
 };
 
-/// Base-256 digit storage for Numeral values.
-/// Used to construct Roc Numeral values during compile-time evaluation.
-///
-/// Numeral in Roc stores:
-/// - is_negative: Bool (whether there was a minus sign)
-/// - digits_before_pt: List(U8) (base-256 digits before decimal point)
-/// - digits_after_pt: List(U8) (base-256 digits after decimal point)
-/// - digits_after_pt_count: U64 (how many decimal digits appeared after the point)
-///
-/// Example: "356.5170" becomes:
-/// - is_negative = false
-/// - digits_before_pt = [1, 100] (because 356 = 1*256 + 100)
-/// - digits_after_pt = [20, 50] (because 5170 = 20*256 + 50)
-/// - digits_after_pt_count = 4
-pub const NumeralDigits = struct {
-    /// Index into the shared digit byte array in ModuleEnv
-    digits_start: u32,
-    /// Number of bytes for digits_before_pt
-    before_pt_len: u16,
-    /// Number of bytes for digits_after_pt
-    after_pt_len: u16,
-    /// Number of decimal digits after the point before base-256 encoding
-    after_pt_digit_count: u64,
-    /// Whether the literal had a minus sign
-    is_negative: bool,
-
-    /// Get the total length of stored digits
-    pub fn totalLen(self: NumeralDigits) u32 {
-        return @as(u32, self.before_pt_len) + @as(u32, self.after_pt_len);
-    }
-
-    /// Extract digits_before_pt from the shared byte array
-    pub fn getDigitsBeforePt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        return digit_bytes[self.digits_start..][0..self.before_pt_len];
-    }
-
-    /// Extract digits_after_pt from the shared byte array
-    pub fn getDigitsAfterPt(self: NumeralDigits, digit_bytes: []const u8) []const u8 {
-        const after_start = self.digits_start + self.before_pt_len;
-        return digit_bytes[after_start..][0..self.after_pt_len];
-    }
-};
-
 // Re-export of the canonical Dec type so CIR consumers can name it locally.
 pub const RocDec = builtins.dec.RocDec;
 
@@ -933,7 +884,7 @@ pub const Import = struct {
             errdefer result.deinit(allocator);
 
             for (result.imports.items.items, 0..) |string_idx, i| {
-                const import_idx = @as(Import.Idx, @enumFromInt(i));
+                const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                 try result.map.put(allocator, string_idx, import_idx);
             }
 
@@ -961,7 +912,7 @@ pub const Import = struct {
 
             if (self.map.get(string_idx)) |idx| {
                 if (ident_idx) |ident| {
-                    const i = @intFromEnum(idx);
+                    const i = @backingInt(idx);
                     if (i < self.import_idents.len() and self.import_idents.items.items[i].isNone()) {
                         self.import_idents.items.items[i] = ident;
                     }
@@ -970,15 +921,15 @@ pub const Import = struct {
                 return idx;
             }
 
-            const idx = @as(Import.Idx, @enumFromInt(self.imports.len()));
+            const idx = @as(Import.Idx, @fromBackingInt(@intCast(self.imports.len())));
 
             // Add to both the list and the map, with unresolved module initially
             const imports_idx = try self.imports.append(allocator, string_idx);
-            std.debug.assert(@intFromEnum(imports_idx) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(imports_idx) == @backingInt(idx));
             const ident_idx_added = try self.import_idents.append(allocator, ident_idx orelse base.Ident.Idx.NONE);
-            std.debug.assert(@intFromEnum(ident_idx_added) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(ident_idx_added) == @backingInt(idx));
             const resolved_idx = try self.resolved_modules.append(allocator, ResolvedModuleIdx.none);
-            std.debug.assert(@intFromEnum(resolved_idx) == @intFromEnum(idx));
+            std.debug.assert(@backingInt(resolved_idx) == @backingInt(idx));
             try self.map.put(allocator, string_idx, idx);
 
             return idx;
@@ -986,7 +937,7 @@ pub const Import = struct {
 
         /// Get the ident index for an import, or null if not set
         pub fn getIdentIdx(self: *const Store, import_idx: Import.Idx) ?base.Ident.Idx {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.import_idents.len()) return null;
             const ident = self.import_idents.items.items[idx];
             if (ident.isNone()) return null;
@@ -995,36 +946,27 @@ pub const Import = struct {
 
         /// Get the resolved module index for an import, or null if unresolved
         pub fn getResolvedModule(self: *const Store, import_idx: Import.Idx) ?u32 {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return null;
             const resolved = self.resolved_modules.items.items[idx];
             if (!resolved.isResolved()) return null;
-            return @intFromEnum(resolved);
+            return @backingInt(resolved);
         }
 
         /// Return true when import resolution has already reported a user-facing
         /// diagnostic before type checking. Type checking may continue for source
         /// tooling, but post-check lowering must never consume this import.
         pub fn importFailedBeforeChecking(self: *const Store, import_idx: Import.Idx) bool {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx >= self.resolved_modules.len()) return false;
             return self.resolved_modules.items.items[idx].isFailedBeforeChecking();
         }
 
         /// Set the resolved module index for an import
         pub fn setResolvedModule(self: *Store, import_idx: Import.Idx, module_idx: u32) void {
-            const idx = @intFromEnum(import_idx);
+            const idx = @backingInt(import_idx);
             if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = @enumFromInt(module_idx);
-            }
-        }
-
-        /// Mark one import as intentionally unavailable because an earlier stage
-        /// already owns the user-facing diagnostic.
-        pub fn setImportFailedBeforeChecking(self: *Store, import_idx: Import.Idx) void {
-            const idx = @intFromEnum(import_idx);
-            if (idx < self.resolved_modules.len()) {
-                self.resolved_modules.items.items[idx] = .failed_before_checking;
+                self.resolved_modules.items.items[idx] = @fromBackingInt(@intCast(module_idx));
             }
         }
 
@@ -1079,7 +1021,7 @@ pub const Import = struct {
             }
 
             for (0..import_count) |i| {
-                const import_idx: Import.Idx = @enumFromInt(i);
+                const import_idx: Import.Idx = @fromBackingInt(@intCast(i));
                 const current = self.resolved_modules.items.items[i];
                 if (!current.isNone()) continue;
                 const str_idx = self.imports.items.items[i];
@@ -1096,36 +1038,6 @@ pub const Import = struct {
                     self.setResolvedModule(import_idx, module_idx);
                 }
             }
-        }
-
-        /// Serialize this Store to the given CompactWriter. The resulting Store
-        /// in the writer's buffer will have offsets instead of pointers. Calling any
-        /// methods on it or dereferencing its internal "pointers" (which are now
-        /// offsets) is illegal behavior!
-        pub fn serialize(
-            self: *const Store,
-            allocator: std.mem.Allocator,
-            writer: *CompactWriter,
-        ) std.mem.Allocator.Error!*const Store {
-            // First, write the Store struct itself
-            const offset_self = try writer.appendAlloc(allocator, Store);
-
-            // Then serialize the sub-structures and update the struct
-            offset_self.* = .{
-                .map = .{}, // Map will be empty after deserialization (only used for deduplication during insertion)
-                .imports = (try self.imports.serialize(allocator, writer)).*,
-                .import_idents = (try self.import_idents.serialize(allocator, writer)).*,
-                .resolved_modules = (try self.resolved_modules.serialize(allocator, writer)).*,
-            };
-
-            return @constCast(offset_self);
-        }
-
-        /// Add the given offset to the memory addresses of all pointers in `self`.
-        pub fn relocate(self: *Store, offset: isize) void {
-            self.imports.relocate(offset);
-            self.import_idents.relocate(offset);
-            self.resolved_modules.relocate(offset);
         }
 
         /// Uses extern struct to guarantee consistent field layout across optimization levels.
@@ -1175,7 +1087,7 @@ pub const Import = struct {
                 // Repopulate the map - we know there's enough capacity since we
                 // are deserializing from a Serialized struct
                 for (store.imports.items.items, 0..) |string_idx, i| {
-                    const import_idx = @as(Import.Idx, @enumFromInt(i));
+                    const import_idx = @as(Import.Idx, @fromBackingInt(@intCast(i)));
                     store.map.putAssumeCapacityNoClobber(string_idx, import_idx);
                 }
 
@@ -1194,8 +1106,7 @@ pub const RecordField = struct {
     value: Expr.Idx,
 
     pub fn pushToSExprTree(self: *const RecordField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("field");
+        const begin = try tree.beginNamedNode("field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
         const attrs = tree.beginNode();
         try cir.store.getExpr(self.value).pushToSExprTree(cir, tree, self.value);
@@ -1214,11 +1125,9 @@ pub const UnsetField = struct {
     name: base.Ident.Idx,
 
     pub fn pushToSExprTree(self: *const UnsetField, cir: anytype, tree: anytype) Allocator.Error!void {
-        const begin = tree.beginNode();
-        try tree.pushStaticAtom("unset-field");
+        const begin = try tree.beginNamedNode("unset-field");
         try tree.pushStringPair("name", cir.getIdent(self.name));
-        const attrs = tree.beginNode();
-        try tree.endNode(begin, attrs);
+        try tree.endNodeWithoutChildren(begin);
     }
 };
 
@@ -1243,8 +1152,7 @@ pub const ExternalDecl = struct {
     pub const SafeList = collections.SafeList(ExternalDecl);
 
     pub fn pushToSExprTree(self: *const ExternalDecl, cir: anytype, tree: anytype) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
+        const node = try tree.beginNamedNode("ext-decl");
         try cir.appendRegionInfoToSExprTreeFromRegion(tree, self.region);
 
         // Add fully qualified name
@@ -1256,26 +1164,7 @@ pub const ExternalDecl = struct {
             .type => try tree.pushStringPair("kind", "type"),
         }
 
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
-    }
-
-    pub fn pushToSExprTreeWithRegion(self: *const ExternalDecl, cir: anytype, tree: anytype, region: Region) Allocator.Error!void {
-        const node = tree.beginNode();
-        try tree.pushStaticAtom("ext-decl");
-        try cir.appendRegionInfoToSExprTreeFromRegion(tree, region);
-
-        // Add fully qualified name
-        try tree.pushStringPair("ident", cir.getIdent(self.qualified_name));
-
-        // Add kind
-        switch (self.kind) {
-            .value => try tree.pushStringPair("kind", "value"),
-            .type => try tree.pushStringPair("kind", "type"),
-        }
-
-        const attrs = tree.beginNode();
-        try tree.endNode(node, attrs);
+        try tree.endNodeWithoutChildren(node);
     }
 };
 
@@ -1305,5 +1194,5 @@ pub fn isCastable(comptime T: type) bool {
 
 /// Safely casts between compatible index types
 pub fn castIdx(comptime From: type, comptime To: type, idx: From) To {
-    return @as(To, @enumFromInt(@intFromEnum(idx)));
+    return @as(To, @fromBackingInt(@intCast(@backingInt(idx))));
 }
