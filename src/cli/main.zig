@@ -751,7 +751,10 @@ const CompileTimeObjectCache = struct {
                     lowered.lir_result.store.procDebugName(proc.id) orelse "",
                     proc.fragment.context_dependencies,
                 });
-                for (proc.fragment.set.artifacts) |member| std.debug.print("ctfe contract domain={s} complete={} contract={any} dependencies={any}\n", .{
+                for (proc.fragment.set.artifacts) |member| std.debug.print("ctfe contract kind={s} source={s} requires_observations={any} domain={s} complete={} contract={any} dependencies={any}\n", .{
+                    @tagName(member.kind),
+                    @tagName(member.source_observations),
+                    member.requires_ctfe_observations,
                     @tagName(member.domain),
                     member.context_complete,
                     member.context_contract,
@@ -10151,17 +10154,26 @@ fn packFileBytesFiltered(
         }
         if (filter.generated_roots) |generated| if (!generated[@intFromEnum(spec_proc.proc)]) continue;
         const proc = procs[@intFromEnum(spec_proc.proc)];
-        const artifact = plan.artifact_by_proc.get(spec_proc.proc) orelse continue;
+        const artifact = plan.artifact_by_proc.get(spec_proc.proc) orelse {
+            if (trace) std.debug.print("withhold key={x} proc={d} reason=missing-producer-declaration name={s}\n", .{
+                &spec_proc.key,
+                @intFromEnum(spec_proc.proc),
+                lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "",
+            });
+            continue;
+        };
         // A linking program calls an entry at its base signature and cannot
         // emit the ownership variants its callers would demand from the
         // body, so an entry that admits such demands is not offered.
         if (proc.rc_variant_demandable) {
             withheld += 1;
+            if (trace) std.debug.print("withhold key={x} proc={d} reason=ownership-variants name={s}\n", .{ &spec_proc.key, @intFromEnum(spec_proc.proc), lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
             continue;
         }
         // A linking program inlines it rather than calling it.
         if (proc.inlined_at_calls) {
             withheld += 1;
+            if (trace) std.debug.print("withhold key={x} proc={d} reason=inlined name={s}\n", .{ &spec_proc.key, @intFromEnum(spec_proc.proc), lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "" });
             continue;
         }
         // Admission includes frozen-callable code edges. Only explicit closed
@@ -10169,6 +10181,15 @@ fn packFileBytesFiltered(
         // evidence that this pack owns the callable's compiled variant.
         if (!plan.eligible[artifact]) {
             withheld += 1;
+            if (trace) std.debug.print("withhold key={x} proc={d} artifact={d} reason=serving-closure source={s} requires_observations={any} complete={} name={s}\n", .{
+                &spec_proc.key,
+                @intFromEnum(spec_proc.proc),
+                artifact,
+                @tagName(set.artifacts[artifact].source_observations),
+                set.artifacts[artifact].requires_ctfe_observations,
+                set.artifacts[artifact].context_complete,
+                lowered.lir_result.store.procDebugName(spec_proc.proc) orelse "",
+            });
             continue;
         }
         try roots.append(allocator, artifact);
