@@ -23,6 +23,10 @@ const cpu_limit_env = "MINICI_MAX_CPUS";
 const failure_log_head_bytes: usize = 12 * 1024;
 const failure_log_tail_bytes: usize = 4 * 1024;
 
+/// Installed by `build-ci`. See `restampBuildCache`.
+const restamp_exe = "zig-out/bin/restamp-zig-cache" ++ builtin.target.exeFileExt();
+const restamp_log = logs_dir ++ "/restamp-zig-cache.txt";
+
 /// Exit status when every phase passed but the cache-reuse canary did not (see
 /// `CacheReuseFailure`). 1 means a phase failed and 2 means bad arguments, so
 /// this status says "the checks and tests are fine; the run compiled work it
@@ -1620,6 +1624,47 @@ fn runCommand(
     };
 }
 
+/// Gives the cache entries `build-ci` just wrote the stat of the files they
+/// name, so that the run jobs reuse them.
+///
+/// Zig 0.17.0 misses the cache for a declared input whose recorded stat does
+/// not match the file, whatever the file contains (see
+/// ci/restamp_zig_cache.zig), and `build-ci` leaves such records behind: an
+/// input recorded in the clock tick it was written in gets a zeroed stat. A
+/// generated host library copied into a fixture tree the moment it exists is
+/// often that new, and the first run job to check it then rebuilds the tree
+/// and everything built from it.
+///
+/// Only this build's own cache is re-stamped. Other builds on a developer's
+/// machine may be reading the global one.
+fn restampBuildCache(allocator: std.mem.Allocator, io: std.Io, zig_exe: []const u8) !void {
+    const started = nowNs(io);
+    const argv: []const []const u8 = &.{ restamp_exe, "--zig", zig_exe, "--local-cache-only" };
+    std.debug.print("MiniCI: re-stamping the Zig cache `build-ci` wrote ... ", .{});
+
+    const result = std.process.run(allocator, io, .{ .argv = argv }) catch |err| {
+        std.debug.print("crashed\n  could not run `{s}`: {s}\n", .{ restamp_exe, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    const log = try std.mem.concat(allocator, u8, &.{ result.stdout, result.stderr });
+    defer allocator.free(log);
+    try writeFile(io, restamp_log, log);
+
+    const passed = switch (result.term) {
+        .exited => |code| code == 0,
+        .signal, .stopped, .unknown => false,
+    };
+    if (!passed) {
+        std.debug.print("failed\n  --- output from `{s}` ---\n", .{restamp_exe});
+        printIndentedLines(std.mem.trimEnd(u8, log, "\n"));
+        std.process.exit(1);
+    }
+    std.debug.print("done in {d:.3}s\n", .{seconds(durationSince(io, started))});
+}
+
 fn skipCommand(
     io: std.Io,
     argv: []const []const u8,
@@ -2378,6 +2423,7 @@ pub fn main(init: std.process.Init) !void {
         try printSummary(allocator, total_phases, cache_reuse_enforced, build_result, results.items, durationSince(io, run_started_ns));
         std.process.exit(1);
     }
+    if (isPass(build_result)) try restampBuildCache(allocator, io, zig_exe);
 
     for (jobs, 0..) |job, job_index| {
         const log_path = try std.fmt.allocPrint(allocator, "{s}/{s}.txt", .{ logs_dir, job.name });
