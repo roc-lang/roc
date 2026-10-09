@@ -19,8 +19,15 @@
 //! inode and mtime to the file's current ones. An entry whose contents differ
 //! is left alone, so a changed input is still a cache miss.
 //!
+//! A cache that never moved has such entries too. Zig does not trust the stat
+//! of an input modified in the clock tick it is recorded in, and records a
+//! zeroed one, which matches nothing. A generated file that the next step
+//! consumes at once is often that new, so the first build after the one that
+//! produced it rebuilds everything downstream of it. MiniCI therefore
+//! re-stamps the local cache after `build-ci` (see src/build/minici.zig).
+//!
 //! The canary test at the bottom fails once Zig hashes re-stat'd inputs
-//! itself. Delete this tool and its CI step when it does.
+//! itself. Delete this tool, its CI step and its MiniCI step when it does.
 
 const std = @import("std");
 const Io = std.Io;
@@ -36,11 +43,13 @@ const prefix_count = 5;
 const prefix_names = [prefix_count][]const u8{ "<cwd>", "<zig lib>", "<local cache>", "<global cache>", "<build root>" };
 
 const usage =
-    \\Usage: restamp-zig-cache [--zig <path>]
+    \\Usage: restamp-zig-cache [--zig <path>] [--local-cache-only]
     \\
     \\Run from the build root after restoring `.zig-cache` from another machine.
     \\
-    \\  --zig <path>   Zig executable whose cache this is (default: zig)
+    \\  --zig <path>         Zig executable whose cache this is (default: zig)
+    \\  --local-cache-only   leave the global cache, which other builds on this
+    \\                       machine may be using, as it is
     \\
 ;
 
@@ -353,6 +362,7 @@ pub fn main(init: std.process.Init) !void {
     const stdout = &stdout_state.interface;
 
     var zig_exe: []const u8 = "zig";
+    var local_cache_only = false;
     const args = try init.minimal.args.toSlice(arena);
     var arg_index: usize = 1;
     while (arg_index < args.len) : (arg_index += 1) {
@@ -360,6 +370,8 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, arg, "--zig") and arg_index + 1 < args.len) {
             arg_index += 1;
             zig_exe = args[arg_index];
+        } else if (std.mem.eql(u8, arg, "--local-cache-only")) {
+            local_cache_only = true;
         } else {
             try stdout.writeAll(usage);
             try stdout.flush();
@@ -389,7 +401,7 @@ pub fn main(init: std.process.Init) !void {
         local_real[0..try local_cache.realPath(io, &local_real)],
         global_real[0..try global_cache.realPath(io, &global_real)],
     );
-    const caches: []const Io.Dir = if (same_cache) &.{local_cache} else &.{ local_cache, global_cache };
+    const caches: []const Io.Dir = if (same_cache or local_cache_only) &.{local_cache} else &.{ local_cache, global_cache };
     for (caches) |cache_dir| {
         var manifest_dir = cache_dir.openDir(io, "h", .{ .iterate = true }) catch |err| switch (err) {
             // A cache nothing was built into has no manifests.
