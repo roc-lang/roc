@@ -119,7 +119,9 @@ describe = |value| value.to_str()
 		(e-lambda
 			(args
 				(p-assign (ident "value")))
-			(e-runtime-error (tag "erroneous_value_expr")))
+			(e-runtime-error (tag "erroneous_value_expr")
+				(e-lookup-local
+					(p-assign (ident "value")))))
 		(annotation
 			(ty-fn (effectful false)
 				(ty-rigid-var (name "a"))

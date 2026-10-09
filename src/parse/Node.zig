@@ -545,7 +545,7 @@ pub const Tag = enum {
     ellipsis,
 
     /// A branch in a match expression
-    /// * main_token - Guard expression index (0 = no guard, raw value = @intFromEnum(guard) + 1)
+    /// * main_token - Guard expression index (0 = no guard, raw value = @backingInt(guard) + 1)
     /// * lhs - Pattern index
     /// * rhs - Body index
     branch,

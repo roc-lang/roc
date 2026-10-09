@@ -104,7 +104,7 @@ fn valueSlotForRoot(
         const owner = value.compile_time_root orelse continue;
         if (owner.role != .value) continue;
         if (!std.meta.eql(owner.module, module) or !owner.root.eql(.{ .checked = root })) continue;
-        return @enumFromInt(index);
+        return @fromBackingInt(@intCast(index));
     }
     return null;
 }
@@ -126,7 +126,7 @@ fn materializesRoot(
 fn countNamedProcs(store: *const lir.LirStore, expected: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
         if (std.mem.eql(u8, name, expected)) count += 1;
     }
     return count;
@@ -137,7 +137,7 @@ fn countNamedProcs(store: *const lir.LirStore, expected: []const u8) usize {
 fn countProcsNaming(store: *const lir.LirStore, fragment: []const u8) usize {
     var count: usize = 0;
     for (0..store.procSpecCount()) |index| {
-        const name = store.procDebugName(@enumFromInt(index)) orelse continue;
+        const name = store.procDebugName(@fromBackingInt(@intCast(index))) orelse continue;
         if (std.mem.find(u8, name, fragment) != null) count += 1;
     }
     return count;
@@ -211,7 +211,7 @@ test "compile-time consumer materializes only the evaluated values the program r
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         ctx,
     );
@@ -294,7 +294,7 @@ test "one evaluated root has one completed-value slot however many places read i
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -333,9 +333,9 @@ test "one evaluated root has one completed-value slot however many places read i
     // creates one. A root this program never reads has none, so the shared
     // slot above is a reader's slot and the materialization request took it.
     const base_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 0))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@intFromEnum(base_slot)].accessor != null);
+    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(base_slot)].accessor != null);
     const offset_slot = valueSlotForRoot(host, helper.key, rootIdentity(try rootWithOrder(helper_roots, 2))).?;
-    try std.testing.expect(host.lir_result.static_data_values.items[@intFromEnum(offset_slot)].accessor == null);
+    try std.testing.expect(host.lir_result.static_data_values.items[@backingInt(offset_slot)].accessor == null);
 
     // `base_value` and `offset` commit the same eight-byte layout and are
     // distinct values, so layout agreement alone never merges two demands.
@@ -344,8 +344,8 @@ test "one evaluated root has one completed-value slot however many places read i
     for (helper_roots[1..]) |request| {
         const other = valueSlotForRoot(host, helper.key, rootIdentity(request)).?;
         try std.testing.expect(first != other);
-        const first_layout = host.lir_result.static_data_values.items[@intFromEnum(first)].layout_idx;
-        const other_layout = host.lir_result.static_data_values.items[@intFromEnum(other)].layout_idx;
+        const first_layout = host.lir_result.static_data_values.items[@backingInt(first)].layout_idx;
+        const other_layout = host.lir_result.static_data_values.items[@backingInt(other)].layout_idx;
         try std.testing.expectEqual(
             host.lir_result.layouts.layoutSize(host.lir_result.layouts.getLayout(first_layout)),
             host.lir_result.layouts.layoutSize(host.lir_result.layouts.getLayout(other_layout)),
@@ -404,7 +404,7 @@ test "a separate compile-time consumer lowers no runtime-only procedure" {
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );
@@ -485,7 +485,7 @@ test "a separate runtime consumer keeps the producer's root order and test-plan 
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.os(allocator, allocator, io),
     );

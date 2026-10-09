@@ -18,7 +18,7 @@ fn expectHostAbiCallablesUseErasedRepresentation(
     var found_hosted_drop = false;
 
     for (store.getProcSpecs(), 0..) |proc, index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const args = store.getLocalSpan(proc.args);
 
         if (proc.hosted != null and args.len == 1) {
@@ -172,7 +172,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
 
     for (store.getProcSpecs(), 0..) |proc, index| {
         if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "from_state")) continue;
 
@@ -190,7 +190,7 @@ fn expectRecursiveBoxedCallableForwardsReuseThroughLet(
             if (stmt == .assign_packed_erased_fn) {
                 if (stmt.assign_packed_erased_fn.reuse == reuse_arg) matching_repack_count += 1;
             }
-            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
     }
 
@@ -215,7 +215,7 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
 
     for (store.getProcSpecs(), 0..) |proc, index| {
         if (proc.abi != .roc or proc.body == null or proc.erased_reuse_arg == null) continue;
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "from_first_state") and
             !std.mem.eql(u8, name, "from_second_state"))
@@ -237,7 +237,7 @@ fn expectParallelRecursiveBoxedCallablesForwardReuse(
             if (stmt == .assign_packed_erased_fn and stmt.assign_packed_erased_fn.reuse == reuse_arg) {
                 matching_repack_count += 1;
             }
-            try lir.BodyClone.appendSuccessors(@constCast(store), &work, stmt_id);
+            try lir.BodyClone.appendSuccessors(store, &work, stmt_id, store.allocator);
         }
     }
 
@@ -272,7 +272,7 @@ fn expectNoDestinationSpecializedFromState(
     var specialized_count: usize = 0;
     for (store.getProcSpecs(), 0..) |proc, index| {
         if (proc.abi != .roc or proc.erased_reuse_arg == null) continue;
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (std.mem.eql(u8, name, "from_state")) specialized_count += 1;
     }

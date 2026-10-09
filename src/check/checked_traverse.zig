@@ -79,10 +79,6 @@ pub fn BoolPredicateTraversal(comptime Key: type, comptime Context: type) type {
             self.memo.deinit();
         }
 
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.memo.clearRetainingCapacity();
-        }
-
         pub fn visit(self: *Self, root: Key) Allocator.Error!bool {
             errdefer {
                 for (self.frames.items) |frame| _ = self.memo.remove(frame.key);
@@ -187,21 +183,6 @@ pub fn ReserveThenFillTraversal(comptime Key: type, comptime Result: type, compt
             self.active.deinit();
         }
 
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.active.clearRetainingCapacity();
-        }
-
-        /// Return whether `result` is currently the reserved value for some
-        /// in-progress key. Used by pending-tolerant scans that must recognize a
-        /// root they are themselves mid-way through building.
-        pub fn hasReservedResult(self: *const Self, result: Result) bool {
-            var it = self.active.valueIterator();
-            while (it.next()) |value| {
-                if (std.meta.eql(value.*, result)) return true;
-            }
-            return false;
-        }
-
         pub fn visit(self: *Self, root: Key) Allocator.Error!Result {
             errdefer {
                 for (self.frames.items) |frame| _ = self.active.remove(frame.key);
@@ -290,10 +271,6 @@ pub fn DigestTraversal(comptime Key: type, comptime Context: type) type {
             self.children.deinit(self.allocator);
             self.frames.deinit(self.allocator);
             self.active.deinit();
-        }
-
-        pub fn resetRetainingCapacity(self: *Self) void {
-            self.active.clearRetainingCapacity();
         }
 
         pub fn activeCount(self: *const Self) u32 {
@@ -455,7 +432,7 @@ test "BoolPredicateTraversal memoizes shared DAG nodes" {
         .{ .key = 3, .children = &children_3 },
         .{ .key = 4 },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -471,7 +448,7 @@ test "BoolPredicateTraversal active cycle hit returns false" {
         .{ .key = 1, .children = &children_1 },
         .{ .key = 2, .children = &children_2 },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -489,7 +466,7 @@ test "BoolPredicateTraversal still finds true branch beside a cycle" {
         .{ .key = 2, .children = &children_2 },
         .{ .key = 3, .result = true },
     };
-    var visits = [_]u8{0} ** 8;
+    var visits = @as([8]u8, @splat(0));
     var context = PredicateTestContext{ .edges = &edges, .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, PredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();
@@ -511,7 +488,7 @@ const RehashPredicateTestContext = struct {
 };
 
 test "BoolPredicateTraversal completes root after recursive inserts rehash memo" {
-    var visits = [_]u8{0} ** 256;
+    var visits = @as([256]u8, @splat(0));
     var context = RehashPredicateTestContext{ .visits = &visits };
     var traversal = BoolPredicateTraversal(u8, RehashPredicateTestContext).init(std.testing.allocator, &context);
     defer traversal.deinit();

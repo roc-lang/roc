@@ -1,5 +1,6 @@
 # Repro for https://github.com/roc-lang/roc/issues/10238: an unresolved
-# dispatch reports MISSING METHOD and lowers to an ordinary Roc crash.
+# dispatch reports its undetermined type once, without naming the default it
+# was given, and lowers to an ordinary Roc crash.
 g : (a -> a) -> I64 where [a.d : I64 -> a, a.encode : a -> I64]
 g = |f| {
     A : a

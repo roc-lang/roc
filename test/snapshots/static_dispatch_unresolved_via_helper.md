@@ -14,30 +14,37 @@ ambiguous = conv(poly())
 ok = conv(5.U8)
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_unresolved_via_helper.md:5:13:5:25
+TYPE NOT DETERMINED - static_dispatch_unresolved_via_helper.md:5:13:5:25
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 5 13) (end 5 25))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "This call uses a")
 			(reflow " ")
 			(annotated code "to_i128")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method, but nothing in this program determines the type it is called on:"))
 		(document
 			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 13) (end 5 25) (annotation error) (line-text "ambiguous = conv(poly())"))
 			(line-break)
-			(reflow "The type was left undetermined by this call:")
+			(reflow "This argument's type does not determine it:")
 			(line-break)
 			(source-region (file "static_dispatch_unresolved_via_helper.md") (start 5 18) (end 5 24) (annotation error) (line-text "ambiguous = conv(poly())"))
 			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "to_i128")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig

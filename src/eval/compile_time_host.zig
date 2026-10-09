@@ -60,9 +60,8 @@ pub const HostEvent = union(enum) {
 
     pub fn bytes(self: HostEvent) []const u8 {
         return switch (self) {
-            .dbg => |msg| msg,
+            inline .dbg, .crashed => |msg| msg,
             .expect_failed => |event| event.message,
-            .crashed => |msg| msg,
         };
     }
 };
@@ -259,7 +258,7 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const demand = self.slot_demand orelse return;
     const started = self.startDemandTiming();
-    const result = demand.ensure(demand.context, @enumFromInt(slot));
+    const result = demand.ensure(demand.context, @fromBackingInt(@intCast(slot)));
     self.finishDemandTiming(started);
     result catch |err| switch (err) {
         error.CompileTimeDependencyCycle => {
@@ -277,7 +276,7 @@ pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
 pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) void {
     const self = enteredHost();
     self.comptime_branch_hits.append(self.host_arena.allocator(), .{
-        .site = @enumFromInt(site_raw),
+        .site = @fromBackingInt(@intCast(site_raw)),
         .branch_index = branch_index,
     }) catch {
         self.jump(.host_oom);
@@ -287,7 +286,7 @@ pub fn rocComptimeBranchTaken(site_raw: u32, branch_index: u32) callconv(.c) voi
 /// Dev-backend hook called when empirical exhaustiveness fails.
 pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
     const self = enteredHost();
-    self.comptime_failed_site = @enumFromInt(site_raw);
+    self.comptime_failed_site = @fromBackingInt(@intCast(site_raw));
     self.jump(.comptime_exhaustiveness);
 }
 
@@ -296,7 +295,7 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 /// names the declaring module).
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
-    self.failed_stmt = @enumFromInt(stmt);
+    self.failed_stmt = @fromBackingInt(@intCast(stmt));
     if (stmt < self.failure_origins.len) {
         if (self.failure_origins[stmt]) |origin| {
             self.failed_region = origin.region;
@@ -324,7 +323,7 @@ pub fn rocComptimeCallEnter(start_offset: u32, end_offset: u32, file: u32, line:
 pub fn rocComptimeCallExit() callconv(.c) void {
     const self = enteredHost();
     if (self.call_regions.items.len == 0) {
-        @panic("compile-time call-region stack underflow");
+        base.invariant("{s}", .{"compile-time call-region stack underflow"});
     }
     _ = self.call_regions.pop();
 }
@@ -332,7 +331,7 @@ pub fn rocComptimeCallExit() callconv(.c) void {
 /// The ops of the evaluation this thread entered, which the hooks above are
 /// only ever called from.
 fn enteredOps() *RocOps {
-    return builtins.in_process_host.current() orelse @panic("compile-time hook ran on a thread that entered no host");
+    return builtins.in_process_host.current() orelse base.invariant("{s}", .{"compile-time hook ran on a thread that entered no host"});
 }
 
 fn enteredHost() *CompileTimeHost {
@@ -394,7 +393,7 @@ fn jump(self: *CompileTimeHost, termination: Termination) noreturn {
             longjmp(active_jmp_buf, 1);
         }
     }
-    @panic("compile-time host failure escaped without an active crash boundary");
+    base.invariant("{s}", .{"compile-time host failure escaped without an active crash boundary"});
 }
 
 fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *anyopaque {
@@ -413,14 +412,14 @@ fn rocAlloc(roc_ops: *RocOps, length: usize, alignment: usize) callconv(.c) *any
 fn rocDealloc(roc_ops: *RocOps, ptr: *anyopaque, _: usize) callconv(.c) void {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     _ = self.allocations.fetchRemove(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps deallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps deallocated unknown pointer"});
     };
 }
 
 fn rocRealloc(roc_ops: *RocOps, ptr: *anyopaque, new_length: usize, alignment: usize) callconv(.c) *anyopaque {
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
     const old_info = self.allocations.get(@intFromPtr(ptr)) orelse {
-        @panic("compile-time RocOps reallocated unknown pointer");
+        base.invariant("{s}", .{"compile-time RocOps reallocated unknown pointer"});
     };
     const alloc_len = @max(new_length, 1);
     const arena_allocator = self.arena.allocator();
@@ -473,13 +472,19 @@ fn allocateBytes(allocator: Allocator, len: usize, alignment: usize) ?[*]u8 {
         4 => (allocator.alignedAlloc(u8, .@"4", len) catch return null).ptr,
         8 => (allocator.alignedAlloc(u8, .@"8", len) catch return null).ptr,
         16 => (allocator.alignedAlloc(u8, .@"16", len) catch return null).ptr,
-        else => @panic("unsupported compile-time RocOps allocation alignment"),
+        else => base.invariant("{s}", .{"unsupported compile-time RocOps allocation alignment"}),
     };
 }
 
 fn hostBytesAllocator(allocator: Allocator) Allocator {
     return switch (@import("builtin").target.os.tag) {
         .freestanding => std.heap.wasm_allocator,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .other,
         .contiki,
         .fuchsia,

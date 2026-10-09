@@ -161,6 +161,12 @@ pub fn aarch64Target(os: std.Target.Os.Tag) Target {
     return switch (os) {
         .driverkit, .ios, .maccatalyst, .macos, .tvos, .visionos, .watchos => .aarch64_macho,
         .windows => .aarch64_windows,
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .freestanding,
         .other,
         .contiki,
@@ -729,7 +735,7 @@ fn placementWin64(
 ) std.mem.Allocator.Error!Placement {
     const size = store.layoutSize(store.getLayout(idx));
     switch (x86_64.classifyWindows(store, idx)) {
-        .memory => return .indirect,
+        .memory, .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
         .integer => return onePiece(arena, .integer, 0, @intCast(size), extend),
         .sse => return onePiece(arena, .float, 0, @intCast(@min(@as(u32, 16), size)), .none),
         // Win64 passes a scalar 128-bit integer in memory but returns it in
@@ -750,7 +756,6 @@ fn placementWin64(
             };
             return .{ .registers = .{ .pieces = pieces } };
         } else return .indirect,
-        .sseup, .x87, .x87up, .none, .float, .float_combine => return .indirect,
     }
 }
 
@@ -900,8 +905,8 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var elem_idx_opt: ?Idx = null;
     var i: u32 = 0;
     while (store.layouts.len() <= target_elem_idx_int) : (i += 1) {
-        const idx = try store.insertLayout(layout.Layout.list(@enumFromInt(i)));
-        if (@intFromEnum(idx) == target_elem_idx_int) elem_idx_opt = idx;
+        const idx = try store.insertLayout(layout.Layout.list(@fromBackingInt(@intCast(i))));
+        if (@backingInt(idx) == target_elem_idx_int) elem_idx_opt = idx;
     }
     const elem_idx = elem_idx_opt.?;
 

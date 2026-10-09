@@ -1287,7 +1287,7 @@ fn runAllocationTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = forkAndEvalWithStats(eval_fns[i], lowered);
         const dur = timer.read();
 
@@ -1378,7 +1378,13 @@ fn runInspectTest(
     specialization_strategy: base.SpecializationStrategy,
     timeout_ms: u64,
 ) RunnerError!TestOutcome {
-    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy);
+    const skips = if (comptime coverage_mode)
+        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
+    else
+        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
+    // Only the wasm backend reads the 32-bit lowering.
+    const wasm_lowering: helpers.WasmLowering = if (skips[2] or !WASM_BACKEND_IMPLEMENTED) .skip else .lower;
+    var compiled = try helpers.compileInspectedProgramWithStrategy(allocator, io, source_kind, src, imports, specialization_strategy, wasm_lowering);
     defer compiled.deinit(allocator);
 
     const timings = EvalTimings{
@@ -1388,10 +1394,6 @@ fn runInspectTest(
     };
 
     const display_expected = expected.display();
-    const skips = if (comptime coverage_mode)
-        [NUM_BACKENDS]bool{ skip.interpreter, true, true, true }
-    else
-        [NUM_BACKENDS]bool{ skip.interpreter, skip.dev, skip.wasm, shouldSkipLlvm(skip.llvm) };
 
     const eval_fns = [NUM_BACKENDS]BackendEvalFn{
         helpers.lirInterpreterInspectedStr,
@@ -1421,7 +1423,7 @@ fn runInspectTest(
 
         trace.log("starting backend {s} for inspected source {s}", .{ BACKEND_NAMES[i], src });
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1601,7 +1603,7 @@ fn runCrashTest(
     }
 
     if (!require_problems and has_problems) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.print("runCrashTest compile-time problems:\n", .{});
             for (can_diags) |diag| {
                 std.debug.print("  can: {s}\n", .{@tagName(diag)});
@@ -1660,7 +1662,7 @@ fn runCrashTest(
         }
 
         var timer = Timer.start() catch unreachable;
-        const lowered = if (i == 2) &compiled.wasm_lowered else &compiled.lowered;
+        const lowered = if (i == 2) &compiled.wasm_lowered.? else &compiled.lowered;
         const fork_result = runBackendEval(io, i, eval_fns[i], lowered, backendTimeoutBudgetMs(io, i, deadline_ms)) catch |err|
             ForkResult{ .child_error = @errorName(err) };
         const dur = timer.read();
@@ -1743,6 +1745,7 @@ fn canDiagnosticIsError(diag: anytype) bool {
         .roc_version_mismatch,
         .deprecated_number_suffix,
         .trailing_try_suffix,
+        .redundant_return,
         => false,
         .not_implemented,
         .exposed_but_not_implemented,
@@ -1843,7 +1846,7 @@ fn serializeOutcomeToBuffer(
     duration_ns: u64,
 ) RunnerError!void {
     var header: WireHeader = .{
-        .status = @intFromEnum(outcome.status),
+        .status = @backingInt(outcome.status),
         .backend_statuses = undefined,
         .backend_durations = undefined,
         .parse_ns = outcome.timings.parse_ns,
@@ -1861,7 +1864,7 @@ fn serializeOutcomeToBuffer(
     };
     if (outcome.has_backend_details) {
         for (0..NUM_BACKENDS) |i| {
-            header.backend_statuses[i] = @intFromEnum(outcome.backends[i].status);
+            header.backend_statuses[i] = @backingInt(outcome.backends[i].status);
             header.backend_durations[i] = outcome.backends[i].duration_ns;
             header.backend_value_lens[i] = if (outcome.backends[i].value) |v| @intCast(v.len) else 0;
         }
@@ -1912,7 +1915,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
         for (0..NUM_BACKENDS) |i| {
             const value = harness.readStr(buf, &offset, header.backend_value_lens[i], gpa);
             backends[i] = .{
-                .status = @enumFromInt(header.backend_statuses[i]),
+                .status = @fromBackingInt(@intCast(header.backend_statuses[i])),
                 .value = value,
                 .duration_ns = header.backend_durations[i],
             };
@@ -1920,7 +1923,7 @@ fn deserializeOutcome(buf: []const u8, gpa: std.mem.Allocator) ?TestResult {
     }
 
     return .{
-        .status = @enumFromInt(header.status),
+        .status = @fromBackingInt(@intCast(header.status)),
         .message = message,
         .duration_ns = header.duration_ns,
         .timings = .{
@@ -2226,6 +2229,7 @@ fn printHelp() void {
         \\OPTIONS:
         \\  -h, --help            Show this help message and exit.
         \\  --filter <PATTERN>    Run only tests whose name or source contains PATTERN.
+        \\  --test-filter        Alias for --filter; accepts a value or =value.
         \\  --threads <N>         Max concurrent child processes (default: number of CPU cores).
         \\  --verbose             Print PASS and SKIP results (default: only FAIL/CRASH).
         \\  --timeout <MS>        Hang timeout in ms for parse/interp/dev/wasm.

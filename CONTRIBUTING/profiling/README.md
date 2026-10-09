@@ -8,7 +8,7 @@ Feel free to at [Brendan Hansknecht](https://roc.zulipchat.com/#user/343810) in 
 
 ## General Tips
 
-1. Make sure to build with optimizations (`-Doptimize=ReleaseFast`).
+1. Build with optimizations and retain debug symbols (`-Doptimize=ReleaseFast -Dstrip=false`).
 2. Try to benchmark real world rather than synthetic inputs.
 3. Prefer end to end benchmarks when possible.
 Microbenchmarks can be misleading and even potentially lead to end to end slowdowns.
@@ -72,7 +72,7 @@ Beyond having tracy install, you also need to download the source of tracy check
 For example, I installed tracy with homebrew. It is at version `0.11.0`.
 As such, I have checked out the tracy github repro to the `v0.11.0` tag in my `~/vendor/tracy` directory. 
 
-Then, on my linux machine (which tracy works better on), I run `zig build -Doptimize=ReleaseFast -Dtracy=$HOME/vendor/tracy roc`.
+Then, on my linux machine (which tracy works better on), I run `zig build -Doptimize=ReleaseFast -Dstrip=false -Dtracy=$HOME/vendor/tracy roc`.
 This builds tracy with all of the bells and whistles.
 One of those cool features is tracy callstacks. This feature gives much more precision of information, but adds significant overhead.
 Often times, it is worth profiling once with `-Dtracy-callstack=false` to have much less overhead.

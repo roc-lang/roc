@@ -30,6 +30,8 @@ plan.md
 zig-out
 zig-pkg
 .zig-cache
+__pycache__/
+*.pyc
 .tmp/
 .direnv
 .envrc
