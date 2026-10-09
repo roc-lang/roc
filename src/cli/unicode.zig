@@ -63,7 +63,7 @@ fn graphemeProperty(codepoint: u21) GraphemeProperty {
     const entry = grapheme_entries[index - 1];
     const range_end = (entry >> 11) + ((entry >> 4) & 0x7f);
     if (codepoint > range_end) return .none;
-    return @enumFromInt(entry & 0xf);
+    return @fromBackingInt(@intCast(entry & 0xf));
 }
 
 fn indicProperty(codepoint: u21) IndicProperty {
@@ -74,7 +74,7 @@ fn indicProperty(codepoint: u21) IndicProperty {
     const entry = indic_entries[index - 1];
     const range_end = (entry >> 11) + ((entry >> 2) & 0x1ff);
     if (codepoint > range_end) return .none;
-    return @enumFromInt(entry & 0x3);
+    return @fromBackingInt(@intCast(entry & 0x3));
 }
 
 fn isWide(codepoint: u21) bool {

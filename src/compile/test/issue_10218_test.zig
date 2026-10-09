@@ -28,7 +28,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
 
     while (stack.pop()) |task| switch (task) {
         .proc => |proc_id| {
-            const index = @intFromEnum(proc_id);
+            const index = @backingInt(proc_id);
             if (seen_procs[index]) continue;
             seen_procs[index] = true;
             if (store.getProcSpec(proc_id).body) |body| {
@@ -36,7 +36,7 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
             }
         },
         .stmt => |stmt_id| {
-            const index = @intFromEnum(stmt_id);
+            const index = @backingInt(stmt_id);
             if (seen_stmts[index]) continue;
             seen_stmts[index] = true;
             switch (store.getCFStmt(stmt_id)) {
@@ -94,6 +94,8 @@ fn procReachesListSet(store: *const lir.LirStore, start: lir.LIR.LirProcSpecId) 
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .assign_call_dict,
@@ -178,6 +180,8 @@ fn retainReachesListSetCall(
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
+            .assign_boxy_eq,
+            .assign_boxy_hash,
             .assign_boxy_tag,
             .assign_boxy_tag_payload,
             .assign_call_dict,
@@ -226,7 +230,7 @@ fn expectNoRetainBeforeListSet(
     var saw_list_set = false;
     var retains_before_list_set: usize = 0;
     for (0..store.cfStmtCount()) |stmt_index| {
-        const stmt = store.getCFStmt(@enumFromInt(@as(u32, @intCast(stmt_index))));
+        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
         if (stmt == .assign_low_level) {
             if (stmt.assign_low_level.op == .list_set) saw_list_set = true;
         } else if (stmt == .incref) {

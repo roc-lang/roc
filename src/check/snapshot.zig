@@ -106,20 +106,6 @@ pub const SnapshotRecordField = struct {
     name: Ident.Idx,
     content: SnapshotContentIdx,
     presence: SnapshotFieldPresence,
-
-    const Self = @This();
-
-    /// Returns true if field `a` should sort before field `b` by name.
-    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
-        return Self.orderByName(ident_store, a, b) == .lt;
-    }
-
-    /// Compares two record fields by their name for ordering.
-    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
-        const a_text = store.getText(a.name);
-        const b_text = store.getText(b.name);
-        return std.mem.order(u8, a_text, b_text);
-    }
 };
 
 /// A snapshotted tag union type with its tags and extension variable.
@@ -415,7 +401,7 @@ pub const Store = struct {
         const tags_len = self.tags.len();
         if (tags_len > m.tags_len) {
             const removed_range = SnapshotTagSafeList.Range{
-                .start = @enumFromInt(m.tags_len),
+                .start = @fromBackingInt(@intCast(m.tags_len)),
                 .count = @intCast(tags_len - m.tags_len),
             };
             for (self.tags.sliceRange(removed_range).items(.formatted)) |formatted| {
@@ -426,7 +412,7 @@ pub const Store = struct {
         var content_idx = m.contents_len;
         const contents_len: usize = @intCast(self.contents.len());
         while (content_idx < contents_len) : (content_idx += 1) {
-            _ = self.formatted_strings.remove(@enumFromInt(content_idx));
+            _ = self.formatted_strings.remove(@fromBackingInt(@intCast(content_idx)));
         }
 
         self.contents.items.shrinkRetainingCapacity(m.contents_len);
@@ -889,7 +875,7 @@ pub const Store = struct {
         range: types.RecordField.SafeMultiList.Range,
         idx: u32,
     ) types.RecordField {
-        return store.record_fields.get(@enumFromInt(@intFromEnum(range.start) + idx));
+        return store.record_fields.get(@fromBackingInt(@intCast(@backingInt(range.start) + idx)));
     }
 
     fn snapshotFieldPresence(store: *const TypesStore, presence: types.RecordField.Presence) SnapshotFieldPresence {
@@ -970,7 +956,7 @@ pub const Store = struct {
                 .tag_args => {
                     // Indexing through the run's start only happens when the
                     // tag union has tags; start may be undefined when count is 0.
-                    const tag = store.tags.get(@enumFromInt(@intFromEnum(frame.source_tags.start) + frame.tag_idx));
+                    const tag = store.tags.get(@fromBackingInt(@intCast(@backingInt(frame.source_tags.start) + frame.tag_idx)));
                     const tag_args_slice = store.sliceVars(tag.args);
                     if (frame.arg_idx < tag_args_slice.len) {
                         frame.stage = .await_tag_arg;

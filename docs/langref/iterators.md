@@ -153,3 +153,43 @@ print_long_lines! = |lines| {
 
 Loops that perform effects on each item don't need a `Stream`, though; a `for` loop can call effectful
 functions on each item of an ordinary iterator.
+
+## Performance
+
+Even though iterators are values, and a chain like `.keep_if(…).map(…)` looks like it builds one
+iterator on top of another, none of those iterators exist at runtime. The compiler knows at
+compile time exactly which operations are in the chain, so it combines the whole chain into a
+single loop, the same way a [`for` loop](loops#performance) over a list or range compiles to a
+plain loop. For example, this:
+
+```roc
+total = [1, 2, 3, 4, 5, 6]
+    .iter()
+    .keep_if(|n| n % 2 == 0)
+    .map(|n| n * 10)
+    .sum()
+```
+
+compiles to a loop that goes through the list once, checking each element, multiplying the ones
+that pass, and adding them to a running total. No iterator gets allocated, and the functions
+passed to `keep_if` and `map` can be inlined into the loop body.
+
+This works for chains of up to 16 operations, including when you pass an iterator to a function
+or return one from a function. It doesn't work when the number of operations in the chain
+depends on something that's only known at runtime. For example, a recursive function that calls
+`map` once per recursive call might build a chain with any number of `map`s in it. Iterators like
+that (and chains longer than 16 operations) are stored on the heap instead, and getting each item
+involves an indirect function call per operation in the chain. They still work; they're just
+slower.
+
+### Collecting
+
+When you [`collect`](#collecting) an iterator into a list, the number of items the iterator says
+it will produce (the `Known(count)` or `Unknown` that [`Iter.custom`](#custom-iterators) takes)
+determines how the list gets allocated. If it's `Known`, the list's memory gets allocated once,
+at exactly the right size. If it's `Unknown` (for example, after a `keep_if`, since nobody knows
+in advance how many items will be kept), the list starts small and grows as items are added.
+
+So when you write a custom iterator, it's worth passing `Known(count)` whenever you know the count.
+Just make sure the count is exact, because collecting relies on the iterator producing exactly
+that many items.

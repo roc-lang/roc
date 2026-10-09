@@ -87,8 +87,6 @@ pub const ExecutionHost = union(enum) {
 
 /// Module name a REPL imports to emit one-way effects.
 pub const repl_effect_module_name = "Repl";
-/// Hosted symbol backing `Repl.emit!`.
-pub const repl_effect_hosted_symbol = "roc_repl_emit!";
 /// Source of the in-memory `Repl` module, served to REPL sessions that opt in
 /// to effects so no file on disk is required.
 pub const repl_effect_module_source =
@@ -98,60 +96,6 @@ pub const repl_effect_module_source =
     \\    emit! = |request| Repl.roc_repl_emit!(request)
     \\}
 ;
-
-/// The dedicated REPL's explicit one-way-effect dependency. Callers opt into
-/// it; ordinary inspected evaluation always passes `.reject`.
-pub fn replEffectHost() ExecutionHost {
-    return .{ .hosted_calls = .{ .dispatch = dispatchReplEffect } };
-}
-
-fn dispatchReplEffect(runtime_env: *RuntimeHostEnv, call: Interpreter.HostedCall) Interpreter.Error!void {
-    if (!std.mem.eql(u8, call.symbol, repl_effect_hosted_symbol)) {
-        return error.UnsupportedHostedFunction;
-    }
-    if (call.arg_layouts.len != 1 or call.arg_offsets.len != 1) {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const arg_layout_idx = call.layouts.runtimeRepresentationLayoutIdx(call.arg_layouts[0]);
-    const arg_layout = call.layouts.getLayout(arg_layout_idx);
-    if (arg_layout.tag != .struct_) return error.InvalidHostedFunctionSignature;
-    const struct_idx = arg_layout.getStruct().idx;
-    if (call.layouts.getStructData(struct_idx).fields.count != 2) {
-        return error.InvalidHostedFunctionSignature;
-    }
-    if (call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 0)) != .str or
-        call.layouts.runtimeRepresentationLayoutIdx(call.layouts.getStructFieldLayoutByOriginalIndex(struct_idx, 1)) != .str or
-        call.layouts.layoutSizeAlign(call.layouts.getLayout(call.ret_layout)).size != 0)
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-
-    const record_offset: usize = call.arg_offsets[0];
-    const name_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 0),
-    ) catch return error.InvalidHostedFunctionSignature;
-    const payload_offset = std.math.add(
-        usize,
-        record_offset,
-        call.layouts.getStructFieldOffsetByOriginalIndex(struct_idx, 1),
-    ) catch return error.InvalidHostedFunctionSignature;
-    if (name_offset > call.args.len or call.args.len - name_offset < @sizeOf(RocStr) or
-        payload_offset > call.args.len or call.args.len - payload_offset < @sizeOf(RocStr))
-    {
-        return error.InvalidHostedFunctionSignature;
-    }
-    const name_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + name_offset);
-    const payload_ptr: *align(1) const RocStr = @ptrCast(call.args.ptr + payload_offset);
-    const name = name_ptr.*;
-    const payload = payload_ptr.*;
-    const roc_ops = runtime_env.get_ops();
-    defer name.decref(roc_ops);
-    defer payload.decref(roc_ops);
-    try runtime_env.recordEffect(name.asSlice(), payload.asSlice());
-}
 
 /// Semantic result of executing a Roc root. The caller owns the byte slice in
 /// either variant and must call `deinit` when it is no longer needed.
@@ -365,6 +309,7 @@ fn runInterpreter(allocator: Allocator, program: Program, execution_host: Execut
     );
     defer interp.deinit();
     static_data.install(&interp);
+    static_data.ownByInterpreter(&interp);
 
     const arg_layouts = try mainProcArgLayouts(allocator, program);
     defer allocator.free(arg_layouts);
@@ -575,7 +520,7 @@ fn llvmCompileOptions(allocator: Allocator, target_usize: base.target.TargetUsiz
     const native_roc_target = roc_target.host_cpu.nativeTarget();
     const resolved_target = std.zig.system.resolveTargetQuery(std.Options.debug_io, native_roc_target.llvmTargetQuery()) catch
         return error.UnsupportedTarget;
-    const cpu = try allocator.dupeZ(u8, roc_target.llvmCpuName(resolved_target));
+    const cpu = try allocator.dupeSentinel(u8, roc_target.llvmCpuName(resolved_target), 0);
     errdefer allocator.free(cpu);
     const features = try roc_target.llvmFeatureString(allocator, resolved_target);
     errdefer allocator.free(features);
@@ -760,7 +705,7 @@ fn entrypointParamSlotSize(layouts: *const LayoutStore, layout_idx: LayoutIdx) u
     if (runtime_layout_idx == .str) return 24;
     if (runtime_layout_idx == .i128 or runtime_layout_idx == .u128 or runtime_layout_idx == .dec) return 16;
 
-    if (@intFromEnum(runtime_layout_idx) < layouts.layouts.len()) {
+    if (@backingInt(runtime_layout_idx) < layouts.layouts.len()) {
         const layout_val = layouts.getLayout(runtime_layout_idx);
         const size = layouts.layoutSizeAlign(layout_val).size;
         if (layout_val.tag == .zst or size == 0) return 0;
@@ -838,7 +783,7 @@ fn copyReturnedRocStr(
     const is_str = ret_layout == .str or
         (layout_val.tag == .scalar and layout_val.getScalar().tag == .str);
     if (!is_str) {
-        std.debug.panic(
+        base.invariant(
             "eval inspect invariant violated: expected Str return layout, found {s}",
             .{@tagName(layout_val.tag)},
         );

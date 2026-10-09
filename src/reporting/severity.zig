@@ -23,12 +23,33 @@ pub const Severity = enum {
         };
     }
 
-    /// Returns a short code suitable for prefixing error messages.
-    pub fn toCode(self: Severity) []const u8 {
+    /// Whether a problem of this severity is an error: it counts toward the
+    /// error total and fails the command. A warning does neither.
+    pub fn isError(self: Severity) bool {
         return switch (self) {
-            .warning => "W",
-            .runtime_error => "E",
-            .fatal => "F",
+            .runtime_error, .fatal => true,
+            .warning => false,
+        };
+    }
+
+    /// The Language Server Protocol `DiagnosticSeverity` number.
+    pub fn toLspSeverity(self: Severity) u8 {
+        return switch (self) {
+            .runtime_error, .fatal => 1,
+            .warning => 2,
         };
     }
 };
+
+test "each severity is an error or a warning, in the compiler and in LSP" {
+    const std = @import("std");
+    const cases = [_]struct { severity: Severity, is_error: bool, lsp: u8 }{
+        .{ .severity = .warning, .is_error = false, .lsp = 2 },
+        .{ .severity = .runtime_error, .is_error = true, .lsp = 1 },
+        .{ .severity = .fatal, .is_error = true, .lsp = 1 },
+    };
+    for (cases) |case| {
+        try std.testing.expectEqual(case.is_error, case.severity.isError());
+        try std.testing.expectEqual(case.lsp, case.severity.toLspSeverity());
+    }
+}

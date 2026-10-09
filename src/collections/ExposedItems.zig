@@ -30,27 +30,27 @@ pub const ExposedItemTarget = extern struct {
 
     pub fn unresolved() ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.unresolved),
+            .kind = @backingInt(Kind.unresolved),
             .node_idx = 0,
         };
     }
 
     pub fn valueDef(node_idx: u32) ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.value_def),
+            .kind = @backingInt(Kind.value_def),
             .node_idx = node_idx,
         };
     }
 
     pub fn typeDecl(node_idx: u32) ExposedItemTarget {
         return .{
-            .kind = @intFromEnum(Kind.type_decl),
+            .kind = @backingInt(Kind.type_decl),
             .node_idx = node_idx,
         };
     }
 
     pub fn tag(self: ExposedItemTarget) Kind {
-        return @enumFromInt(self.kind);
+        return @fromBackingInt(@intCast(self.kind));
     }
 
     pub fn isResolved(self: ExposedItemTarget) bool {
@@ -180,17 +180,6 @@ pub const ExposedItems = struct {
         self.items.ensureSorted(allocator);
     }
 
-    /// Detect duplicate exposed items for error reporting
-    /// Returns the interned IDs of duplicates (caller must convert to strings)
-    pub fn detectDuplicates(self: *Self, allocator: Allocator) Allocator.Error![]IdentIdx {
-        return self.items.detectDuplicates(allocator);
-    }
-
-    /// Relocate pointers after memory movement
-    pub fn relocate(self: *Self, offset: isize) void {
-        self.items.relocate(offset);
-    }
-
     /// Serialized representation of ExposedItems
     /// Uses extern struct to guarantee consistent field layout across optimization levels.
     pub const Serialized = extern struct {
@@ -214,44 +203,6 @@ pub const ExposedItems = struct {
             };
         }
     };
-
-    /// Serialize this ExposedItems to the given CompactWriter. The resulting ExposedItems
-    /// in the writer's buffer will have offsets instead of pointers. Calling any
-    /// methods on it or dereferencing its internal "pointers" (which are now
-    /// offsets) is illegal behavior!
-    pub fn serialize(
-        self: *const Self,
-        allocator: Allocator,
-        writer: *CompactWriter,
-    ) Allocator.Error!*const Self {
-        // Items must be sorted and deduplicated before serialization
-        std.debug.assert(self.items.sorted);
-        std.debug.assert(self.items.isDeduplicated());
-
-        // First, write the ExposedItems struct itself
-        const offset_self = try writer.appendAlloc(allocator, Self);
-
-        // Serialize the SortedArrayBuilder's entries
-        const entries = self.items.entries.items;
-        const entries_offset = if (entries.len > 0) blk: {
-            // Write the entries array
-            const offset = try writer.appendSlice(allocator, entries);
-            break :blk offset;
-        } else null;
-
-        // Update the struct with serialized data
-        offset_self.* = .{
-            .items = .{
-                .entries = .{
-                    .items = if (entries_offset) |offset| offset else entries[0..0],
-                    .capacity = entries.len,
-                },
-                .sorted = self.items.sorted,
-            },
-        };
-
-        return @constCast(offset_self);
-    }
 
     /// Iterator for all exposed items
     pub const Iterator = struct {
@@ -338,8 +289,8 @@ test "ExposedItems empty CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    const serialized = try original.serialize(allocator, &writer);
-    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
+    const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+    try serialized.serialize(&original, allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -350,9 +301,10 @@ test "ExposedItems empty CompactWriter roundtrip" {
 
     _ = try file.readPositionalAll(io, buffer, 0);
 
-    // Cast and relocate
-    const deserialized = @as(*ExposedItems, @ptrCast(@alignCast(buffer.ptr + writer.total_bytes - @sizeOf(ExposedItems))));
-    deserialized.relocate(@as(isize, @intCast(@intFromPtr(buffer.ptr))));
+    // Deserialize
+    const deserialized_serialized: *const ExposedItems.Serialized = @ptrCast(@alignCast(buffer.ptr));
+    var deserialized_value = deserialized_serialized.deserializeInto(@intFromPtr(buffer.ptr));
+    const deserialized = &deserialized_value;
 
     // Verify empty
     try testing.expectEqual(@as(usize, 0), deserialized.count());
@@ -395,8 +347,8 @@ test "ExposedItems basic CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    const serialized = try original.serialize(allocator, &writer);
-    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
+    const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+    try serialized.serialize(&original, allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -455,8 +407,8 @@ test "ExposedItems with duplicates CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    const serialized = try original.serialize(allocator, &writer);
-    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
+    const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+    try serialized.serialize(&original, allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -521,8 +473,8 @@ test "ExposedItems comprehensive CompactWriter roundtrip" {
     var writer = CompactWriter.init();
     defer writer.deinit(allocator);
 
-    const serialized = try original.serialize(allocator, &writer);
-    try testing.expectEqual(original.items.entries.items.len, serialized.items.entries.capacity);
+    const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+    try serialized.serialize(&original, allocator, &writer);
 
     // Write to file
     try writer.writeGather(file, io);
@@ -559,8 +511,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        const serialized = try exposed.serialize(allocator, &writer);
-        try testing.expectEqual(exposed.items.entries.items.len, serialized.items.entries.capacity);
+        const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+        try serialized.serialize(&exposed, allocator, &writer);
 
         const buffer = try allocator.alloc(u8, writer.total_bytes);
         defer allocator.free(buffer);
@@ -592,8 +544,8 @@ test "ExposedItems edge cases CompactWriter roundtrip" {
         var writer = CompactWriter.init();
         defer writer.deinit(allocator);
 
-        const serialized = try exposed.serialize(allocator, &writer);
-        try testing.expectEqual(exposed.items.entries.items.len, serialized.items.entries.capacity);
+        const serialized = try writer.appendAlloc(allocator, ExposedItems.Serialized);
+        try serialized.serialize(&exposed, allocator, &writer);
 
         // Test writeGather
         try writer.writeGather(file, io);

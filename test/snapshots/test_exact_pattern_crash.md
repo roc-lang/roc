@@ -275,12 +275,12 @@ main = {
 				(p-assign (ident "g")))
 			(e-tuple
 				(elems
-					(e-call (constraint-fn-var 342)
+					(e-call (constraint-fn-var 346)
 						(e-lookup-local
 							(p-assign (ident "f")))
 						(e-lookup-local
 							(p-assign (ident "x"))))
-					(e-call (constraint-fn-var 343)
+					(e-call (constraint-fn-var 347)
 						(e-lookup-local
 							(p-assign (ident "g")))
 						(e-lookup-local
@@ -306,7 +306,7 @@ main = {
 		(e-block
 			(s-let
 				(p-assign (ident "p1"))
-				(e-call (constraint-fn-var 372)
+				(e-call (constraint-fn-var 376)
 					(e-lookup-local
 						(p-assign (ident "swap_pair")))
 					(e-tuple
@@ -316,7 +316,7 @@ main = {
 			(s-let
 				(p-assign (ident "p2"))
 				(e-runtime-error (tag "erroneous_value_expr")))
-			(e-runtime-error (tag "erroneous_value_use"))))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-alias-decl
 		(ty-header (name "Pair")
 			(ty-args

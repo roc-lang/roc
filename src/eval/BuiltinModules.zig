@@ -36,7 +36,7 @@ pub const BuiltinModules = struct {
     /// Initialize builtin handles over the baked static ModuleEnv and artifact.
     pub fn init(allocator: Allocator) InitError!BuiltinModules {
         const indices = compiled_builtins.builtinIndices(CIR);
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             try builtin_static.validateBuiltinManifest(
                 compiled_builtins.builtin_type_registry_hash,
                 compiled_builtins.builtin_indices_layout_hash,
@@ -46,7 +46,7 @@ pub const BuiltinModules = struct {
         var builtin_module = try builtin_static.moduleView(allocator, compiled_builtins.builtin_bin[0..], "Builtin", compiled_builtins.builtin_source);
         errdefer builtin_module.deinit();
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             try builtin_static.validateBuiltinIndices(builtin_module.env, indices);
         }
 

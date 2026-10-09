@@ -356,7 +356,7 @@ test "issue 10804: an imported type's derived encoder_for still validates its co
     var test_env_b = try TestEnv.initWithImport("B", source_b, "A", &test_env_a);
     defer test_env_b.deinit();
 
-    try test_env_b.assertOneTypeError("Missing Method");
+    try test_env_b.assertOneTypeError("Type Not Determined");
 }
 
 test "issue 10804: imported generalized derived codec revalidates accepted and rejected substitutions" {

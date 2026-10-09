@@ -10,7 +10,6 @@ pub const targets_config = @import("targets_config.zig");
 pub const TargetsConfig = targets_config.TargetsConfig;
 pub const single_module = @import("compile_module.zig");
 pub const module_discovery = @import("module_discovery.zig");
-pub const dependency_sort = @import("dependency_sort.zig");
 pub const threading = @import("threading.zig");
 pub const static_data_exports = @import("static_data");
 pub const package_source = @import("package_source.zig");
@@ -28,7 +27,6 @@ pub const app_header = @import("app_header.zig");
 
 pub const key = @import("cache_key.zig");
 pub const config = @import("cache_config.zig");
-pub const reporting = @import("cache_reporting.zig");
 pub const manager = @import("cache_manager.zig");
 pub const cleanup = if (!threading_mod.is_freestanding) @import("cache_cleanup.zig") else struct {
     pub const CleanupStats = struct {
@@ -84,14 +82,12 @@ test "compile tests" {
     std.testing.refAllDecls(@import("cache_key.zig"));
     std.testing.refAllDecls(@import("cache_manager.zig"));
     std.testing.refAllDecls(@import("cache_module.zig"));
-    std.testing.refAllDecls(@import("cache_reporting.zig"));
     std.testing.refAllDecls(@import("canonicalized_cache_entry.zig"));
     std.testing.refAllDecls(@import("compile_build.zig"));
     std.testing.refAllDecls(@import("targets_config.zig"));
     std.testing.refAllDecls(@import("compile_module.zig"));
     std.testing.refAllDecls(@import("compile_package.zig"));
     std.testing.refAllDecls(@import("module_discovery.zig"));
-    std.testing.refAllDecls(@import("dependency_sort.zig"));
     std.testing.refAllDecls(static_data_exports);
     std.testing.refAllDecls(@import("package_source.zig"));
     std.testing.refAllDecls(@import("package_resolution.zig"));
@@ -153,6 +149,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/tuple_access_control_flow_receiver_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10831_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11302_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12052_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11438_test.zig"));
     std.testing.refAllDecls(@import("test/specialization_identity_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10842_test.zig"));
@@ -192,6 +189,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11465_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11922_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11943_test.zig"));
+    std.testing.refAllDecls(@import("test/issue_12022_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11217_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11236_test.zig"));
     std.testing.refAllDecls(@import("test/source_single_use_inline_test.zig"));

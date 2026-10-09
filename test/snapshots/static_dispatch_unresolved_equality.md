@@ -10,25 +10,29 @@ poly = || { crash "x" }
 result = poly() == poly()
 ~~~
 # EXPECTED
-MISSING METHOD - static_dispatch_unresolved_equality.md:3:10:3:16
+TYPE NOT DETERMINED - static_dispatch_unresolved_equality.md:3:10:3:16
 # PROBLEMS
 ~~~clojure
 (reports
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 3 10) (end 3 16))
 		(headline
-			(reflow "This is trying to compare values with")
+			(reflow "Nothing in this program determines the type of the values this")
 			(reflow " ")
 			(annotated code "==")
-			(reflow ", but their type is an unresolved type variable, which has no methods."))
+			(reflow " ")
+			(reflow "compares:"))
 		(document
 			(source-region (file "static_dispatch_unresolved_equality.md") (start 3 10) (end 3 16) (annotation error) (line-text "result = poly() == poly()"))
 			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell how to compare them.")
+			(line-break)
+			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -84,7 +88,7 @@ result = poly() == poly()
 			(lhs
 				(e-runtime-error (tag "erroneous_value_expr")))
 			(rhs
-				(e-call (constraint-fn-var 229)
+				(e-call (constraint-fn-var 233)
 					(e-lookup-local
 						(p-assign (ident "poly"))))))))
 ~~~

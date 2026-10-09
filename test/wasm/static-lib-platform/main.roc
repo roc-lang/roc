@@ -8,8 +8,13 @@ platform ""
         "roc_runtime_seed": Runtime.seed!,
     }
     targets: {
-        inputs_dir: "../platform/targets/",
+        inputs_dir: "targets/",
         wasm32: {
+            inputs: ["host.wasm", app],
+            output: Shared,
+            exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],
+        },
+        wasm32v1: {
             inputs: ["host.wasm", app],
             output: Shared,
             exports: ["wasm_main", "wasm_result_len", "wasm_reset_alloc_counts", "wasm_alloc_count", "wasm_dealloc_count"],

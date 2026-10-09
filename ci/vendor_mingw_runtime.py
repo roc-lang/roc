@@ -4,7 +4,7 @@
 Where these files come from
 ---------------------------
 Everything written by this script is produced by the *installed Zig toolchain*
-(Zig 0.16.0), not by a system MinGW install:
+(Zig 0.17.0), not by a system MinGW install:
 
   * `crt2.obj` (exe startup), `dllcrt2.obj` (DLL startup) and `libmingw32.lib`
     -- Zig's bundled mingw-w64 sources, compiled on demand for the requested
@@ -27,7 +27,7 @@ what is already done for musl (`crt1.o` / `libc.a`).
 
 How to regenerate
 -----------------
-    zig version          # must print 0.16.0
+    zig version          # must print 0.17.0
     python ci/vendor_mingw_runtime.py
 
 Add `--check` to rebuild into a temp dir and diff against the checked-in files
@@ -53,7 +53,7 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_ZIG_VERSION = "0.16.0"
+REQUIRED_ZIG_VERSION = "0.17.0"
 
 COMPILED_ARTIFACTS = (
     "crt2.obj",

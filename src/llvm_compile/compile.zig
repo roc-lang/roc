@@ -50,6 +50,12 @@ const host_os: HostOs = switch (builtin.os.tag) {
     .visionos,
     .watchos,
     .uefi,
+    .wiiu,
+    .@"switch",
+    .gba,
+    .psx,
+    .tios,
+    .ashetos,
     .@"3ds",
     .ps3,
     .ps4,
@@ -473,7 +479,7 @@ fn emitMergedBitcodeModulesToObject(
 
     for (bitcodes[1..], 1..) |bitcode, index| {
         var name_buf: [64]u8 = undefined;
-        const name = std.fmt.bufPrintZ(&name_buf, "roc_bitcode_{d}", .{index}) catch return Error.OutOfMemory;
+        const name = std.mem.printSentinel(&name_buf, "roc_bitcode_{d}", .{index}, 0) catch return Error.OutOfMemory;
         const next_module = try parseBitcodeModule(context, bitcode, name.ptr);
         if (module.link(next_module).toBool()) {
             return Error.ModuleLinkFailed;
@@ -694,7 +700,7 @@ pub fn compileBitcodeModulesToObject(allocator: Allocator, io: std.Io, bitcodes:
 /// Append one record to the file `ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE`
 /// names, so a test can count how many in-process objects a run compiled.
 fn recordInProcessCompileForTest(allocator: Allocator, io: std.Io) void {
-    const path_key = allocator.dupeZ(u8, "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE") catch return;
+    const path_key = allocator.dupeSentinel(u8, "ROC_TEST_LLVM_OBJECT_COMPILE_COUNT_FILE", 0) catch return;
     defer allocator.free(path_key);
     const path_z = std.c.getenv(path_key) orelse return;
     const path = allocator.dupe(u8, path_z[0..std.mem.len(path_z)]) catch return;

@@ -35,6 +35,11 @@ pub const LowLevel = enum(u16) {
     str_release_excess_capacity,
     str_to_utf8,
     str_from_utf8_lossy,
+    str_from_utf8_validated,
+    str_from_utf16_le_short,
+    str_from_utf16_be_short,
+    str_from_utf32_le_short,
+    str_from_utf32_be_short,
     str_from_utf8,
     str_split_on,
     str_join_with,
@@ -232,6 +237,8 @@ pub const LowLevel = enum(u16) {
     // Fixed-width integer SIMD operations. Lane width and signedness are
     // carried by the operand/result layouts; these operations never encode a
     // concrete vector type in their identity.
+    // Load 16 bytes from a list, indexed in its element units. The input list
+    // layout commits the stride (bytes or typed integer lanes).
     simd_load_16_unchecked,
     simd_store_16_unchecked,
     simd_append_16,
@@ -626,7 +633,9 @@ pub const LowLevel = enum(u16) {
     /// () -> Box(T): heap cell via allocateWithRefcount (rc=1), payload zero-filled.
     /// Bit-identical to a box_box whose payload is all zeroes.
     box_alloc_zeroed,
-    /// (Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into *ptr.
+    /// (Box(T) | Ptr(T), T) -> {}: copy sizeOf(T) bytes from the value into
+    /// the pointed-at payload. A Box address is borrowed for the store, so the
+    /// store keeps its allocation alive.
     ptr_store,
     /// (Ptr(T)) -> T: copy sizeOf(T) bytes out of *ptr.
     ptr_load,
@@ -644,9 +653,9 @@ pub const LowLevel = enum(u16) {
     /// evaluator share the semantic oracle's operation vocabulary without a
     /// module cycle.
     pub fn simdOpIndex(self: LowLevel) ?u8 {
-        const raw = @intFromEnum(self);
-        const first = @intFromEnum(LowLevel.simd_load_16_unchecked);
-        const last = @intFromEnum(LowLevel.simd_clmul_hi);
+        const raw = @backingInt(self);
+        const first = @backingInt(LowLevel.simd_load_16_unchecked);
+        const last = @backingInt(LowLevel.simd_clmul_hi);
         if (raw < first or raw > last) return null;
         return @intCast(raw - first);
     }
@@ -758,10 +767,6 @@ pub const LowLevel = enum(u16) {
             };
         }
 
-        pub fn retainsOrReleases() RcEffect {
-            return .{ .may_retain_or_release = true };
-        }
-
         pub fn retainsResult() RcEffect {
             return .{
                 .may_retain_or_release = true,
@@ -774,13 +779,6 @@ pub const LowLevel = enum(u16) {
                 .may_retain_or_release = true,
                 .retain_result = true,
                 .result_borrows_args = mask,
-            };
-        }
-
-        pub fn allocatesAndRetainsOrReleases() RcEffect {
-            return .{
-                .may_allocate = true,
-                .may_retain_or_release = true,
             };
         }
 
@@ -947,6 +945,11 @@ pub const LowLevel = enum(u16) {
             .str_release_excess_capacity,
             .str_to_utf8,
             .str_from_utf8_lossy,
+            .str_from_utf8_validated,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
             .str_from_utf8,
             .str_split_on,
             .str_join_with,
@@ -1500,6 +1503,7 @@ pub const LowLevel = enum(u16) {
             .str_from_utf8_lossy => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_to_utf8 => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
+            .str_from_utf8_validated => RcEffect.retainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .list_drop_at,
             .list_sublist,
@@ -1601,6 +1605,11 @@ pub const LowLevel = enum(u16) {
             .str_split_on => RcEffect.allocatesAndRetainsOrReleasesSharingArgs(argMask(&.{0})),
 
             .str_repeat,
+            .str_from_utf16_le_short,
+            .str_from_utf16_be_short,
+            .str_from_utf32_le_short,
+            .str_from_utf32_be_short,
+
             .str_with_capacity,
             .str_inspect,
             .u8_to_str,
@@ -1650,7 +1659,7 @@ pub const LowLevel = enum(u16) {
             .box_alloc_zeroed => RcEffect.allocates(),
 
             // The stored value's ownership transfers into the pointed-at structure.
-            // The pointer args/results are ptr layouts, which are never refcounted.
+            // A ptr address is never refcounted; a Box address is borrowed.
             .ptr_store => RcEffect.consumesArgsRetainingArgs(argMask(&.{1}), 0),
 
             .ptr_alloca,

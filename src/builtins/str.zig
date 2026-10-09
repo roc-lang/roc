@@ -253,7 +253,7 @@ pub const RocStr = extern struct {
         const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
 
         // Verify the computed allocation pointer is properly aligned
-        if (comptime builtin.mode == .Debug) {
+        if (comptime builtin.mode == .debug) {
             if (alloc_ptr != 0 and alloc_ptr % @alignOf(usize) != 0) {
                 // This indicates memory corruption - the allocation pointer should always be aligned
                 unreachable;
@@ -316,8 +316,8 @@ pub const RocStr = extern struct {
         }
 
         if (self.isSmallStr() and other.isSmallStr()) {
-            const self_bytes: [@sizeOf(RocStr)]u8 = @bitCast(self);
-            const other_bytes: [@sizeOf(RocStr)]u8 = @bitCast(other);
+            const self_bytes: [@sizeOf(RocStr)]u8 = std.mem.asBytes(&self).*;
+            const other_bytes: [@sizeOf(RocStr)]u8 = std.mem.asBytes(&other).*;
             return smallBytesEqual(self_bytes, other_bytes, self_len);
         }
 
@@ -653,14 +653,6 @@ pub const RocStr = extern struct {
         return self.asU8ptr()[0..self.len()];
     }
 
-    pub fn asSliceWithCapacity(self: *const RocStr) []const u8 {
-        return self.asU8ptr()[0..self.getCapacity()];
-    }
-
-    pub fn asSliceWithCapacityMut(self: *RocStr) []u8 {
-        return self.asU8ptrMut()[0..self.getCapacity()];
-    }
-
     pub fn asU8ptr(self: *const RocStr) [*]const u8 {
         if (self.isSmallStr()) {
             return @as([*]const u8, @ptrCast(self));
@@ -730,7 +722,7 @@ inline fn bytesEqualStaticSmall(bytes: [*]const u8, len: usize, word0: u64, word
 
 inline fn staticSmallRuntimeWord(str: RocStr, offset: usize, active_len: usize) u64 {
     if (str.isSmallStr()) {
-        const bytes: [@sizeOf(RocStr)]u8 = @bitCast(str);
+        const bytes: [@sizeOf(RocStr)]u8 = std.mem.asBytes(&str).*;
         return readSmallStringU64(bytes, offset);
     }
 
@@ -818,74 +810,8 @@ pub fn strStaticSmallWordCaselessEq(self: RocStr, offset: u64, active_len: u64, 
 }
 
 // Str.numberOfBytes
-/// TODO: Document strNumberOfBytes.
-pub fn strNumberOfBytes(string: RocStr) callconv(.c) usize {
-    return string.len();
-}
-
 // Str.fromInt
-/// TODO: Document exportFromInt.
-pub fn exportFromInt(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            int: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromIntHelp, .{ T, int, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromIntHelp(
-    comptime T: type,
-    int: T,
-    roc_ops: *RocOps,
-) RocStr {
-    const size = compiler_rt_128.int_string_capacity(T);
-    var buf: [size]u8 = undefined;
-    const result = compiler_rt_128.int_to_str(T, &buf, int);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 // Str.fromFloat
-/// TODO: Document exportFromFloat.
-pub fn exportFromFloat(
-    comptime T: type,
-    comptime name: []const u8,
-) void {
-    const f = struct {
-        fn func(
-            float: T,
-            roc_ops: *RocOps,
-        ) callconv(.c) RocStr {
-            return @call(.always_inline, strFromFloatHelp, .{ T, float, roc_ops });
-        }
-    }.func;
-
-    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
-}
-
-fn strFromFloatHelp(
-    comptime T: type,
-    float: T,
-    roc_ops: *RocOps,
-) RocStr {
-    var buf: [32]u8 = undefined;
-    const val_bits: u64 = if (T == f32)
-        @as(u64, @as(u32, @bitCast(float)))
-    else
-        @bitCast(float);
-    const result = floatToStrBytes(&buf, val_bits, T == f32);
-
-    return RocStr.init(result.ptr, result.len, roc_ops);
-}
-
 /// Format a Roc float into caller-owned scratch bytes.
 pub fn floatToStrBytes(buf: []u8, val_bits: u64, is_f32: bool) []const u8 {
     return if (is_f32) blk: {
@@ -913,7 +839,7 @@ fn expectFloatToStr(comptime T: type, value: T, expected: []const u8) FloatToStr
 
     if (std.math.isFinite(value)) {
         const parsed = try parse_float.parseFloat(T, actual);
-        const Bits = std.meta.Int(.unsigned, @bitSizeOf(T));
+        const Bits = @Int(.unsigned, @bitSizeOf(T));
         try testing.expectEqual(@as(Bits, @bitCast(value)), @as(Bits, @bitCast(parsed)));
     }
 }
@@ -1720,6 +1646,143 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
         }
     }
     return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+}
+
+/// Borrows bytes whose producer guarantees valid UTF-8. No validation scan is
+/// needed: copy inline output, or retain and share the existing byte allocation.
+pub fn fromUtf8Validated(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    const len = list.len();
+    if (len == 0) return RocStr.empty();
+    if (RocStr.fitsInSmallStr(len)) return RocStr.fromSliceSmall(list.bytes.?[0..len]);
+    list.incref(1, false, roc_ops);
+    return .{ .bytes = list.bytes, .length = len, .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr };
+}
+
+/// Largest lossy UTF-8 output the Roc wide-UTF decoders route to the scalar
+/// short path. Matches the 64-bit inline capacity and `wide_utf_short_max_bytes`
+/// in Builtin.roc; on 32-bit targets output above the inline capacity allocates once.
+pub const WIDE_UTF_SHORT_MAX_BYTES = 23;
+
+/// Borrows bytes whose lossy UTF-8 output was already sized to at most
+/// WIDE_UTF_SHORT_MAX_BYTES. Bulk decoding remains in checked Roc SIMD code.
+fn fromWideUtfShort(comptime Unit: type, comptime endian: std.builtin.Endian, list: RocList, roc_ops: *RocOps) RocStr {
+    const len = list.len();
+    if (len == 0) return RocStr.empty();
+    const bytes = list.bytes.?[0..len];
+    const unit_width = @sizeOf(Unit);
+    var buffer: [WIDE_UTF_SHORT_MAX_BYTES]u8 = undefined;
+    var written: usize = 0;
+    var index: usize = 0;
+    while (index < bytes.len) {
+        var scalar: u21 = UNICODE_REPLACEMENT;
+        if (bytes.len - index < unit_width) {
+            index = bytes.len;
+        } else {
+            const unit = std.mem.readInt(Unit, bytes[index..][0..unit_width], endian);
+            index += unit_width;
+            if (Unit == u16) {
+                if (unit >= 0xd800 and unit <= 0xdbff) {
+                    if (bytes.len - index >= unit_width) {
+                        const low = std.mem.readInt(Unit, bytes[index..][0..unit_width], endian);
+                        if (low >= 0xdc00 and low <= 0xdfff) {
+                            scalar = 0x10000 + ((@as(u21, unit) - 0xd800) << 10) + (low - 0xdc00);
+                            index += unit_width;
+                        }
+                    }
+                } else if (unit < 0xdc00 or unit > 0xdfff) {
+                    scalar = unit;
+                }
+            } else if (unit <= 0x10ffff and (unit < 0xd800 or unit > 0xdfff)) {
+                scalar = @intCast(unit);
+            }
+        }
+        const width = unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
+        std.debug.assert(buffer.len - written >= width);
+        written += unicode.utf8Encode(scalar, buffer[written..]) catch unreachable;
+    }
+    return RocStr.init(&buffer, written, roc_ops);
+}
+
+/// Lossy fixed-order UTF-16 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf16LeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u16, .little, list, roc_ops);
+}
+
+/// Lossy fixed-order UTF-16 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf16BeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u16, .big, list, roc_ops);
+}
+
+/// Lossy fixed-order UTF-32 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf32LeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u32, .little, list, roc_ops);
+}
+
+/// Lossy fixed-order UTF-32 byte decode for output already sized to at most 23 bytes.
+pub fn fromUtf32BeShort(list: RocList, roc_ops: *RocOps) callconv(.c) RocStr {
+    return fromWideUtfShort(u32, .big, list, roc_ops);
+}
+
+test "short wide UTF decoding: explicit byte order, replacements, and pairs" {
+    var env = TestEnv.init(testing.allocator);
+    defer env.deinit();
+    const Case = struct { bytes: []const u8, expected: []const u8 };
+    inline for (.{ .{ u16, fromUtf16LeShort, fromUtf16BeShort }, .{ u32, fromUtf32LeShort, fromUtf32BeShort } }) |spec| {
+        const Unit = spec[0];
+        const cases = if (Unit == u16) [_]Case{
+            .{ .bytes = &.{}, .expected = "" },
+            .{ .bytes = &.{ 82, 0, 111, 0, 99, 0, 0x3d, 0xd8, 0x26, 0xdc }, .expected = "Roc🐦" },
+            .{ .bytes = &.{ 65, 0, 0, 0xd8, 66, 0 }, .expected = "A�B" },
+            .{ .bytes = &.{ 0, 0xdc, 0, 0xd8 }, .expected = "��" },
+            .{ .bytes = &.{ 0xff, 0xfe }, .expected = "\u{feff}" },
+        } else [_]Case{
+            .{ .bytes = &.{}, .expected = "" },
+            .{ .bytes = &.{ 0x26, 0xf4, 1, 0 }, .expected = "🐦" },
+            .{ .bytes = &.{ 65, 0, 0, 0, 0, 0xd8, 0, 0 }, .expected = "A�" },
+            .{ .bytes = &.{ 0, 0, 0x11, 0, 255, 255, 255, 255 }, .expected = "��" },
+            .{ .bytes = &.{ 0xff, 0xfe, 0, 0 }, .expected = "\u{feff}" },
+        };
+        for (cases) |case| {
+            inline for (.{ spec[1], spec[2] }, 0..) |decode, order| {
+                var input: [32]u8 = undefined;
+                @memcpy(input[0..case.bytes.len], case.bytes);
+                if (order == 1) {
+                    var i: usize = 0;
+                    while (i < case.bytes.len) : (i += @sizeOf(Unit)) std.mem.reverse(u8, input[i..][0..@sizeOf(Unit)]);
+                }
+                const list = RocList{ .bytes = &input, .length = case.bytes.len, .capacity_or_alloc_ptr = RocList.encodeCapacity(case.bytes.len) };
+                const result = decode(list, env.getOps());
+                defer result.decref(env.getOps());
+                try testing.expectEqualStrings(case.expected, result.asSlice());
+            }
+        }
+    }
+    inline for (.{ fromUtf16LeShort, fromUtf16BeShort, fromUtf32LeShort, fromUtf32BeShort }) |decode| {
+        var input = [_]u8{65};
+        const result = decode(.{ .bytes = &input, .length = 1, .capacity_or_alloc_ptr = RocList.encodeCapacity(1) }, env.getOps());
+        defer result.decref(env.getOps());
+        try testing.expectEqualStrings("�", result.asSlice());
+    }
+    try testing.expectEqual(@as(usize, 0), env.getAllocationCount());
+}
+
+test "short wide UTF decoding: inline capacity boundaries" {
+    inline for (.{ .{ u16, fromUtf16LeShort, std.builtin.Endian.little }, .{ u16, fromUtf16BeShort, std.builtin.Endian.big }, .{ u32, fromUtf32LeShort, std.builtin.Endian.little }, .{ u32, fromUtf32BeShort, std.builtin.Endian.big } }) |spec| {
+        const Unit = spec[0];
+        for ([_]usize{ 0, 7, 8, 11, 12, 22, 23 }) |len| {
+            var env = TestEnv.init(testing.allocator);
+            defer env.deinit();
+            var input: [WIDE_UTF_SHORT_MAX_BYTES * @sizeOf(Unit) + 1]u8 = undefined;
+            for (0..len) |i| std.mem.writeInt(Unit, input[1 + i * @sizeOf(Unit) ..][0..@sizeOf(Unit)], 65, spec[2]);
+            const list = RocList{ .bytes = input[1..].ptr, .length = len * @sizeOf(Unit), .capacity_or_alloc_ptr = RocList.encodeCapacity(len * @sizeOf(Unit)) };
+            const result = spec[1](list, env.getOps());
+            defer result.decref(env.getOps());
+            var expected: [WIDE_UTF_SHORT_MAX_BYTES]u8 = undefined;
+            @memset(&expected, 65);
+            try testing.expectEqualStrings(expected[0..len], result.asSlice());
+            try testing.expectEqual(@as(usize, if (RocStr.fitsInSmallStr(len)) 0 else 1), env.getAllocationCount());
+        }
+    }
 }
 
 /// Convert borrowed bytes to an owned string, replacing invalid UTF-8 with U+FFFD.
@@ -2609,6 +2672,79 @@ pub fn reserve(
     }
 }
 
+/// The text `Str.inspect` renders for a string: the string wrapped in double
+/// quotes, with a backslash before each `"` and each backslash it contains.
+///
+/// ## Ownership
+/// - `string`: **borrows** - caller retains ownership
+/// - Returns: **independent** - a small string or a new allocation
+pub fn strEscapeAndQuote(
+    string: RocStr,
+    roc_ops: *RocOps,
+) callconv(.c) RocStr {
+    const slice = string.asSlice();
+
+    var extra: usize = 0;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') extra += 1;
+    }
+
+    const result_len = slice.len + extra + 2;
+    const small_string_size = @sizeOf(RocStr);
+
+    if (result_len < small_string_size) {
+        var buf: [small_string_size]u8 = @splat(0);
+        buf[0] = '"';
+        var pos: usize = 1;
+        for (slice) |ch| {
+            if (ch == '\\' or ch == '"') {
+                buf[pos] = '\\';
+                pos += 1;
+            }
+            buf[pos] = ch;
+            pos += 1;
+        }
+        buf[pos] = '"';
+        buf[small_string_size - 1] = @intCast(result_len | 0x80);
+        return std.mem.bytesToValue(RocStr, &buf);
+    }
+
+    const heap_ptr = utils.allocateWithRefcountC(result_len, 1, false, roc_ops);
+    heap_ptr[0] = '"';
+    var pos: usize = 1;
+    for (slice) |ch| {
+        if (ch == '\\' or ch == '"') {
+            heap_ptr[pos] = '\\';
+            pos += 1;
+        }
+        heap_ptr[pos] = ch;
+        pos += 1;
+    }
+    heap_ptr[pos] = '"';
+    return .{ .bytes = heap_ptr, .capacity_or_alloc_ptr = RocStr.encodeCapacity(result_len), .length = result_len };
+}
+
+test "strEscapeAndQuote quotes through the host operations it is given" {
+    var test_env = TestEnv.init(std.testing.allocator);
+    defer test_env.deinit();
+    const ops = test_env.getOps();
+
+    const cases = [_]struct { input: []const u8, expected: []const u8 }{
+        .{ .input = "", .expected = "\"\"" },
+        .{ .input = "hi", .expected = "\"hi\"" },
+        .{ .input = "a\"b\\c", .expected = "\"a\\\"b\\\\c\"" },
+        .{ .input = "a string too long to be stored inline", .expected = "\"a string too long to be stored inline\"" },
+        .{ .input = "a \"quoted\" string too long to store inline", .expected = "\"a \\\"quoted\\\" string too long to store inline\"" },
+    };
+    for (cases) |case| {
+        const input = RocStr.fromSlice(case.input, ops);
+        defer input.decref(ops);
+        const quoted = strEscapeAndQuote(input, ops);
+        defer quoted.decref(ops);
+        try std.testing.expectEqualStrings(case.expected, quoted.asSlice());
+    }
+}
+
 /// Creates a new RocStr with the specified capacity.
 pub fn withCapacityC(
     capacity: u64,
@@ -2617,47 +2753,6 @@ pub fn withCapacityC(
     var str = RocStr.allocate(@intCast(capacity), roc_ops);
     str.setLen(0);
     return str;
-}
-
-/// Clones the contents of the given RocStr into the provided pointer, starting at the given offset and extra_offset.
-pub fn strCloneTo(
-    string: RocStr,
-    ptr: [*]u8,
-    offset: usize,
-    extra_offset: usize,
-) callconv(.c) usize {
-    const WIDTH: usize = @sizeOf(RocStr);
-    if (string.isSmallStr()) {
-        const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
-
-        var i: usize = 0;
-        while (i < WIDTH) : (i += 1) {
-            ptr[offset + i] = array[i];
-        }
-
-        return extra_offset;
-    } else {
-        const slice = string.asSlice();
-
-        var relative = string;
-        relative.bytes = @as(?[*]u8, @ptrFromInt(extra_offset)); // i.e. just after the string struct
-
-        // write the string struct
-        const array = relative.asArray();
-        @memcpy(ptr[offset..(offset + WIDTH)], array[0..WIDTH]);
-
-        // write the string bytes just after the struct
-        @memcpy(ptr[extra_offset..(extra_offset + slice.len)], slice);
-
-        return extra_offset + slice.len;
-    }
-}
-
-/// Returns a pointer to the allocation backing the given RocStr
-pub fn strAllocationPtr(
-    string: RocStr,
-) callconv(.c) ?[*]u8 {
-    return string.getAllocationPtr();
 }
 
 /// Release excess capacity
@@ -5070,12 +5165,48 @@ test "default-platform RocStr view matches canonical RocStr layout" {
     try std.testing.expectEqual(@sizeOf(RocStr), @sizeOf(View));
     try std.testing.expectEqual(@alignOf(RocStr), @alignOf(View));
 
-    const canonical_fields = @typeInfo(RocStr).@"struct".fields;
-    const view_fields = @typeInfo(View).@"struct".fields;
-    try std.testing.expectEqual(canonical_fields.len, view_fields.len);
-    inline for (canonical_fields, view_fields) |cf, vf| {
-        try std.testing.expect(std.mem.eql(u8, cf.name, vf.name));
-        try std.testing.expectEqual(cf.type, vf.type);
-        try std.testing.expectEqual(@offsetOf(RocStr, cf.name), @offsetOf(View, vf.name));
+    const canonical_info = @typeInfo(RocStr).@"struct";
+    const view_info = @typeInfo(View).@"struct";
+    try std.testing.expectEqual(canonical_info.field_names.len, view_info.field_names.len);
+    inline for (canonical_info.field_names, canonical_info.field_types, view_info.field_names, view_info.field_types) |canonical_name, CanonicalType, view_name, ViewType| {
+        try std.testing.expect(std.mem.eql(u8, canonical_name, view_name));
+        try std.testing.expectEqual(CanonicalType, ViewType);
+        try std.testing.expectEqual(@offsetOf(RocStr, canonical_name), @offsetOf(View, view_name));
     }
+}
+
+test "validated UTF-8 construction: inline copies and retained heap ownership" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    inline for (.{ "", "Roc🐦", "a longer valid UTF-8 string containing 🐦 and €" }) |text| {
+        const list = RocList.fromSlice(u8, text, false, env.getOps());
+        const result = fromUtf8Validated(list, env.getOps());
+        try testing.expectEqualStrings(text, result.asSlice());
+        if (text.len <= SMALL_STR_MAX_LENGTH) {
+            try testing.expect(result.isSmallStr());
+        } else {
+            try testing.expectEqual(list.bytes, result.bytes);
+            try testing.expectEqual(list.capacity_or_alloc_ptr, result.capacity_or_alloc_ptr);
+        }
+        list.decref(1, 1, false, null, &rcNone, env.getOps());
+        // The returned string remains owned after the borrowed source is gone.
+        try testing.expectEqualStrings(text, result.asSlice());
+        result.decref(env.getOps());
+        try testing.expectEqual(@as(usize, 0), env.allocation_map.count());
+    }
+}
+
+test "validated UTF-8 construction: seamless slices retain their allocation" {
+    var env = TestEnv.init(std.testing.allocator);
+    defer env.deinit();
+    const text = "prefix: a long slice containing 🐦 and € survives its source";
+    const list = RocList.fromSlice(u8, text, false, env.getOps());
+    const slice = @import("list.zig").listSublistBorrowed(list, 1, 8, text.len - 8, false, env.getOps());
+    const result = fromUtf8Validated(slice, env.getOps());
+    try testing.expect(result.isSeamlessSlice());
+    try testing.expectEqual(slice.bytes, result.bytes);
+    list.decref(1, 1, false, null, &rcNone, env.getOps());
+    try testing.expectEqualStrings(text[8..], result.asSlice());
+    result.decref(env.getOps());
+    try testing.expectEqual(@as(usize, 0), env.allocation_map.count());
 }

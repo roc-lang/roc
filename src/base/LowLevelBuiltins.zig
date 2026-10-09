@@ -57,8 +57,7 @@ pub fn floatRounding(op: LowLevel, is_f32: bool) BuiltinFn {
 }
 
 /// Binary Dec arithmetic. `dec_mul` crashes on
-/// overflow like the interpreter's Dec multiply; the saturating
-/// `dec_mul_saturated` wrapper is not the lowering of any current op.
+/// overflow like the interpreter's Dec multiply.
 pub fn decBinaryArith(op: LowLevel) BuiltinFn {
     return lookup(op, .{
         .{ LowLevel.dec_mul, BuiltinFn.dec_mul },
@@ -215,7 +214,13 @@ pub fn strOp(op: LowLevel) BuiltinFn {
         .{ LowLevel.str_release_excess_capacity, BuiltinFn.str_release_excess_capacity },
         .{ LowLevel.str_to_utf8, BuiltinFn.str_to_utf8 },
         .{ LowLevel.str_from_utf8_lossy, BuiltinFn.str_from_utf8_lossy },
+        .{ LowLevel.str_from_utf8_validated, BuiltinFn.str_from_utf8_validated },
+        .{ LowLevel.str_from_utf16_le_short, BuiltinFn.str_from_utf16_le_short },
+        .{ LowLevel.str_from_utf16_be_short, BuiltinFn.str_from_utf16_be_short },
+        .{ LowLevel.str_from_utf32_le_short, BuiltinFn.str_from_utf32_le_short },
+        .{ LowLevel.str_from_utf32_be_short, BuiltinFn.str_from_utf32_be_short },
         .{ LowLevel.str_from_utf8, BuiltinFn.str_from_utf8_result },
+
         .{ LowLevel.str_split_on, BuiltinFn.str_split },
         .{ LowLevel.str_join_with, BuiltinFn.str_join_with },
         .{ LowLevel.str_inspect, BuiltinFn.str_escape_and_quote },

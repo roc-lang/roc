@@ -22,17 +22,13 @@ TYPE MISMATCH - test_instantiated_arg_mismatch.md:5:14:5:21
 		(title "Type Mismatch")
 		(region (start 5 14) (end 5 21))
 		(headline
-			(reflow "This string literal is being used where a non-string type is needed."))
+			(reflow "This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:"))
 		(document
 			(source-region (file "test_instantiated_arg_mismatch.md") (start 5 14) (end 5 21) (annotation error) (line-text "    pair(42, \"hello\")"))
 			(line-break)
-			(reflow "The type was determined to be:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "Dec")
-			(annotation-end))))
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -93,7 +89,7 @@ EndOfFile,
 						(p-assign (ident "x")))
 					(e-lookup-local
 						(p-assign (ident "y")))))))
-	(e-call (constraint-fn-var 244)
+	(e-call (constraint-fn-var 248)
 		(e-lookup-local
 			(p-assign (ident "pair")))
 		(e-runtime-error (tag "erroneous_value_expr"))

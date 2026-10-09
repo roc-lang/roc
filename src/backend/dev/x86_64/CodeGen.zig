@@ -52,19 +52,19 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// System V: RBX, R12, R13, R14, R15 (not RBP - it's the frame pointer)
         /// Windows: RBX, RSI, RDI, R12, R13, R14, R15 (not RBP - it's the frame pointer)
         pub const CALLEE_SAVED_GENERAL_MASK: u32 = if (target.isWindows())
-            (1 << @intFromEnum(GeneralReg.RBX)) |
-                (1 << @intFromEnum(GeneralReg.RSI)) |
-                (1 << @intFromEnum(GeneralReg.RDI)) |
-                (1 << @intFromEnum(GeneralReg.R12)) |
-                (1 << @intFromEnum(GeneralReg.R13)) |
-                (1 << @intFromEnum(GeneralReg.R14)) |
-                (1 << @intFromEnum(GeneralReg.R15))
+            (1 << @backingInt(GeneralReg.RBX)) |
+                (1 << @backingInt(GeneralReg.RSI)) |
+                (1 << @backingInt(GeneralReg.RDI)) |
+                (1 << @backingInt(GeneralReg.R12)) |
+                (1 << @backingInt(GeneralReg.R13)) |
+                (1 << @backingInt(GeneralReg.R14)) |
+                (1 << @backingInt(GeneralReg.R15))
         else
-            (1 << @intFromEnum(GeneralReg.RBX)) |
-                (1 << @intFromEnum(GeneralReg.R12)) |
-                (1 << @intFromEnum(GeneralReg.R13)) |
-                (1 << @intFromEnum(GeneralReg.R14)) |
-                (1 << @intFromEnum(GeneralReg.R15));
+            (1 << @backingInt(GeneralReg.RBX)) |
+                (1 << @backingInt(GeneralReg.R12)) |
+                (1 << @backingInt(GeneralReg.R13)) |
+                (1 << @backingInt(GeneralReg.R14)) |
+                (1 << @backingInt(GeneralReg.R15));
 
         /// Size of the callee-saved register area
         /// Windows: 7 registers * 8 bytes = 56 bytes
@@ -134,7 +134,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
             }
             // Try callee-saved
             if (self.allocFromGeneralMask(&self.callee_saved_available)) |reg| {
-                self.callee_saved_used |= @as(u16, 1) << @intCast(@intFromEnum(reg));
+                self.callee_saved_used |= @as(u16, 1) << @intCast(@backingInt(reg));
                 return reg;
             }
             return null;
@@ -144,12 +144,12 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (mask.* == 0) return null;
             const bit: u5 = @intCast(@ctz(mask.*));
             mask.* &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         /// Free a general-purpose register, making it available for allocation.
         pub fn freeGeneral(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Return to appropriate pool
             if ((CALLEE_SAVED_GENERAL_MASK & (@as(u32, 1) << idx)) != 0) {
                 self.callee_saved_available |= @as(u32, 1) << idx;
@@ -161,7 +161,7 @@ pub fn CodeGen(comptime target: RocTarget) type {
         /// Mark a register as in use so it won't be allocated.
         /// Used for return values from function calls that need to persist.
         pub fn markRegisterInUse(self: *Self, reg: GeneralReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             // Remove from free pool (it's now in use)
             self.free_general &= ~(@as(u16, 1) << @intCast(idx));
             self.callee_saved_available &= ~(@as(u16, 1) << @intCast(idx));
@@ -171,11 +171,11 @@ pub fn CodeGen(comptime target: RocTarget) type {
             if (self.free_float == 0) return null;
             const bit: u5 = @intCast(@ctz(self.free_float));
             self.free_float &= ~(@as(u32, 1) << bit);
-            return @enumFromInt(bit);
+            return @fromBackingInt(@intCast(bit));
         }
 
         pub fn freeFloat(self: *Self, reg: FloatReg) void {
-            const idx = @intFromEnum(reg);
+            const idx = @backingInt(reg);
             self.free_float |= @as(u32, 1) << idx;
         }
 
@@ -235,40 +235,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
             try builder.emitEpilogue(&self.emit);
         }
 
-        /// Emit stack frame setup with given local size
-        pub fn emitStackAlloc(self: *Self, size: u32) Allocator.Error!void {
-            if (size > 0) {
-                // sub rsp, size
-                try self.emit.subRegImm32(.w64, .RSP, @intCast(size));
-            }
-        }
-
-        /// On Windows, save R12 to stack before a C function call.
-        /// R12 holds roc_ops in generated code, and while R12 is callee-saved
-        /// in the Windows x64 ABI, something in the Zig-compiled C function
-        /// call chain appears to corrupt it. This saves R12 and returns the
-        /// offset where it was saved, for use with restoreR12AfterCall.
-        pub fn saveR12BeforeCall(self: *Self) Allocator.Error!i32 {
-            if (comptime target.isWindows()) {
-                // Allocate 8 bytes on stack for R12
-                try self.emit.subRegImm32(.w64, .RSP, 8);
-                // Save R12 at [RSP]
-                try self.emit.movMemReg(.w64, .RSP, 0, .R12);
-                return 0; // R12 is at [RSP+0]
-            }
-            return 0;
-        }
-
-        /// On Windows, restore R12 from stack after a C function call.
-        pub fn restoreR12AfterCall(self: *Self) Allocator.Error!void {
-            if (comptime target.isWindows()) {
-                // Restore R12 from [RSP]
-                try self.emit.movRegMem(.w64, .R12, .RSP, 0);
-                // Deallocate the 8 bytes
-                try self.emit.addRegImm32(.w64, .RSP, 8);
-            }
-        }
-
         // Integer operations
 
         /// Emit integer addition: dst = a + b
@@ -296,100 +262,60 @@ pub fn CodeGen(comptime target: RocTarget) type {
         }
 
         /// Emit signed integer division: dst = a / b
-        /// Uses IDIV which requires dividend in RDX:RAX, result in RAX
         pub fn emitSDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IDIV uses RAX for dividend/quotient and RDX for high bits/remainder
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Sign-extend RAX into RDX:RAX
-            if (width == .w64) {
-                try self.emit.cqo();
-            } else {
-                try self.emit.cdq();
-            }
-            // 3. Perform IDIV
-            try self.emit.idivReg(width, divisor_reg);
-            // 4. Quotient is in RAX, move to dst
-            if (dst != .RAX) {
-                try self.emit.movRegReg(width, dst, .RAX);
-            }
+            try self.emitDivMod(width, dst, a, b, true, .RAX);
         }
 
         /// Emit unsigned integer division: dst = a / b
-        /// Uses DIV which requires dividend in RDX:RAX, result in RAX
         pub fn emitUDiv(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // DIV uses RAX for dividend/quotient and RDX for high bits/remainder
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Zero-extend: set RDX to 0
-            try self.emit.xorRegReg(width, .RDX, .RDX);
-            // 3. Perform DIV
-            try self.emit.divReg(width, divisor_reg);
-            // 4. Quotient is in RAX, move to dst
-            if (dst != .RAX) {
-                try self.emit.movRegReg(width, dst, .RAX);
-            }
+            try self.emitDivMod(width, dst, a, b, false, .RAX);
         }
 
         /// Emit signed integer modulo: dst = a % b
-        /// Uses IDIV which puts remainder in RDX
         pub fn emitSMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
-            const divisor_reg = if (b == .RAX or b == .RDX) blk: {
-                try self.emit.movRegReg(width, .R11, b);
-                break :blk .R11;
-            } else b;
-            // 1. Move dividend to RAX
-            if (a != .RAX) {
-                try self.emit.movRegReg(width, .RAX, a);
-            }
-            // 2. Sign-extend RAX into RDX:RAX
-            if (width == .w64) {
-                try self.emit.cqo();
-            } else {
-                try self.emit.cdq();
-            }
-            // 3. Perform IDIV
-            try self.emit.idivReg(width, divisor_reg);
-            // Remainder is in RDX
-            if (dst != .RDX) {
-                try self.emit.movRegReg(width, dst, .RDX);
-            }
+            try self.emitDivMod(width, dst, a, b, true, .RDX);
         }
 
         /// Emit unsigned integer modulo: dst = a % b
-        /// Uses DIV which puts remainder in RDX
         pub fn emitUMod(self: *Self, width: RegisterWidth, dst: GeneralReg, a: GeneralReg, b: GeneralReg) Allocator.Error!void {
-            // IMPORTANT: Save b to R11 BEFORE moving a to RAX, in case b is in RAX
+            try self.emitDivMod(width, dst, a, b, false, .RDX);
+        }
+
+        /// Emit IDIV or DIV of `a` by `b` and move `result_reg` to `dst`.
+        /// Both take the dividend in RDX:RAX and leave the quotient in RAX
+        /// and the remainder in RDX.
+        fn emitDivMod(
+            self: *Self,
+            width: RegisterWidth,
+            dst: GeneralReg,
+            a: GeneralReg,
+            b: GeneralReg,
+            comptime signed: bool,
+            comptime result_reg: GeneralReg,
+        ) Allocator.Error!void {
+            // Save b to R11 before moving a to RAX, in case b is in RAX or RDX.
             const divisor_reg = if (b == .RAX or b == .RDX) blk: {
                 try self.emit.movRegReg(width, .R11, b);
                 break :blk .R11;
             } else b;
-            // 1. Move dividend to RAX
             if (a != .RAX) {
                 try self.emit.movRegReg(width, .RAX, a);
             }
-            // 2. Zero-extend: set RDX to 0
-            try self.emit.xorRegReg(width, .RDX, .RDX);
-            // 3. Perform DIV
-            try self.emit.divReg(width, divisor_reg);
-            // Remainder is in RDX
-            if (dst != .RDX) {
-                try self.emit.movRegReg(width, dst, .RDX);
+            if (signed) {
+                // Sign-extend RAX into RDX:RAX
+                if (width == .w64) {
+                    try self.emit.cqo();
+                } else {
+                    try self.emit.cdq();
+                }
+                try self.emit.idivReg(width, divisor_reg);
+            } else {
+                // Zero-extend: set RDX to 0
+                try self.emit.xorRegReg(width, .RDX, .RDX);
+                try self.emit.divReg(width, divisor_reg);
+            }
+            if (dst != result_reg) {
+                try self.emit.movRegReg(width, dst, result_reg);
             }
         }
 
@@ -431,14 +357,6 @@ pub fn CodeGen(comptime target: RocTarget) type {
                 try self.emit.movRegReg(width, dst, src);
             }
             try self.emit.notReg(width, dst);
-        }
-
-        /// Emit bitwise XOR with immediate: dst = src ^ imm
-        pub fn emitXorImm(self: *Self, width: RegisterWidth, dst: GeneralReg, src: GeneralReg, imm: i8) Allocator.Error!void {
-            if (dst != src) {
-                try self.emit.movRegReg(width, dst, src);
-            }
-            try self.emit.xorRegImm8(width, dst, imm);
         }
 
         // Comparison operations
@@ -776,7 +694,7 @@ test "Windows vector allocation excludes nonvolatile XMM registers" {
     defer cg.deinit();
 
     for (0..6) |index| {
-        try std.testing.expectEqual(@as(FloatReg, @enumFromInt(index)), cg.allocFloat().?);
+        try std.testing.expectEqual(@as(FloatReg, @fromBackingInt(@intCast(index))), cg.allocFloat().?);
     }
     try std.testing.expectEqual(@as(?FloatReg, null), cg.allocFloat());
 }
@@ -940,10 +858,10 @@ test "free register returns it to correct pool" {
     cg.freeGeneral(callee_reg);
 
     // caller_reg should be back in free_general
-    try std.testing.expect((cg.free_general & (@as(u32, 1) << @intFromEnum(caller_reg))) != 0);
+    try std.testing.expect((cg.free_general & (@as(u32, 1) << @backingInt(caller_reg))) != 0);
 
     // callee_reg should be back in callee_saved_available
-    try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @intFromEnum(callee_reg))) != 0);
+    try std.testing.expect((cg.callee_saved_available & (@as(u32, 1) << @backingInt(callee_reg))) != 0);
 }
 
 test "epilogue restores callee-saved registers with MOV" {

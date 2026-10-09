@@ -104,20 +104,22 @@ test "check type - i64 annotation with fractional literal fails type checking" {
 }
 
 test "check type - string plus number should fail" {
-    // Str + number: the `+` operator desugars to calling the `.plus` method on the left operand.
-    // Since Str doesn't have a `plus` method, we get MISSING METHOD before even checking
-    // the from_numeral constraint on the number literal.
+    // String literal + number: the `+` operator desugars to calling the
+    // `.plus` method on the left operand. Nothing determines the string
+    // literal's type and its default has no `plus` method, so the
+    // undetermined string type is reported before the number literal's own
+    // conversion is checked.
     const source =
         \\x = "hello" + 123
     ;
-    try checkTypesModule(source, .fail_first, "Missing Method");
+    try checkTypesModule(source, .fail_first, "Type Not Determined");
 }
 
 test "check type - string plus string should fail (no plus method)" {
     const source =
         \\x = "hello" + "world"
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Not Determined");
 }
 
 // binop operand type unification //
@@ -2862,19 +2864,18 @@ test "check type - tag union - tag typo hint on an inline output union" {
 
 test "check type - tag union - tag typo hint on an explicit open ext" {
     // An anonymous `..` in an output position is generated like absence, so
-    // it carries the same hint. On a value binding it never warns redundant,
-    // so this is the only problem.
+    // it carries the same hint, and on a function it is also redundant.
     const source =
-        \\color : [Red, Green, Blue, ..]
-        \\color = Greeen
+        \\to_color : Str -> [Red, Green, Blue, ..]
+        \\to_color = |_| Greeen
     ;
-    try checkTypesModule(source, .fail_with,
+    try checkTypesModule(source, .{ .fail_with_all = &.{
         \\**Type Mismatch**
         \\This expression produces the tag `Greeen` but the annotated tag union does not list it.
         \\```roc
-        \\color = Greeen
+        \\to_color = |_| Greeen
         \\```
-        \\        ^^^^^^
+        \\               ^^^^^^
         \\
         \\It has the type:
         \\
@@ -2888,7 +2889,19 @@ test "check type - tag union - tag typo hint on an explicit open ext" {
         \\**Hint:** Maybe `Greeen` should be `Green`?
         \\
         \\
-    );
+        ,
+        \\**Redundant Open Tag Union**
+        \\This tag union has an explicit `..`, but it is already implicitly open.
+        \\```roc
+        \\to_color : Str -> [Red, Green, Blue, ..]
+        \\```
+        \\                                     ^^
+        \\
+        \\
+        \\Tag unions in output positions, like the return type of a function, are automatically open. Remove the `..` or bind it to a named type variable like `..others` if you want to refer to the extension elsewhere.
+        \\
+        \\
+    } }, "");
 }
 
 test "check type - tag union - no tag typo hint without a close match" {
@@ -2982,13 +2995,13 @@ test "check type - large open tag union annotation preserves all tags" {
     // into the types store rather than read from a stale scratch slice.
     const lo = "abcdefghijklmnopqrstuvwxyz";
     const source = comptime blk: {
-        var s: []const u8 = "foo : [";
+        var s: []const u8 = "foo : {} -> [";
         var i: usize = 0;
         while (i < 80) : (i += 1) {
             s = s ++ "T" ++ &[_]u8{ lo[i / 26], lo[i % 26] };
             if (i < 79) s = s ++ ", ";
         }
-        s = s ++ ", ..ext]\nfoo = Taa";
+        s = s ++ ", ..ext]\nfoo = |{}| Taa";
         break :blk s;
     };
     var test_env = try TestEnv.init("Test", source);
@@ -3792,15 +3805,15 @@ test "typed method definition entries expose finalized owner-method keys" {
 
     const method_ident = try env.insertIdent(Ident.for_text("get"));
     const other_method_ident = try env.insertIdent(Ident.for_text("set"));
-    const owner: can.CIR.Statement.Idx = @enumFromInt(1);
+    const owner: can.CIR.Statement.Idx = @fromBackingInt(@intCast(1));
 
     try env.registerMethodDefForOwner(owner, method_ident, .{
-        .type_node_idx = @enumFromInt(1),
-        .def_idx = @enumFromInt(1),
+        .type_node_idx = @fromBackingInt(@intCast(1)),
+        .def_idx = @fromBackingInt(@intCast(1)),
     });
     try env.registerMethodDefForOwner(owner, other_method_ident, .{
-        .type_node_idx = @enumFromInt(2),
-        .def_idx = @enumFromInt(2),
+        .type_node_idx = @fromBackingInt(@intCast(2)),
+        .def_idx = @fromBackingInt(@intCast(2)),
     });
 
     const source_modules = [_]TypedCIR.Modules.SourceModule{
@@ -4148,9 +4161,10 @@ test "check type - if else - different branch types 3" {
 // rejected—but the diagnostic must not depend on which unify side each literal
 // arrived on. The defaulting oracle (src/types/literal_defaulting.zig)
 // tie-breaks dual-kind vars to `.numeral` for every stage that asks, so BOTH
-// orders default the var toward the numeral head (Dec) and report the quote
+// orders default the var toward the numeral head and report the quote
 // constraint against it: mirror-image programs get the SAME diagnostic (same
-// title, same prose; only the source region differs).
+// title, same prose; only the source region differs). The default the checker
+// chose is never named, because the program never wrote it.
 test "check type - if else - dual-kind literal branches (number first) - stable diagnostic" {
     const source =
         \\x = if True 1 else "s"
@@ -4159,15 +4173,13 @@ test "check type - if else - dual-kind literal branches (number first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed.
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
         \\```roc
         \\x = if True 1 else "s"
         \\```
         \\                   ^^^
         \\
-        \\The type was determined to be:
-        \\
-        \\    Dec
+        \\**Hint:** Add a type annotation saying which type it should be.
         \\
         \\
         ,
@@ -4182,15 +4194,13 @@ test "check type - if else - dual-kind literal branches (string first) - stable 
         source,
         .fail_with,
         \\**Type Mismatch**
-        \\This string literal is being used where a non-string type is needed.
+        \\This string literal must have the same type as a number literal, and nothing in this program determines a type that can be both:
         \\```roc
         \\x = if True "s" else 1
         \\```
         \\            ^^^
         \\
-        \\The type was determined to be:
-        \\
-        \\    Dec
+        \\**Hint:** Add a type annotation saying which type it should be.
         \\
         \\
         ,
@@ -4494,7 +4504,7 @@ test "check type - unary minus mismatch" {
         \\
         \\y = -x
     ;
-    try checkTypesModule(source, .fail, "Missing Method");
+    try checkTypesModule(source, .fail, "Type Not Determined");
 }
 
 // binops
@@ -5444,12 +5454,12 @@ test "check type - crash" {
 test "check type - issue 10244 - crash body satisfies annotated function type" {
     // Repro for https://github.com/roc-lang/roc/issues/10244
     const source =
-        \\fun : a -> a
+        \\fun : Str -> Str
         \\fun = {
         \\  crash "NYI"
         \\}
     ;
-    try checkTypesModule(source, .{ .pass = .{ .def = "fun" } }, "a -> a");
+    try checkTypesModule(source, .{ .pass = .{ .def = "fun" } }, "Str -> Str");
 }
 
 test "check type - if with all crash branches makes following code unreachable" {
@@ -6266,10 +6276,12 @@ test "check type - scoped type variables - fail" {
         \\  result
         \\}
     ;
+    // `c` is not in scope, so the annotation introduces it, and `result` is a
+    // value binding, which cannot quantify it.
     try checkTypesModule(
         source,
         .fail,
-        "Type Mismatch",
+        "Value Is Not Polymorphic",
     );
 }
 
@@ -9227,6 +9239,85 @@ test "check type - polarity - closed output row cannot be widened by callers" {
     try checkTypesModule(source, .fail_first, "Type Mismatch");
 }
 
+test "check type - polarity - closed output row cannot be widened by its own recursive call" {
+    // A recursive call instantiates the annotation's predeclared scheme, whose
+    // result row is open, but the body closes that row by returning its
+    // closed parameter. The call is related to the scheme the body publishes,
+    // exactly like `wider`'s call above (issue #12095).
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by a recursive call after it closes" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| {
+        \\    if a != A { return a }
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by a recursive group member" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else g(a)
+        \\
+        \\g : [A] -> [A]
+        \\g = |a| {
+        \\    _x = [f(a), B]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - closed output row cannot be widened by an annotated local's recursive call" {
+    const source =
+        \\main = {
+        \\    f : [A] -> [A]
+        \\    f = |a| if a == A a else {
+        \\        _x = [f(a), B]
+        \\        a
+        \\    }
+        \\    f(A)
+        \\}
+    ;
+    try checkTypesModule(source, .fail_first, "Type Mismatch");
+}
+
+test "check type - polarity - open output row may be widened by its own recursive call" {
+    // The body constructs its result, so the row stays open in the published
+    // scheme and the recursive call may widen its own copy.
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A A else {
+        \\    _x = [f(a), B]
+        \\    A
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
+}
+
+test "check type - polarity - closed output row may be used unwidened by its own recursive call" {
+    const source =
+        \\f : [A] -> [A]
+        \\f = |a| if a == A a else {
+        \\    _x = [f(a), A]
+        \\    a
+        \\}
+    ;
+    try checkTypesModule(source, .{ .pass = .last_def }, "[A] -> [A]");
+}
+
 test "check type - polarity - annotated input union stays closed" {
     const source =
         \\handle : [Known] -> Str
@@ -9400,7 +9491,7 @@ const PolarityTestGraph = struct {
             }
             return self.collect(store, store.getAliasBackingVar(content.alias));
         }
-        try self.add(@intFromEnum(std.meta.activeTag(content)));
+        try self.add(@backingInt(std.meta.activeTag(content)));
         switch (content) {
             .flex, .rigid => {
                 var index: usize = 0;
@@ -9414,7 +9505,7 @@ const PolarityTestGraph = struct {
                 }
             },
             .structure => |structure| {
-                try self.add(@intFromEnum(std.meta.activeTag(structure)));
+                try self.add(@backingInt(std.meta.activeTag(structure)));
                 switch (structure) {
                     .fn_pure, .fn_effectful, .fn_unbound => |func| {
                         try self.add(func.args.count);
@@ -9864,18 +9955,19 @@ test "check type - polarity - a defaulted field use at the annotated width is cl
     try test_env.assertNoErrors();
 }
 
-test "check type - polarity - value with explicit open ext generalizes" {
-    // `..` on a value annotation is the opt-in to a quantified row (as on
-    // main): each use instantiates it fresh.
+test "check type - polarity - a thunk's open row is instantiated per use" {
+    // A value cannot quantify a row (`..` on a value annotation is rejected),
+    // but a thunk's implicitly open output row is instantiated fresh by each
+    // call.
     const source =
-        \\e : [Boom, ..]
-        \\e = Boom
+        \\e : {} -> [Boom]
+        \\e = |{}| Boom
         \\
         \\use_a : Str -> [A, Boom]
-        \\use_a = |_| e
+        \\use_a = |_| e({})
         \\
         \\use_b : Str -> [B, Boom]
-        \\use_b = |_| e
+        \\use_b = |_| e({})
     ;
     try checkTypesModuleDefs(source, &.{
         .{ .def = "use_a", .expected = "Str -> [A, Boom]" },
@@ -10221,14 +10313,14 @@ test "check type - polarity - named ext in output position does not warn" {
     try checkTypesModule(source, .{ .pass = .last_def }, "Str -> [Fail, Ok, ..others]");
 }
 
-test "check type - polarity - explicit anonymous ext on a value does not warn" {
-    // On a value binding `..` is the opt-in to a quantified row (it is what
-    // makes the value generalize), so it is not redundant.
+test "check type - polarity - explicit anonymous ext on a value is rejected" {
+    // A value binding cannot quantify a row, so `..` on its annotation claims
+    // a polymorphism it does not have.
     const source =
         \\e : [Boom, ..]
         \\e = Boom
     ;
-    try checkTypesModule(source, .{ .pass = .last_def }, "[Boom]");
+    try checkTypesModule(source, .fail, "Value Is Not Polymorphic");
 }
 
 test "check type - polarity - explicit anonymous ext in an input position does not warn" {
@@ -11970,7 +12062,7 @@ test "check type - shared pending scheme requirement reports once across uses" {
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try testing.expectEqual(@as(usize, 1), try test_env.typeProblemCount());
-    try test_env.assertFirstTypeError("Missing Method");
+    try test_env.assertFirstTypeError("Type Not Determined");
 }
 
 test "check type - independent value dispatch sites each receive an ambiguity judgment" {
@@ -12178,8 +12270,8 @@ test "check type - generated principality under optional exact annotations" {
     // an independent TestEnv.
     for (0..8) |raw_combination| {
         const combination: u3 = @intCast(raw_combination);
-        const weak: GeneratedWeakLiteral = @enumFromInt(combination & 0b001);
-        const wrapper: GeneratedResultWrapper = @enumFromInt((combination >> 1) & 0b001);
+        const weak: GeneratedWeakLiteral = @fromBackingInt(@intCast(combination & 0b001));
+        const wrapper: GeneratedResultWrapper = @fromBackingInt(@intCast((combination >> 1) & 0b001));
         const transitive = combination & 0b100 != 0;
 
         const inferred_source = try generatedPrincipalitySource(
@@ -12490,30 +12582,40 @@ test "check type - derived codec - value-restricted structural receiver settles 
     try test_env.assertNoErrors();
 }
 
-// RECURSIVE DISPATCH MUST BE REPORTED AS SUCH. Satisfying the interpolation's
-// `from_interpolation` constraint on the annotation's inner
-// `Try(Url, [InvalidUrl])` would require dispatching `from_interpolation` on
-// that same type again, so the checker must reject the chain as recursive
-// dispatch. Builtin's `Try` really declares `from_interpolation`, so a
-// missing-method report on this program would be factually wrong.
+// Rejecting an interpolation part retires only the failing use. The
+// interpolation's result keeps its solved `Str` type, which every other
+// expression sharing that type relies on.
+test "check type - interpolation part mismatch keeps the result's Str type" {
+    var test_env = try TestEnv.init("Test",
+        \\y = 5.U8
+        \\main = "${y}"
+    );
+    defer test_env.deinit();
+    try test_env.assertHasTypeError("Type Mismatch");
+    try test_env.assertDefTypeOptions("main", "Str", .{ .allow_type_errors = true });
+}
 
-test "check type - dispatch - nested Try interpolation reports recursive dispatch" {
+// An interpolation's value is the `Ok` payload of its conversion, so an
+// interpolation whose target is `Try` would need `Try` itself to declare
+// `from_interpolation`. It does not: the literal is used where a non-string
+// type is needed.
+test "check type - dispatch - interpolation cannot target Try" {
     const source =
         \\Url := [Url(Str)].{
-        \\    from_interpolation : Str, Iter((Str, Str)) -> Try(Url, [InvalidUrl])
-        \\    from_interpolation = |first, rest| Ok(Url.Url(rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))))
+        \\    from_interpolation : List(Str) -> Try((List(Str) -> Url), [InvalidInterpolation(Str)])
+        \\    from_interpolation = |segments| Str.from_interpolation(segments).map_ok(|assemble| |values| Url.Url(assemble(values)))
         \\}
         \\
         \\main = {
         \\    domain = "example"
-        \\    url : Try(Try(Url, [InvalidUrl]), [Outer])
+        \\    url : Try(Url, [InvalidInterpolation(Str)])
         \\    url = "https://${domain}.com"
         \\    url
         \\}
     ;
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
-    try test_env.assertOneTypeError("Recursive Dispatch");
+    try test_env.assertOneTypeError("Type Mismatch");
 }
 
 // Bare patterns leave payload equality requirements on the method's scheme.
@@ -12544,7 +12646,7 @@ test "check type - dispatch - inferred recursive nominal equality closes a concr
     try test_env.assertNoErrors();
 }
 
-test "check type - recursive equality captures local values" {
+test "check type - recursive equality method using an enclosing value is a capture" {
     var test_env = try TestEnv.init("Test",
         \\compare_with = |expected, value| {
         \\    Expr := [Leaf(Str), Next(Expr)].{
@@ -12561,10 +12663,10 @@ test "check type - recursive equality captures local values" {
         \\different = compare_with("b", "a")
     );
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
-test "check type - recursive method captures a local comparison" {
+test "check type - recursive method using an enclosing value is a capture" {
     var test_env = try TestEnv.init("Test",
         \\compare_with = |expected, value| {
         \\    Expr := [Leaf(Str), Next(Expr)].{
@@ -12580,7 +12682,7 @@ test "check type - recursive method captures a local comparison" {
         \\different = compare_with("b", "a")
     );
     defer test_env.deinit();
-    try test_env.assertNoErrors();
+    try test_env.assertTypeErrorTitles(&.{"Method Captures a Local Value"});
 }
 
 test "check type - recursive equality rejects an unsupported captured comparison" {
@@ -12654,6 +12756,42 @@ test "check type - dispatch - strictly growing dispatch chain reports recursive 
     var test_env = try TestEnv.init("Test", source);
     defer test_env.deinit();
     try test_env.assertOneTypeError("Recursive Dispatch");
+}
+
+// Each recursive call dispatches on the result of another method call, so the
+// receiver of `is_odd`/`is_even` is reachable only through `pred`'s callable.
+// Selecting `pred` at the concrete repeated state fixes that receiver, so the
+// cycle closes instead of being rejected.
+test "check type - dispatch - recursion through another method's result closes" {
+    var test_env = try TestEnv.init("Test",
+        \\Num := { n : U64 }.{
+        \\    pred = |x| Num.{ n: x.n - 1 }
+        \\    is_zero = |x| x.n == 0
+        \\    is_even = |x| if x.is_zero() Bool.True else x.pred().is_odd()
+        \\    is_odd = |x| if x.is_zero() Bool.False else x.pred().is_even()
+        \\}
+        \\
+        \\main = Num.is_even(Num.{ n: 4 })
+    );
+    defer test_env.deinit();
+    try test_env.assertDefType("main", "Bool");
+}
+
+// The repeated state's result type is never determined, so the cycle still
+// needs inference and is rejected. The rejection poisons only the failing use:
+// `pred`'s reusable definition keeps its concrete result type.
+test "check type - dispatch - rejected recursive dispatch leaves the shared receiver's definition intact" {
+    var test_env = try TestEnv.init("Test",
+        \\N := [Z].{
+        \\    pred = |_x| N.Z
+        \\    f = |x| x.pred().f()
+        \\}
+        \\
+        \\main = N.f(N.Z)
+    );
+    defer test_env.deinit();
+    try expectRecursiveDispatchReported(&test_env);
+    try test_env.assertDefTypeOptions("Test.N.pred", "_arg -> N", .{ .allow_type_errors = true });
 }
 
 // The variants below pin the divergence detector's coverage of receivers
@@ -13119,18 +13257,18 @@ test "check type - def order independence - residual dispatch report with interf
 // never chose.
 
 fn expectRejectedDefaultTargetProblemShape(test_env: *TestEnv) TestEnv.TestEnvError!void {
-    var type_mismatch_count: usize = 0;
+    var undetermined_type_count: usize = 0;
     var polymorphic_value_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
-        if (problem == .type_mismatch) {
-            type_mismatch_count += 1;
+        if (problem == .static_dispatch and problem.static_dispatch == .undetermined_type) {
+            undetermined_type_count += 1;
         } else if (problem == .polymorphic_value) {
             polymorphic_value_count += 1;
         } else {
             return error.TestUnexpectedResult;
         }
     }
-    try testing.expectEqual(@as(usize, 1), type_mismatch_count);
+    try testing.expectEqual(@as(usize, 1), undetermined_type_count);
     try testing.expectEqual(@as(usize, 1), polymorphic_value_count);
 }
 
@@ -13345,11 +13483,17 @@ test "check type - failed group default records only the rejected driver" {
     if (comptime std.debug.runtime_safety) {
         try testing.expectEqual(@as(usize, 1), test_env.checker.bench_conflicted_default_records);
     }
+    // Only the rejected numeral driver is reported: its type was never
+    // determined, so it is reported as undetermined rather than as a mismatch
+    // against the default it was given.
     var mismatch_count: usize = 0;
+    var undetermined_type_count: usize = 0;
     for (test_env.checker.problems.problems.items) |problem| {
         if (problem == .type_mismatch) mismatch_count += 1;
+        if (problem == .static_dispatch and problem.static_dispatch == .undetermined_type) undetermined_type_count += 1;
     }
-    try testing.expectEqual(@as(usize, 1), mismatch_count);
+    try testing.expectEqual(@as(usize, 0), mismatch_count);
+    try testing.expectEqual(@as(usize, 1), undetermined_type_count);
 }
 
 // PENDING-DISPATCH OWNERSHIP IS BY GROUP IDENTITY. A value-def group checked
@@ -13851,7 +13995,7 @@ test "check type - polarity - nominal declarations close direct and alias rows" 
     var count: usize = 0;
     for (env.module_env.store.sliceStatements(env.module_env.all_statements)) |statement| {
         if (env.module_env.store.getStatement(statement) != .s_nominal_decl) continue;
-        const index = env.module_env.types.lookupNominalDeclByKey(env.module_env.selfModuleIdentity(), @intFromEnum(statement)).?;
+        const index = env.module_env.types.lookupNominalDeclByKey(env.module_env.selfModuleIdentity(), @backingInt(statement)).?;
         var graph: PolarityTestGraph = .{};
         defer graph.deinit();
         try graph.collect(&env.module_env.types, env.module_env.types.getNominalDecl(index).backing);
@@ -13859,6 +14003,84 @@ test "check type - polarity - nominal declarations close direct and alias rows" 
         count += 1;
     }
     try testing.expectEqual(@as(usize, 4), count);
+}
+
+test "check type - declaration body - bare parameterized alias has too few args" {
+    var env = try TestEnv.init("BareAliasInNominal",
+        \\Pair(a) : (a, a)
+        \\
+        \\Thing :: { p : Pair }
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare parameterized nominal has too few args" {
+    var env = try TestEnv.init("BareNominalInNominal",
+        \\Box2(a) :: { v : a }
+        \\
+        \\Thing :: [T(Box2)]
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare parameterized alias inside an alias application has too few args" {
+    var env = try TestEnv.init("BareAliasInAlias",
+        \\Pair(a) : (a, a)
+        \\
+        \\Pairs : List(Pair)
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+}
+
+test "check type - declaration body - bare re-export of a parameterized type has too few args" {
+    var env = try TestEnv.init("BareReexportInNominal",
+        \\Pair(a) : (a, a)
+        \\
+        \\LocalPair : Pair
+        \\
+        \\Thing :: { p : LocalPair }
+    );
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - bare imported parameterized alias has too few args" {
+    var lib = try TestEnv.init("BareLib",
+        \\Pair(a) : (a, a)
+    );
+    defer lib.deinit();
+    var env = try TestEnv.initWithImport("BareMain",
+        \\import BareLib
+        \\
+        \\Thing :: { p : BareLib.Pair }
+    , "BareLib", &lib);
+    defer env.deinit();
+    try env.assertOneTypeError("Too Few Args");
+    try env.assertNominalDeclValidity("Thing", false);
+}
+
+test "check type - declaration body - an alias may re-export a parameterized type" {
+    var env = try TestEnv.init("Reexport",
+        \\Pair(a) : (a, a)
+        \\
+        \\LocalPair : Pair
+        \\ParenPair : (Pair)
+        \\Applied : Pair(U8)
+        \\
+        \\Thing :: { p : Applied }
+        \\
+        \\x : Pair
+        \\x = (1, 2)
+    );
+    defer env.deinit();
+    try env.assertNoErrors();
+    try env.assertNominalDeclValidity("Thing", true);
 }
 
 test "check type - polarity - wrapped shared hidden row joins all occurrences" {

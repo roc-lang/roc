@@ -24,10 +24,10 @@ const expectEqual = testing.expectEqual;
 fn expectNoZeroTargetExternalLookup(env: *const ModuleEnv) error{TestUnexpectedResult}!void {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
 
-        const expr_idx: CIR.Expr.Idx = @enumFromInt(raw_node_idx);
+        const expr_idx: CIR.Expr.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const expr = env.store.getExpr(expr_idx);
         if (expr != .e_lookup_external) unreachable;
         try testing.expect(expr.e_lookup_external.target_node_idx != 0);
@@ -641,7 +641,7 @@ test "aliased package-qualified import resolves before the import statement" {
     const qualified_lib_ident = try app_env.insertIdent(base.Ident.for_text("pf.Lib"));
     const imported_lib = Can.AutoImportedType{
         .env = &lib_env,
-        .statement_idx = @enumFromInt(lib_type_node),
+        .statement_idx = @fromBackingInt(@intCast(lib_type_node)),
         .qualified_type_ident = lib_ident,
         .import_identity = .{ .module = qualified_lib_ident },
     };
@@ -667,13 +667,13 @@ test "aliased package-qualified import resolves before the import statement" {
     var found_make_lookup = false;
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < app_env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (app_env.store.nodes.get(node_idx).tag != .expr_external_lookup) continue;
 
-        const external = app_env.store.getExpr(@enumFromInt(raw_node_idx)).e_lookup_external;
+        const external = app_env.store.getExpr(@fromBackingInt(@intCast(raw_node_idx))).e_lookup_external;
         if (!external.ident_idx.eql(make_ident)) continue;
 
-        const import_name_idx = app_env.imports.imports.items.items[@intFromEnum(external.module_idx)];
+        const import_name_idx = app_env.imports.imports.items.items[@backingInt(external.module_idx)];
         try testing.expectEqualStrings("pf.Lib", app_env.getString(import_name_idx));
         found_make_lookup = true;
     }

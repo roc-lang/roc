@@ -14,7 +14,7 @@ for n in 1..<5 {
 }
 ```
 
-> `1..<5` is a [range](numbers#ranges): a reusable `Range` describing the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5. If the bounds are `I64` values, the range is a `Range(I64)`, and its iterator yields `I64` values.
+Here, `1..<5` is a [range](numbers#ranges), which describes the numbers from 1 up to (but not including) 5. Writing `1..=5` instead would include the 5.
 
 A loop body only includes statements; it does not have a final expression. The loop itself evaluates to `{}`.
 
@@ -132,7 +132,7 @@ The condition must evaluate to a boolean value.
 
 ## `break` Statement
 
-Use `break` to exit the innermost loop immediately:
+`break` exits the innermost loop immediately:
 
 ```roc
 var $sum = 0
@@ -188,3 +188,36 @@ that waits for a request, handles it, and then goes back to waiting for the next
 
 A loop that runs forever during [compile-time evaluation](compile-time) will currently hang the compiler, as
 noted in [Pure Functions](functions#pure-functions).
+
+## Performance
+
+A `for` loop over a list or a range compiles to the same kind of loop you'd write by hand in C:
+a counter that goes up by one each time. No iterator gets allocated on the heap, and there's no
+function call per item. This is also true when the loop goes over a chain of
+[iterator](iterators) operations, like `for n in list.iter().map(double).keep_if(is_big)`. The
+compiler combines the whole chain into one loop, which does the mapping and filtering for each
+item as it goes, without building any intermediate lists.
+
+`while` loops compile to ordinary loops too, and since [variables](naming#variables-with-var) are
+just names for values, reassigning them in a loop doesn't allocate anything by itself.
+
+Building up a list in a loop is fast when the list is unique, because each `append` can add to the
+list in place:
+
+```roc
+squares = |count| {
+    var $list = List.with_capacity(count)
+
+    for n in 0..<count {
+        $list = $list.append(n * n)
+    }
+
+    $list
+}
+```
+
+Since `$list` holds the only reference to the list, each `append` just writes the new element
+into the list's existing memory. When the list runs out of room, `append` gets more memory (with
+room to spare, so this doesn't happen on every append). Starting with
+[`List.with_capacity`](../List#with_capacity) means it never runs out of room in this loop, since
+the loop knows how many elements it'll add.

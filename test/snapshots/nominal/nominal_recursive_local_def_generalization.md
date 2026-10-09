@@ -213,7 +213,7 @@ RBTree(k) := [
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 341)
+												(e-call (constraint-fn-var 339)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-nominal (nominal "RBTree")
@@ -245,7 +245,7 @@ RBTree(k) := [
 													(p-nominal
 														(p-applied-tag))))
 											(value
-												(e-call (constraint-fn-var 375)
+												(e-call (constraint-fn-var 370)
 													(e-lookup-local
 														(p-assign (ident "delRBTree")))
 													(e-lookup-local
@@ -257,7 +257,7 @@ RBTree(k) := [
 											(value
 												(e-lookup-local
 													(p-assign (ident "t")))))))))))
-				(e-call (constraint-fn-var 382)
+				(e-call (constraint-fn-var 374)
 					(e-lookup-local
 						(p-assign (ident "delCurr")))
 					(e-lookup-local

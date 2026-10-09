@@ -86,11 +86,11 @@ main = |_y| {
 						(p-assign (ident "id"))))
 				(e-tuple
 					(elems
-						(e-call (constraint-fn-var 233)
+						(e-call (constraint-fn-var 237)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-num (value "1")))
-						(e-call (constraint-fn-var 244)
+						(e-call (constraint-fn-var 248)
 							(e-lookup-local
 								(p-assign (ident "alias")))
 							(e-string

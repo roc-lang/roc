@@ -172,6 +172,10 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
         }
     }
 
+    // Zig 0.17's build configurer cannot export a temp directory to Run steps,
+    // and CI runners do not always set one, so fall back to the POSIX default.
+    if (comptime @import("builtin").os.tag != .windows) return allocator.dupe(u8, "/tmp");
+
     return error.TempDirUnavailable;
 }
 
@@ -253,63 +257,11 @@ fn generateAllReports(
     can_ir: *ModuleEnv,
     solver: *Check,
     snapshot_path: []const u8,
-    module_env: *ModuleEnv,
 ) Allocator.Error!std.array_list.Managed(reporting.Report) {
-    var reports = std.array_list.Managed(reporting.Report).init(allocator);
-    errdefer reports.deinit();
-
-    // Generate tokenize reports
-    for (parse_ast.tokenize_diagnostics.items) |diagnostic| {
-        const report = parse_ast.tokenizeDiagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create tokenize report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate parse reports
-    for (parse_ast.parse_diagnostics.items) |diagnostic| {
-        const report = parse_ast.parseDiagnosticToReport(&module_env.common, diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create parse report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    // Generate canonicalization reports
-    const diagnostics = try can_ir.getDiagnostics();
-    defer allocator.free(diagnostics);
-    for (diagnostics) |diagnostic| {
-        const report = can_ir.diagnosticToReport(diagnostic, allocator, snapshot_path) catch |err| {
-            std.debug.panic("Failed to create canonicalization report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    _ = try solver.problems.flushPendingStaticExhaustiveness(allocator);
-
-    // Generate type checking reports
-    for (solver.problems.problems.items) |problem| {
-        const empty_modules: []const *ModuleEnv = &.{};
-        var report_builder = try check.ReportBuilder.init(
-            allocator,
-            module_env,
-            can_ir,
-            &solver.snapshots,
-            &solver.problems,
-            snapshot_path,
-            empty_modules,
-            &solver.import_mapping,
-            &solver.regions,
-            null,
-        );
-        defer report_builder.deinit();
-
-        const report = report_builder.build(problem) catch |err| {
-            std.debug.panic("Failed to create type checking report for snapshot {s}: {s}", .{ snapshot_path, @errorName(err) });
-        };
-        try reports.append(report);
-    }
-
-    return reports;
+    var reports: std.ArrayList(reporting.Report) = .empty;
+    errdefer check.module_reports.deinit(allocator, &reports);
+    try check.module_reports.appendUnfinalizedModule(allocator, &reports, parse_ast, can_ir, solver, snapshot_path, &.{});
+    return reports.toManaged(allocator);
 }
 
 /// Render reports to PROBLEMS section format (markdown and HTML).
@@ -851,25 +803,39 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
     }
 
-    // Delete existing .md files
+    // Delete existing .md files that no .roc file regenerates. The others are
+    // rewritten below only if their contents change (see `writeSnapshotMarkdown`).
     if (!config.disable_updates) {
         iterator = dir.iterate();
-        var files_to_delete = std.array_list.Managed([]u8).init(allocator);
+        var md_files = std.array_list.Managed([]u8).init(allocator);
         defer {
-            for (files_to_delete.items) |file_path| {
+            for (md_files.items) |file_path| {
                 allocator.free(file_path);
             }
-            files_to_delete.deinit();
+            md_files.deinit();
+        }
+        var roc_base_names = std.StringHashMap(void).init(allocator);
+        defer {
+            var iter = roc_base_names.keyIterator();
+            while (iter.next()) |key| allocator.free(key.*);
+            roc_base_names.deinit();
         }
 
         while (try iterator.next(app_io)) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            if (entry.kind != .file) continue;
+            if (std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
-                try files_to_delete.append(file_path);
+                errdefer allocator.free(file_path);
+                try md_files.append(file_path);
+            } else if (std.mem.endsWith(u8, entry.name, ".roc")) {
+                const base_name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - ".roc".len]);
+                errdefer allocator.free(base_name);
+                try roc_base_names.put(base_name, {});
             }
         }
 
-        for (files_to_delete.items) |file_name| {
+        for (md_files.items) |file_name| {
+            if (roc_base_names.contains(file_name[0 .. file_name.len - ".md".len])) continue;
             dir.deleteFile(app_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
@@ -895,6 +861,13 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             // Read the .roc file content
             const roc_content = std.Io.Dir.cwd().readFileAlloc(app_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
                 warn("Failed to read {s}: {}", .{ roc_file_path, err });
+                // Nothing regenerates this snapshot, so it must not outlive the run.
+                if (!config.disable_updates) {
+                    dir.deleteFile(app_io, snapshot_file_name) catch |delete_err| switch (delete_err) {
+                        error.FileNotFound => {},
+                        else => warn("Failed to delete {s}: {}", .{ snapshot_file_name, delete_err }),
+                    };
+                }
                 continue;
             };
             defer allocator.free(roc_content);
@@ -1063,11 +1036,11 @@ fn processSnapshotContent(
 
             switch (content.meta.node_type) {
                 .expr => {
-                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
                 .statement => {
-                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const ast_stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 .file,
@@ -1323,7 +1296,7 @@ fn processSnapshotContent(
     try generateHtmlWrapper(&output, &content);
 
     // Generate reports once and use for both EXPECTED and PROBLEMS sections
-    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path, can_ir);
+    var generated_reports = try generateAllReports(allocator, parse_ast, can_ir, &solver, output_path);
     defer {
         for (generated_reports.items) |*report| {
             report.deinit();
@@ -1372,22 +1345,12 @@ fn processSnapshotContent(
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
         if (content.meta.source_escapes) {
-            var remaining = snapshot_md;
-            while (std.mem.findScalar(u8, remaining, '\r')) |index| {
-                try md_file.writeStreamingAll(app_io, remaining[0..index]);
-                try md_file.writeStreamingAll(app_io, "\\r");
-                remaining = remaining[index + 1 ..];
-            }
-            try md_file.writeStreamingAll(app_io, remaining);
+            const escaped_md = try std.mem.replaceOwned(u8, allocator, snapshot_md, "\r", "\\r");
+            defer allocator.free(escaped_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, escaped_md)) return false;
         } else {
-            try md_file.writeStreamingAll(app_io, snapshot_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
         }
 
         if (html_buffer_unmanaged) |*buf| {
@@ -2415,11 +2378,11 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .header => {
-            const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+            const header = parse_ast.store.getHeader(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .expr => {
-            const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+            const expr = parse_ast.store.getExpr(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .mono => {
@@ -2427,18 +2390,10 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
-            const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+            const stmt = parse_ast.store.getStatement(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
-        .package => {
-            const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
-        },
-        .platform => {
-            const file = parse_ast.store.getFile();
-            try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
-        },
-        .app => {
+        .package, .platform, .app => {
             const file = parse_ast.store.getFile();
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
@@ -2507,13 +2462,7 @@ fn generateFormattedSection(output: *DualOutput, content: *const Content, parse_
             try fmt.formatStatement(parse_ast.*, &formatted.writer);
             try formatted.writer.writeByte('\n');
         },
-        .package => {
-            try fmt.formatAst(parse_ast.*, &formatted.writer);
-        },
-        .platform => {
-            try fmt.formatAst(parse_ast.*, &formatted.writer);
-        },
-        .app => {
+        .package, .platform, .app => {
             try fmt.formatAst(parse_ast.*, &formatted.writer);
         },
         .repl => {
@@ -2781,98 +2730,6 @@ fn getDefaultedTypeStringWithSeen(
 
     // Copy the result since type_writer will be deinitialized
     return allocator.dupe(u8, type_writer.get());
-}
-
-/// Check if a pattern is a top-level definition.
-/// Top-level captures are always in scope and should not be lifted as closure parameters.
-fn isTopLevelPattern(can_ir: *ModuleEnv, pattern_idx: CIR.Pattern.Idx) bool {
-    const defs = can_ir.store.sliceDefs(can_ir.all_defs);
-    for (defs) |def_idx| {
-        const def = can_ir.store.getDef(def_idx);
-        if (def.pattern == pattern_idx) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// Get the monomorphized type string for an expression.
-/// For closures, this includes capture types as leading function arguments.
-fn getMonoTypeString(allocator: std.mem.Allocator, can_ir: *ModuleEnv, expr_idx: CIR.Expr.Idx) Allocator.Error![]const u8 {
-    const expr = can_ir.store.getExpr(expr_idx);
-
-    // For blocks, get the type of the final expression (what the block evaluates to)
-    if (expr == .e_block) {
-        return getMonoTypeString(allocator, can_ir, expr.e_block.final_expr);
-    }
-
-    // Handle closures specially - include capture types in the function type
-    if (expr == .e_closure) {
-        const closure = expr.e_closure;
-        const captures = can_ir.store.sliceCaptures(closure.captures);
-
-        // Get the lambda's function type
-        const lambda_var = ModuleEnv.varFrom(closure.lambda_idx);
-        const resolved = can_ir.types.resolveVar(lambda_var);
-
-        // Check if this is a function type
-        if (resolved.desc.content.unwrapFunc()) |func| {
-            var result = std.array_list.Managed(u8).init(allocator);
-            errdefer result.deinit();
-
-            // First, add non-top-level capture types (top-level captures are always in scope)
-            var emitted_captures: u32 = 0;
-            for (captures) |capture_idx| {
-                const capture = can_ir.store.getCapture(capture_idx);
-
-                // Skip top-level captures - they're always in scope
-                if (isTopLevelPattern(can_ir, capture.pattern_idx)) continue;
-
-                if (emitted_captures > 0) try result.appendSlice(", ");
-                emitted_captures += 1;
-
-                const capture_var = ModuleEnv.varFrom(capture.pattern_idx);
-                const capture_type = try getDefaultedTypeString(allocator, can_ir, capture_var);
-                defer allocator.free(capture_type);
-                try result.appendSlice(capture_type);
-            }
-
-            // Then add the lambda's own argument types
-            const arg_vars = can_ir.types.sliceVars(func.args);
-            for (arg_vars, 0..) |arg_var, i| {
-                if (emitted_captures > 0 or i > 0) try result.appendSlice(", ");
-                const arg_type = try getDefaultedTypeString(allocator, can_ir, arg_var);
-                defer allocator.free(arg_type);
-                try result.appendSlice(arg_type);
-            }
-
-            try result.appendSlice(" -> ");
-
-            // Get the return type - if the body is also a closure, recursively process it
-            const lambda_expr = can_ir.store.getExpr(closure.lambda_idx);
-            std.debug.assert(lambda_expr == .e_lambda);
-            const body_expr = can_ir.store.getExpr(lambda_expr.e_lambda.body);
-
-            const is_nested_function = body_expr == .e_closure;
-            const ret_type = if (is_nested_function)
-                // Recursively process nested closures to include their captures
-                try getMonoTypeString(allocator, can_ir, lambda_expr.e_lambda.body)
-            else
-                try getDefaultedTypeString(allocator, can_ir, func.ret);
-            defer allocator.free(ret_type);
-
-            // Nested function types need parens in Roc
-            if (is_nested_function) try result.appendSlice("(");
-            try result.appendSlice(ret_type);
-            if (is_nested_function) try result.appendSlice(")");
-
-            return result.toOwnedSlice();
-        }
-    }
-
-    // For non-closures, just use the regular type defaulting
-    const expr_var = ModuleEnv.varFrom(expr_idx);
-    return getDefaultedTypeString(allocator, can_ir, expr_var);
 }
 
 /// Validate that the MONO output is valid Roc code by parsing, canonicalizing, and type-checking it.
@@ -3333,6 +3190,33 @@ fn generateHtmlClosing(output: *DualOutput) error{WriteFailed}!void {
 }
 
 /// Write HTML buffer to file
+/// Writes a snapshot's markdown, leaving a file that already holds exactly
+/// these bytes untouched. The build cache treats a rewritten input as changed
+/// even when its contents are identical, so re-stamping unchanged snapshots
+/// would rebuild everything derived from `test/` after each regeneration.
+/// Returns false, after logging, when the file cannot be created.
+fn writeSnapshotMarkdown(gpa: Allocator, output_path: []const u8, snapshot_md: []const u8) SnapshotError!bool {
+    // One byte past the new length is enough to tell a longer file apart.
+    const existing: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(app_io, output_path, gpa, .limited(snapshot_md.len + 1)) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        // Missing, longer, or unreadable: not known to match, so write it.
+        else => null,
+    };
+    if (existing) |bytes| {
+        defer gpa.free(bytes);
+        if (std.mem.eql(u8, bytes, snapshot_md)) return true;
+    }
+
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close(app_io);
+
+    try md_file.writeStreamingAll(app_io, snapshot_md);
+    return true;
+}
+
 fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) (Allocator.Error || error{WriteFailed})!void {
     // Convert .md path to .html path
     const html_path = blk: {
@@ -3785,13 +3669,7 @@ fn processDocsSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -3911,7 +3789,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
     }
     unreachable;
@@ -3924,14 +3802,14 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
             }
             unreachable;
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
         }
         unreachable;
@@ -3943,7 +3821,7 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic(
             "snapshot invariant violated: exported platform root has no published FFI symbol",
             .{},
@@ -3960,7 +3838,7 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic(
                 "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
@@ -4132,14 +4010,14 @@ fn processDevObjectSnapshot(
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
-    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+    const roc_target_info = @typeInfo(RocTarget).@"enum";
 
-    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var hash_results: [roc_target_info.field_names.len]TargetHashResult = undefined;
     var object_compiler = backend.ObjectFileCompiler.init(allocator);
 
-    inline for (roc_target_fields, 0..) |field, i| {
-        const target: RocTarget = @enumFromInt(field.value);
-        hash_results[i].target_name = field.name;
+    inline for (roc_target_info.field_names, roc_target_info.field_values, 0..) |field_name, field_value, i| {
+        const target: RocTarget = @fromBackingInt(@intCast(field_value));
+        hash_results[i].target_name = field_name;
 
         target_snapshot: {
             const arch = target.toCpuArch();
@@ -4188,7 +4066,7 @@ fn processDevObjectSnapshot(
                 target,
                 .{ .include_provided_exports = true },
             ) catch |err| {
-                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field_name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
@@ -4323,13 +4201,7 @@ fn processDevObjectSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -4488,7 +4360,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
-    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
 }
 
 fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
@@ -4702,129 +4574,11 @@ fn compileSnapshotReplInspectedExpr(allocator: Allocator, source: []const u8) Sn
     return eval_mod.test_helpers.compileInspectedProgram(allocator, app_io, .expr, source, &.{});
 }
 
-fn renderSnapshotReplTypeProblems(
-    allocator: Allocator,
-    source_kind: eval_mod.test_helpers.SourceKind,
-    source: []const u8,
-    config: *const Config,
-) SnapshotError![]const u8 {
-    const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
-
-    var module_env = try single_module.ModuleEnv.init(allocator, source);
-    defer module_env.deinit();
-    var can_ir = &module_env;
-
-    const parse_mode: single_module.ParseMode = switch (source_kind) {
-        // REPL expression lines are identified through the statement parser once
-        // they are known not to be definitions. The diagnostic renderer must use
-        // that same shape instead of reparsing through expression-only or file
-        // mode, both of which accept different syntax at their roots.
-        .expr => .statement,
-        .module => .file,
-    };
-    const parse_ast = try single_module.parseSingleModule(
-        allocator,
-        can_ir,
-        parse_mode,
-        .{ .module_name = "repl" },
-    );
-    defer parse_ast.deinit();
-    // Snapshot evaluation must honor the same whole-source rejection as the CLI.
-    if (parse_ast.source_rejected) return error.ParseFailed;
-
-    const builtin_ctx: Check.BuiltinContext = .{
-        .bool_stmt = config.builtin_indices.bool_type,
-        .try_stmt = config.builtin_indices.try_type,
-        .str_stmt = config.builtin_indices.str_type,
-        .builtin_module = config.builtin_module,
-        .builtin_indices = config.builtin_indices,
-    };
-
-    const roc_ctx_repl = CoreCtx.default(allocator, allocator, app_io);
-    var czer = try Can.initModule(roc_ctx_repl, can_ir, parse_ast, .{
-        .builtin_types = .{
-            .builtin_module_env = builtin_env,
-            .builtin_indices = config.builtin_indices,
-        },
-        .is_entry_module = true,
-    });
-    defer czer.deinit();
-
-    const repl_expr = switch (source_kind) {
-        .expr => blk: {
-            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
-            const statement = parse_ast.store.getStatement(statement_idx);
-            const expr_idx = switch (statement) {
-                .expr => |expr_stmt| expr_stmt.expr,
-                .decl,
-                .@"var",
-                .crash,
-                .dbg,
-                .expect,
-                .@"for",
-                .@"while",
-                .@"return",
-                .@"break",
-                .import,
-                .file_import,
-                .type_decl,
-                .type_anno,
-                .malformed,
-                => break :blk null,
-            };
-            break :blk try czer.canonicalizeExpr(expr_idx);
-        },
-        .module => blk: {
-            try czer.canonicalizeFile();
-            break :blk null;
-        },
-    };
-    if (source_kind == .expr and can_ir.store.scratch != null) {
-        can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
-    }
-
-    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(allocator);
-    defer imported_envs.deinit();
-    for (can_ir.imports.imports.items.items) |str_idx| {
-        const import_name = can_ir.getString(str_idx);
-        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
-            try imported_envs.append(builtin_env);
-        }
-    }
-    if (imported_envs.items.len == 0) {
-        try imported_envs.append(builtin_env);
-    }
-
-    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
-    defer module_envs.deinit();
-    try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
-
-    try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = roc_ctx_repl } });
-    can_ir.imports.clearResolvedModules();
-    try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
-    can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
-    try can.resolveDeferredImports(can_ir, .{
-        .imports = .{ .resolved_store = imported_envs.items },
-    });
-
-    var checker = try Check.init(
-        allocator,
-        &can_ir.types,
-        can_ir,
-        imported_envs.items,
-        &module_envs,
-        &can_ir.store.regions,
-        builtin_ctx,
-    );
-    checker.fixupTypeWriter();
-    defer checker.deinit();
-
-    const check_result: SnapshotError!void = switch (source_kind) {
-        .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
-        .module => checker.checkFile(),
-    };
-    check_result catch |err| switch (err) {
-        error.TypeCheckError => {},
+/// Whether `err` is `error.TypeCheckError`. The switch names every other
+/// snapshot error so each one is classified explicitly.
+fn isTypeCheckError(err: SnapshotError) bool {
+    return switch (err) {
+        error.TypeCheckError => true,
         error.AccessDenied,
         error.AntivirusInterference,
         error.BadPathName,
@@ -4927,6 +4681,7 @@ fn renderSnapshotReplTypeProblems(
         error.ParseFailed,
         error.ParsingFailed,
         error.PathAlreadyExists,
+        error.PathExceedsLimit,
         error.PathOutsideWorkspace,
         error.PermissionDenied,
         error.PipeBusy,
@@ -4965,10 +4720,134 @@ fn renderSnapshotReplTypeProblems(
         error.WasmExecFailed,
         error.WouldBlock,
         error.WriteFailed,
-        => return err,
+        => false,
+    };
+}
+
+fn renderSnapshotReplTypeProblems(
+    allocator: Allocator,
+    source_kind: eval_mod.test_helpers.SourceKind,
+    source: []const u8,
+    config: *const Config,
+) SnapshotError![]const u8 {
+    const builtin_env = config.builtin_module orelse return error.MissingBuiltinModule;
+
+    var module_env = try single_module.ModuleEnv.init(allocator, source);
+    defer module_env.deinit();
+    var can_ir = &module_env;
+
+    const parse_mode: single_module.ParseMode = switch (source_kind) {
+        // REPL expression lines are identified through the statement parser once
+        // they are known not to be definitions. The diagnostic renderer must use
+        // that same shape instead of reparsing through expression-only or file
+        // mode, both of which accept different syntax at their roots.
+        .expr => .statement,
+        .module => .file,
+    };
+    const parse_ast = try single_module.parseSingleModule(
+        allocator,
+        can_ir,
+        parse_mode,
+        .{ .module_name = "repl" },
+    );
+    defer parse_ast.deinit();
+    // Snapshot evaluation must honor the same whole-source rejection as the CLI.
+    if (parse_ast.source_rejected) return error.ParseFailed;
+
+    const builtin_ctx: Check.BuiltinContext = .{
+        .bool_stmt = config.builtin_indices.bool_type,
+        .try_stmt = config.builtin_indices.try_type,
+        .str_stmt = config.builtin_indices.str_type,
+        .builtin_module = config.builtin_module,
+        .builtin_indices = config.builtin_indices,
     };
 
-    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl", can_ir);
+    const roc_ctx_repl = CoreCtx.default(allocator, allocator, app_io);
+    var czer = try Can.initModule(roc_ctx_repl, can_ir, parse_ast, .{
+        .builtin_types = .{
+            .builtin_module_env = builtin_env,
+            .builtin_indices = config.builtin_indices,
+        },
+        .is_entry_module = true,
+    });
+    defer czer.deinit();
+
+    const repl_expr = switch (source_kind) {
+        .expr => blk: {
+            const statement_idx: AST.Statement.Idx = @fromBackingInt(parse_ast.root_node_idx);
+            const statement = parse_ast.store.getStatement(statement_idx);
+            const expr_idx = switch (statement) {
+                .expr => |expr_stmt| expr_stmt.expr,
+                .decl,
+                .@"var",
+                .crash,
+                .dbg,
+                .expect,
+                .@"for",
+                .@"while",
+                .@"return",
+                .@"break",
+                .import,
+                .file_import,
+                .type_decl,
+                .type_anno,
+                .malformed,
+                => break :blk null,
+            };
+            break :blk try czer.canonicalizeExpr(expr_idx);
+        },
+        .module => blk: {
+            try czer.canonicalizeFile();
+            break :blk null;
+        },
+    };
+    if (source_kind == .expr and can_ir.store.scratch != null) {
+        can_ir.diagnostics = try can_ir.store.diagnosticSpanFrom(0);
+    }
+
+    var imported_envs = std.array_list.Managed(*const ModuleEnv).init(allocator);
+    defer imported_envs.deinit();
+    for (can_ir.imports.imports.items.items) |str_idx| {
+        const import_name = can_ir.getString(str_idx);
+        if (CIR.Import.isCompilerBuiltinImportName(import_name)) {
+            try imported_envs.append(builtin_env);
+        }
+    }
+    if (imported_envs.items.len == 0) {
+        try imported_envs.append(builtin_env);
+    }
+
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(allocator);
+    defer module_envs.deinit();
+    try Can.populateModuleEnvs(&module_envs, can_ir, builtin_env, config.builtin_indices);
+
+    try can.resolveDeferredFileImports(can_ir, .{ .read = .{ .ctx = roc_ctx_repl } });
+    can_ir.imports.clearResolvedModules();
+    try can_ir.imports.resolveImportsByExactModuleName(can_ir, imported_envs.items);
+    can_ir.imports.markUnresolvedImportsFailedBeforeChecking();
+    try can.resolveDeferredImports(can_ir, .{
+        .imports = .{ .resolved_store = imported_envs.items },
+    });
+
+    var checker = try Check.init(
+        allocator,
+        &can_ir.types,
+        can_ir,
+        imported_envs.items,
+        &module_envs,
+        &can_ir.store.regions,
+        builtin_ctx,
+    );
+    checker.fixupTypeWriter();
+    defer checker.deinit();
+
+    const check_result: SnapshotError!void = switch (source_kind) {
+        .expr => if (repl_expr) |expr| checker.checkExprRepl(expr.idx) else {},
+        .module => checker.checkFile(),
+    };
+    check_result catch |err| if (!isTypeCheckError(err)) return err;
+
+    var reports = try generateAllReports(allocator, parse_ast, can_ir, &checker, "repl");
     defer {
         for (reports.items) |*report| {
             report.deinit();
@@ -5060,150 +4939,10 @@ fn snapshotReplDefinitionStep(
         if (identity.kind == .value and !session.hasDefinition(.value, identity.name)) {
             session.removeDefinition(allocator, .type_annotation, identity.name);
         }
-        return switch (err) {
-            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config),
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.BadSectionHeader,
-            error.BitcodeParseError,
-            error.BrokenPipe,
-            error.BufferTooSmall,
-            error.BuiltinArtifactVersionMismatch,
-            error.BuiltinLowLevelAnnotationMustBeFunction,
-            error.BuiltinModuleLeakedInSnapshots,
-            error.CacheRoundTripValidationFailed,
-            error.CacheVersionHashMismatch,
-            error.Canceled,
-            error.CompilationFailed,
-            error.ComptimeExhaustiveness,
-            error.ConnectionResetByPeer,
-            error.CorruptArtifact,
-            error.CorruptBuiltinArtifact,
-            error.CorruptEmbeddedBuiltins,
-            error.CorruptSerializedModuleEnv,
-            error.Crash,
-            error.CreateFileMappingFailed,
-            error.CurrentDirUnlinked,
-            error.DevBackendUnavailable,
-            error.DeviceBusy,
-            error.DiskQuota,
-            error.DivisionByZero,
-            error.DownloadFailed,
-            error.ElfHashTableNotFound,
-            error.ElfStringSectionNotFound,
-            error.ElfSymSectionNotFound,
-            error.EmptyCode,
-            error.EntrypointNotFound,
-            error.ErrFinalizingHTMLWriter,
-            error.EvaluationFailed,
-            error.ExpectErr,
-            error.ExpectedPlatformString,
-            error.ExpectedString,
-            error.FileBusy,
-            error.FileError,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileSystem,
-            error.FileTooBig,
-            error.FtruncateFailed,
-            error.HostedFunctionNotBound,
-            error.InputOutput,
-            error.Internal,
-            error.InvalidDependency,
-            error.InvalidHandle,
-            error.InvalidHostedFunctionSignature,
-            error.InvalidLirImage,
-            error.InvalidMagicNumber,
-            error.InvalidNodeType,
-            error.InvalidNullByteInPath,
-            error.InvalidUrl,
-            error.InvalidUtf8,
-            error.IoError,
-            error.IsDir,
-            error.LinkFailed,
-            error.LinkQuotaExceeded,
-            error.LlvmBackendUnavailable,
-            error.LlvmModuleVerificationFailed,
-            error.LlvmObjectEmitFailed,
-            error.LockViolation,
-            error.LockedMemoryLimitExceeded,
-            error.LowLevelOperationsNotFound,
-            error.MapViewOfFileFailed,
-            error.MappingAlreadyExists,
-            error.MemfdCreateFailed,
-            error.MemoryMappingNotSupported,
-            error.MissingBuiltinBitcode,
-            error.MissingBuiltinModule,
-            error.MissingDynamicLinkingInformation,
-            error.MissingFilesDirectory,
-            error.MissingSnapshotHeader,
-            error.MissingSnapshotSource,
-            error.MissingTargetFile,
-            error.MmapFailed,
-            error.ModuleLinkFailed,
-            error.MonoFormattingFailed,
-            error.MonoValidationFailed,
-            error.MprotectFailed,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoBitcodeModules,
-            error.NoCacheDir,
-            error.NoDevice,
-            error.NoPackageSource,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotDynamicLibrary,
-            error.NotElfFile,
-            error.NotOpenForReading,
-            error.NotOpenForWriting,
-            error.OpenFileMappingFailed,
-            error.OutOfMemory,
-            error.PageSizeQueryFailed,
-            error.ParseError,
-            error.ParseFailed,
-            error.ParsingFailed,
-            error.PathAlreadyExists,
-            error.PathOutsideWorkspace,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.RuntimeError,
-            error.ShmOpenFailed,
-            error.ShmUnlinkFailed,
-            error.SnapshotValidationFailed,
-            error.SocketUnconnected,
-            error.StaleEmbeddedBuiltins,
-            error.StreamTooLong,
-            error.Streaming,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.TempDirUnavailable,
-            error.TempFileOpenFailed,
-            error.TempFileUnlinkFailed,
-            error.TestExpectedEqual,
-            error.TestUnexpectedResult,
-            error.ThreadQuotaExceeded,
-            error.Unexpected,
-            error.Unseekable,
-            error.UnsupportedBuiltinAnnotationOnly,
-            error.UnsupportedHeader,
-            error.UnsupportedHostedFunction,
-            error.UnsupportedLirImageVersion,
-            error.UnsupportedLlvmTriple,
-            error.UnsupportedLowLevel,
-            error.UnsupportedPlatform,
-            error.UnsupportedTarget,
-            error.UnwindRegistrationFailed,
-            error.VirtualAllocFailed,
-            error.VirtualProtectFailed,
-            error.WasmExecFailed,
-            error.WouldBlock,
-            error.WriteFailed,
-            => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
-        };
+        return if (isTypeCheckError(err))
+            renderSnapshotReplTypeProblems(allocator, .module, validation_with_main, config)
+        else
+            try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
     };
     compiled.deinit(allocator);
 
@@ -5217,150 +4956,10 @@ fn compileAndEvaluateSnapshotReplExpr(
     config: *const Config,
 ) SnapshotError![]const u8 {
     var expr_compiled = compileSnapshotReplInspectedExpr(allocator, input) catch |expr_err| {
-        return switch (expr_err) {
-            error.TypeCheckError => renderSnapshotReplTypeProblems(allocator, .expr, input, config),
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.BadSectionHeader,
-            error.BitcodeParseError,
-            error.BrokenPipe,
-            error.BufferTooSmall,
-            error.BuiltinArtifactVersionMismatch,
-            error.BuiltinLowLevelAnnotationMustBeFunction,
-            error.BuiltinModuleLeakedInSnapshots,
-            error.CacheRoundTripValidationFailed,
-            error.CacheVersionHashMismatch,
-            error.Canceled,
-            error.CompilationFailed,
-            error.ComptimeExhaustiveness,
-            error.ConnectionResetByPeer,
-            error.CorruptArtifact,
-            error.CorruptBuiltinArtifact,
-            error.CorruptEmbeddedBuiltins,
-            error.CorruptSerializedModuleEnv,
-            error.Crash,
-            error.CreateFileMappingFailed,
-            error.CurrentDirUnlinked,
-            error.DevBackendUnavailable,
-            error.DeviceBusy,
-            error.DiskQuota,
-            error.DivisionByZero,
-            error.DownloadFailed,
-            error.ElfHashTableNotFound,
-            error.ElfStringSectionNotFound,
-            error.ElfSymSectionNotFound,
-            error.EmptyCode,
-            error.EntrypointNotFound,
-            error.ErrFinalizingHTMLWriter,
-            error.EvaluationFailed,
-            error.ExpectErr,
-            error.ExpectedPlatformString,
-            error.ExpectedString,
-            error.FileBusy,
-            error.FileError,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileSystem,
-            error.FileTooBig,
-            error.FtruncateFailed,
-            error.HostedFunctionNotBound,
-            error.InputOutput,
-            error.Internal,
-            error.InvalidDependency,
-            error.InvalidHandle,
-            error.InvalidHostedFunctionSignature,
-            error.InvalidLirImage,
-            error.InvalidMagicNumber,
-            error.InvalidNodeType,
-            error.InvalidNullByteInPath,
-            error.InvalidUrl,
-            error.InvalidUtf8,
-            error.IoError,
-            error.IsDir,
-            error.LinkFailed,
-            error.LinkQuotaExceeded,
-            error.LlvmBackendUnavailable,
-            error.LlvmModuleVerificationFailed,
-            error.LlvmObjectEmitFailed,
-            error.LockViolation,
-            error.LockedMemoryLimitExceeded,
-            error.LowLevelOperationsNotFound,
-            error.MapViewOfFileFailed,
-            error.MappingAlreadyExists,
-            error.MemfdCreateFailed,
-            error.MemoryMappingNotSupported,
-            error.MissingBuiltinBitcode,
-            error.MissingBuiltinModule,
-            error.MissingDynamicLinkingInformation,
-            error.MissingFilesDirectory,
-            error.MissingSnapshotHeader,
-            error.MissingSnapshotSource,
-            error.MissingTargetFile,
-            error.MmapFailed,
-            error.ModuleLinkFailed,
-            error.MonoFormattingFailed,
-            error.MonoValidationFailed,
-            error.MprotectFailed,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoBitcodeModules,
-            error.NoCacheDir,
-            error.NoDevice,
-            error.NoPackageSource,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotDynamicLibrary,
-            error.NotElfFile,
-            error.NotOpenForReading,
-            error.NotOpenForWriting,
-            error.OpenFileMappingFailed,
-            error.OutOfMemory,
-            error.PageSizeQueryFailed,
-            error.ParseError,
-            error.ParseFailed,
-            error.ParsingFailed,
-            error.PathAlreadyExists,
-            error.PathOutsideWorkspace,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.RuntimeError,
-            error.ShmOpenFailed,
-            error.ShmUnlinkFailed,
-            error.SnapshotValidationFailed,
-            error.SocketUnconnected,
-            error.StaleEmbeddedBuiltins,
-            error.StreamTooLong,
-            error.Streaming,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.TempDirUnavailable,
-            error.TempFileOpenFailed,
-            error.TempFileUnlinkFailed,
-            error.TestExpectedEqual,
-            error.TestUnexpectedResult,
-            error.ThreadQuotaExceeded,
-            error.Unexpected,
-            error.Unseekable,
-            error.UnsupportedBuiltinAnnotationOnly,
-            error.UnsupportedHeader,
-            error.UnsupportedHostedFunction,
-            error.UnsupportedLirImageVersion,
-            error.UnsupportedLlvmTriple,
-            error.UnsupportedLowLevel,
-            error.UnsupportedPlatform,
-            error.UnsupportedTarget,
-            error.UnwindRegistrationFailed,
-            error.VirtualAllocFailed,
-            error.VirtualProtectFailed,
-            error.WasmExecFailed,
-            error.WouldBlock,
-            error.WriteFailed,
-            => try std.fmt.allocPrint(allocator, "{s}", .{@errorName(expr_err)}),
-        };
+        return if (isTypeCheckError(expr_err))
+            renderSnapshotReplTypeProblems(allocator, .expr, input, config)
+        else
+            try std.fmt.allocPrint(allocator, "{s}", .{@errorName(expr_err)});
     };
     defer expr_compiled.deinit(allocator);
 
@@ -5392,318 +4991,30 @@ fn snapshotReplExpressionStep(
 
     const use_expr_fallback = !statement_body and session.definitions.items.len == 0;
     var compiled = compileSnapshotReplInspectedModule(allocator, source, config) catch |err| {
-        switch (err) {
-            error.TypeCheckError => {
-                const module_problems = renderSnapshotReplTypeProblems(allocator, .module, source, config) catch |render_err| {
-                    if (use_expr_fallback) {
-                        switch (render_err) {
-                            error.TypeCheckError => return compileAndEvaluateSnapshotReplExpr(allocator, input, config),
-                            error.AccessDenied,
-                            error.AntivirusInterference,
-                            error.BadPathName,
-                            error.BadSectionHeader,
-                            error.BitcodeParseError,
-                            error.BrokenPipe,
-                            error.BufferTooSmall,
-                            error.BuiltinArtifactVersionMismatch,
-                            error.BuiltinLowLevelAnnotationMustBeFunction,
-                            error.BuiltinModuleLeakedInSnapshots,
-                            error.CacheRoundTripValidationFailed,
-                            error.CacheVersionHashMismatch,
-                            error.Canceled,
-                            error.CompilationFailed,
-                            error.ComptimeExhaustiveness,
-                            error.ConnectionResetByPeer,
-                            error.CorruptArtifact,
-                            error.CorruptBuiltinArtifact,
-                            error.CorruptEmbeddedBuiltins,
-                            error.CorruptSerializedModuleEnv,
-                            error.Crash,
-                            error.CreateFileMappingFailed,
-                            error.CurrentDirUnlinked,
-                            error.DevBackendUnavailable,
-                            error.DeviceBusy,
-                            error.DiskQuota,
-                            error.DivisionByZero,
-                            error.DownloadFailed,
-                            error.ElfHashTableNotFound,
-                            error.ElfStringSectionNotFound,
-                            error.ElfSymSectionNotFound,
-                            error.EmptyCode,
-                            error.EntrypointNotFound,
-                            error.ErrFinalizingHTMLWriter,
-                            error.EvaluationFailed,
-                            error.ExpectErr,
-                            error.ExpectedPlatformString,
-                            error.ExpectedString,
-                            error.FileBusy,
-                            error.FileError,
-                            error.FileLocksUnsupported,
-                            error.FileNotFound,
-                            error.FileSystem,
-                            error.FileTooBig,
-                            error.FtruncateFailed,
-                            error.HostedFunctionNotBound,
-                            error.InputOutput,
-                            error.Internal,
-                            error.InvalidDependency,
-                            error.InvalidHandle,
-                            error.InvalidHostedFunctionSignature,
-                            error.InvalidLirImage,
-                            error.InvalidMagicNumber,
-                            error.InvalidNodeType,
-                            error.InvalidNullByteInPath,
-                            error.InvalidUrl,
-                            error.InvalidUtf8,
-                            error.IoError,
-                            error.IsDir,
-                            error.LinkFailed,
-                            error.LinkQuotaExceeded,
-                            error.LlvmBackendUnavailable,
-                            error.LlvmModuleVerificationFailed,
-                            error.LlvmObjectEmitFailed,
-                            error.LockViolation,
-                            error.LockedMemoryLimitExceeded,
-                            error.LowLevelOperationsNotFound,
-                            error.MapViewOfFileFailed,
-                            error.MappingAlreadyExists,
-                            error.MemfdCreateFailed,
-                            error.MemoryMappingNotSupported,
-                            error.MissingBuiltinBitcode,
-                            error.MissingBuiltinModule,
-                            error.MissingDynamicLinkingInformation,
-                            error.MissingFilesDirectory,
-                            error.MissingSnapshotHeader,
-                            error.MissingSnapshotSource,
-                            error.MissingTargetFile,
-                            error.MmapFailed,
-                            error.ModuleLinkFailed,
-                            error.MonoFormattingFailed,
-                            error.MonoValidationFailed,
-                            error.MprotectFailed,
-                            error.NameTooLong,
-                            error.NetworkNotFound,
-                            error.NoBitcodeModules,
-                            error.NoCacheDir,
-                            error.NoDevice,
-                            error.NoPackageSource,
-                            error.NoSpaceLeft,
-                            error.NotDir,
-                            error.NotDynamicLibrary,
-                            error.NotElfFile,
-                            error.NotOpenForReading,
-                            error.NotOpenForWriting,
-                            error.OpenFileMappingFailed,
-                            error.OutOfMemory,
-                            error.PageSizeQueryFailed,
-                            error.ParseError,
-                            error.ParseFailed,
-                            error.ParsingFailed,
-                            error.PathAlreadyExists,
-                            error.PathOutsideWorkspace,
-                            error.PermissionDenied,
-                            error.PipeBusy,
-                            error.ProcessFdQuotaExceeded,
-                            error.ReadOnlyFileSystem,
-                            error.RuntimeError,
-                            error.ShmOpenFailed,
-                            error.ShmUnlinkFailed,
-                            error.SnapshotValidationFailed,
-                            error.SocketUnconnected,
-                            error.StaleEmbeddedBuiltins,
-                            error.StreamTooLong,
-                            error.Streaming,
-                            error.SymLinkLoop,
-                            error.SystemFdQuotaExceeded,
-                            error.SystemResources,
-                            error.TempDirUnavailable,
-                            error.TempFileOpenFailed,
-                            error.TempFileUnlinkFailed,
-                            error.TestExpectedEqual,
-                            error.TestUnexpectedResult,
-                            error.ThreadQuotaExceeded,
-                            error.Unexpected,
-                            error.Unseekable,
-                            error.UnsupportedBuiltinAnnotationOnly,
-                            error.UnsupportedHeader,
-                            error.UnsupportedHostedFunction,
-                            error.UnsupportedLirImageVersion,
-                            error.UnsupportedLlvmTriple,
-                            error.UnsupportedLowLevel,
-                            error.UnsupportedPlatform,
-                            error.UnsupportedTarget,
-                            error.UnwindRegistrationFailed,
-                            error.VirtualAllocFailed,
-                            error.VirtualProtectFailed,
-                            error.WasmExecFailed,
-                            error.WouldBlock,
-                            error.WriteFailed,
-                            => {},
-                        }
-                    }
-                    return render_err;
-                };
-                errdefer allocator.free(module_problems);
+        if (!isTypeCheckError(err)) return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)});
 
-                if (use_expr_fallback) {
-                    // These titles are matched against markdown output, which
-                    // preserves the authored title case (EXPECTED metadata uses
-                    // uppercase, but this is the markdown render).
-                    const is_top_level_wrapper_problem =
-                        std.mem.find(u8, module_problems, "Effectful Top Level Value") != null or
-                        std.mem.find(u8, module_problems, "Polymorphic Value") != null;
-                    if (is_top_level_wrapper_problem) {
-                        allocator.free(module_problems);
-                        return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
-                    }
+        const module_problems = renderSnapshotReplTypeProblems(allocator, .module, source, config) catch |render_err| {
+            if (use_expr_fallback and isTypeCheckError(render_err)) return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
+            return render_err;
+        };
+        errdefer allocator.free(module_problems);
 
-                    allocator.free(module_problems);
-                    return renderSnapshotReplTypeProblems(allocator, .expr, input, config);
-                }
-                return module_problems;
-            },
-            error.AccessDenied,
-            error.AntivirusInterference,
-            error.BadPathName,
-            error.BadSectionHeader,
-            error.BitcodeParseError,
-            error.BrokenPipe,
-            error.BufferTooSmall,
-            error.BuiltinArtifactVersionMismatch,
-            error.BuiltinLowLevelAnnotationMustBeFunction,
-            error.BuiltinModuleLeakedInSnapshots,
-            error.CacheRoundTripValidationFailed,
-            error.CacheVersionHashMismatch,
-            error.Canceled,
-            error.CompilationFailed,
-            error.ComptimeExhaustiveness,
-            error.ConnectionResetByPeer,
-            error.CorruptArtifact,
-            error.CorruptBuiltinArtifact,
-            error.CorruptEmbeddedBuiltins,
-            error.CorruptSerializedModuleEnv,
-            error.Crash,
-            error.CreateFileMappingFailed,
-            error.CurrentDirUnlinked,
-            error.DevBackendUnavailable,
-            error.DeviceBusy,
-            error.DiskQuota,
-            error.DivisionByZero,
-            error.DownloadFailed,
-            error.ElfHashTableNotFound,
-            error.ElfStringSectionNotFound,
-            error.ElfSymSectionNotFound,
-            error.EmptyCode,
-            error.EntrypointNotFound,
-            error.ErrFinalizingHTMLWriter,
-            error.EvaluationFailed,
-            error.ExpectErr,
-            error.ExpectedPlatformString,
-            error.ExpectedString,
-            error.FileBusy,
-            error.FileError,
-            error.FileLocksUnsupported,
-            error.FileNotFound,
-            error.FileSystem,
-            error.FileTooBig,
-            error.FtruncateFailed,
-            error.HostedFunctionNotBound,
-            error.InputOutput,
-            error.Internal,
-            error.InvalidDependency,
-            error.InvalidHandle,
-            error.InvalidHostedFunctionSignature,
-            error.InvalidLirImage,
-            error.InvalidMagicNumber,
-            error.InvalidNodeType,
-            error.InvalidNullByteInPath,
-            error.InvalidUrl,
-            error.InvalidUtf8,
-            error.IoError,
-            error.IsDir,
-            error.LinkFailed,
-            error.LinkQuotaExceeded,
-            error.LlvmBackendUnavailable,
-            error.LlvmModuleVerificationFailed,
-            error.LlvmObjectEmitFailed,
-            error.LockViolation,
-            error.LockedMemoryLimitExceeded,
-            error.LowLevelOperationsNotFound,
-            error.MapViewOfFileFailed,
-            error.MappingAlreadyExists,
-            error.MemfdCreateFailed,
-            error.MemoryMappingNotSupported,
-            error.MissingBuiltinBitcode,
-            error.MissingBuiltinModule,
-            error.MissingDynamicLinkingInformation,
-            error.MissingFilesDirectory,
-            error.MissingSnapshotHeader,
-            error.MissingSnapshotSource,
-            error.MissingTargetFile,
-            error.MmapFailed,
-            error.ModuleLinkFailed,
-            error.MonoFormattingFailed,
-            error.MonoValidationFailed,
-            error.MprotectFailed,
-            error.NameTooLong,
-            error.NetworkNotFound,
-            error.NoBitcodeModules,
-            error.NoCacheDir,
-            error.NoDevice,
-            error.NoPackageSource,
-            error.NoSpaceLeft,
-            error.NotDir,
-            error.NotDynamicLibrary,
-            error.NotElfFile,
-            error.NotOpenForReading,
-            error.NotOpenForWriting,
-            error.OpenFileMappingFailed,
-            error.OutOfMemory,
-            error.PageSizeQueryFailed,
-            error.ParseError,
-            error.ParseFailed,
-            error.ParsingFailed,
-            error.PathAlreadyExists,
-            error.PathOutsideWorkspace,
-            error.PermissionDenied,
-            error.PipeBusy,
-            error.ProcessFdQuotaExceeded,
-            error.ReadOnlyFileSystem,
-            error.RuntimeError,
-            error.ShmOpenFailed,
-            error.ShmUnlinkFailed,
-            error.SnapshotValidationFailed,
-            error.SocketUnconnected,
-            error.StaleEmbeddedBuiltins,
-            error.StreamTooLong,
-            error.Streaming,
-            error.SymLinkLoop,
-            error.SystemFdQuotaExceeded,
-            error.SystemResources,
-            error.TempDirUnavailable,
-            error.TempFileOpenFailed,
-            error.TempFileUnlinkFailed,
-            error.TestExpectedEqual,
-            error.TestUnexpectedResult,
-            error.ThreadQuotaExceeded,
-            error.Unexpected,
-            error.Unseekable,
-            error.UnsupportedBuiltinAnnotationOnly,
-            error.UnsupportedHeader,
-            error.UnsupportedHostedFunction,
-            error.UnsupportedLirImageVersion,
-            error.UnsupportedLlvmTriple,
-            error.UnsupportedLowLevel,
-            error.UnsupportedPlatform,
-            error.UnsupportedTarget,
-            error.UnwindRegistrationFailed,
-            error.VirtualAllocFailed,
-            error.VirtualProtectFailed,
-            error.WasmExecFailed,
-            error.WouldBlock,
-            error.WriteFailed,
-            => return try std.fmt.allocPrint(allocator, "{s}", .{@errorName(err)}),
+        if (use_expr_fallback) {
+            // These titles are matched against markdown output, which
+            // preserves the authored title case (EXPECTED metadata uses
+            // uppercase, but this is the markdown render).
+            const is_top_level_wrapper_problem =
+                std.mem.find(u8, module_problems, "Effectful Top Level Value") != null or
+                std.mem.find(u8, module_problems, "Polymorphic Value") != null;
+            if (is_top_level_wrapper_problem) {
+                allocator.free(module_problems);
+                return compileAndEvaluateSnapshotReplExpr(allocator, input, config);
+            }
+
+            allocator.free(module_problems);
+            return renderSnapshotReplTypeProblems(allocator, .expr, input, config);
         }
+        return module_problems;
     };
     defer compiled.deinit(allocator);
 
@@ -5764,13 +5075,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
-        try md_file.writeStreamingAll(app_io, snapshot_md);
+        if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -5950,6 +5255,86 @@ test "snapshot validation" {
     }
 }
 
+test "a snapshot reports what a build reports for the same module" {
+    app_io = std.testing.io;
+    const gpa = std.testing.allocator;
+    const source =
+        \\Fixture :: [].{
+        \\    describe : [Red, Green, Blue] -> Str
+        \\    describe = |color| match color {
+        \\        Red => "red"
+        \\        Green => "green"
+        \\    }
+        \\
+        \\    count : U64
+        \\    count = "three"
+        \\}
+        \\
+    ;
+
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.writeFile(app_io, .{ .sub_path = "Fixture.roc", .data = source });
+    const dir_path = try tmp_dir.dir.realPathFileAlloc(app_io, ".", gpa);
+    defer gpa.free(dir_path);
+    const module_path = try tmp_dir.dir.realPathFileAlloc(app_io, "Fixture.roc", gpa);
+    defer gpa.free(module_path);
+
+    // The reports `roc check` collects.
+    var build_env = try compile.BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), dir_path, app_io);
+    defer build_env.deinit();
+    try build_env.build(module_path);
+    const drained = try build_env.drainReports();
+    defer build_env.freeDrainedReports(drained);
+
+    // The reports of the same module checked on its own, as a file snapshot is.
+    var builtin_modules = try eval_mod.BuiltinModules.init(gpa);
+    defer builtin_modules.deinit();
+    var module_env = try single_module.ModuleEnv.init(gpa, source);
+    defer module_env.deinit();
+    const parse_ast = try single_module.parseSingleModule(gpa, &module_env, .file, .{ .module_name = "Fixture" });
+    defer parse_ast.deinit();
+    var module_envs = std.AutoHashMap(base.Ident.Idx, Can.AutoImportedType).init(gpa);
+    defer module_envs.deinit();
+    var checker = try compile.package.canonicalizeAndTypeCheckModule(
+        CoreCtx.default(gpa, gpa, app_io),
+        gpa,
+        &module_env,
+        parse_ast,
+        builtin_modules.builtin_module.env,
+        builtin_modules.builtin_indices,
+        &.{@constCast(builtin_modules.builtin_module.env)},
+        &module_envs,
+        dir_path,
+        .none,
+    );
+    defer checker.deinit();
+    var snapshot_reports = try generateAllReports(gpa, parse_ast, &module_env, &checker, module_path);
+    defer {
+        for (snapshot_reports.items) |*report| report.deinit();
+        snapshot_reports.deinit();
+    }
+
+    var compared: usize = 0;
+    for (drained) |module_reports| {
+        for (module_reports.reports) |*built| {
+            try std.testing.expect(compared < snapshot_reports.items.len);
+            const snapshot = &snapshot_reports.items[compared];
+            try std.testing.expectEqualStrings(built.title, snapshot.title);
+            const built_loc = reportRegionLoc(built);
+            const snapshot_loc = reportRegionLoc(snapshot);
+            try std.testing.expectEqual(
+                [4]u32{ built_loc.sl, built_loc.sc, built_loc.el, built_loc.ec },
+                [4]u32{ snapshot_loc.sl, snapshot_loc.sc, snapshot_loc.el, snapshot_loc.ec },
+            );
+            compared += 1;
+        }
+    }
+    try std.testing.expectEqual(snapshot_reports.items.len, compared);
+    try std.testing.expectEqualStrings("Type Mismatch", snapshot_reports.items[0].title);
+    try std.testing.expectEqualStrings("Non Exhaustive Match", snapshot_reports.items[1].title);
+}
+
 test "snapshot markdown avoids removed keyword text" {
     const allocator = std.testing.allocator;
     const input = "module Module MODULE type_module";
@@ -6004,7 +5389,7 @@ test "no Builtin module leaks in snapshots" {
     var snapshots_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "test/snapshots", .{ .iterate = true });
     defer snapshots_dir.close(std.testing.io);
 
-    var files_with_builtin: std.array_list.Managed([]const u8) = .{ .allocator = allocator, .items = &.{}, .capacity = 0 };
+    var files_with_builtin = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (files_with_builtin.items) |path| {
             allocator.free(path);

@@ -56,7 +56,7 @@ fn countDecodeShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
@@ -177,7 +177,7 @@ fn countArithmeticShape(store: *const lir.LirStore, layouts: *const layout.Store
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.c.getenv("RANGE_PROVE_DUMP_ALL") != null) std.debug.print("\n===== arithmetic candidate =====\n{s}\n", .{text});
         const selected = switch (arithmetic_selection) {
@@ -241,7 +241,7 @@ fn countMeetShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
         const selected = switch (meet_selection) {
@@ -275,7 +275,7 @@ fn countColdDefaults(store: *const lir.LirStore, layouts: *const layout.Store) h
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0) continue;
         cold_shape = .{ .found = true, .cold_defaults = std.mem.count(u8, text, "default_cold=true") };
@@ -300,7 +300,7 @@ fn countFillShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_with_capacity") == 0) continue;
         fill_shape = .{
@@ -425,7 +425,7 @@ fn countSearchShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "list_get_unsafe") == 0 or std.mem.count(u8, text, "i16_to_u64_wrap") == 0) continue;
         search_shape = .{
@@ -712,7 +712,7 @@ fn countSkipShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") == 0 or std.mem.count(u8, text, "list_set") == 0) continue;
         skip_shape = .{
@@ -1021,7 +1021,7 @@ fn countRealShape(store: *const lir.LirStore, layouts: *const layout.Store) harn
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, "num_from_le_bytes_unchecked") < 3) continue;
         if (std.c.getenv("RANGE_PROVE_DUMP") != null) {
@@ -1049,7 +1049,7 @@ fn countSimdConcatCounts(store: *const lir.LirStore, layouts: *const layout.Stor
     defer std.testing.allocator.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(std.testing.allocator, store, layouts, @enumFromInt(index), &writer);
+        try lir.DebugPrint.writeProc(std.testing.allocator, store, layouts, @fromBackingInt(@intCast(index)), &writer);
         simd_concat_ops += std.mem.count(u8, writer.buffered(), "low_level simd_concat_shift_bytes(");
         simd_constant_concats += std.mem.count(u8, writer.buffered(), " concat_count=");
     }
@@ -1116,7 +1116,7 @@ var guarded_proc_survives: bool = false;
 fn inspectGuardedWrapper(store: *const lir.LirStore, _: *const layout.Store) harness.LowerToLirHarnessError!void {
     guarded_proc_survives = false;
     for (0..store.procSpecCount()) |index| {
-        if (store.procDebugName(@enumFromInt(index))) |name| {
+        if (store.procDebugName(@fromBackingInt(@intCast(index)))) |name| {
             if (std.mem.eql(u8, name, "guarded")) guarded_proc_survives = true;
         }
     }
@@ -1190,7 +1190,7 @@ fn countSharedGetShape(store: *const lir.LirStore, layouts: *const layout.Store)
     const buf = try gpa.alloc(u8, 1 << 20);
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
-        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const name = store.procDebugName(proc_id) orelse continue;
         if (!std.mem.eql(u8, name, "read")) continue;
         var writer = std.Io.Writer.fixed(buf);
@@ -1261,7 +1261,7 @@ fn countMarkedShape(store: *const lir.LirStore, layouts: *const layout.Store) ha
     defer gpa.free(buf);
     for (0..store.getProcSpecs().len) |index| {
         var writer = std.Io.Writer.fixed(buf);
-        try lir.DebugPrint.writeProc(gpa, store, layouts, @enumFromInt(@as(u32, @intCast(index))), &writer);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, @fromBackingInt(@intCast(@as(u32, @intCast(index)))), &writer);
         const text = writer.buffered();
         if (std.mem.count(u8, text, marked_op) == 0) continue;
         marked_shape = .{
@@ -1321,6 +1321,48 @@ test "a guard on one sum bounds every read whose index is a sum sharing its oper
     try std.testing.expectEqual(@as(usize, 0), marked_shape.is_lt);
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gt);
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}
+
+// The read's index is the sum `a + b`, and `b`'s bound comes through
+// another sum, `b + k`: the first guard caps that sum, which states its
+// facts while `k` is unbounded, the second guard then bounds `k`, and the
+// read proves only if the sum's facts are restated with `k`'s bound.
+test "a guard on a sum bounds the operand of another sum whose index it shares" {
+    marked_op = "num_from_le_bytes_unchecked";
+    try harness.expectLirInspectionWithOptions(
+        \\read : List(U8), U64, U64, U64 -> U64
+        \\read = |input, a, b, k| {
+        \\    capped = b + k
+        \\    if capped > 100 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if k < 5 {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    if a + 103 > List.len(input) {
+        \\        return 0
+        \\    } else {
+        \\    }
+        \\    U64.from_le_bytes(input, a.plus_wrap(b)) ?? 0
+        \\}
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    bytes = Str.to_utf8(Str.join_with(args, ","))
+        \\    echo!(Str.inspect(read(bytes, args.len(), 1, 7)))
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countMarkedShape,
+    );
+    try std.testing.expect(marked_shape.found);
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.unchecked_reads);
+    // The read's length test folded; only the guards' own comparisons remain.
+    try std.testing.expectEqual(@as(usize, 1), marked_shape.is_lt);
+    try std.testing.expectEqual(@as(usize, 2), marked_shape.is_gt);
 }
 
 // The table grows by one per iteration and is read `len` back from its end
@@ -1689,4 +1731,58 @@ test "a loop parameter bounded by its loop head keeps a test it does not decide"
     // The one `>=` left is `level >= 10`. `level * 4 >= 55` folds soundly,
     // since the loop head bounds `level` by 12 inside the body.
     try std.testing.expectEqual(@as(usize, 1), marked_shape.is_gte);
+}
+
+const BareCompareShape = struct {
+    found: bool = false,
+    is_lt: usize = 0,
+    switches: usize = 0,
+    checked_arithmetic: bool = true,
+};
+var bare_compare_shape: BareCompareShape = .{};
+
+fn countBareCompareShape(store: *const lir.LirStore, layouts: *const layout.Store) harness.LowerToLirHarnessError!void {
+    bare_compare_shape = .{};
+    const gpa = std.testing.allocator;
+    const buf = try gpa.alloc(u8, 1 << 22);
+    defer gpa.free(buf);
+    for (0..store.getProcSpecs().len) |index| {
+        const proc_id: lir.LIR.LirProcSpecId = @fromBackingInt(@as(u32, @intCast(index)));
+        var writer = std.Io.Writer.fixed(buf);
+        try lir.DebugPrint.writeProc(gpa, store, layouts, proc_id, &writer);
+        const text = writer.buffered();
+        if (std.mem.count(u8, text, "num_bitwise_and(") == 0) continue;
+        bare_compare_shape = .{
+            .found = true,
+            .is_lt = std.mem.count(u8, text, "num_is_lt("),
+            .switches = std.mem.count(u8, text, "switch "),
+            .checked_arithmetic = store.getProcSpec(proc_id).shapes.checked_arithmetic,
+        };
+        return;
+    }
+}
+
+test "a comparison a mask decides folds in a body with no branch and no checked arithmetic" {
+    try harness.expectLirInspectionWithOptions(
+        \\masked_small : U64 -> Bool
+        \\masked_small = |n| n.bitwise_and(7) < 8
+        \\
+        \\main! : List(Str) => Try({}, [Exit(I8), ..])
+        \\main! = |args| {
+        \\    first = masked_small(args.len())
+        \\    second = masked_small(Str.count_utf8_bytes(Str.join_with(args, ",")))
+        \\    echo!("${Str.inspect(first)} ${Str.inspect(second)}")
+        \\    Ok({})
+        \\}
+    ,
+        .{ .inline_mode = .wrappers, .prove_ranges = true },
+        countBareCompareShape,
+    );
+    try std.testing.expect(bare_compare_shape.found);
+    // The comparison is the only statement of the body the prover can
+    // decide: nothing else there admits the body to the range phase.
+    try std.testing.expectEqual(@as(usize, 0), bare_compare_shape.switches);
+    try std.testing.expect(!bare_compare_shape.checked_arithmetic);
+    // The mask bounds the left operand by 7, so `< 8` is a constant.
+    try std.testing.expectEqual(@as(usize, 0), bare_compare_shape.is_lt);
 }

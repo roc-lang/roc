@@ -123,10 +123,6 @@ const InterpreterRocEnv = struct {
     jmp_buf: JmpBuf = undefined,
     active_jmp_buf: ?*JmpBuf = null,
     caller_roc_ops: *RocOps,
-    /// Interpreter currently executing through these RocOps. Erased-callable
-    /// trampolines use this explicit host context for static callable data,
-    /// whose immutable capture bytes cannot embed a mutable interpreter pointer.
-    active_interpreter: ?*anyopaque = null,
 
     fn init(allocator: Allocator, caller_roc_ops: *RocOps) InterpreterRocEnv {
         return .{
@@ -372,10 +368,6 @@ pub const Interpreter = struct {
     /// Explicit compile-time slot readiness callback; ordinary runtime images
     /// are already complete and leave this unset.
     static_data_demand: ?StaticDataDemand = null,
-
-    /// Static erased callables use the ordinary target payload ABI. This table
-    /// supplies the interpreter-only proc identity without rewriting that data.
-    static_erased_callables: []const StaticErasedCallable,
     /// Reusable frame slot arrays, indexed by slot count. Every frame with
     /// the same number of locals can reuse the same array, whichever proc it
     /// belongs to, so this grows only with the frames this interpreter runs.
@@ -399,6 +391,12 @@ pub const Interpreter = struct {
     /// Bound recursive function-call depth so the interpreter reports a Roc crash
     /// instead of overflowing the native stack.
     call_depth: usize = 0,
+    /// An erased call a deferred tail call left for whoever awaits its
+    /// procedure's result. It owns one reference to its closure.
+    pending_erased: ?PendingErasedCall = null,
+    /// Set while an erased call is entering its callee, so that callee can
+    /// tell this caller, which makes pending calls, from any other.
+    erased_caller_drives: bool = false,
     /// Active proc call stack for the current evaluation.
     call_stack: std.ArrayList(LirProcSpecId),
     /// Call stack captured at the first failed exit in the current evaluation.
@@ -461,10 +459,95 @@ pub const Interpreter = struct {
         branch_index: u32,
     };
 
-    pub const StaticErasedCallable = struct {
-        capture_ptr: [*]u8,
-        proc_id: LIR.LirProcSpecId,
+    /// Runs the static erased callables of one interpreter static-data image.
+    /// A caller of the erased-callable ABI supplies only its own RocOps and the
+    /// capture pointer, so each callable reaches its owner through the
+    /// `StaticCallableHeader` stored before its allocation, never through the
+    /// caller's RocOps.
+    pub const StaticCallableOwner = struct {
+        context: ?*anyopaque,
+        call: *const fn (?*anyopaque, InterpretedCallable, *RocOps, ?[*]u8, ?[*]const u8, ?[*]u8, *?*const anyopaque) void,
+
+        /// The owner of an image whose consumer has not yet named one.
+        pub const unbound: StaticCallableOwner = .{ .context = null, .call = callUnbound };
+
+        /// Run callables on `interpreter`, which outlives every holder of a
+        /// value in the image.
+        pub fn forInterpreter(interpreter: *LirInterpreter) StaticCallableOwner {
+            return .{ .context = interpreter, .call = callOnInterpreter };
+        }
+
+        fn callUnbound(_: ?*anyopaque, _: InterpretedCallable, ops: *RocOps, _: ?[*]u8, _: ?[*]const u8, _: ?[*]u8, _: *?*const anyopaque) void {
+            ops.crash("static interpreted callable's image has no owner");
+        }
+
+        fn callOnInterpreter(raw: ?*anyopaque, callable: InterpretedCallable, ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) void {
+            const interpreter: *LirInterpreter = @ptrCast(@alignCast(raw.?));
+            interpreter.callInterpreterErasedCallable(callable, ops, ret, args, reuse, out_desc) catch |err| interpreter.crashErasedCallable(null, ops, err, .call);
+        }
     };
+
+    /// Owns static erased callables for a program whose interpreters are
+    /// created per call, such as a platform host's shim: a host may invoke a
+    /// callable after the provided root that returned it has finished. Each
+    /// call runs on a fresh retained interpreter bound to the caller's RocOps.
+    /// Everything this names must live as long as the image it owns.
+    pub const StaticCallableProgram = struct {
+        callable_owner: StaticCallableOwner,
+        parts: Parts,
+
+        pub const Parts = struct {
+            allocator: Allocator,
+            store: *const LirStore,
+            layout_store: *const layout_mod.Store,
+            boxy_tables: BoxyTables,
+            static_strings: backend.StaticStringData.View,
+            static_addresses: []const usize,
+            synchronization_io: std.Io,
+        };
+
+        pub fn bind(self: *StaticCallableProgram, parts: Parts) void {
+            self.* = .{ .callable_owner = .{ .context = self, .call = call }, .parts = parts };
+        }
+
+        fn call(raw: ?*anyopaque, callable: InterpretedCallable, ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) void {
+            const parts = &@as(*const StaticCallableProgram, @ptrCast(@alignCast(raw.?))).parts;
+            const retained = Retained.createWithBoxyTables(
+                parts.allocator,
+                parts.store,
+                parts.layout_store,
+                parts.boxy_tables,
+                parts.static_strings,
+                ops,
+                parts.synchronization_io,
+            ) catch {
+                ops.crash("static interpreted callable could not initialize the LIR interpreter");
+            };
+            retained.enter();
+            const interpreter = &retained.interpreter;
+            interpreter.setStaticData(parts.static_addresses);
+            interpreter.callInterpreterErasedCallable(callable, ops, ret, args, reuse, out_desc) catch |err| interpreter.crashErasedCallable(retained, ops, err, .call);
+            leaveAndReleaseErasedCallableOwner(retained);
+        }
+    };
+
+    /// Interpreter-private header stored immediately before the allocation of
+    /// each static erased callable in an interpreter static-data image.
+    pub const StaticCallableHeader = extern struct {
+        owner: *const StaticCallableOwner,
+        proc_id: u32,
+        padding: u32 = 0,
+    };
+
+    /// Byte offset from a static erased callable's allocation start to its
+    /// payload: the allocation's refcount header at payload alignment.
+    pub const static_callable_payload_offset: usize =
+        std.mem.alignForward(usize, @sizeOf(usize), builtins.erased_callable.payload_alignment);
+
+    pub fn staticCallableHeader(capture_ptr: [*]u8) *const StaticCallableHeader {
+        const payload = @intFromPtr(capture_ptr) - builtins.erased_callable.capture_offset;
+        return @ptrFromInt(payload - static_callable_payload_offset - @sizeOf(StaticCallableHeader));
+    }
 
     const CrashBoundary = struct {
         env: *InterpreterRocEnv,
@@ -505,6 +588,9 @@ pub const Interpreter = struct {
     const Frame = struct {
         proc_id: LirProcSpecId,
         ret_layout: layout_mod.Idx,
+        /// Whether an erased call made this activation, which then makes
+        /// whatever call the activation leaves pending.
+        caller_drives: bool = false,
         /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
         /// The proc's join points, sorted by id.
@@ -514,10 +600,10 @@ pub const Interpreter = struct {
         fn findSlotIndex(self: *const Frame, local_id: LocalId) ?usize {
             var low: usize = 0;
             var high: usize = self.locals.len;
-            const target = @intFromEnum(local_id);
+            const target = @backingInt(local_id);
             while (low < high) {
                 const mid = low + (high - low) / 2;
-                const current = @intFromEnum(GuardedList.at(self.locals, mid));
+                const current = @backingInt(GuardedList.at(self.locals, mid));
                 if (current == target) return mid;
                 if (current < target) {
                     low = mid + 1;
@@ -531,11 +617,11 @@ pub const Interpreter = struct {
         fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
             var low: usize = 0;
             var high: usize = self.join_points.len;
-            const target = @intFromEnum(join_point_id);
+            const target = @backingInt(join_point_id);
             while (low < high) {
                 const mid = low + (high - low) / 2;
                 const join_point = GuardedList.at(self.join_points, mid);
-                const current = @intFromEnum(join_point.id);
+                const current = @backingInt(join_point.id);
                 if (current == target) return join_point;
                 if (current < target) {
                     low = mid + 1;
@@ -548,10 +634,10 @@ pub const Interpreter = struct {
 
         fn slotIndex(self: *const Frame, local_id: LocalId) usize {
             if (self.findSlotIndex(local_id)) |index| return index;
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 debugPrint(
                     "LIR/interpreter invariant violated: proc {d} frame does not contain local {d}\n",
-                    .{ @intFromEnum(self.proc_id), @intFromEnum(local_id) },
+                    .{ @backingInt(self.proc_id), @backingInt(local_id) },
                 );
             }
             unreachable;
@@ -572,10 +658,10 @@ pub const Interpreter = struct {
 
         fn setLocalDesc(self: *Frame, local_id: LocalId, desc: ?*const LirProgram.BoxyTypeDesc) void {
             const slot = &self.slots[self.slotIndex(local_id)];
-            if (builtin.mode == .Debug and !slot.assigned) {
+            if (builtin.mode == .debug and !slot.assigned) {
                 debugPrint(
                     "LIR/interpreter invariant violated: proc {d} tried to attach descriptor to unassigned local {d}\n",
-                    .{ @intFromEnum(self.proc_id), @intFromEnum(local_id) },
+                    .{ @backingInt(self.proc_id), @backingInt(local_id) },
                 );
             }
             slot.desc = desc;
@@ -589,8 +675,26 @@ pub const Interpreter = struct {
 
     const ExecOutcome = union(enum) {
         returned: LocalId,
+        /// The procedure returned without a value because a call is pending.
+        returned_pending,
         loop_continue,
         loop_break,
+        /// A frame-replacing call: the procedure's result is whatever this
+        /// call returns, so its own frame ends before the callee's begins.
+        tail_call: TailCall,
+    };
+
+    const TailCall = struct {
+        proc: LirProcSpecId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+    };
+
+    /// One procedure activation ends with its result, or with the call that
+    /// replaces it.
+    const ProcStep = union(enum) {
+        result: EvalProcResult,
+        tail_call: TailCall,
     };
 
     const EvalProcResult = struct {
@@ -670,15 +774,15 @@ pub const Interpreter = struct {
 
         pub fn retain(self: *Retained) void {
             const previous = self.references.fetchAdd(1, .monotonic);
-            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+            if (builtin.mode == .debug) std.debug.assert(previous > 0);
         }
 
         pub fn release(self: *Retained) void {
             const previous = self.references.fetchSub(1, .release);
-            if (builtin.mode == .Debug) std.debug.assert(previous > 0);
+            if (builtin.mode == .debug) std.debug.assert(previous > 0);
             if (previous != 1) return;
             _ = self.references.load(.acquire);
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.assert(self.execution_owner.load(.acquire) == 0);
                 std.debug.assert(self.execution_depth == 0);
             }
@@ -714,7 +818,7 @@ pub const Interpreter = struct {
             }
 
             self.execution_mutex.lockUncancelable(self.synchronization_io);
-            if (builtin.mode == .Debug) std.debug.assert(self.execution_owner.load(.monotonic) == 0);
+            if (builtin.mode == .debug) std.debug.assert(self.execution_owner.load(.monotonic) == 0);
             self.interpreter.resetRetainedExecution();
             self.execution_depth = 1;
             self.execution_owner.store(thread_id, .release);
@@ -722,12 +826,12 @@ pub const Interpreter = struct {
 
         pub fn leave(self: *Retained) void {
             if (comptime is_freestanding) {
-                if (builtin.mode == .Debug) std.debug.assert(self.execution_depth > 0);
+                if (builtin.mode == .debug) std.debug.assert(self.execution_depth > 0);
                 self.execution_depth -= 1;
                 return;
             }
 
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 std.debug.assert(self.execution_owner.load(.acquire) == currentThreadId());
                 std.debug.assert(self.execution_depth > 0);
             }
@@ -783,28 +887,6 @@ pub const Interpreter = struct {
         );
     }
 
-    /// Construct an interpreter with an explicit hosted-call dependency. When
-    /// present, every hosted call is routed exclusively through this handler
-    /// and the RocOps function table is never consulted.
-    pub fn initWithHostedCallHandler(
-        allocator: Allocator,
-        store: *const LirStore,
-        layout_store: *const layout_mod.Store,
-        static_strings: backend.StaticStringData.View,
-        caller_roc_ops: *RocOps,
-        hosted_call_handler: ?HostedCallHandler,
-    ) Allocator.Error!LirInterpreter {
-        return initWithBoxyTablesAndHostedCallHandler(
-            allocator,
-            store,
-            layout_store,
-            .{},
-            static_strings,
-            caller_roc_ops,
-            hosted_call_handler,
-        );
-    }
-
     /// Construct an interpreter from the checked LIR image's explicit Boxy
     /// tables and optional hosted-call dependency.
     pub fn initWithBoxyTablesAndHostedCallHandler(
@@ -845,7 +927,6 @@ pub const Interpreter = struct {
             .expect_observer = null,
             .static_strings = static_strings,
             .static_data = &.{},
-            .static_erased_callables = &.{},
             .boxy_tables = boxy_tables,
             .runtime_boxy_type_descs = .empty,
             .runtime_boxy_desc_ids = .empty,
@@ -907,14 +988,9 @@ pub const Interpreter = struct {
     }
 
     /// Install the explicit immutable data image that backs LIR static-data
-    /// literals. Both slices must outlive every evaluation on this interpreter.
-    pub fn setStaticData(
-        self: *LirInterpreter,
-        addresses: []const usize,
-        erased_callables: []const StaticErasedCallable,
-    ) void {
+    /// literals. The addresses must outlive every evaluation on this interpreter.
+    pub fn setStaticData(self: *LirInterpreter, addresses: []const usize) void {
         self.static_data = addresses;
-        self.static_erased_callables = erased_callables;
     }
 
     /// Install the test runner's per-site observation sink.
@@ -922,8 +998,9 @@ pub const Interpreter = struct {
         self.expect_observer = observer;
     }
 
-    /// Function address stored in static erased-callable payloads interpreted
-    /// in-process. Proc identity is resolved by `static_erased_callables`.
+    /// Function address stored in the static erased-callable payloads of an
+    /// interpreter static-data image. The callable's owner and procedure come
+    /// from its `StaticCallableHeader`.
     pub fn staticErasedCallableTrampolineAddress() usize {
         return @intFromPtr(&staticErasedCallableTrampoline);
     }
@@ -962,10 +1039,6 @@ pub const Interpreter = struct {
         return self.roc_env.runtime_error_message;
     }
 
-    pub fn getExpectMessage(self: *const LirInterpreter) ?[]const u8 {
-        return self.roc_env.expect_message;
-    }
-
     pub fn getExpectFailures(self: *const LirInterpreter) []const ExpectFailure {
         return self.roc_env.expect_failures.items;
     }
@@ -980,10 +1053,6 @@ pub const Interpreter = struct {
     /// The source region of the `?` whose Err failed the expect.
     pub fn getExpectErrRegion(self: *const LirInterpreter) ?base.Region {
         return self.roc_env.expect_err_region;
-    }
-
-    pub fn getFailedCallStack(self: *const LirInterpreter) []const LirProcSpecId {
-        return self.failed_call_stack.items;
     }
 
     /// The crash statement that ended the last evaluation, if one did.
@@ -1114,7 +1183,7 @@ pub const Interpreter = struct {
     }
 
     fn invariantFailed(_: *const LirInterpreter, comptime fmt: []const u8, args: anytype) noreturn {
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             debugPrint(fmt, args);
             debugPrint("\n", .{});
             std.debug.assert(false);
@@ -1131,7 +1200,6 @@ pub const Interpreter = struct {
     /// interpreter is pinned, so a single binding at each evaluation entry keeps
     /// the runtime valid for every boxy operation reached from it.
     fn bindBoxyRuntime(self: *LirInterpreter) void {
-        self.roc_env.active_interpreter = self;
         self.boxy_runtime.runtime_boxy_type_descs = &self.runtime_boxy_type_descs;
         self.boxy_runtime.runtime_boxy_desc_ids = &self.runtime_boxy_desc_ids;
         self.boxy_runtime.desc_materializations = &self.desc_materializations;
@@ -1164,7 +1232,7 @@ pub const Interpreter = struct {
         self.failed_stmt_inline_scope = InlineScopeId.none;
         self.failed_crash_stmt = null;
         self.comptime_failed_site = null;
-        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+        if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
     }
 
     fn bindCallerRocOps(self: *LirInterpreter, caller_roc_ops: *RocOps) void {
@@ -1221,7 +1289,7 @@ pub const Interpreter = struct {
             const locals = self.interp.store.getLocalSpan(captures);
             for (ids, descs, 0..) |*id, *desc, index| {
                 const local = GuardedList.at(locals, index);
-                id.* = @intFromEnum(local);
+                id.* = @backingInt(local);
                 desc.* = try self.interp.resolveBoxyDescRef(frame, .{ .local = local });
             }
         }
@@ -1234,58 +1302,56 @@ pub const Interpreter = struct {
             return self.interp.resolveBoxyDictRef(frame, dict_ref);
         }
 
-        pub fn callInspectMethod(
+        fn activeFrame(self: BoxyFrameHooks, kind: boxy_runtime.DescriptorMethodKind) Error!*const Frame {
+            return self.frame orelse self.interp.invariantFailedError(
+                "LIR/interpreter invariant violated: {s} worker called without an active frame",
+                .{@tagName(kind)},
+            );
+        }
+
+        /// Crash at code checking rejected and already reported.
+        pub fn crashCheckedError(self: BoxyFrameHooks, message: []const u8) Error {
+            return self.interp.triggerCrash(message);
+        }
+
+        /// Call the `kind` method slot the first argument's descriptor
+        /// carries with the borrowed `args`.
+        pub fn callDescriptorMethod(
             self: BoxyFrameHooks,
+            kind: boxy_runtime.DescriptorMethodKind,
             method: LirProgram.BoxyMethodSlotId,
-            value: Value,
-            value_layout: layout_mod.Idx,
-            desc: *const LirProgram.BoxyTypeDesc,
-        ) Error!boxy_runtime.InspectCallResult {
-            const prepared = try self.interp.boxy_runtime.prepareInspectCall(
+            args: []const boxy_runtime.DictCallArg,
+        ) Error!boxy_runtime.DescriptorMethodCallResult {
+            const prepared = try self.interp.boxy_runtime.prepareDescriptorMethodCall(
                 self,
                 self.interp.arena.allocator(),
+                kind,
                 method,
-                .{ .value = value, .layout = value_layout, .source_desc = desc },
+                args,
             );
             const proc = self.interp.store.getProcSpec(prepared.proc);
-            if (prepared.arg_values.len == 0) {
+            if (prepared.arg_values.len < args.len) {
                 return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker call had no explicit argument",
-                    .{},
+                    "LIR/interpreter invariant violated: {s} worker call had {d} explicit arguments for {d} values",
+                    .{ @tagName(kind), prepared.arg_values.len, args.len },
                 );
             }
-            const argument_is_borrowed = (prepared.borrowed_args & 1) != 0;
-            const worker_borrows_argument = (proc.rc_borrowed_params & 1) != 0;
-            if (argument_is_borrowed and !worker_borrows_argument) {
-                const frame = self.frame orelse return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
-                    .{},
-                );
-                try self.interp.performBoxyLayoutDrop(
-                    frame,
-                    prepared.arg_values[0],
-                    prepared.arg_layouts[0],
-                    prepared.arg_descs[0],
-                    .incref,
-                    1,
-                    .atomic,
-                );
+            for (0..args.len) |index| {
+                const bit = @as(u64, 1) << @intCast(index);
+                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
+                if (argument_is_borrowed and !worker_borrows_argument) {
+                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .incref, 1, .atomic);
+                }
             }
             const result = try self.interp.evalProcById(prepared.proc, prepared.arg_values, prepared.arg_layouts);
-            if (!argument_is_borrowed and worker_borrows_argument) {
-                const frame = self.frame orelse return self.interp.invariantFailedError(
-                    "LIR/interpreter invariant violated: to_inspect worker called without an active frame",
-                    .{},
-                );
-                try self.interp.performBoxyLayoutDrop(
-                    frame,
-                    prepared.arg_values[0],
-                    prepared.arg_layouts[0],
-                    prepared.arg_descs[0],
-                    .decref,
-                    1,
-                    .atomic,
-                );
+            for (0..args.len) |index| {
+                const bit = @as(u64, 1) << @intCast(index);
+                const argument_is_borrowed = (prepared.borrowed_args & bit) != 0;
+                const worker_borrows_argument = (proc.rc_borrowed_params & bit) != 0;
+                if (!argument_is_borrowed and worker_borrows_argument) {
+                    try self.interp.performBoxyLayoutDrop(try self.activeFrame(kind), prepared.arg_values[index], prepared.arg_layouts[index], prepared.arg_descs[index], .decref, 1, .atomic);
+                }
             }
             return .{
                 .value = result.value,
@@ -1321,7 +1387,7 @@ pub const Interpreter = struct {
 
         pub fn traceProcId(self: BoxyFrameHooks) u32 {
             const frame = self.frame orelse return std.math.maxInt(u32);
-            return @intFromEnum(frame.proc_id);
+            return @backingInt(frame.proc_id);
         }
 
         pub fn debugDumpProc(self: BoxyFrameHooks) void {
@@ -1373,7 +1439,7 @@ pub const Interpreter = struct {
     }
 
     fn maxRocAlignment(a: layout_mod.RocAlignment, b: layout_mod.RocAlignment) layout_mod.RocAlignment {
-        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+        return if (@backingInt(a) >= @backingInt(b)) a else b;
     }
 
     /// Allocate heap data through roc_ops with a refcount header.
@@ -1483,6 +1549,14 @@ pub const Interpreter = struct {
 
     /// Evaluate a proc-root LIR program using the RocOps bound at initialization time.
     pub fn eval(self: *LirInterpreter, request: EvalRequest) Error!EvalResult {
+        // Freestanding Linux programs own their signal handler and have no
+        // TLS startup. Only the compiler's handler reads this diagnostic flag.
+        const tracks_compiler_signals = builtin.os.tag != .linux or builtin.link_libc;
+        const outer_interpreting = if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program else false;
+        if (comptime tracks_compiler_signals) base.stack_overflow.interpreting_roc_program = true;
+        defer if (comptime tracks_compiler_signals) {
+            base.stack_overflow.interpreting_roc_program = outer_interpreting;
+        };
         self.bindBoxyRuntime();
         self.roc_env.resetForEval();
         self.call_stack.clearRetainingCapacity();
@@ -1496,7 +1570,7 @@ pub const Interpreter = struct {
         self.failed_crash_stmt = null;
         self.comptime_branch_hits.clearRetainingCapacity();
         self.comptime_failed_site = null;
-        if (builtin.mode == .Debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
+        if (builtin.mode == .debug) self.inflight_zeroed_box_payloads.clearRetainingCapacity();
 
         if (sljmp.supported) {
             var eval_jmp_buf: JmpBuf = undefined;
@@ -1604,7 +1678,7 @@ pub const Interpreter = struct {
     ) Error!void {
         const layout_idx = self.store.getLocal(local_id).layout_idx;
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             var visited = std.ArrayList(DebugVisitedValue).empty;
             defer visited.deinit(self.evalAllocator());
             self.debugAssertValueMatchesLayout(
@@ -1631,13 +1705,13 @@ pub const Interpreter = struct {
                 debugPrint(
                     "LIR/interpreter unassigned local in proc {d}: name={d} body={any} stmt={any} region={any} local={d} layout={d}\n",
                     .{
-                        @intFromEnum(frame.proc_id),
+                        @backingInt(frame.proc_id),
                         proc.name.raw(),
                         proc.body,
                         self.active_stmt_id,
                         if (self.active_stmt_id) |stmt_id| self.store.stmtRegion(stmt_id) else base.Region.zero(),
-                        @intFromEnum(local_id),
-                        @intFromEnum(self.store.getLocal(local_id).layout_idx),
+                        @backingInt(local_id),
+                        @backingInt(self.store.getLocal(local_id).layout_idx),
                     },
                 );
                 if (self.active_stmt_id) |stmt_id| {
@@ -1655,8 +1729,8 @@ pub const Interpreter = struct {
                 for (0..params.len) |i| {
                     const param = GuardedList.at(params, i);
                     debugPrint(" {d}:layout={d}", .{
-                        @intFromEnum(param),
-                        @intFromEnum(self.store.getLocal(param).layout_idx),
+                        @backingInt(param),
+                        @backingInt(self.store.getLocal(param).layout_idx),
                     });
                 }
                 debugPrint("\n", .{});
@@ -1665,7 +1739,7 @@ pub const Interpreter = struct {
             }
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: local {d} was used before assignment in proc {d}",
-                .{ @intFromEnum(local_id), @intFromEnum(frame.proc_id) },
+                .{ @backingInt(local_id), @backingInt(frame.proc_id) },
             );
         }
         return slot.val;
@@ -1713,7 +1787,7 @@ pub const Interpreter = struct {
         residual_shell_absent_fields: LIR.U32Span,
         root_list_validation: DebugListValidation,
     ) void {
-        if (builtin.mode != .Debug) return;
+        if (builtin.mode != .debug) return;
         if (comptime builtin.target.os.tag == .freestanding) return;
         // Bound the walk: stop descending into very deep structures
         // (e.g. long TRMC-built lists), since this walk recurses natively, and
@@ -1793,14 +1867,19 @@ pub const Interpreter = struct {
                 );
             },
             .erased_callable => {
-                const data_ptr = self.readBoxedDataPointer(value) orelse self.debugValueShapePanicAt(
-                    proc_id,
-                    stmt_id,
-                    local_id,
-                    layout_idx,
-                    path_buf[0..path_len],
-                    "boxed erased callable had null payload pointer",
-                );
+                const data_ptr = self.readBoxedDataPointer(value) orelse {
+                    // A zero-filled box payload awaiting its value (a
+                    // recursive value's slot) holds null callables.
+                    if (allow_zeroed_box_payload_holes and path_len > 0) return;
+                    self.debugValueShapePanicAt(
+                        proc_id,
+                        stmt_id,
+                        local_id,
+                        layout_idx,
+                        path_buf[0..path_len],
+                        "boxed erased callable had null payload pointer",
+                    );
+                };
                 _ = builtins.erased_callable.payloadPtr(data_ptr);
             },
             .list => {
@@ -1994,11 +2073,11 @@ pub const Interpreter = struct {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: proc {d} stmt {d}={any} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                     .{
-                        @intFromEnum(proc_id),
-                        @intFromEnum(id),
+                        @backingInt(proc_id),
+                        @backingInt(id),
                         self.store.getCFStmt(id),
-                        @intFromEnum(local_id),
-                        @intFromEnum(layout_idx),
+                        @backingInt(local_id),
+                        @backingInt(layout_idx),
                         path,
                         reason,
                     },
@@ -2008,9 +2087,9 @@ pub const Interpreter = struct {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: proc {d} assigned local {d} layout {d} invalid value shape at path {any}: {s}",
                 .{
-                    @intFromEnum(proc_id),
-                    @intFromEnum(local_id),
-                    @intFromEnum(layout_idx),
+                    @backingInt(proc_id),
+                    @backingInt(local_id),
+                    @backingInt(layout_idx),
                     path,
                     reason,
                 },
@@ -2022,7 +2101,7 @@ pub const Interpreter = struct {
         if (comptime builtin.target.os.tag == .freestanding) return;
         debugPrint(
             "LIR/interpreter stmt chain from {d}:\n",
-            .{@intFromEnum(start_stmt)},
+            .{@backingInt(start_stmt)},
         );
         var current = start_stmt;
         var remaining = limit;
@@ -2032,11 +2111,11 @@ pub const Interpreter = struct {
                 .assign_ref => |assign| debugPrint(
                     "  stmt {d}: assign_ref target={d} op={any} next={d} layout={d}\n",
                     .{
-                        @intFromEnum(current),
-                        @intFromEnum(assign.target),
+                        @backingInt(current),
+                        @backingInt(assign.target),
                         assign.op,
-                        @intFromEnum(assign.next),
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(assign.next),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_literal => |assign| {
@@ -2045,9 +2124,9 @@ pub const Interpreter = struct {
                     debugPrint(
                         "  stmt {d}: {any} target_layout={d} tag={s} size={d}\n",
                         .{
-                            @intFromEnum(current),
+                            @backingInt(current),
                             stmt,
-                            @intFromEnum(layout_idx),
+                            @backingInt(layout_idx),
                             @tagName(layout_val.tag),
                             self.helper.sizeOf(layout_idx),
                         },
@@ -2056,46 +2135,46 @@ pub const Interpreter = struct {
                 .assign_call => |assign| debugPrint(
                     "  stmt {d}: assign_call proc={d} target={d} args={d}+{d} next={d} layout={d}\n",
                     .{
-                        @intFromEnum(current),
-                        @intFromEnum(assign.proc),
-                        @intFromEnum(assign.target),
+                        @backingInt(current),
+                        @backingInt(assign.proc),
+                        @backingInt(assign.target),
                         assign.args.start,
                         assign.args.len,
-                        @intFromEnum(assign.next),
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(assign.next),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_call_erased => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_packed_erased_fn => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_low_level => |assign| {
                     debugPrint(
                         "  stmt {d}: {any} target_layout={d} args=",
                         .{
-                            @intFromEnum(current),
+                            @backingInt(current),
                             stmt,
-                            @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                            @backingInt(self.store.getLocal(assign.target).layout_idx),
                         },
                     );
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     for (0..arg_locals.len) |i| {
                         const arg_local = GuardedList.at(arg_locals, i);
                         debugPrint("{d}:layout={d} ", .{
-                            @intFromEnum(arg_local),
-                            @intFromEnum(self.store.getLocal(arg_local).layout_idx),
+                            @backingInt(arg_local),
+                            @backingInt(self.store.getLocal(arg_local).layout_idx),
                         });
                     }
                     debugPrint("\n", .{});
@@ -2103,49 +2182,49 @@ pub const Interpreter = struct {
                 .assign_list => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_struct => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .assign_tag => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
                 .store_struct => |assign| debugPrint(
                     "  stmt {d}: {any} store_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(assign.struct_layout),
+                        @backingInt(assign.struct_layout),
                     },
                 ),
                 .store_tag => |assign| debugPrint(
                     "  stmt {d}: {any} store_layout={d}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(assign.tag_layout),
+                        @backingInt(assign.tag_layout),
                     },
                 ),
                 .set_local => |assign| debugPrint(
                     "  stmt {d}: {any} target_layout={d} target_layout_data={any}\n",
                     .{
-                        @intFromEnum(current),
+                        @backingInt(current),
                         stmt,
-                        @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                        @backingInt(self.store.getLocal(assign.target).layout_idx),
                         self.layout_store.getLayout(self.store.getLocal(assign.target).layout_idx),
                     },
                 ),
@@ -2158,6 +2237,8 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 .boxy_tag_match,
@@ -2182,7 +2263,7 @@ pub const Interpreter = struct {
                 .jump,
                 .ret,
                 .crash,
-                => debugPrint("  stmt {d}: {any}\n", .{ @intFromEnum(current), stmt }),
+                => debugPrint("  stmt {d}: {any}\n", .{ @backingInt(current), stmt }),
             }
             current = switch (stmt) {
                 .assign_ref => |assign| assign.next,
@@ -2199,6 +2280,8 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox => |assign| assign.next,
                 .assign_boxy_adapt => |assign| assign.next,
                 .assign_boxy_inspect => |assign| assign.next,
+                .assign_boxy_eq => |assign| assign.next,
+                .assign_boxy_hash => |assign| assign.next,
                 .assign_boxy_tag => |assign| assign.next,
                 .assign_boxy_tag_payload => |assign| assign.next,
                 .assign_call_dict => |assign| assign.next,
@@ -2209,13 +2292,8 @@ pub const Interpreter = struct {
                 .store_struct => |assign| assign.next,
                 .store_tag => |assign| assign.next,
                 .set_local => |assign| assign.next,
-                .debug => |stmt_next| stmt_next.next,
-                .expect => |stmt_next| stmt_next.next,
+                inline .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |stmt_next| stmt_next.next,
                 .comptime_branch_taken => |marker| marker.next,
-                .incref => |stmt_next| stmt_next.next,
-                .decref => |stmt_next| stmt_next.next,
-                .decref_if_initialized => |stmt_next| stmt_next.next,
-                .free => |stmt_next| stmt_next.next,
                 .join => |join_stmt| join_stmt.body,
                 .switch_stmt,
                 .switch_initialized_payload,
@@ -2235,125 +2313,9 @@ pub const Interpreter = struct {
         }
     }
 
-    fn debugPrintLayoutShapeLines(
-        self: *LirInterpreter,
-        layout_idx: layout_mod.Idx,
-        indent: usize,
-        visited: *std.ArrayList(u32),
-    ) void {
-        for (visited.items) |existing| {
-            if (existing == @intFromEnum(layout_idx)) {
-                debugPrint("{s}{d} (cycle)\n", .{ debugIndent(indent), @intFromEnum(layout_idx) });
-                return;
-            }
-        }
-
-        visited.append(self.evalAllocator(), @intFromEnum(layout_idx)) catch return;
-        defer _ = visited.pop();
-
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{s}{d}: {s}\n", .{ debugIndent(indent), @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar, .zst, .box_of_zst, .erased_box, .list_of_zst, .erased_callable => {},
-            .box, .ptr => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .list => self.debugPrintLayoutShapeLines(layout_val.getIdx(), indent + 1, visited),
-            .closure => self.debugPrintLayoutShapeLines(layout_val.getClosure().captures_layout_idx, indent + 1, visited),
-            .struct_ => {
-                const info = self.layout_store.getStructInfo(layout_val);
-                for (0..info.fields.len) |i| {
-                    const field = info.fields.get(@intCast(i));
-                    debugPrint("{s}field[{d}] semantic_index={d}\n", .{ debugIndent(indent + 1), i, field.index });
-                    self.debugPrintLayoutShapeLines(field.layout, indent + 2, visited);
-                }
-            },
-            .tag_union => {
-                const info = self.layout_store.getTagUnionInfo(layout_val);
-                for (0..info.variants.len) |i| {
-                    const variant = info.variants.get(@intCast(i));
-                    debugPrint("{s}variant[{d}]\n", .{ debugIndent(indent + 1), i });
-                    self.debugPrintLayoutShapeLines(variant.payload_layout, indent + 2, visited);
-                }
-            },
-        }
-    }
-
-    fn debugIndent(indent: usize) []const u8 {
-        const spaces = "                                ";
-        return spaces[0..@min(indent * 2, spaces.len)];
-    }
-
-    fn debugPrintValueSummary(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx, depth: u8) void {
-        if (depth > 2) {
-            debugPrint("...", .{});
-            return;
-        }
-        const layout_val = self.layout_store.getLayout(layout_idx);
-        debugPrint("{d}:{s}", .{ @intFromEnum(layout_idx), @tagName(layout_val.tag) });
-        switch (layout_val.tag) {
-            .scalar => {
-                const size = self.helper.sizeOf(layout_idx);
-                const raw = switch (size) {
-                    0 => @as(u64, 0),
-                    1 => @as(u64, value.read(u8)),
-                    2 => @as(u64, value.read(u16)),
-                    4 => @as(u64, value.read(u32)),
-                    8 => value.read(u64),
-                    else => @as(u64, 0),
-                };
-                debugPrint("(raw={d})", .{raw});
-            },
-            .tag_union => {
-                const disc = self.helper.readTagDiscriminant(value, layout_idx);
-                debugPrint("(disc={d}", .{disc});
-                const payload_layout = self.requireBoxyTagPayloadLayout(layout_idx, disc);
-                debugPrint(",payload=", .{});
-                if (self.helper.sizeOf(payload_layout) == 0) {
-                    debugPrint("{d}:zst", .{@intFromEnum(payload_layout)});
-                } else {
-                    self.debugPrintValueSummary(value, payload_layout, depth + 1);
-                }
-                debugPrint(")", .{});
-            },
-            .struct_ => {
-                const struct_idx = layout_val.getStruct().idx;
-                const data = self.layout_store.getStructData(struct_idx);
-                debugPrint("(", .{});
-                var field_index: u32 = 0;
-                while (field_index < data.fields.count) : (field_index += 1) {
-                    if (field_index != 0) debugPrint(",", .{});
-                    const field_layout = self.layout_store.getStructFieldLayoutByOriginalIndex(struct_idx, field_index);
-                    const field_offset = self.layout_store.getStructFieldOffsetByOriginalIndex(struct_idx, field_index);
-                    debugPrint("f{d}=", .{field_index});
-                    if (self.helper.sizeOf(field_layout) == 0) {
-                        debugPrint("{d}:zst", .{@intFromEnum(field_layout)});
-                    } else {
-                        self.debugPrintValueSummary(value.offset(field_offset), field_layout, depth + 1);
-                    }
-                }
-                debugPrint(")", .{});
-            },
-            .list, .list_of_zst => {
-                const list = self.valueToRocListForLayout(value, layout_idx);
-                debugPrint("(len={d},bytes={any})", .{ list.len(), list.bytes });
-            },
-            .box, .box_of_zst => {
-                debugPrint("(ptr={any})", .{self.readBoxedDataPointer(value)});
-            },
-            .erased_callable => {
-                const ptr = self.readBoxedDataPointer(value);
-                debugPrint("(ptr={any}", .{ptr});
-                if (ptr) |data_ptr| {
-                    debugPrint(",proc={d}", .{@intFromEnum(erasedCallableInterpreterProcId(data_ptr))});
-                }
-                debugPrint(")", .{});
-            },
-            .zst => {},
-            .ptr, .closure => {
-                debugPrint("(ptr=0x{x})", .{@intFromPtr(value.ptr)});
-            },
-        }
-    }
-
+    /// Run a procedure to its result. A frame-replacing call ends the
+    /// activation that made it before the callee's begins, so a chain of them
+    /// runs in this one native frame.
     fn evalProcSpec(
         self: *LirInterpreter,
         proc_id: LirProcSpecId,
@@ -2362,11 +2324,26 @@ pub const Interpreter = struct {
         arg_layouts: []const layout_mod.Idx,
         descriptor_bindings: []const EvalDescriptorBinding,
     ) Error!EvalProcResult {
+        var step = try self.evalProcActivation(proc_id, proc_spec, args, arg_layouts, descriptor_bindings);
+        while (true) switch (step) {
+            .result => |result| return result,
+            .tail_call => |call| step = try self.evalProcActivation(call.proc, self.store.getProcSpec(call.proc), call.args, call.arg_layouts, &.{}),
+        };
+    }
+
+    fn evalProcActivation(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        proc_spec: LirProcSpec,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        descriptor_bindings: []const EvalDescriptorBinding,
+    ) Error!ProcStep {
         try self.call_stack.append(self.evalAllocator(), proc_id);
         defer _ = self.call_stack.pop();
         errdefer self.recordFailedCallStackIfUnset() catch {};
 
-        if (comptime builtin.mode == .Debug) {
+        if (comptime builtin.mode == .debug) {
             if (self.call_depth >= max_call_depth) {
                 return self.triggerCrash(stack_overflow_message);
             }
@@ -2390,20 +2367,20 @@ pub const Interpreter = struct {
             for (args, arg_layouts, param_layouts, 0..) |arg, arg_layout, param_layout, i| {
                 normalized_args[i] = try self.coerceExplicitRefValueToLayout(arg, arg_layout, param_layout);
             }
-            return .{
+            return .{ .result = .{
                 .value = try self.callHostedProc(proc_id, hosted, normalized_args, param_layouts, proc_spec.ret_layout),
                 .layout = proc_spec.ret_layout,
-            };
+            } };
         }
 
         trace.log(
             "enter proc={d} name={d} depth={d} args={d} ret_layout={d} ret_desc={any}",
             .{
-                @intFromEnum(proc_id),
+                @backingInt(proc_id),
                 proc_spec.name.raw(),
                 self.call_depth,
                 args.len,
-                @intFromEnum(proc_spec.ret_layout),
+                @backingInt(proc_spec.ret_layout),
                 proc_spec.ret_desc,
             },
         );
@@ -2412,18 +2389,20 @@ pub const Interpreter = struct {
 
         var frame = try self.initFrame(proc_id, proc_spec);
         defer self.releaseFrameSlots(frame.slots);
+        frame.caller_drives = self.erased_caller_drives;
+        self.erased_caller_drives = false;
 
         const params = self.store.getLocalSpan(proc_spec.args);
         if (params.len != args.len) {
-            if (builtin.mode == .Debug) {
-                debugPrint("debug_proc_arg_count_mismatch proc={d} params=", .{@intFromEnum(proc_id)});
+            if (builtin.mode == .debug) {
+                debugPrint("debug_proc_arg_count_mismatch proc={d} params=", .{@backingInt(proc_id)});
                 for (0..params.len) |i| {
                     const param = GuardedList.at(params, i);
-                    debugPrint("{d}:{d} ", .{ @intFromEnum(param), @intFromEnum(self.store.getLocal(param).layout_idx) });
+                    debugPrint("{d}:{d} ", .{ @backingInt(param), @backingInt(self.store.getLocal(param).layout_idx) });
                 }
                 debugPrint(" args=", .{});
                 for (arg_layouts, 0..) |arg_layout, i| {
-                    debugPrint("{d}:{d} ", .{ i, @intFromEnum(arg_layout) });
+                    debugPrint("{d}:{d} ", .{ i, @backingInt(arg_layout) });
                 }
                 debugPrint(" abi={s} hosted={}\n", .{ @tagName(proc_spec.abi), proc_spec.hosted != null });
                 self.debugDumpProc(proc_id);
@@ -2449,12 +2428,12 @@ pub const Interpreter = struct {
                 if (param_layout != .opaque_ptr or arg_layout != .opaque_ptr) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} hidden capture parameter was not opaque_ptr",
-                        .{@intFromEnum(proc_id)},
+                        .{@backingInt(proc_id)},
                     );
                 }
             }
 
-            if (builtin.mode == .Debug and arg_layout != param_layout) {
+            if (builtin.mode == .debug and arg_layout != param_layout) {
                 const actual_layout_val = self.layout_store.getLayout(arg_layout);
                 const expected_layout_val = self.layout_store.getLayout(param_layout);
                 if (actual_layout_val.tag == .struct_ or expected_layout_val.tag == .struct_ or
@@ -2464,19 +2443,19 @@ pub const Interpreter = struct {
                     debugPrint(
                         "LIR/interpreter invariant violated before proc arg coercion: proc={d} name={d} arg_index={d} actual_layout={d} ({s}) expected_layout={d} ({s}) param_local={d}\n",
                         .{
-                            @intFromEnum(proc_id),
+                            @backingInt(proc_id),
                             proc_spec.name.raw(),
                             i,
-                            @intFromEnum(arg_layout),
+                            @backingInt(arg_layout),
                             @tagName(actual_layout_val.tag),
-                            @intFromEnum(param_layout),
+                            @backingInt(param_layout),
                             @tagName(expected_layout_val.tag),
-                            @intFromEnum(param),
+                            @backingInt(param),
                         },
                     );
                     debugPrint("  call stack:", .{});
                     for (self.call_stack.items) |stack_proc| {
-                        debugPrint(" {d}", .{@intFromEnum(stack_proc)});
+                        debugPrint(" {d}", .{@backingInt(stack_proc)});
                     }
                     debugPrint("\n", .{});
                     for (self.call_stack.items) |stack_proc| {
@@ -2497,7 +2476,7 @@ pub const Interpreter = struct {
                 if (self.layout_store.getLayout(param_layout).tag != .erased_callable) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased reuse parameter in proc {d} did not have erased_callable layout",
-                        .{@intFromEnum(proc_id)},
+                        .{@backingInt(proc_id)},
                     );
                 }
                 frame.setLocal(param, materialized);
@@ -2518,13 +2497,21 @@ pub const Interpreter = struct {
         if (trace.enabled) self.debugPrintStmtChain(body, 32);
         const outcome = try self.execStmtChain(&frame, body);
         return switch (outcome) {
+            .tail_call => |call| .{ .tail_call = call },
+            .returned_pending => .{ .result = .{
+                .value = try self.poisonUninitializedValue(proc_spec.ret_layout),
+                .layout = proc_spec.ret_layout,
+            } },
             .returned => |ret_local| blk: {
                 trace.log(
                     "return proc={d} name={d} depth={d}",
-                    .{ @intFromEnum(proc_id), proc_spec.name.raw(), self.call_depth },
+                    .{ @backingInt(proc_id), proc_spec.name.raw(), self.call_depth },
                 );
                 const raw_result = try self.getLocalChecked(&frame, ret_local);
                 const raw_layout = self.store.getLocal(ret_local).layout_idx;
+                // A procedure that left a call pending returns no value; the
+                // pending call produces the result.
+                if (self.pending_erased != null) break :blk .{ .result = .{ .value = raw_result, .layout = raw_layout } };
                 const result_desc = if (proc_spec.runtime_ret_desc) |runtime_ret_desc|
                     try self.resolveBoxyDescRef(&frame, .{ .local = runtime_ret_desc })
                 else
@@ -2532,7 +2519,7 @@ pub const Interpreter = struct {
                         try self.resolveBoxyDescRef(&frame, desc_ref)
                     else
                         null;
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, raw_result, raw_layout, &visited, false, .empty(), .items);
@@ -2548,7 +2535,7 @@ pub const Interpreter = struct {
                     raw_layout,
                     proc_spec.ret_layout,
                 );
-                if (builtin.mode == .Debug) {
+                if (builtin.mode == .debug) {
                     var visited = std.ArrayList(DebugVisitedValue).empty;
                     defer visited.deinit(self.evalAllocator());
                     self.debugAssertValueMatchesLayout(proc_id, null, ret_local, coerced_result, proc_spec.ret_layout, &visited, false, .empty(), .items);
@@ -2559,17 +2546,17 @@ pub const Interpreter = struct {
                 // When the coercion truly unwrapped a box, the descriptor must
                 // follow it down to the payload.
                 if (coercion_unwraps) {
-                    break :blk .{
+                    break :blk .{ .result = .{
                         .value = try self.materializeLocalValue(coerced_result, proc_spec.ret_layout),
                         .desc = if (result_desc) |desc| try self.boxyBoxAllocationPayloadDesc(&frame, raw_layout, desc) else null,
                         .layout = proc_spec.ret_layout,
-                    };
+                    } };
                 }
-                break :blk .{
+                break :blk .{ .result = .{
                     .value = try self.materializeLocalValue(coerced_result, raw_layout),
                     .desc = result_desc,
                     .layout = raw_layout,
-                };
+                } };
             },
             .loop_continue => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
@@ -2627,7 +2614,7 @@ pub const Interpreter = struct {
     fn requireProcBody(self: *LirInterpreter, proc_id: LirProcSpecId, proc_spec: LirProcSpec) CFStmtId {
         return proc_spec.body orelse self.invariantFailed(
             "LIR/interpreter invariant violated: non-hosted proc {d} missing statement body",
-            .{@intFromEnum(proc_id)},
+            .{@backingInt(proc_id)},
         );
     }
 
@@ -2717,31 +2704,61 @@ pub const Interpreter = struct {
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_values = try self.collectLocalValues(frame, arg_locals);
                     const arg_layouts = try self.localLayouts(arg_locals);
+                    if (assign.replaces_frame) {
+                        return .{ .tail_call = .{ .proc = assign.proc, .args = arg_values, .arg_layouts = arg_layouts } };
+                    }
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
+                    var result = self.evalProcById(assign.proc, arg_values, arg_layouts) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = self.materializeCallResultToLayout(
+                    var stored_as: ?*const LirProgram.BoxyTypeDesc = null;
+                    if (self.pending_erased != null) {
+                        if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) |pending_return| {
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
+                                };
+                                return .returned_pending;
+                            }
+                            // The pending call produces this statement's
+                            // value; this procedure returns to whoever makes
+                            // it without reading the value.
+                            frame.setLocal(assign.target, result.value);
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            current = assign.next;
+                            continue;
+                        }
+                        const driven = (try self.drivePendingErasedCalls(frame)).?;
+                        result = .{ .value = driven.value, .layout = driven.layout, .desc = driven.desc };
+                        stored_as = driven.stored_as;
+                    }
+                    const materialized_result = self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     ) catch |err| {
                         if (comptime builtin.target.os.tag != .freestanding) {
                             debugPrint(
                                 "LIR/interpreter call-result materialization failed in proc {d} stmt {d}: callee={d} target={d} actual_layout={d} target_layout={d}\n",
                                 .{
-                                    @intFromEnum(frame.proc_id),
-                                    @intFromEnum(current),
-                                    @intFromEnum(assign.proc),
-                                    @intFromEnum(assign.target),
-                                    @intFromEnum(result.layout),
-                                    @intFromEnum(self.store.getLocal(assign.target).layout_idx),
+                                    @backingInt(frame.proc_id),
+                                    @backingInt(current),
+                                    @backingInt(assign.proc),
+                                    @backingInt(assign.target),
+                                    @backingInt(result.layout),
+                                    @backingInt(self.store.getLocal(assign.target).layout_idx),
                                 },
                             );
                         }
@@ -2810,7 +2827,47 @@ pub const Interpreter = struct {
                     const call_loc = self.active_stmt_loc;
                     const call_region = self.active_stmt_region;
                     const call_inline_scope = self.active_stmt_inline_scope;
-                    const result = self.evalErasedCall(
+                    const target_layout = self.store.getLocal(assign.target).layout_idx;
+                    const result = if (assign.deferred) deferred: {
+                        if (self.pending_erased != null) {
+                            return self.invariantFailedError(
+                                "LIR/interpreter invariant violated: deferred an erased call while another was pending",
+                                .{},
+                            );
+                        }
+                        self.pending_erased = .{
+                            .closure = try self.getLocalChecked(frame, assign.closure),
+                            .args = arg_values,
+                            .arg_layouts = arg_layouts,
+                            .arg_descs = arg_descs,
+                            .arg_desc_keys = arg_desc_keys,
+                            .arg_plan = assign.arg_plan,
+                            .site_layout = target_layout,
+                            .result_desc = try self.resolveOptionalBoxyDescRef(frame, assign.result_desc),
+                            .conversion = null,
+                        };
+                        if (!drivesHere(frame, assign.drive)) {
+                            // The conversions that follow would read a value
+                            // that is not there yet, so the procedure returns
+                            // now to whoever makes the pending call.
+                            if (assign.returns_pending) |pending_return| {
+                                self.pending_erased.?.conversion = .{
+                                    .layout = self.store.getProcSpec(frame.proc_id).ret_layout,
+                                    .desc = try self.resolveOptionalBoxyDescRef(frame, pending_return.result_desc),
+                                    .keeps_own_desc = pending_return.keeps_own_desc,
+                                };
+                                return .returned_pending;
+                            }
+                            frame.setLocal(assign.target, try self.poisonUninitializedValue(target_layout));
+                            if (assign.out_desc) |out_desc| frame.setLocal(out_desc, try self.allocPointerIntValue(0));
+                            current = assign.next;
+                            continue;
+                        }
+                        break :deferred (self.drivePendingErasedCalls(frame) catch |err| {
+                            self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
+                            return err;
+                        }).?;
+                    } else self.evalErasedCall(
                         frame,
                         assign.closure,
                         arg_values,
@@ -2818,18 +2875,19 @@ pub const Interpreter = struct {
                         arg_descs,
                         arg_desc_keys,
                         assign.arg_plan,
-                        self.store.getLocal(assign.target).layout_idx,
+                        target_layout,
                         assign.reuse_closure,
                     ) catch |err| {
                         self.recordCallerFailureLocForCalleeError(call_loc, call_region, call_inline_scope, err);
                         return err;
                     };
-                    const materialized_result = try self.materializeCallResultToLayout(
+                    const materialized_result = try self.materializeDrivenCallResult(
                         frame,
                         result.value,
                         result.layout,
                         result.desc,
                         assign.result_desc,
+                        result.stored_as,
                         self.store.getLocal(assign.target).layout_idx,
                     );
                     try self.setLocalChecked(
@@ -2863,7 +2921,7 @@ pub const Interpreter = struct {
                 },
                 .assign_call_dict => |assign| {
                     const dict = try self.resolveBoxyDictRef(frame, assign.dict);
-                    const required_method = @intFromEnum(assign.method);
+                    const required_method = @backingInt(assign.method);
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     const arg_desc_locals = self.store.getLocalSpan(assign.arg_descs);
                     const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
@@ -2881,7 +2939,7 @@ pub const Interpreter = struct {
                         if (raw_desc_ptr == 0) {
                             return self.invariantFailedError(
                                 "LIR/interpreter invariant violated: dictionary call argument descriptor local {d} was null",
-                                .{@intFromEnum(desc_local)},
+                                .{@backingInt(desc_local)},
                             );
                         }
                         call_args[arg_index] = .{
@@ -2972,7 +3030,7 @@ pub const Interpreter = struct {
                     const payload_desc = if (assign.payload_desc) |desc_ref| try self.resolveBoxyDescRef(frame, desc_ref) else {
                         return self.invariantFailedError(
                             "LIR/interpreter invariant violated: assign_boxy_box reached interpreter without a payload descriptor at stmt {d}",
-                            .{@intFromEnum(current)},
+                            .{@backingInt(current)},
                         );
                     };
                     const source_desc = if (assign.source_desc) |desc_ref|
@@ -3108,6 +3166,41 @@ pub const Interpreter = struct {
                         try self.inspectBoxyValue(frame, source_value, self.store.getLocal(assign.source).layout_idx, source_desc),
                         false,
                     );
+                    current = assign.next;
+                },
+                .assign_boxy_eq => |assign| {
+                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
+                    const value_layout = self.store.getLocal(assign.lhs).layout_idx;
+                    if (self.store.getLocal(assign.rhs).layout_idx != value_layout) {
+                        return self.invariantFailedError(
+                            "LIR/interpreter invariant violated: boxy equality operands had layouts {d} and {d}",
+                            .{ @backingInt(value_layout), @backingInt(self.store.getLocal(assign.rhs).layout_idx) },
+                        );
+                    }
+                    const equal = try self.boxy_runtime.boxyEq(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.lhs),
+                        try self.getLocalChecked(frame, assign.rhs),
+                        value_layout,
+                        desc,
+                    );
+                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    result.write(u8, if (equal) 1 else 0);
+                    try self.setLocalChecked(frame, current, assign.target, result, false);
+                    current = assign.next;
+                },
+                .assign_boxy_hash => |assign| {
+                    const desc = try self.resolveBoxyDescRef(frame, assign.desc);
+                    const state = try self.boxy_runtime.boxyHash(
+                        self.boxyFrameHooks(frame),
+                        try self.getLocalChecked(frame, assign.value),
+                        self.store.getLocal(assign.value).layout_idx,
+                        desc,
+                        (try self.getLocalChecked(frame, assign.hasher)).read(u64),
+                    );
+                    const result = try self.alloc(self.store.getLocal(assign.target).layout_idx);
+                    result.write(u64, state);
+                    try self.setLocalChecked(frame, current, assign.target, result, false);
                     current = assign.next;
                 },
                 .assign_boxy_adapt => |assign| {
@@ -3260,14 +3353,14 @@ pub const Interpreter = struct {
                     current = expect_stmt.next;
                 },
                 .runtime_error => {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         debugPrint(
                             "debug_runtime_error proc={d} stmt={d}\n",
-                            .{ @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            .{ @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         debugPrint("  call stack:", .{});
                         for (self.call_stack.items) |stack_proc| {
-                            debugPrint(" {d}", .{@intFromEnum(stack_proc)});
+                            debugPrint(" {d}", .{@backingInt(stack_proc)});
                         }
                         debugPrint("\n", .{});
                         self.debugDumpProc(frame.proc_id);
@@ -3285,19 +3378,19 @@ pub const Interpreter = struct {
                     current = marker.next;
                 },
                 .incref => |inc| {
-                    if (builtin.mode == .Debug and !frame.isAssigned(inc.value)) {
+                    if (builtin.mode == .debug and !frame.isAssigned(inc.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before incref: local {d} unassigned in proc {d} at stmt {d}\n",
-                            .{ @intFromEnum(inc.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            .{ @backingInt(inc.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt incref: proc={d} stmt={d} local={d} layout={d} count={d} ptr=0x{x} rc={any}", .{
-                        @intFromEnum(frame.proc_id),
-                        @intFromEnum(current),
-                        @intFromEnum(inc.value),
-                        @intFromEnum(self.store.getLocal(inc.value).layout_idx),
+                        @backingInt(frame.proc_id),
+                        @backingInt(current),
+                        @backingInt(inc.value),
+                        @backingInt(self.store.getLocal(inc.value).layout_idx),
                         inc.count,
                         @intFromPtr((try self.getLocalChecked(frame, inc.value)).ptr),
                         inc.rc,
@@ -3316,19 +3409,19 @@ pub const Interpreter = struct {
                     current = inc.next;
                 },
                 .decref => |dec| {
-                    if (builtin.mode == .Debug and !frame.isAssigned(dec.value)) {
+                    if (builtin.mode == .debug and !frame.isAssigned(dec.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before decref: local {d} unassigned in proc {d} at stmt {d}\n",
-                            .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            .{ @backingInt(dec.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt decref: proc={d} stmt={d} local={d} layout={d} ptr=0x{x} rc={any}", .{
-                        @intFromEnum(frame.proc_id),
-                        @intFromEnum(current),
-                        @intFromEnum(dec.value),
-                        @intFromEnum(self.store.getLocal(dec.value).layout_idx),
+                        @backingInt(frame.proc_id),
+                        @backingInt(current),
+                        @backingInt(dec.value),
+                        @backingInt(self.store.getLocal(dec.value).layout_idx),
                         @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
                         dec.rc,
                     });
@@ -3351,21 +3444,21 @@ pub const Interpreter = struct {
                         self.store.getLocal(dec.cond).layout_idx,
                     );
                     if ((cond_value & dec.cond_mask) == dec.cond_mask) {
-                        if (builtin.mode == .Debug and !frame.isAssigned(dec.value)) {
+                        if (builtin.mode == .debug and !frame.isAssigned(dec.value)) {
                             debugPrint(
                                 "LIR/interpreter invariant violated before decref_if_initialized: local {d} unassigned in proc {d} at stmt {d}\n",
-                                .{ @intFromEnum(dec.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                                .{ @backingInt(dec.value), @backingInt(frame.proc_id), @backingInt(current) },
                             );
                             self.debugDumpProc(frame.proc_id);
                             self.debugPrintStmtChain(current, 20);
                         }
                         trace_rc.log("stmt decref_if_initialized: proc={d} stmt={d} cond={d} mask=0x{x} local={d} layout={d} ptr=0x{x}", .{
-                            @intFromEnum(frame.proc_id),
-                            @intFromEnum(current),
-                            @intFromEnum(dec.cond),
+                            @backingInt(frame.proc_id),
+                            @backingInt(current),
+                            @backingInt(dec.cond),
                             dec.cond_mask,
-                            @intFromEnum(dec.value),
-                            @intFromEnum(self.store.getLocal(dec.value).layout_idx),
+                            @backingInt(dec.value),
+                            @backingInt(self.store.getLocal(dec.value).layout_idx),
                             @intFromPtr((try self.getLocalChecked(frame, dec.value)).ptr),
                         });
                         try self.performExplicitRcStmt(
@@ -3381,19 +3474,19 @@ pub const Interpreter = struct {
                     current = dec.next;
                 },
                 .free => |free_stmt| {
-                    if (builtin.mode == .Debug and !frame.isAssigned(free_stmt.value)) {
+                    if (builtin.mode == .debug and !frame.isAssigned(free_stmt.value)) {
                         debugPrint(
                             "LIR/interpreter invariant violated before free: local {d} unassigned in proc {d} at stmt {d}\n",
-                            .{ @intFromEnum(free_stmt.value), @intFromEnum(frame.proc_id), @intFromEnum(current) },
+                            .{ @backingInt(free_stmt.value), @backingInt(frame.proc_id), @backingInt(current) },
                         );
                         self.debugDumpProc(frame.proc_id);
                         self.debugPrintStmtChain(current, 20);
                     }
                     trace_rc.log("stmt free: proc={d} stmt={d} local={d} layout={d} ptr=0x{x}", .{
-                        @intFromEnum(frame.proc_id),
-                        @intFromEnum(current),
-                        @intFromEnum(free_stmt.value),
-                        @intFromEnum(self.store.getLocal(free_stmt.value).layout_idx),
+                        @backingInt(frame.proc_id),
+                        @backingInt(current),
+                        @backingInt(free_stmt.value),
+                        @backingInt(self.store.getLocal(free_stmt.value).layout_idx),
                         @intFromPtr((try self.getLocalChecked(frame, free_stmt.value)).ptr),
                     });
                     try self.performExplicitRcStmt(
@@ -3417,16 +3510,16 @@ pub const Interpreter = struct {
                         trace.log(
                             "switch: cond_local={d} layout={any} value={d} branches={d} default={d}",
                             .{
-                                @intFromEnum(switch_stmt.cond),
+                                @backingInt(switch_stmt.cond),
                                 self.store.getLocal(switch_stmt.cond).layout_idx,
                                 cond_value,
                                 branches.len,
-                                @intFromEnum(switch_stmt.default_branch),
+                                @backingInt(switch_stmt.default_branch),
                             },
                         );
                         for (0..branches.len) |i| {
                             const branch = GuardedList.at(branches, i);
-                            trace.log("  branch value={d} body={d}", .{ branch.value, @intFromEnum(branch.body) });
+                            trace.log("  branch value={d} body={d}", .{ branch.value, @backingInt(branch.body) });
                         }
                     }
                     var target = switch_stmt.default_branch;
@@ -3448,12 +3541,12 @@ pub const Interpreter = struct {
                         trace.log(
                             "switch_initialized_payload: cond_local={d} mask=0x{x} payload_local={d} value={d} initialized={d} uninitialized={d}",
                             .{
-                                @intFromEnum(switch_stmt.cond),
+                                @backingInt(switch_stmt.cond),
                                 switch_stmt.cond_mask,
-                                @intFromEnum(switch_stmt.payload),
+                                @backingInt(switch_stmt.payload),
                                 cond_value,
-                                @intFromEnum(switch_stmt.initialized_branch),
-                                @intFromEnum(switch_stmt.uninitialized_branch),
+                                @backingInt(switch_stmt.initialized_branch),
+                                @backingInt(switch_stmt.uninitialized_branch),
                             },
                         );
                     }
@@ -3476,15 +3569,15 @@ pub const Interpreter = struct {
                 .jump => |jump_stmt| {
                     const join_point = frame.joinPoint(jump_stmt.target) orelse self.invariantFailed(
                         "LIR/interpreter invariant violated: missing join point {d} in proc {d}",
-                        .{ @intFromEnum(jump_stmt.target), @intFromEnum(frame.proc_id) },
+                        .{ @backingInt(jump_stmt.target), @backingInt(frame.proc_id) },
                     );
                     current = join_point.body;
                 },
                 .ret => |ret_stmt| return .{ .returned = ret_stmt.value },
                 .crash => |crash_stmt| {
                     self.failed_crash_stmt = current;
-                    if (@intFromEnum(current) < self.failure_origins.len) {
-                        if (self.failure_origins[@intFromEnum(current)]) |origin| {
+                    if (@backingInt(current) < self.failure_origins.len) {
+                        if (self.failure_origins[@backingInt(current)]) |origin| {
                             self.failed_stmt_loc = origin.loc orelse base.SourceLoc.none;
                             self.failed_stmt_region = origin.region orelse base.Region.zero();
                         }
@@ -3518,17 +3611,17 @@ pub const Interpreter = struct {
     fn debugDumpProc(self: *LirInterpreter, proc_id: LirProcSpecId) void {
         const proc_spec = self.store.getProcSpec(proc_id);
         const body = proc_spec.body orelse {
-            debugPrint("  proc {d} has no body\n", .{@intFromEnum(proc_id)});
+            debugPrint("  proc {d} has no body\n", .{@backingInt(proc_id)});
             return;
         };
 
         debugPrint(
             "  proc {d} name={d} body={d} ret_layout={d}\n",
             .{
-                @intFromEnum(proc_id),
+                @backingInt(proc_id),
                 proc_spec.name.raw(),
-                @intFromEnum(body),
-                @intFromEnum(proc_spec.ret_layout),
+                @backingInt(body),
+                @backingInt(proc_spec.ret_layout),
             },
         );
         const args = self.store.getLocalSpan(proc_spec.args);
@@ -3537,7 +3630,7 @@ pub const Interpreter = struct {
             for (0..args.len) |i| {
                 const arg = GuardedList.at(args, i);
                 const layout_idx = self.store.getLocal(arg).layout_idx;
-                debugPrint(" {d}:{d}", .{ @intFromEnum(arg), @intFromEnum(layout_idx) });
+                debugPrint(" {d}:{d}", .{ @backingInt(arg), @backingInt(layout_idx) });
             }
             debugPrint("\n", .{});
         }
@@ -3545,15 +3638,15 @@ pub const Interpreter = struct {
         if (local_count > 0) {
             debugPrint("  locals:\n", .{});
             for (0..local_count) |idx| {
-                const local = self.store.getLocal(@enumFromInt(@as(u32, @intCast(idx))));
+                const local = self.store.getLocal(@fromBackingInt(@intCast(@as(u32, @intCast(idx)))));
                 const layout_idx = local.layout_idx;
                 const layout_val = self.layout_store.getLayout(layout_idx);
                 debugPrint(
                     "    local {d}: layout={d} tag={s}",
-                    .{ idx, @intFromEnum(layout_idx), @tagName(layout_val.tag) },
+                    .{ idx, @backingInt(layout_idx), @tagName(layout_val.tag) },
                 );
                 if (layout_val.tag == .list) {
-                    debugPrint(" elem={d}", .{@intFromEnum(layout_val.getIdx())});
+                    debugPrint(" elem={d}", .{@backingInt(layout_val.getIdx())});
                 }
                 if (layout_val.tag == .tag_union) {
                     const tu_info = self.layout_store.getTagUnionInfo(layout_val);
@@ -3577,53 +3670,53 @@ pub const Interpreter = struct {
             switch (stmt) {
                 .assign_ref => |assign| {
                     debugPrint("    {d}: assign_ref target={d} op={any} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
                         assign.op,
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_literal => |assign| {
                     debugPrint("    {d}: assign_literal target={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(assign.next),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .init_uninitialized => |uninit| {
                     debugPrint("    {d}: init_uninitialized target={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(uninit.target),
-                        @intFromEnum(uninit.next),
+                        @backingInt(stmt_id),
+                        @backingInt(uninit.target),
+                        @backingInt(uninit.next),
                     });
                     stack.append(self.evalAllocator(), uninit.next) catch return;
                 },
                 .assign_call => |assign| {
                     debugPrint("    {d}: assign_call proc={d} target={d} args=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.proc),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.proc),
+                        @backingInt(assign.target),
                     });
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     for (0..arg_locals.len) |i| {
                         const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@backingInt(arg_local)});
                     }
-                    debugPrint("out_desc={any} next={d}\n", .{ assign.out_desc, @intFromEnum(assign.next) });
+                    debugPrint("out_desc={any} next={d}\n", .{ assign.out_desc, @backingInt(assign.next) });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_call_erased => |assign| {
                     debugPrint("    {d}: assign_call_erased target={d} closure={d} args=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(assign.closure),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
+                        @backingInt(assign.closure),
                     });
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     for (0..arg_locals.len) |i| {
                         const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@backingInt(arg_local)});
                     }
                     debugPrint("result_desc=", .{});
                     if (assign.result_desc) |desc_ref| {
@@ -3631,30 +3724,30 @@ pub const Interpreter = struct {
                     } else {
                         debugPrint("null", .{});
                     }
-                    debugPrint(" next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint(" next={d}\n", .{@backingInt(assign.next)});
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_packed_erased_fn => |assign| {
                     debugPrint("    {d}: assign_packed_erased_fn target={d} reuse={?d} unique={} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        if (assign.reuse) |reuse| @intFromEnum(reuse) else null,
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
+                        if (assign.reuse) |reuse| @backingInt(reuse) else null,
                         assign.reuse_unique,
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_boxy_desc_ref => |assign| {
                     debugPrint("    {d}: assign_boxy_desc_ref target={d} desc={any} captures=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
                         assign.desc,
                     });
                     const capture_locals = self.store.getLocalSpan(assign.captures);
                     for (0..capture_locals.len) |i| {
-                        debugPrint("{d} ", .{@intFromEnum(GuardedList.at(capture_locals, i))});
+                        debugPrint("{d} ", .{@backingInt(GuardedList.at(capture_locals, i))});
                     }
-                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 inline .assign_boxy_dict_ref,
@@ -3664,189 +3757,191 @@ pub const Interpreter = struct {
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
                 .assign_boxy_tag,
                 .assign_boxy_tag_payload,
                 => |assign| {
-                    debugPrint("    {d}: {any}\n", .{ @intFromEnum(stmt_id), stmt });
+                    debugPrint("    {d}: {any}\n", .{ @backingInt(stmt_id), stmt });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_call_dict => |assign| {
                     debugPrint(
                         "    {d}: assign_call_dict target={d} method={d} slot={d} args=",
-                        .{ @intFromEnum(stmt_id), @intFromEnum(assign.target), @intFromEnum(assign.method), assign.method_slot },
+                        .{ @backingInt(stmt_id), @backingInt(assign.target), @backingInt(assign.method), assign.method_slot },
                     );
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     for (0..arg_locals.len) |i| {
                         const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@backingInt(arg_local)});
                     }
                     debugPrint("hidden=", .{});
                     const hidden_arg_locals = self.store.getLocalSpan(assign.hidden_args);
                     for (0..hidden_arg_locals.len) |i| {
                         const hidden_local = GuardedList.at(hidden_arg_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(hidden_local)});
+                        debugPrint("{d} ", .{@backingInt(hidden_local)});
                     }
-                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .boxy_tag_match => |tag_match| {
-                    debugPrint("    {d}: {any}\n", .{ @intFromEnum(stmt_id), stmt });
+                    debugPrint("    {d}: {any}\n", .{ @backingInt(stmt_id), stmt });
                     stack.append(self.evalAllocator(), tag_match.on_match) catch return;
                     stack.append(self.evalAllocator(), tag_match.on_miss) catch return;
                 },
                 .assign_low_level => |assign| {
                     debugPrint("    {d}: assign_low_level target={d} op={s} args=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
                         @tagName(assign.op),
                     });
                     const arg_locals = self.store.getLocalSpan(assign.args);
                     for (0..arg_locals.len) |i| {
                         const arg_local = GuardedList.at(arg_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(arg_local)});
+                        debugPrint("{d} ", .{@backingInt(arg_local)});
                     }
-                    debugPrint("next={d}\n", .{@intFromEnum(assign.next)});
+                    debugPrint("next={d}\n", .{@backingInt(assign.next)});
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_list => |assign| {
                     debugPrint("    {d}: assign_list target={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(assign.next),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_struct => |assign| {
                     debugPrint("    {d}: assign_struct target={d} fields=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
                     });
                     const field_locals = self.store.getLocalSpan(assign.fields);
                     for (0..field_locals.len) |i| {
                         const field_local = GuardedList.at(field_locals, i);
-                        debugPrint("{d} ", .{@intFromEnum(field_local)});
+                        debugPrint("{d} ", .{@backingInt(field_local)});
                     }
                     debugPrint("next={d}\n", .{
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .assign_tag => |assign| {
                     debugPrint("    {d}: assign_tag target={d} variant={d} discrim={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
                         assign.variant_index,
                         assign.discriminant,
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .store_struct => |assign| {
                     debugPrint("    {d}: store_struct dest={d} fields=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.dest),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.dest),
                     });
                     const fields = self.store.getLocalSpan(assign.fields);
                     for (0..fields.len) |index| {
                         const field_local = GuardedList.at(fields, index);
-                        debugPrint("{d} ", .{@intFromEnum(field_local)});
+                        debugPrint("{d} ", .{@backingInt(field_local)});
                     }
                     debugPrint("next={d}\n", .{
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .store_tag => |assign| {
                     debugPrint("    {d}: store_tag dest={d} variant={d} discrim={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.dest),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.dest),
                         assign.variant_index,
                         assign.discriminant,
-                        @intFromEnum(assign.next),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .set_local => |assign| {
                     debugPrint("    {d}: set_local target={d} value={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(assign.target),
-                        @intFromEnum(assign.value),
-                        @intFromEnum(assign.next),
+                        @backingInt(stmt_id),
+                        @backingInt(assign.target),
+                        @backingInt(assign.value),
+                        @backingInt(assign.next),
                     });
                     stack.append(self.evalAllocator(), assign.next) catch return;
                 },
                 .debug => |debug_stmt| {
                     debugPrint("    {d}: debug next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(debug_stmt.next),
+                        @backingInt(stmt_id),
+                        @backingInt(debug_stmt.next),
                     });
                     stack.append(self.evalAllocator(), debug_stmt.next) catch return;
                 },
                 .expect => |expect_stmt| {
                     debugPrint("    {d}: expect cond={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(expect_stmt.condition),
-                        @intFromEnum(expect_stmt.next),
+                        @backingInt(stmt_id),
+                        @backingInt(expect_stmt.condition),
+                        @backingInt(expect_stmt.next),
                     });
                     stack.append(self.evalAllocator(), expect_stmt.next) catch return;
                 },
                 .runtime_error => {
-                    debugPrint("    {d}: runtime_error\n", .{@intFromEnum(stmt_id)});
+                    debugPrint("    {d}: runtime_error\n", .{@backingInt(stmt_id)});
                 },
                 .comptime_exhaustiveness_failed => |failed| {
                     debugPrint("    {d}: comptime_exhaustiveness_failed site={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(failed.site),
+                        @backingInt(stmt_id),
+                        @backingInt(failed.site),
                     });
                 },
                 .comptime_branch_taken => |marker| {
                     debugPrint("    {d}: comptime_branch_taken site={d} branch={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(marker.site),
+                        @backingInt(stmt_id),
+                        @backingInt(marker.site),
                         marker.branch_index,
-                        @intFromEnum(marker.next),
+                        @backingInt(marker.next),
                     });
                     stack.append(self.evalAllocator(), marker.next) catch return;
                 },
                 .incref => |inc| {
                     debugPrint("    {d}: incref value={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(inc.value),
-                        @intFromEnum(inc.next),
+                        @backingInt(stmt_id),
+                        @backingInt(inc.value),
+                        @backingInt(inc.next),
                     });
                     stack.append(self.evalAllocator(), inc.next) catch return;
                 },
                 .decref => |dec| {
                     debugPrint("    {d}: decref value={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(dec.value),
-                        @intFromEnum(dec.next),
+                        @backingInt(stmt_id),
+                        @backingInt(dec.value),
+                        @backingInt(dec.next),
                     });
                     stack.append(self.evalAllocator(), dec.next) catch return;
                 },
                 .decref_if_initialized => |dec| {
                     debugPrint("    {d}: decref_if_initialized cond={d} mask=0x{x} value={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(dec.cond),
+                        @backingInt(stmt_id),
+                        @backingInt(dec.cond),
                         dec.cond_mask,
-                        @intFromEnum(dec.value),
-                        @intFromEnum(dec.next),
+                        @backingInt(dec.value),
+                        @backingInt(dec.next),
                     });
                     stack.append(self.evalAllocator(), dec.next) catch return;
                 },
                 .free => |dec| {
                     debugPrint("    {d}: free value={d} next={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(dec.value),
-                        @intFromEnum(dec.next),
+                        @backingInt(stmt_id),
+                        @backingInt(dec.value),
+                        @backingInt(dec.next),
                     });
                     stack.append(self.evalAllocator(), dec.next) catch return;
                 },
                 .switch_stmt => |switch_stmt| {
                     debugPrint("    {d}: switch cond={d} default={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(switch_stmt.cond),
-                        @intFromEnum(switch_stmt.default_branch),
+                        @backingInt(stmt_id),
+                        @backingInt(switch_stmt.cond),
+                        @backingInt(switch_stmt.default_branch),
                     });
                     stack.append(self.evalAllocator(), switch_stmt.default_branch) catch return;
                     const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
@@ -3854,39 +3949,39 @@ pub const Interpreter = struct {
                         const branch = GuardedList.at(branches, i);
                         debugPrint("        branch {d} -> {d}\n", .{
                             branch.value,
-                            @intFromEnum(branch.body),
+                            @backingInt(branch.body),
                         });
                         stack.append(self.evalAllocator(), branch.body) catch return;
                     }
                 },
                 .switch_initialized_payload => |switch_stmt| {
                     debugPrint("    {d}: switch_initialized_payload cond={d} mask=0x{x} payload={d} initialized={d} uninitialized={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(switch_stmt.cond),
+                        @backingInt(stmt_id),
+                        @backingInt(switch_stmt.cond),
                         switch_stmt.cond_mask,
-                        @intFromEnum(switch_stmt.payload),
-                        @intFromEnum(switch_stmt.initialized_branch),
-                        @intFromEnum(switch_stmt.uninitialized_branch),
+                        @backingInt(switch_stmt.payload),
+                        @backingInt(switch_stmt.initialized_branch),
+                        @backingInt(switch_stmt.uninitialized_branch),
                     });
                     stack.append(self.evalAllocator(), switch_stmt.initialized_branch) catch return;
                     stack.append(self.evalAllocator(), switch_stmt.uninitialized_branch) catch return;
                 },
                 .str_match => |str_match| {
                     debugPrint("    {d}: str_match source={d} on_match={d} on_miss={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(str_match.source),
-                        @intFromEnum(str_match.on_match),
-                        @intFromEnum(str_match.on_miss),
+                        @backingInt(stmt_id),
+                        @backingInt(str_match.source),
+                        @backingInt(str_match.on_match),
+                        @backingInt(str_match.on_miss),
                     });
                     stack.append(self.evalAllocator(), str_match.on_match) catch return;
                     stack.append(self.evalAllocator(), str_match.on_miss) catch return;
                 },
                 .str_match_set => |str_match_set| {
                     debugPrint("    {d}: str_match_set source={d} arms={d} on_miss={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(str_match_set.source),
+                        @backingInt(stmt_id),
+                        @backingInt(str_match_set.source),
                         str_match_set.arms.len,
-                        @intFromEnum(str_match_set.on_miss),
+                        @backingInt(str_match_set.on_miss),
                     });
                     const arms = self.store.getStrMatchArms(str_match_set.arms);
                     for (0..arms.len) |i| {
@@ -3896,56 +3991,56 @@ pub const Interpreter = struct {
                     stack.append(self.evalAllocator(), str_match_set.on_miss) catch return;
                 },
                 .loop_continue => {
-                    debugPrint("    {d}: loop_continue\n", .{@intFromEnum(stmt_id)});
+                    debugPrint("    {d}: loop_continue\n", .{@backingInt(stmt_id)});
                 },
                 .loop_break => {
-                    debugPrint("    {d}: loop_break\n", .{@intFromEnum(stmt_id)});
+                    debugPrint("    {d}: loop_break\n", .{@backingInt(stmt_id)});
                 },
                 .join => |join| {
                     debugPrint("    {d}: join id={d} params=", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(join.id),
+                        @backingInt(stmt_id),
+                        @backingInt(join.id),
                     });
                     const params = self.store.getLocalSpan(join.params);
                     for (0..params.len) |i| {
                         const param_local = GuardedList.at(params, i);
-                        debugPrint("{d} ", .{@intFromEnum(param_local)});
+                        debugPrint("{d} ", .{@backingInt(param_local)});
                     }
                     debugPrint("body={d} remainder={d}\n", .{
-                        @intFromEnum(join.body),
-                        @intFromEnum(join.remainder),
+                        @backingInt(join.body),
+                        @backingInt(join.remainder),
                     });
                     stack.append(self.evalAllocator(), join.body) catch return;
                     stack.append(self.evalAllocator(), join.remainder) catch return;
                 },
                 .jump => |jump| {
                     debugPrint("    {d}: jump target={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(jump.target),
+                        @backingInt(stmt_id),
+                        @backingInt(jump.target),
                     });
                 },
                 .ret => |ret| {
                     debugPrint("    {d}: ret value={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(ret.value),
+                        @backingInt(stmt_id),
+                        @backingInt(ret.value),
                     });
                 },
                 .crash => |crash| {
                     switch (crash.msg) {
                         .literal => |literal| debugPrint("    {d}: crash literal={d}\n", .{
-                            @intFromEnum(stmt_id),
-                            @intFromEnum(literal),
+                            @backingInt(stmt_id),
+                            @backingInt(literal),
                         }),
                         .local => |local| debugPrint("    {d}: crash local={d}\n", .{
-                            @intFromEnum(stmt_id),
-                            @intFromEnum(local),
+                            @backingInt(stmt_id),
+                            @backingInt(local),
                         }),
                     }
                 },
                 .expect_err => |expect_err_stmt| {
                     debugPrint("    {d}: expect_err message={d}\n", .{
-                        @intFromEnum(stmt_id),
-                        @intFromEnum(expect_err_stmt.message),
+                        @backingInt(stmt_id),
+                        @backingInt(expect_err_stmt.message),
                     });
                 },
             }
@@ -3997,7 +4092,101 @@ pub const Interpreter = struct {
         value: Value,
         layout: layout_mod.Idx,
         desc: ?*const LirProgram.BoxyTypeDesc = null,
+        /// When the value came unconverted from a pending call: the
+        /// descriptor that call's statement stored it as.
+        stored_as: ?*const LirProgram.BoxyTypeDesc = null,
     };
+
+    const PendingErasedCall = struct {
+        closure: Value,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+        /// The layout and result descriptor the deferring statement calls
+        /// with.
+        site_layout: layout_mod.Idx,
+        result_desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The last conversion a procedure skipped by returning while this
+        /// call was pending. Each procedure that returns early replaces it.
+        conversion: ?PendingConversion,
+    };
+
+    /// A conversion of a pending call's result that a procedure left to
+    /// whoever makes the call: the layout that procedure returns and the
+    /// descriptor it would have stored the result as.
+    const PendingConversion = struct {
+        layout: layout_mod.Idx,
+        desc: ?*const LirProgram.BoxyTypeDesc,
+        /// The conversion stores the result under the descriptor the value
+        /// arrives with.
+        keeps_own_desc: bool,
+    };
+
+    /// Whether calls pending after a statement are made in this frame.
+    fn drivesHere(frame: *const Frame, drive: LIR.PendingDrive) bool {
+        return switch (drive) {
+            .none, .handed_up => false,
+            .always => true,
+            .unless_caller_drives => !frame.caller_drives,
+        };
+    }
+
+    /// Make every pending erased call in turn. Each is made exactly as its
+    /// statement wrote it. The result that ends the chain is then converted
+    /// the way the procedures that returned early would have converted it,
+    /// as the native erased-call runtime does.
+    fn drivePendingErasedCalls(self: *LirInterpreter, frame: *Frame) Error!?ErasedCallResult {
+        var result: ?ErasedCallResult = null;
+        // The conversion skipped on the way out to this caller. It belongs
+        // to the first pending call; later ones are left inside its extent.
+        var outermost: ?PendingConversion = null;
+        var first = true;
+        while (self.pending_erased) |call| {
+            self.pending_erased = null;
+            const raw = try self.evalErasedCallOnce(frame, call.closure, null, call.args, call.arg_layouts, call.arg_descs, call.arg_desc_keys, call.arg_plan, call.site_layout, false);
+            if (self.pending_erased == null) {
+                var current = try self.boxy_runtime.materializeCallResult(
+                    self.boxyFrameHooks(frame),
+                    raw.value,
+                    raw.layout,
+                    raw.desc,
+                    call.result_desc,
+                    call.site_layout,
+                );
+                var current_layout = call.site_layout;
+                for ([_]?PendingConversion{ call.conversion, outermost }) |skipped| {
+                    const conversion = skipped orelse continue;
+                    current = try self.boxy_runtime.materializeCallResult(
+                        self.boxyFrameHooks(frame),
+                        current.value,
+                        current_layout,
+                        current.desc,
+                        if (conversion.keeps_own_desc) current.desc else conversion.desc,
+                        conversion.layout,
+                    );
+                    current_layout = conversion.layout;
+                }
+                result = .{
+                    .value = current.value,
+                    .layout = current_layout,
+                    .desc = current.desc,
+                    .stored_as = if (call.conversion == null and outermost == null) call.result_desc else null,
+                };
+            }
+            if (first) {
+                outermost = call.conversion;
+                first = false;
+            }
+            const closure_ptr = self.readBoxedDataPointer(call.closure) orelse return self.invariantFailedError(
+                "LIR/interpreter invariant violated: pending erased call had a null closure",
+                .{},
+            );
+            builtins.erased_callable.decref(closure_ptr, &self.roc_ops);
+        }
+        return result;
+    }
 
     fn readSwitchValue(self: *LirInterpreter, value: Value, layout_idx: layout_mod.Idx) Error!u64 {
         return self.boxy_runtime.readSwitchValue(value, layout_idx);
@@ -4046,7 +4235,7 @@ pub const Interpreter = struct {
                     target_layout,
                 );
                 const target_layout_val = self.layout_store.getLayout(target_layout);
-                if (builtin.mode == .Debug and
+                if (builtin.mode == .debug and
                     self.helper.sizeOf(target_layout) > 0 and
                     target_layout_val.tag != .box_of_zst and
                     field_value.isZst())
@@ -4054,12 +4243,12 @@ pub const Interpreter = struct {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source_local={d} source_layout={d} base_layout={d} field_idx={d} actual_field_layout={d} target_layout={d} normalized to ZST",
                         .{
-                            @intFromEnum(field.source),
-                            @intFromEnum(source_layout),
-                            @intFromEnum(struct_base.layout),
+                            @backingInt(field.source),
+                            @backingInt(source_layout),
+                            @backingInt(struct_base.layout),
                             field.field_idx,
-                            @intFromEnum(actual_field_layout),
-                            @intFromEnum(target_layout),
+                            @backingInt(actual_field_layout),
+                            @backingInt(target_layout),
                         },
                     );
                 }
@@ -4070,7 +4259,7 @@ pub const Interpreter = struct {
                 const source_layout = self.store.getLocal(payload.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload access expected discriminant {d} but observed {d}",
                         .{ payload.tag_discriminant, disc },
@@ -4107,10 +4296,10 @@ pub const Interpreter = struct {
                     .tag_union,
                     .ptr,
                     => {
-                        if (builtin.mode == .Debug and payload.payload_idx != 0) {
+                        if (builtin.mode == .debug and payload.payload_idx != 0) {
                             self.invariantFailed(
                                 "LIR/interpreter invariant violated: scalar tag payload access requested payload_idx {d} from non-struct payload layout {d}",
-                                .{ payload.payload_idx, @intFromEnum(actual_payload_layout) },
+                                .{ payload.payload_idx, @backingInt(actual_payload_layout) },
                             );
                         }
                         const payload_value = try self.coerceExplicitRefValueToLayout(tag_base.value, actual_payload_layout, target_layout);
@@ -4123,7 +4312,7 @@ pub const Interpreter = struct {
                 const source_layout = self.store.getLocal(payload.source).layout_idx;
                 const tag_base = self.resolveTagUnionBaseValue(source_val, source_layout);
                 const disc = self.helper.readTagDiscriminant(tag_base.value, tag_base.layout);
-                if (builtin.mode == .Debug and disc != payload.tag_discriminant) {
+                if (builtin.mode == .debug and disc != payload.tag_discriminant) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: tag payload struct access expected discriminant {d} but observed {d}",
                         .{ payload.tag_discriminant, disc },
@@ -4162,7 +4351,7 @@ pub const Interpreter = struct {
                     8 => disc_value.write(u64, disc),
                     else => self.invariantFailed(
                         "LIR/interpreter invariant violated: discriminant local has unsupported layout {d}",
-                        .{@intFromEnum(target_layout)},
+                        .{@backingInt(target_layout)},
                     ),
                 }
                 break :blk try self.materializeLocalValue(disc_value, target_layout);
@@ -4187,7 +4376,6 @@ pub const Interpreter = struct {
                 .{},
             ),
             .bytes_literal => |idx| self.evalBytesLiteral(idx, target_layout),
-            .null_ptr => self.evalNullPtrLiteral(),
             .proc_ref => |proc_id| self.evalProcRefLiteral(proc_id),
             .static_data => |id| self.evalStaticDataLiteral(id, target_layout),
         };
@@ -4219,19 +4407,9 @@ pub const Interpreter = struct {
         return try self.boxy_runtime.boxyDynamicFracLiteral(self.boxyFrameHooks(null), dec_bits, desc, target_layout);
     }
 
-    fn evalNullPtrLiteral(self: *LirInterpreter) Error!Value {
-        const val = try self.alloc(.opaque_ptr);
-        switch (self.layout_store.targetUsize().size()) {
-            4 => val.write(u32, 0),
-            8 => val.write(usize, 0),
-            else => unreachable,
-        }
-        return val;
-    }
-
     fn evalProcRefLiteral(self: *LirInterpreter, proc_id: LIR.LirProcSpecId) Error!Value {
         const val = try self.alloc(.opaque_ptr);
-        const encoded: usize = @intFromEnum(proc_id) + 1;
+        const encoded: usize = @backingInt(proc_id) + 1;
         switch (self.layout_store.targetUsize().size()) {
             4 => val.write(u32, @intCast(encoded)),
             8 => val.write(usize, encoded),
@@ -4249,7 +4427,7 @@ pub const Interpreter = struct {
     }
 
     fn evalStaticDataLiteral(self: *LirInterpreter, id: LIR.StaticDataId, target_layout: layout_mod.Idx) Error!Value {
-        const index: usize = @intFromEnum(id);
+        const index: usize = @backingInt(id);
         if (index >= self.static_data.len) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: static data value {d} has no image address",
@@ -4272,36 +4450,25 @@ pub const Interpreter = struct {
         result_desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
-    /// Decode only the explicit static-registry or interpreter-context ABI.
-    pub fn interpretedCallable(self: *LirInterpreter, data_ptr: [*]u8) error{RuntimeError}!?InterpretedCallable {
+    /// Decode only the explicit static-header or interpreter-context ABI.
+    pub fn interpretedCallable(data_ptr: [*]u8) ?InterpretedCallable {
         const payload = builtins.erased_callable.payloadPtr(data_ptr);
         const code = @intFromPtr(payload.callable_fn_ptr);
         if (code == staticErasedCallableTrampolineAddress()) {
             const capture = builtins.erased_callable.capturePtr(data_ptr);
-            for (self.static_erased_callables) |entry| {
-                if (entry.capture_ptr == capture) return .{ .proc = entry.proc_id, .capture_ptr = capture };
-            }
-            return self.runtimeError("LIR/interpreter invariant violated: static interpreted callable omitted its producer registry entry");
+            return .{ .proc = @fromBackingInt(staticCallableHeader(capture).proc_id), .capture_ptr = capture };
         }
         if (code != @intFromPtr(&interpreterErasedCallableTrampoline)) return null;
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        return .{ .proc = @enumFromInt(context.proc_id), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr), .result_desc = context.result_desc };
+        return .{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = erasedCallableInterpreterCaptureValuePtr(data_ptr), .result_desc = context.result_desc };
     }
 
     fn staticErasedCallableTrampoline(ops: *RocOps, ret: ?[*]u8, args: ?[*]const u8, capture: ?[*]u8, reuse: ?[*]u8, out_desc: *?*const anyopaque) callconv(.c) void {
-        const env: *InterpreterRocEnv = @ptrCast(@alignCast(ops.env));
-        const self: *LirInterpreter = @ptrCast(@alignCast(env.active_interpreter orelse {
-            ops.crash("static interpreted callable has no active interpreter");
-        }));
         const capture_ptr = capture orelse {
             ops.crash("static interpreted callable omitted its capture address");
         };
-        for (self.static_erased_callables) |entry| {
-            if (entry.capture_ptr != capture_ptr) continue;
-            self.callInterpreterErasedCallable(.{ .proc = entry.proc_id, .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc) catch |err| self.crashErasedCallable(null, ops, err, .call);
-            return;
-        }
-        ops.crash("static interpreted callable omitted its producer registry entry");
+        const header = staticCallableHeader(capture_ptr);
+        header.owner.call(header.owner.context, .{ .proc = @fromBackingInt(header.proc_id), .capture_ptr = capture_ptr }, ops, ret, args, reuse, out_desc);
     }
 
     pub fn erasedCallableInterpreterContextFromCapture(capture_ptr: ?[*]u8) *ErasedCallableInterpreterContext {
@@ -4314,7 +4481,7 @@ pub const Interpreter = struct {
 
     pub fn erasedCallableInterpreterProcId(data_ptr: [*]u8) LIR.LirProcSpecId {
         const context = erasedCallableInterpreterContextFromPayload(data_ptr);
-        return @enumFromInt(context.proc_id);
+        return @fromBackingInt(@intCast(context.proc_id));
     }
 
     pub fn erasedCallableInterpreterCaptureValuePtr(data_ptr: [*]u8) [*]u8 {
@@ -4336,7 +4503,7 @@ pub const Interpreter = struct {
             retained.retain();
             retained.enter();
         }
-        context.interpreter.callInterpreterErasedCallable(.{ .proc = @enumFromInt(context.proc_id), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
+        context.interpreter.callInterpreterErasedCallable(.{ .proc = @fromBackingInt(@intCast(context.proc_id)), .capture_ptr = (capture orelse unreachable) + context.capture_value_offset, .result_desc = context.result_desc }, ops, ret, args, reuse, out_desc) catch |err| context.interpreter.crashErasedCallable(owner, ops, err, .call);
         leaveAndReleaseErasedCallableOwner(owner);
     }
 
@@ -4391,7 +4558,7 @@ pub const Interpreter = struct {
         context: *ErasedCallableInterpreterContext,
         capture: ?[*]u8,
     ) Error!void {
-        const drop_kind: ErasedCallableCaptureDrop = @enumFromInt(context.drop_kind);
+        const drop_kind: ErasedCallableCaptureDrop = @fromBackingInt(@intCast(context.drop_kind));
         if (drop_kind == .none) return;
         const capture_layout: layout_mod.Idx = if (context.drop_layout_plus_one == 0)
             self.invariantFailed(
@@ -4399,7 +4566,7 @@ pub const Interpreter = struct {
                 .{},
             )
         else
-            @enumFromInt(context.drop_layout_plus_one - 1);
+            @fromBackingInt(@intCast(context.drop_layout_plus_one - 1));
         const capture_value_ptr = (capture orelse unreachable) + context.capture_value_offset;
         switch (drop_kind) {
             .none => unreachable,
@@ -4462,7 +4629,7 @@ pub const Interpreter = struct {
         if (proc_arg_locals.len < 2) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} lacks hidden capture/reuse arguments",
-                .{@intFromEnum(proc_id)},
+                .{@backingInt(proc_id)},
             );
         }
 
@@ -4472,14 +4639,14 @@ pub const Interpreter = struct {
         const arg_plan = self.store.getErasedCallArgsPlan(proc_spec.erased_call_args orelse {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} has no argument plan",
-                .{@intFromEnum(proc_id)},
+                .{@backingInt(proc_id)},
             );
         });
         const arg_offsets = self.store.getErasedCallArgOffsets(arg_plan);
         if (arg_offsets.len != explicit_arg_count) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased callable proc {d} argument plan had {d} offsets for {d} arguments",
-                .{ @intFromEnum(proc_id), arg_offsets.len, explicit_arg_count },
+                .{ @backingInt(proc_id), arg_offsets.len, explicit_arg_count },
             );
         }
 
@@ -4494,7 +4661,7 @@ pub const Interpreter = struct {
                 const raw_args = args orelse {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} expected args payload",
-                        .{@intFromEnum(proc_id)},
+                        .{@backingInt(proc_id)},
                     );
                 };
                 proc_args[i] = .{ .ptr = @constCast(raw_args + GuardedList.at(arg_offsets, i)) };
@@ -4523,7 +4690,7 @@ pub const Interpreter = struct {
             const ret_ptr = ret orelse {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} returned non-ZST result without result storage",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             };
             @memcpy(ret_ptr[0..ret_size], result.value.ptr[0..ret_size]);
@@ -4589,6 +4756,8 @@ pub const Interpreter = struct {
         return bindings;
     }
 
+    /// Make an erased call and then every call it leaves pending, as the
+    /// native erased-call runtime does.
     fn evalErasedCall(
         self: *LirInterpreter,
         frame: *Frame,
@@ -4602,51 +4771,66 @@ pub const Interpreter = struct {
         reuse_closure: bool,
     ) Error!ErasedCallResult {
         const closure_layout = self.store.getLocal(closure_local).layout_idx;
-        const closure_value = try self.getLocalChecked(frame, closure_local);
-        const closure_layout_val = self.layout_store.getLayout(closure_layout);
-        if (closure_layout_val.tag != .erased_callable) {
+        if (self.layout_store.getLayout(closure_layout).tag != .erased_callable) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: erased call closure local {d} does not have erased_callable layout",
-                .{@intFromEnum(closure_local)},
+                .{@backingInt(closure_local)},
             );
         }
+        const closure_value = try self.getLocalChecked(frame, closure_local);
+        const first = try self.evalErasedCallOnce(frame, closure_value, closure_local, args, arg_layouts, arg_descs, arg_desc_keys, arg_plan, ret_layout, reuse_closure);
+        return try self.drivePendingErasedCalls(frame) orelse first;
+    }
 
+    fn evalErasedCallOnce(
+        self: *LirInterpreter,
+        frame: *Frame,
+        closure_value: Value,
+        closure_local: ?LocalId,
+        args: []const Value,
+        arg_layouts: []const layout_mod.Idx,
+        arg_descs: []const *const LirProgram.BoxyTypeDesc,
+        arg_desc_keys: []const LIR.ErasedArgDescKey,
+        arg_plan: LIR.ErasedCallArgsPlanId,
+        ret_layout: layout_mod.Idx,
+        reuse_closure: bool,
+    ) Error!ErasedCallResult {
         const closure_ptr = self.readBoxedDataPointer(closure_value) orelse {
             return self.invariantFailedError(
-                "LIR/interpreter invariant violated: erased call closure local {d} has null payload",
-                .{@intFromEnum(closure_local)},
+                "LIR/interpreter invariant violated: erased call closure local {?d} has null payload",
+                .{if (closure_local) |local| @backingInt(local) else null},
             );
         };
 
         const payload = builtins.erased_callable.payloadPtr(closure_ptr);
-        if (try self.interpretedCallable(closure_ptr)) |callable| {
+        if (interpretedCallable(closure_ptr)) |callable| {
             const proc_id = callable.proc;
             const proc_spec = self.store.getProcSpec(proc_id);
             const proc_params = self.store.getLocalSpan(proc_spec.args);
             if (proc_params.len == 0) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had no hidden capture parameter",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             }
             const desc_params = self.boxy_runtime.boxy_tables.erased_arg_desc_params[proc_spec.erased_arg_desc_params.start..][0..proc_spec.erased_arg_desc_params.len];
             const capture_param = proc_spec.erased_capture_arg orelse {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had no capture parameter metadata",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             };
             const explicit_arg_count = proc_spec.erased_arg_layouts.len;
             if (proc_params.len != explicit_arg_count + 2) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} had {d} parameters for {d} explicit arguments plus capture/reuse",
-                    .{ @intFromEnum(proc_id), proc_params.len, explicit_arg_count },
+                    .{ @backingInt(proc_id), proc_params.len, explicit_arg_count },
                 );
             }
             if (args.len != explicit_arg_count or arg_layouts.len != explicit_arg_count) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} expected {d} explicit args but call provided {d} values and {d} layouts",
-                    .{ @intFromEnum(proc_id), explicit_arg_count, args.len, arg_layouts.len },
+                    .{ @backingInt(proc_id), explicit_arg_count, args.len, arg_layouts.len },
                 );
             }
             const worker_layouts_end = @as(usize, proc_spec.erased_arg_layouts.start) + proc_spec.erased_arg_layouts.len;
@@ -4655,7 +4839,7 @@ pub const Interpreter = struct {
             {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased callable proc {d} argument layout span was invalid",
-                    .{@intFromEnum(proc_id)},
+                    .{@backingInt(proc_id)},
                 );
             }
             const worker_arg_layouts = self.boxy_runtime.boxy_tables.erased_arg_layouts[proc_spec.erased_arg_layouts.start..worker_layouts_end];
@@ -4670,7 +4854,7 @@ pub const Interpreter = struct {
                 if (expected_layout != self.layout_store.runtimeRepresentationLayoutIdx(param_layout)) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: erased callable proc {d} argument {d} layout metadata disagreed with its parameter",
-                        .{ @intFromEnum(proc_id), index },
+                        .{ @backingInt(proc_id), index },
                     );
                 }
                 // A closure built in a providing module against an abstract type
@@ -4728,7 +4912,7 @@ pub const Interpreter = struct {
                     break :direct incoming_desc orelse
                         return self.invariantFailedError(
                             "LIR/interpreter invariant violated: erased callable proc {d} required missing descriptor key ({d}, {d})",
-                            .{ @intFromEnum(proc_id), param.key.arg_index, param.key.descriptor_index },
+                            .{ @backingInt(proc_id), param.key.arg_index, param.key.descriptor_index },
                         );
                 } else projected: {
                     var parent_desc: ?*const LirProgram.BoxyTypeDesc = null;
@@ -4776,6 +4960,7 @@ pub const Interpreter = struct {
             proc_args[reuse_index] = try self.allocPointerIntValue(if (reuse_closure) @intFromPtr(closure_ptr) else 0);
             proc_arg_layouts[reuse_index] = self.store.getLocal(reuse_param).layout_idx;
 
+            self.erased_caller_drives = true;
             const proc_result = try self.evalProcByIdWithDescriptors(proc_id, proc_args, proc_arg_layouts, descriptor_bindings);
             return .{
                 .value = proc_result.value,
@@ -4886,18 +5071,18 @@ pub const Interpreter = struct {
         );
 
         const capture_drop_kind: ErasedCallableCaptureDrop = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => .none,
+            .none => .none,
             .rc_helper => .rc_helper,
             .boxy_capture => .boxy_capture,
         };
         const drop_layout: ?layout_mod.Idx = switch (assign.on_drop) {
-            .none, .interpreter_context_drop => null,
+            .none => null,
             .rc_helper => |helper| helper.layout_idx,
             .boxy_capture => |plan| plan.capture_layout,
         };
         const drop_desc_field_offset: u32 = switch (assign.on_drop) {
             .boxy_capture => |plan| plan.desc_field_offset,
-            .none, .rc_helper, .interpreter_context_drop => 0,
+            .none, .rc_helper => 0,
         };
         const on_drop: ?builtins.erased_callable.OnDropFn = if (self.retained_owner != null or capture_drop_kind != .none)
             &interpreterErasedCallableOnDrop
@@ -4920,11 +5105,11 @@ pub const Interpreter = struct {
             .owner = self.retained_owner,
             .interpreter = self,
             .result_desc = result_desc,
-            .proc_id = @intFromEnum(assign.proc),
-            .drop_layout_plus_one = if (drop_layout) |layout_idx| @intFromEnum(layout_idx) + 1 else 0,
+            .proc_id = @backingInt(assign.proc),
+            .drop_layout_plus_one = if (drop_layout) |layout_idx| @backingInt(layout_idx) + 1 else 0,
             .capture_value_offset = @intCast(erased_callable_context_capture_offset),
             .drop_desc_field_offset = drop_desc_field_offset,
-            .drop_kind = @intFromEnum(capture_drop_kind),
+            .drop_kind = @backingInt(capture_drop_kind),
             .padding = .{ 0, 0, 0 },
         };
 
@@ -5004,7 +5189,7 @@ pub const Interpreter = struct {
             .ptr,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: assign_struct target layout {d} is not a struct or boxed struct",
-                .{@intFromEnum(struct_layout)},
+                .{@backingInt(struct_layout)},
             ),
         }
     }
@@ -5020,7 +5205,7 @@ pub const Interpreter = struct {
                 if (self.helper.sizeOf(field_layout) != 0) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: boxed/zst struct literal for layout {d} had non-ZST field {d}",
-                        .{ @intFromEnum(struct_layout), index },
+                        .{ @backingInt(struct_layout), index },
                     );
                 }
             }
@@ -5035,10 +5220,10 @@ pub const Interpreter = struct {
             if (field.is_padding) continue;
             expected_field_count = @max(expected_field_count, @as(usize, @intCast(field.index)) + 1);
         }
-        if (builtin.mode == .Debug and field_locals.len < expected_field_count) {
+        if (builtin.mode == .debug and field_locals.len < expected_field_count) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: struct literal for layout {d} had {d} fields but layout expects {d}",
-                .{ @intFromEnum(struct_layout), field_locals.len, expected_field_count },
+                .{ @backingInt(struct_layout), field_locals.len, expected_field_count },
             );
         }
         for (0..field_locals.len) |i| {
@@ -5063,19 +5248,19 @@ pub const Interpreter = struct {
                 source_layout,
                 field_layout,
             );
-            if (builtin.mode == .Debug and field_value.isZst()) {
+            if (builtin.mode == .debug and field_value.isZst()) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: struct field local {d} in proc {d} had ZST value for non-ZST layout {d} (local_layout={d}, local_layout_data={any}, field_layout_data={any}, struct_layout_data={any}, field index {d} of struct layout {d})",
                     .{
-                        @intFromEnum(field_local),
-                        @intFromEnum(frame.proc_id),
-                        @intFromEnum(field_layout),
-                        @intFromEnum(self.store.getLocal(field_local).layout_idx),
+                        @backingInt(field_local),
+                        @backingInt(frame.proc_id),
+                        @backingInt(field_layout),
+                        @backingInt(self.store.getLocal(field_local).layout_idx),
                         self.layout_store.getLayout(self.store.getLocal(field_local).layout_idx),
                         self.layout_store.getLayout(field_layout),
                         self.layout_store.getLayout(struct_layout),
                         i,
-                        @intFromEnum(struct_layout),
+                        @backingInt(struct_layout),
                     },
                 );
             }
@@ -5101,10 +5286,10 @@ pub const Interpreter = struct {
         const allocated = try self.allocTagValue(union_layout);
         if (self.helper.sizeOf(allocated.base_layout) > 0) {
             self.helper.writeTagDiscriminant(allocated.base, allocated.base_layout, discriminant);
-        } else if (builtin.mode == .Debug and discriminant != 0) {
+        } else if (builtin.mode == .debug and discriminant != 0) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: nonzero discriminant {d} for zero-sized tag layout {d}",
-                .{ discriminant, @intFromEnum(allocated.base_layout) },
+                .{ discriminant, @backingInt(allocated.base_layout) },
             );
         }
 
@@ -5151,17 +5336,17 @@ pub const Interpreter = struct {
                 self.store.getLocal(elem_local).layout_idx,
                 elem_layout,
             );
-            if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(elem_value) == null) {
+            if (builtin.mode == .debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(elem_value) == null) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: list literal source local {d} in proc {d} had null boxed element for list elem layout {d}",
-                    .{ @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
+                    .{ @backingInt(elem_local), @backingInt(frame.proc_id), @backingInt(elem_layout) },
                 );
             }
             @memcpy(elem_data[offset..][0..elem_size], elem_value.readBytes(elem_size));
-            if (builtin.mode == .Debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(.{ .ptr = elem_data + offset }) == null) {
+            if (builtin.mode == .debug and elem_layout_val.tag == .box and self.readBoxedDataPointer(.{ .ptr = elem_data + offset }) == null) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: list literal wrote null boxed element at index {d} from local {d} in proc {d} for elem layout {d}",
-                    .{ i, @intFromEnum(elem_local), @intFromEnum(frame.proc_id), @intFromEnum(elem_layout) },
+                    .{ i, @backingInt(elem_local), @backingInt(frame.proc_id), @backingInt(elem_layout) },
                 );
             }
         }
@@ -5227,7 +5412,7 @@ pub const Interpreter = struct {
         } else if (hosted.dispatch_index >= self.roc_ops.hosted_fns.count) {
             return self.invariantFailedError(
                 "LIR/interpreter invariant violated: hosted call index {d} out of bounds for proc {d}",
-                .{ hosted.dispatch_index, @intFromEnum(proc_id) },
+                .{ hosted.dispatch_index, @backingInt(proc_id) },
             );
         } else if (comptime host_trampoline.available) {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
@@ -5246,7 +5431,7 @@ pub const Interpreter = struct {
                 ret_buf.ptr,
             ) catch |err| return self.invariantFailedError(
                 "hosted call C-ABI lowering failed for proc {d}: {s}",
-                .{ @intFromEnum(proc_id), @errorName(err) },
+                .{ @backingInt(proc_id), @errorName(err) },
             );
         } else {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
@@ -5331,7 +5516,7 @@ pub const Interpreter = struct {
         if (self.static_strings.find(backing)) |entry| return entry.bytes;
         self.invariantFailed(
             "LIR/interpreter invariant violated: string literal {d} has no runtime static backing",
-            .{@intFromEnum(backing)},
+            .{@backingInt(backing)},
         );
     }
 
@@ -5349,7 +5534,7 @@ pub const Interpreter = struct {
             return self.rocStrToValue(small, .str);
         }
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             const data_addr = @intFromPtr(backing.ptr);
             if (data_addr % @alignOf(isize) != 0) {
                 self.invariantFailed(
@@ -5395,7 +5580,7 @@ pub const Interpreter = struct {
             return self.rocListToValue(.{ .bytes = null, .length = elem_len, .capacity_or_alloc_ptr = RocList.encodeCapacity(elem_len) }, target_layout);
         }
 
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             const data_addr = @intFromPtr(backing.ptr);
             if (data_addr % @alignOf(isize) != 0) {
                 self.invariantFailed(
@@ -5710,7 +5895,7 @@ pub const Interpreter = struct {
         if (plan == .noop) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: explicit RC statement used noop helper for layout {d}",
-                .{@intFromEnum(helper.layout_idx)},
+                .{@backingInt(helper.layout_idx)},
             );
         }
         self.boxy_runtime.performRcPlan(self.boxyFrameHooks(null), plan, val, count, atomicity);
@@ -5973,7 +6158,7 @@ pub const Interpreter = struct {
     fn listElemInfo(self: *LirInterpreter, list_layout: layout_mod.Idx) ListElemInfo {
         const resolved_layout = self.layout_store.resolvedListLayoutIdx(list_layout) orelse self.invariantFailed(
             "LIR/interpreter invariant violated: expected explicit resolved list layout for layout {d}",
-            .{@intFromEnum(list_layout)},
+            .{@backingInt(list_layout)},
         );
         const l = self.layout_store.getLayout(resolved_layout);
         if (l.tag == .list) {
@@ -6138,12 +6323,12 @@ pub const Interpreter = struct {
                 elem_desc = try self.firstNestedBoxyDesc(ll.frame, desc) orelse
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: descriptor-backed list layout {d} had no element descriptor",
-                        .{@intFromEnum(list_layout)},
+                        .{@backingInt(list_layout)},
                     );
             } else if (elem_is_erased_box) {
                 return self.invariantFailedError(
                     "LIR/interpreter invariant violated: erased-box list element layout {d} reached a refcounted list builtin without a Boxy list descriptor",
-                    .{@intFromEnum(elem_layout)},
+                    .{@backingInt(elem_layout)},
                 );
             }
         }
@@ -6506,7 +6691,7 @@ pub const Interpreter = struct {
                     const index_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 0);
                     const problem_off = self.layout_store.getStructFieldOffsetByOriginalIndex(rec_idx, 1);
                     val.offset(index_off).write(u64, result.byte_index);
-                    val.offset(problem_off).write(u8, @intFromEnum(result.problem_code));
+                    val.offset(problem_off).write(u8, @backingInt(result.problem_code));
                     if (inner_tu_data_opt) |inner_tu| {
                         // The inner tag union sits at offset 0 of the Err payload, which is at
                         // offset 0 of the outer tag union. Write its discriminant in place.
@@ -6515,6 +6700,26 @@ pub const Interpreter = struct {
                     self.helper.writeTagDiscriminant(val, ll.ret_layout, resolved_err);
                 }
                 break :blk val;
+            },
+            .str_from_utf8_validated => blk: {
+                const result = builtins.str.fromUtf8Validated(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf16_le_short => blk: {
+                const result = builtins.str.fromUtf16LeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf16_be_short => blk: {
+                const result = builtins.str.fromUtf16BeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32_le_short => blk: {
+                const result = builtins.str.fromUtf32LeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
+            },
+            .str_from_utf32_be_short => blk: {
+                const result = builtins.str.fromUtf32BeShort(self.valueToRocListForLayout(args[0], arg_layout), &self.roc_ops);
+                break :blk self.rocStrToValue(result, ll.ret_layout);
             },
             .str_from_utf8_lossy => blk: {
                 var crash_boundary = self.enterCrashBoundary();
@@ -6562,16 +6767,7 @@ pub const Interpreter = struct {
                 defer crash_boundary.deinit();
                 const sj = crash_boundary.set();
                 if (sj != 0) return self.crashError();
-                var result: RocStr = undefined;
-                const roc_str = valueToRocStr(args[0]);
-                const entered = builtins.in_process_host.enter(&self.roc_ops, null);
-                defer builtins.in_process_host.leave(entered);
-                dev_wrappers.roc_builtins_str_escape_and_quote(
-                    &result,
-                    roc_str.bytes,
-                    roc_str.length,
-                    roc_str.capacity_or_alloc_ptr,
-                );
+                const result = builtins.str.strEscapeAndQuote(valueToRocStr(args[0]), &self.roc_ops);
                 break :blk self.rocStrToValue(result, ll.ret_layout);
             },
 
@@ -7253,8 +7449,7 @@ pub const Interpreter = struct {
             => self.evalIntegerFamily(ll.op, args[0], args[1], ll.ret_layout, arg_layout),
             .num_float_add => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .add, null),
             .num_float_sub => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .sub, null),
-            .num_float_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
-            .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
+            .num_float_mul, .dec_mul => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .mul, null),
             .num_div_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, null),
             .num_div_by_checked => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div, .num_div_by_checked),
             .num_div_trunc_by => self.numBinOp(args[0], args[1], ll.ret_layout, arg_layout, .div_trunc, null),
@@ -7384,7 +7579,7 @@ pub const Interpreter = struct {
             .hasher_write_bool => blk: {
                 const seed = args[0].read(u64);
                 const value: u64 = if (try self.readBoolValue(args[1], try self.lowLevelArgLayout(ll, 1))) 1 else 0;
-                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(lir.hasherDomain(ll.op)), value, lir.hasherU64Width(ll.op));
+                const next = builtins.hash.hasher_write_u64(seed, @backingInt(lir.hasherDomain(ll.op)), value, lir.hasherU64Width(ll.op));
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_u8,
@@ -7413,7 +7608,7 @@ pub const Interpreter = struct {
                     @as(u64, @as(u32, @bitCast(args[1].read(i32))))
                 else
                     @bitCast(args[1].read(i64));
-                const next = builtins.hash.hasher_write_u64(seed, @intFromEnum(lir.hasherDomain(ll.op)), value, lir.hasherU64Width(ll.op));
+                const next = builtins.hash.hasher_write_u64(seed, @backingInt(lir.hasherDomain(ll.op)), value, lir.hasherU64Width(ll.op));
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_f32 => blk: {
@@ -7436,20 +7631,20 @@ pub const Interpreter = struct {
                 const bits: u128 = @bitCast(args[1].read(i128));
                 const low: u64 = @truncate(bits);
                 const high: u64 = @truncate(bits >> 64);
-                const next = builtins.hash.hasher_write_u128(seed, @intFromEnum(lir.hasherDomain(ll.op)), low, high);
+                const next = builtins.hash.hasher_write_u128(seed, @backingInt(lir.hasherDomain(ll.op)), low, high);
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_bytes => blk: {
                 const seed = args[0].read(u64);
                 const bytes = try self.byteListSlice(args[1], try self.lowLevelArgLayout(ll, 1));
-                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(lir.hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                const next = builtins.hash.hasher_write_bytes(seed, @backingInt(lir.hasherDomain(ll.op)), bytes.ptr, bytes.len);
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
             .hasher_write_str => blk: {
                 const seed = args[0].read(u64);
                 var str = valueToRocStr(args[1]);
                 const bytes = str.asSlice();
-                const next = builtins.hash.hasher_write_bytes(seed, @intFromEnum(lir.hasherDomain(ll.op)), bytes.ptr, bytes.len);
+                const next = builtins.hash.hasher_write_bytes(seed, @backingInt(lir.hasherDomain(ll.op)), bytes.ptr, bytes.len);
                 break :blk self.writeHasherValue(ll.ret_layout, next);
             },
 
@@ -7894,8 +8089,7 @@ pub const Interpreter = struct {
 
             // ── Box ops ──
             .box_box => try self.evalBoxBox(args[0], ll.ret_layout),
-            .box_unbox => try self.evalBoxUnbox(args[0], ll.ret_layout),
-            .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
+            .box_unbox, .box_unbox_borrowed => try self.evalBoxUnbox(args[0], ll.ret_layout),
             .box_prepare_update => try self.evalBoxPrepareUpdate(args[0], ll.ret_layout, ll.unique_args),
             .erased_capture_load => try self.evalErasedCaptureLoad(args[0], ll.ret_layout),
             .ptr_alloca => try self.evalPtrAlloca(ll.ret_layout),
@@ -7914,7 +8108,7 @@ pub const Interpreter = struct {
         if (struct_layout_val.tag != .struct_) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: expected struct layout for list/element pair, got layout {d} ({s})",
-                .{ @intFromEnum(struct_layout), @tagName(struct_layout_val.tag) },
+                .{ @backingInt(struct_layout), @tagName(struct_layout_val.tag) },
             );
         }
 
@@ -7922,7 +8116,7 @@ pub const Interpreter = struct {
         if (struct_info.fields.len != 2) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: expected 2-field struct layout {d} for list/element pair, found {d} fields",
-                .{ @intFromEnum(struct_layout), struct_info.fields.len },
+                .{ @backingInt(struct_layout), struct_info.fields.len },
             );
         }
 
@@ -7938,7 +8132,7 @@ pub const Interpreter = struct {
                 if (found_list) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: struct layout {d} had multiple list fields in list/element pair lowering",
-                        .{@intFromEnum(struct_layout)},
+                        .{@backingInt(struct_layout)},
                     );
                 }
                 found_list = true;
@@ -7957,7 +8151,7 @@ pub const Interpreter = struct {
                 if (found_elem) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: struct layout {d} had multiple non-list fields in list/element pair lowering",
-                        .{@intFromEnum(struct_layout)},
+                        .{@backingInt(struct_layout)},
                     );
                 }
                 found_elem = true;
@@ -7977,12 +8171,12 @@ pub const Interpreter = struct {
 
         const resolved = pair orelse self.invariantFailed(
             "LIR/interpreter invariant violated: struct layout {d} did not resolve a list/element pair shape",
-            .{@intFromEnum(struct_layout)},
+            .{@backingInt(struct_layout)},
         );
         if (!found_list or !found_elem) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: struct layout {d} missing list or element field in list/element pair shape",
-                .{@intFromEnum(struct_layout)},
+                .{@backingInt(struct_layout)},
             );
         }
         return resolved;
@@ -8004,6 +8198,16 @@ pub const Interpreter = struct {
     const ShiftOp = enum { shl, shr, shr_zf };
     const BitwiseOp = enum { @"and", @"or", xor, not };
     const BitCountOp = enum { count_ones, count_leading_zeros, count_trailing_zeros };
+    /// The unsigned integer type a numeric operand of `bits` bits is read as.
+    fn UInt(comptime bits: u16) type {
+        return @Int(.unsigned, bits);
+    }
+
+    /// The signed integer type a numeric operand of `bits` bits is read as.
+    fn SInt(comptime bits: u16) type {
+        return @Int(.signed, bits);
+    }
+
     const NumericOperandKind = union(enum) {
         unsigned_int: u16,
         signed_int: u16,
@@ -8049,7 +8253,7 @@ pub const Interpreter = struct {
         for (0..@min(ll.args.len, operands.len)) |i| {
             operands[i] = self.readLowBits(ll.args[i], try self.lowLevelArgLayout(ll, i));
         }
-        const simd_op: builtins.simd.Op = @enumFromInt(ll.op.simdOpIndex() orelse unreachable);
+        const simd_op: builtins.simd.Op = @fromBackingInt(@intCast(ll.op.simdOpIndex() orelse unreachable));
         const result_bits = builtins.simd.eval(simd_op, source_kind, destination_kind, operands[0], operands[1], operands[2]);
         const result = try self.alloc(ll.ret_layout);
         const result_size = @min(self.helper.sizeOf(ll.ret_layout), @sizeOf(u128));
@@ -8075,10 +8279,13 @@ pub const Interpreter = struct {
     }
 
     fn evalSimdLoad(self: *LirInterpreter, ll: LowLevelEvalInput) Error!Value {
-        const list = self.valueToRocListForLayout(ll.args[0], try self.lowLevelArgLayout(ll, 0));
+        const list_layout = try self.lowLevelArgLayout(ll, 0);
+        const list = self.valueToRocListForLayout(ll.args[0], list_layout);
+        const abi = self.layout_store.builtinListAbi(list_layout);
         const index: usize = @intCast(ll.args[1].read(u64));
+        const offset = index * abi.elem_size;
         const result = try self.alloc(ll.ret_layout);
-        @memcpy(result.ptr[0..16], list.bytes.?[index..][0..16]);
+        @memcpy(result.ptr[0..16], list.bytes.?[offset..][0..16]);
         return result;
     }
 
@@ -8137,7 +8344,7 @@ pub const Interpreter = struct {
         if (layout_idx == .dec) return .dec;
         return self.invariantFailedError(
             "LIR/interpreter invariant violated: numeric low-level op used non-numeric layout {d} ({s})",
-            .{ @intFromEnum(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
+            .{ @backingInt(layout_idx), @tagName(self.layout_store.getLayout(layout_idx).tag) },
         );
     }
 
@@ -8155,43 +8362,27 @@ pub const Interpreter = struct {
         if (checked_op != null and is_division_like) {
             switch (kind) {
                 .unsigned_int => |bits| switch (bits) {
-                    8 => if (b.read(u8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(u16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(u32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(u64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(u128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(UInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
                 },
                 .signed_int => |bits| switch (bits) {
-                    8 => if (b.read(i8) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    16 => if (b.read(i16) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    32 => if (b.read(i32) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    64 => if (b.read(i64) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
-                    128 => if (b.read(i128) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
+                    inline 8, 16, 32, 64, 128 => |w| if (b.read(SInt(w)) == 0) return self.checkedZeroDenominator(checked_op.?, arg_layout),
                     else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
                 },
                 .dec, .float => return self.invariantFailedError(
                     "LIR/interpreter invariant violated: checked integer op used non-integer layout {d}",
-                    .{@intFromEnum(arg_layout)},
+                    .{@backingInt(arg_layout)},
                 ),
             }
         }
 
         switch (kind) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, try self.intBinOp(u8, a.read(u8), b.read(u8), op, checked_op)),
-                16 => val.write(u16, try self.intBinOp(u16, a.read(u16), b.read(u16), op, checked_op)),
-                32 => val.write(u32, try self.intBinOp(u32, a.read(u32), b.read(u32), op, checked_op)),
-                64 => val.write(u64, try self.intBinOp(u64, a.read(u64), b.read(u64), op, checked_op)),
-                128 => val.write(u128, try self.intBinOp(u128, a.read(u128), b.read(u128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), try self.intBinOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, try self.intBinOp(i8, a.read(i8), b.read(i8), op, checked_op)),
-                16 => val.write(i16, try self.intBinOp(i16, a.read(i16), b.read(i16), op, checked_op)),
-                32 => val.write(i32, try self.intBinOp(i32, a.read(i32), b.read(i32), op, checked_op)),
-                64 => val.write(i64, try self.intBinOp(i64, a.read(i64), b.read(i64), op, checked_op)),
-                128 => val.write(i128, try self.intBinOp(i128, a.read(i128), b.read(i128), op, checked_op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), try self.intBinOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op, checked_op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8222,7 +8413,7 @@ pub const Interpreter = struct {
             .sub => .sub,
             .mul => .mul,
         };
-        if (builtin.mode == .Debug and entry.mode == .proven_cannot_overflow) {
+        if (builtin.mode == .debug and entry.mode == .proven_cannot_overflow) {
             if (try self.integerOperationOverflows(a, b, arg_layout, entry.operation)) {
                 return self.invariantFailedError("range prover emitted {s} for overflowing operands", .{@tagName(low_level)});
             }
@@ -8254,19 +8445,11 @@ pub const Interpreter = struct {
     ) Error!bool {
         return switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => intBinOverflows(u8, a.read(u8), b.read(u8), operation),
-                16 => intBinOverflows(u16, a.read(u16), b.read(u16), operation),
-                32 => intBinOverflows(u32, a.read(u32), b.read(u32), operation),
-                64 => intBinOverflows(u64, a.read(u64), b.read(u64), operation),
-                128 => intBinOverflows(u128, a.read(u128), b.read(u128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(UInt(w), a.read(UInt(w)), b.read(UInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => intBinOverflows(i8, a.read(i8), b.read(i8), operation),
-                16 => intBinOverflows(i16, a.read(i16), b.read(i16), operation),
-                32 => intBinOverflows(i32, a.read(i32), b.read(i32), operation),
-                64 => intBinOverflows(i64, a.read(i64), b.read(i64), operation),
-                128 => intBinOverflows(i128, a.read(i128), b.read(i128), operation),
+                inline 8, 16, 32, 64, 128 => |w| intBinOverflows(SInt(w), a.read(SInt(w)), b.read(SInt(w)), operation),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer width {d}", .{bits}),
             },
             .dec => if (operation == .mul)
@@ -8296,19 +8479,11 @@ pub const Interpreter = struct {
 
         const result: bool = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOp(u8, a.read(u8), b.read(u8), op),
-                16 => cmpOp(u16, a.read(u16), b.read(u16), op),
-                32 => cmpOp(u32, a.read(u32), b.read(u32), op),
-                64 => cmpOp(u64, a.read(u64), b.read(u64), op),
-                128 => cmpOp(u128, a.read(u128), b.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOp(i8, a.read(i8), b.read(i8), op),
-                16 => cmpOp(i16, a.read(i16), b.read(i16), op),
-                32 => cmpOp(i32, a.read(i32), b.read(i32), op),
-                64 => cmpOp(i64, a.read(i64), b.read(i64), op),
-                128 => cmpOp(i128, a.read(i128), b.read(i128), op),
+                inline 8, 16, 32, 64, 128 => |w| cmpOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8331,19 +8506,11 @@ pub const Interpreter = struct {
         // Runtime tag order for [Before, Same, After]: After=0, Before=1, Same=2.
         const result: u8 = switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => cmpOrder(u8, a.read(u8), b.read(u8)),
-                16 => cmpOrder(u16, a.read(u16), b.read(u16)),
-                32 => cmpOrder(u32, a.read(u32), b.read(u32)),
-                64 => cmpOrder(u64, a.read(u64), b.read(u64)),
-                128 => cmpOrder(u128, a.read(u128), b.read(u128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(UInt(w), a.read(UInt(w)), b.read(UInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer compare width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => cmpOrder(i8, a.read(i8), b.read(i8)),
-                16 => cmpOrder(i16, a.read(i16), b.read(i16)),
-                32 => cmpOrder(i32, a.read(i32), b.read(i32)),
-                64 => cmpOrder(i64, a.read(i64), b.read(i64)),
-                128 => cmpOrder(i128, a.read(i128), b.read(i128)),
+                inline 8, 16, 32, 64, 128 => |w| cmpOrder(SInt(w), a.read(SInt(w)), b.read(SInt(w))),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer compare width {d}", .{bits}),
             },
             .float => |bits| switch (bits) {
@@ -8361,24 +8528,16 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, shiftOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, shiftOp(u16, a.read(u16), b.read(u8), op)),
-                32 => val.write(u32, shiftOp(u32, a.read(u32), b.read(u8), op)),
-                64 => val.write(u64, shiftOp(u64, a.read(u64), b.read(u8), op)),
-                128 => val.write(u128, shiftOp(u128, a.read(u128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), shiftOp(UInt(w), a.read(UInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer shift width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, shiftOp(i8, a.read(i8), b.read(u8), op)),
-                16 => val.write(i16, shiftOp(i16, a.read(i16), b.read(u8), op)),
-                32 => val.write(i32, shiftOp(i32, a.read(i32), b.read(u8), op)),
-                64 => val.write(i64, shiftOp(i64, a.read(i64), b.read(u8), op)),
-                128 => val.write(i128, shiftOp(i128, a.read(i128), b.read(u8), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), shiftOp(SInt(w), a.read(SInt(w)), b.read(u8), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer shift width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: shift used non-integer layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8388,24 +8547,16 @@ pub const Interpreter = struct {
         const val = try self.alloc(ret_layout);
         switch (try self.numericOperandKind(arg_layout)) {
             .unsigned_int => |bits| switch (bits) {
-                8 => val.write(u8, bitwiseOp(u8, a.read(u8), b.read(u8), op)),
-                16 => val.write(u16, bitwiseOp(u16, a.read(u16), b.read(u16), op)),
-                32 => val.write(u32, bitwiseOp(u32, a.read(u32), b.read(u32), op)),
-                64 => val.write(u64, bitwiseOp(u64, a.read(u64), b.read(u64), op)),
-                128 => val.write(u128, bitwiseOp(u128, a.read(u128), b.read(u128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(UInt(w), bitwiseOp(UInt(w), a.read(UInt(w)), b.read(UInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported unsigned integer bitwise width {d}", .{bits}),
             },
             .signed_int => |bits| switch (bits) {
-                8 => val.write(i8, bitwiseOp(i8, a.read(i8), b.read(i8), op)),
-                16 => val.write(i16, bitwiseOp(i16, a.read(i16), b.read(i16), op)),
-                32 => val.write(i32, bitwiseOp(i32, a.read(i32), b.read(i32), op)),
-                64 => val.write(i64, bitwiseOp(i64, a.read(i64), b.read(i64), op)),
-                128 => val.write(i128, bitwiseOp(i128, a.read(i128), b.read(i128), op)),
+                inline 8, 16, 32, 64, 128 => |w| val.write(SInt(w), bitwiseOp(SInt(w), a.read(SInt(w)), b.read(SInt(w)), op)),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported signed integer bitwise width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: bitwise used non-integer layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8422,16 +8573,12 @@ pub const Interpreter = struct {
             // operand's signedness does not affect the result; read each width
             // as its unsigned counterpart.
             .unsigned_int, .signed_int => |bits| switch (bits) {
-                8 => bitCount(u8, a.read(u8), op),
-                16 => bitCount(u16, a.read(u16), op),
-                32 => bitCount(u32, a.read(u32), op),
-                64 => bitCount(u64, a.read(u64), op),
-                128 => bitCount(u128, a.read(u128), op),
+                inline 8, 16, 32, 64, 128 => |w| bitCount(UInt(w), a.read(UInt(w)), op),
                 else => return self.invariantFailedError("LIR/interpreter invariant violated: unsupported integer bit-count width {d}", .{bits}),
             },
             .float, .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: bit count used non-integer layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         };
         val.write(u8, count);
@@ -8455,7 +8602,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_pow survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8474,7 +8621,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_atan2 survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8497,7 +8644,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_sqrt survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8520,7 +8667,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_log survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8582,7 +8729,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_{s} survived lowering for layout {d}",
-                .{ @tagName(op), @intFromEnum(arg_layout) },
+                .{ @tagName(op), @backingInt(arg_layout) },
             ),
         }
         return val;
@@ -8593,7 +8740,7 @@ pub const Interpreter = struct {
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: Dec num_floor survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @floor(a.read(f32))),
@@ -8602,7 +8749,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_floor survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8613,7 +8760,7 @@ pub const Interpreter = struct {
         switch (try self.numericOperandKind(arg_layout)) {
             .dec => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: Dec num_ceiling survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
             .float => |bits| switch (bits) {
                 32 => val.write(f32, @ceil(a.read(f32))),
@@ -8622,7 +8769,7 @@ pub const Interpreter = struct {
             },
             .signed_int, .unsigned_int => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: integer num_ceiling survived lowering for layout {d}",
-                .{@intFromEnum(arg_layout)},
+                .{@backingInt(arg_layout)},
             ),
         }
         return val;
@@ -8642,7 +8789,7 @@ pub const Interpreter = struct {
             16 => val.write(if (@typeInfo(Src).int.signedness == .signed) i128 else u128, @intCast(sv)),
             else => return self.invariantFailedError(
                 "LIR/interpreter invariant violated: numeric widen target layout {d} has unsupported size {d}",
-                .{ @intFromEnum(ret_layout), ret_size },
+                .{ @backingInt(ret_layout), ret_size },
             ),
         }
         return val;
@@ -8654,7 +8801,7 @@ pub const Interpreter = struct {
         // Truncate to same-width as Dst, then bitcast if signedness differs
         const DstBits = @typeInfo(Dst).int.bits;
         std.debug.assert(@typeInfo(Src).int.bits >= DstBits);
-        const SameSigned = std.meta.Int(@typeInfo(Src).int.signedness, DstBits);
+        const SameSigned = @Int(@typeInfo(Src).int.signedness, DstBits);
         const truncated: SameSigned = @truncate(sv);
         val.write(Dst, @bitCast(truncated));
         return val;
@@ -8695,7 +8842,7 @@ pub const Interpreter = struct {
 
         return self.invariantFailedError(
             "LIR/interpreter invariant violated: Bool value used layout {d} ({s})",
-            .{ @intFromEnum(bool_layout), @tagName(layout_val.tag) },
+            .{ @backingInt(bool_layout), @tagName(layout_val.tag) },
         );
     }
 
@@ -8865,7 +9012,7 @@ pub const Interpreter = struct {
                 .wrap => if (comptime spec.src.bits() >= spec.dst.bits())
                     self.numTruncate(Src, spec.dst.ZigType(), arg, ret_layout)
                 else
-                    self.numTruncateWiden(Src, std.meta.Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
+                    self.numTruncateWiden(Src, @Int(.signed, spec.dst.bits()), spec.dst.ZigType(), arg, ret_layout),
                 .@"try" => self.numTry(Src, spec.dst.ZigType(), arg, ret_layout),
                 .trunc, .try_unsafe => unreachable,
             },
@@ -9436,7 +9583,7 @@ pub const Interpreter = struct {
             .shl => av << shift,
             .shr => av >> shift,
             .shr_zf => blk: {
-                const U = std.meta.Int(.unsigned, max_bits);
+                const U = @Int(.unsigned, max_bits);
                 break :blk @bitCast(@as(U, @bitCast(av)) >> shift);
             },
         };
@@ -9546,7 +9693,7 @@ pub const Interpreter = struct {
                 if (raw_ptr == 0) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: boxy descriptor local {d} contained a null descriptor pointer",
-                        .{@intFromEnum(local)},
+                        .{@backingInt(local)},
                     );
                 }
                 break :blk @ptrFromInt(raw_ptr);
@@ -9557,7 +9704,7 @@ pub const Interpreter = struct {
                     BoxyFrameHooks{ .interp = self, .frame = frame },
                     dict,
                     projection.method_slot,
-                    @intFromEnum(projection.method),
+                    @backingInt(projection.method),
                     projection.arg_index,
                 );
             },
@@ -9567,7 +9714,7 @@ pub const Interpreter = struct {
                     BoxyFrameHooks{ .interp = self, .frame = frame },
                     dict,
                     projection.method_slot,
-                    @intFromEnum(projection.method),
+                    @backingInt(projection.method),
                     projection.hidden_index,
                     projection.shape,
                 );
@@ -9590,7 +9737,7 @@ pub const Interpreter = struct {
                 if (dict.template) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: template dictionary {d} was read without materializing its captures",
-                        .{@intFromEnum(dict_id)},
+                        .{@backingInt(dict_id)},
                     );
                 }
                 break :blk dict;
@@ -9601,7 +9748,7 @@ pub const Interpreter = struct {
                 if (raw_ptr == 0) {
                     return self.invariantFailedError(
                         "LIR/interpreter invariant violated: boxy dictionary local {d} contained a null dictionary pointer",
-                        .{@intFromEnum(local)},
+                        .{@backingInt(local)},
                     );
                 }
                 break :blk @ptrFromInt(raw_ptr);
@@ -9846,12 +9993,12 @@ pub const Interpreter = struct {
                 if (inner_layout_val.tag != .struct_) {
                     self.invariantFailed(
                         "LIR/interpreter invariant violated: field projection source layout {d} boxes non-struct layout {d}",
-                        .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
+                        .{ @backingInt(struct_layout), @backingInt(inner_layout) },
                     );
                 }
                 const data_ptr = self.readBoxedDataPointer(struct_val) orelse self.invariantFailed(
                     "LIR/interpreter invariant violated: boxed struct layout {d} had null data pointer for inner layout {d}",
-                    .{ @intFromEnum(struct_layout), @intFromEnum(inner_layout) },
+                    .{ @backingInt(struct_layout), @backingInt(inner_layout) },
                 );
                 return .{
                     .value = .{ .ptr = data_ptr },
@@ -9874,7 +10021,7 @@ pub const Interpreter = struct {
             .ptr,
             => self.invariantFailed(
                 "LIR/interpreter invariant violated: field projection source layout {d} is not a struct or boxed struct",
-                .{@intFromEnum(struct_layout)},
+                .{@backingInt(struct_layout)},
             ),
         }
     }
@@ -9937,6 +10084,33 @@ pub const Interpreter = struct {
             actual_layout,
             actual_desc,
             result_desc,
+            expected_layout,
+        );
+    }
+
+    /// Store a call's result as the statement's own descriptor describes.
+    /// `stored_as` is the descriptor a pending call's statement already
+    /// stored the value as; applying the same one again changes nothing.
+    fn materializeDrivenCallResult(
+        self: *LirInterpreter,
+        frame: *const Frame,
+        value: Value,
+        actual_layout: layout_mod.Idx,
+        actual_desc: ?*const LirProgram.BoxyTypeDesc,
+        result_desc_ref: ?LIR.BoxyDescRef,
+        stored_as: ?*const LirProgram.BoxyTypeDesc,
+        expected_layout: layout_mod.Idx,
+    ) Error!boxy_runtime.BoxyAssignedValue {
+        const own = try self.resolveOptionalBoxyDescRef(frame, result_desc_ref);
+        if (stored_as) |applied| {
+            if (own == applied and actual_layout == expected_layout) return .{ .value = value, .desc = actual_desc };
+        }
+        return try self.boxy_runtime.materializeCallResult(
+            self.boxyFrameHooks(frame),
+            value,
+            actual_layout,
+            actual_desc,
+            own,
             expected_layout,
         );
     }
@@ -10081,10 +10255,10 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
             const raw_capture_ptr = self.readPointerInt(capture_ptr);
-            if (builtin.mode == .Debug and raw_capture_ptr == 0) {
+            if (builtin.mode == .debug and raw_capture_ptr == 0) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: erased capture load received a null capture pointer for non-ZST layout {d}",
-                    .{@intFromEnum(ret_layout)},
+                    .{@backingInt(ret_layout)},
                 );
             }
             result.copyFrom(.{ .ptr = @ptrFromInt(raw_capture_ptr) }, size);
@@ -10098,7 +10272,7 @@ pub const Interpreter = struct {
     /// frame—fine, since TRMC emits at most one alloca per proc invocation.
     fn evalPtrAlloca(self: *LirInterpreter, ret_layout: layout_mod.Idx) Error!Value {
         const ret_layout_val = self.layout_store.getLayout(ret_layout);
-        if (builtin.mode == .Debug and ret_layout_val.tag != .ptr) {
+        if (builtin.mode == .debug and ret_layout_val.tag != .ptr) {
             self.invariantFailed(
                 "LIR/interpreter invariant violated: ptr_alloca target had layout {s}, expected ptr",
                 .{@tagName(ret_layout_val.tag)},
@@ -10123,7 +10297,7 @@ pub const Interpreter = struct {
         if (box_info.elem_size > 0) {
             @memset(data_ptr[0..box_info.elem_size], 0);
         }
-        if (builtin.mode == .Debug) {
+        if (builtin.mode == .debug) {
             try self.inflight_zeroed_box_payloads.put(self.allocator, @intFromPtr(data_ptr), {});
         }
         const boxed = try self.alloc(ret_layout);
@@ -10136,15 +10310,15 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(value_layout);
         if (size > 0) {
             const raw_ptr = self.readPointerInt(ptr_val);
-            if (builtin.mode == .Debug and raw_ptr == 0) {
+            if (builtin.mode == .debug and raw_ptr == 0) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: ptr_store received a null pointer for non-ZST layout {d}",
-                    .{@intFromEnum(value_layout)},
+                    .{@backingInt(value_layout)},
                 );
             }
             const dest: [*]u8 = @ptrFromInt(raw_ptr);
             @memcpy(dest[0..size], value.ptr[0..size]);
-            if (builtin.mode == .Debug) {
+            if (builtin.mode == .debug) {
                 _ = self.inflight_zeroed_box_payloads.remove(raw_ptr);
             }
         }
@@ -10159,10 +10333,10 @@ pub const Interpreter = struct {
         const size = self.helper.sizeOf(ret_layout);
         if (size > 0) {
             const raw_ptr = self.readPointerInt(ptr_val);
-            if (builtin.mode == .Debug and raw_ptr == 0) {
+            if (builtin.mode == .debug and raw_ptr == 0) {
                 self.invariantFailed(
                     "LIR/interpreter invariant violated: ptr_load received a null pointer for non-ZST layout {d}",
-                    .{@intFromEnum(ret_layout)},
+                    .{@backingInt(ret_layout)},
                 );
             }
             result.copyFrom(.{ .ptr = @ptrFromInt(raw_ptr) }, size);
@@ -10248,7 +10422,7 @@ test "interpreter evaluates explicit static data by compact id" {
     var static_value: u64 = 0xCAFE_BABE_D00D_F00D;
     var static_addresses = std.ArrayList(usize).empty;
     defer static_addresses.deinit(allocator);
-    const static_data_id: LIR.StaticDataId = @enumFromInt(@as(u32, @intCast(static_addresses.items.len)));
+    const static_data_id: LIR.StaticDataId = @fromBackingInt(@intCast(@as(u32, @intCast(static_addresses.items.len))));
     try static_addresses.append(allocator, @intFromPtr(&static_value));
 
     const result_local = try store.addLocal(.{ .layout_idx = .u64 });
@@ -10272,7 +10446,7 @@ test "interpreter evaluates explicit static data by compact id" {
     defer static_strings.deinit();
     var interpreter = try Interpreter.init(allocator, &store, &layouts, static_strings.view(), runtime_env.get_ops());
     defer interpreter.deinit();
-    interpreter.setStaticData(static_addresses.items, &.{});
+    interpreter.setStaticData(static_addresses.items);
 
     const result = try interpreter.eval(.{ .proc_id = proc, .ret_layout = .u64 });
     try std.testing.expectEqual(static_value, result.value.read(u64));
