@@ -21,7 +21,7 @@ const Allocator = std.mem.Allocator;
 
 const magic = "RPCK";
 /// Format version; bump whenever the encoding or artifact contents change.
-pub const format_version: u32 = 11;
+pub const format_version: u32 = 12;
 
 /// One specialization the pack can serve: its reservation-time key, the
 /// artifact holding its procedure, and the ownership signature and
@@ -59,7 +59,60 @@ pub const ReadError = Allocator.Error || error{
     UnsupportedPackVersion,
 };
 
-pub const WriteError = Allocator.Error || ContextImmediate.Error;
+pub const WriteError = Allocator.Error || ContextImmediate.Error || error{InvalidCodeTarget};
+
+/// Native-image offsets have no persistent representation.
+const PersistentCodeTarget = union(enum) {
+    local: u32,
+    symbolic: @FieldType(ProcArtifact.SymbolicReference, "target"),
+};
+
+test "pack preserves physical callable targets and observation facts but rejects image offsets" {
+    const allocator = std.testing.allocator;
+    const leaf = ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(79) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .source_observations = .absent,
+        .requires_ctfe_observations = true,
+    };
+    var relocation = [_]ProcArtifact.DataRelocation{.{
+        .offset = 0,
+        .name = "frozen-local-target",
+        .addend = 0,
+        .function = true,
+        .code_target = .{ .local = 0 },
+    }};
+    var artifacts = [_]ProcArtifact.Artifact{ leaf, leaf };
+    artifacts[1].data = &.{.{
+        .name = "frozen",
+        .bytes = "\x00" ** 8,
+        .alignment = 8,
+        .symbol_offset = 0,
+        .relocations = &relocation,
+    }};
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    const bytes = try write(allocator, &set, &.{});
+    defer allocator.free(bytes);
+    var decoded = try read(allocator, bytes);
+    defer decoded.deinit();
+    try std.testing.expectEqualDeep(artifacts[1], decoded.set.artifacts[1]);
+    const corrupt = try allocator.dupe(u8, bytes);
+    defer allocator.free(corrupt);
+    const name_offset = std.mem.indexOf(u8, corrupt, relocation[0].name).?;
+    const target_offset = name_offset - 8; // length prefix and the local target word
+    std.mem.writeInt(u32, corrupt[target_offset..][0..4], 2, .little);
+    try std.testing.expectError(error.MalformedPack, read(allocator, corrupt));
+    @memcpy(corrupt, bytes);
+    corrupt[target_offset - 1] = 2; // No persistent image_offset union member.
+    try std.testing.expectError(error.MalformedPack, read(allocator, corrupt));
+    relocation[0].code_target = .{ .image_offset = 123 };
+    try std.testing.expectError(error.InvalidCodeTarget, write(allocator, &set, &.{}));
+}
 
 /// Encode an artifact set and its spec table. Every carried constant the
 /// set's program named for itself is written under its content name, and so
@@ -67,6 +120,12 @@ pub const WriteError = Allocator.Error || ContextImmediate.Error;
 /// context immediates are stored as zero: their descriptors, not the producer's
 /// dense IDs, decide the persistent bytes.
 pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const SpecEntry) WriteError![]u8 {
+    for (set.artifacts) |artifact| for (artifact.data) |item| for (item.relocations) |relocation| {
+        if (relocation.code_target) |target| {
+            if (!relocation.function or target == .image_offset) return error.InvalidCodeTarget;
+            if (target == .local and target.local >= set.artifacts.len) return error.InvalidCodeTarget;
+        }
+    };
     var names = try ProcArtifact.ContentNames.init(allocator, set);
     defer names.deinit();
     var bytes = std.ArrayList(u8).empty;
@@ -86,6 +145,8 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
         try writer.context(artifact.context_bindings);
         try writer.context(artifact.context_relocations);
         try writer.context(artifact.callable_contract);
+        try writer.context(artifact.source_observations);
+        try writer.context(artifact.requires_ctfe_observations);
         switch (artifact.kind) {
             .proc => |identity| {
                 try writer.byte(0);
@@ -194,6 +255,12 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
                 try writer.wide(@bitCast(relocation.addend));
                 try writer.byte(@intFromBool(relocation.function));
                 try writer.byte(@intFromBool(relocation.external));
+                const persistent: ?PersistentCodeTarget = if (relocation.code_target) |target| switch (target) {
+                    .local => |node| .{ .local = node },
+                    .symbolic => |symbol| .{ .symbolic = symbol },
+                    .image_offset => unreachable,
+                } else null;
+                try writer.context(persistent);
                 // An external binding names the linking image's symbol.
                 try writer.str(if (relocation.external) relocation.name else names.of(relocation.name));
             }
@@ -241,6 +308,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         const context_bindings = try reader.context([]const CtfeContext.Binding, arena_allocator);
         const context_relocations = try reader.context([]const ContextImmediate.Relocation, arena_allocator);
         const callable_contract = try reader.context(?[32]u8, arena_allocator);
+        const source_observations = try reader.context(lir.Program.ProducerObservations, arena_allocator);
+        const requires_ctfe_observations = try reader.context(?bool, arena_allocator);
         if (domain == .runtime and (context_bindings.len != 0 or context_relocations.len != 0)) return error.MalformedPack;
         if (domain == .runtime and context_dependencies != null and context_dependencies.?.comptime_hooks) return error.MalformedPack;
         if (domain == .ctfe and (!context_complete or context_contract == null or context_dependencies == null or !context_contract.?.hooks_enabled or !context_dependencies.?.comptime_hooks)) return error.MalformedPack;
@@ -356,12 +425,22 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
                     1 => true,
                     else => return error.MalformedPack,
                 };
+                const persistent = try reader.context(?PersistentCodeTarget, arena_allocator);
+                const code_target: ?ProcArtifact.CodeTarget = if (persistent) |target| switch (target) {
+                    .local => |node| .{ .local = node },
+                    .symbolic => |symbol| .{ .symbolic = symbol },
+                } else null;
+                if (code_target) |target| {
+                    if (!function or target == .image_offset) return error.MalformedPack;
+                    if (target == .local and target.local >= artifact_count) return error.MalformedPack;
+                }
                 relocation.* = .{
                     .offset = offset,
                     .name = try reader.strOwned(arena_allocator),
                     .addend = addend,
                     .function = function,
                     .external = external,
+                    .code_target = code_target,
                 };
             }
             item.* = .{
@@ -374,6 +453,8 @@ pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
         }
         artifact.* = .{
             .kind = kind,
+            .source_observations = source_observations,
+            .requires_ctfe_observations = requires_ctfe_observations,
             .code = code,
             .entry = entry,
             .frame = frame,

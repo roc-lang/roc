@@ -751,22 +751,33 @@ ordinary native statements retain their existing ID prefix without a duplicated
 full failure record. These boundaries prevent cache hits from replacing
 specialization work with unrelated pack copying or large descriptor tables.
 
-CTFE provider selection covers complete serving closures before any early offer.
-One immutable canonical image owns each callable definition; identities alone
-cannot authorize replacing a runtime callee with an instrumented CTFE callee.
-The actual producer stamps structural callable ABI and final ARC compatibility,
-alongside definition-local emitter dependencies and context completeness.
-Unsupported contracts are explicitly non-interchangeable. Incompatible callee
-substitutions reject their callers before body elision, while complete compatible
-runtime provisions retain the shared early-elision capability. Runtime images
-never consume this CTFE-only canonical image. Source-local symbolic namespaces
-are resolved once, and admission, binding and placement share those edge facts.
-The declared consumer selects a coherent provision before indexing: shared native
-runtime consumers prefer complete runtime definitions, whereas standalone CTFE
-keeps its own definitions, including neutral definitions whose seed/callee
-contracts still belong to that namespace. Merely loading another pack namespace
-must not invalidate an independently valid serving closure. Preference never
-relaxes structural ABI, ARC, static-access, or seed compatibility.
+Logical function identity is distinct from a compiled variant. Admission retains
+each independently valid physical serving closure, including recursive groups;
+adding an incompatible sibling never rewrites an existing caller's edges or hides
+its compatible helpers. Source-local symbolic references resolve only when their
+namespace proves one exact definition. Machine references and frozen callable
+relocations then name physical artifact indices through selection, binding,
+placement, and recapture. Native-image offsets are session handles, never pack
+data. Frozen data containing a callable includes its physical source graph
+identity in its content name, so equal logical names and local ordinals in two
+packs cannot merge different callable values.
+
+Every declared consumer selects its own eligible root variants. Joint source-body
+elision certifies each consumer's serving closure and compatible structural
+callable/ARC metadata without requiring identical compiled objects. The complete
+runtime provision and the original runtime declaration remain immutable. Joint
+hits also retain the compile-time closure's checked-root metadata demands.
+
+Expect preservation is stamped before omission, propagated through actual
+inlining, and retained on every procedure and cached offer. Emitter-owned
+diagnostic, debug, and exhaustiveness obligations are recorded before choosing
+hook-enabled emission. These facts propagate upstream over the same recursive
+components as context requirements. Missing facts, omitted expects, or a runtime
+fragment lacking required compile-time provenance decline only the affected
+serving offers; no hooks is not an observation-absence proof. Checked
+exhaustiveness gates, literal-conversion exclusions, and source/failure/static-root
+binding contracts remain independent requirements. Pack version 12 preserves
+these facts and physical callable targets; older layouts are incompatible.
 
 ## Checking Effects And Const Roots
 

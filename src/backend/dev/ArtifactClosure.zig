@@ -17,11 +17,11 @@ helpers: std.StringHashMap(u32),
 /// One resolution per symbolic edge, shared by admission and placement.
 symbolic_offsets: []usize = &.{},
 symbolic_targets: []?u32 = &.{},
+data_offsets: []usize = &.{},
+data_targets: []?u32 = &.{},
 symbolic_lookups: usize = 0,
 /// Same-kind definitions whose symbolic name cannot prove one callable contract.
 ambiguous_definitions: std.AutoHashMap(u32, void),
-/// Preparation-only dependencies from an alias to its selected definition.
-aliases: []const u32 = &.{},
 seen: std.AutoHashMap(u32, void),
 order: std.ArrayList(u32) = .empty,
 complete: bool = true,
@@ -54,17 +54,41 @@ pub fn init(allocator: Allocator, set: *const ProcArtifact.Set) Allocator.Error!
     for (set.artifacts, 0..) |artifact, index| {
         for (artifact.symbolic_refs, self.symbolic_targets[self.symbolic_offsets[index]..self.symbolic_offsets[index + 1]]) |ref, *target| {
             self.symbolic_lookups += 1;
-            target.* = switch (ref.target) {
-                .proc => |identity| self.procs.get(identity),
-                .boxy_thunk => |identity| self.thunks.get(identity),
-                .rc_helper => |name| self.helpers.get(name),
-            };
-            if (target.*) |definition| {
-                if (self.ambiguous_definitions.contains(definition)) target.* = null;
-            }
+            target.* = self.resolveSymbolic(ref.target);
         }
     }
+    self.data_offsets = try allocator.alloc(usize, set.artifacts.len + 1);
+    self.data_offsets[0] = 0;
+    for (set.artifacts, 0..) |artifact, index| {
+        var count: usize = 0;
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            if (relocation.code_target != null) count += 1;
+        };
+        self.data_offsets[index + 1] = self.data_offsets[index] + count;
+    }
+    self.data_targets = try allocator.alloc(?u32, self.data_offsets[set.artifacts.len]);
+    for (set.artifacts, 0..) |artifact, index| {
+        var cursor = self.data_offsets[index];
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            const target = relocation.code_target orelse continue;
+            self.data_targets[cursor] = switch (target) {
+                .local => |node| node,
+                .symbolic => |symbol| self.resolveSymbolic(symbol),
+                .image_offset => unreachable,
+            };
+            cursor += 1;
+        };
+    }
     return self;
+}
+
+fn resolveSymbolic(self: *const Self, target: @FieldType(ProcArtifact.SymbolicReference, "target")) ?u32 {
+    const definition = switch (target) {
+        .proc => |identity| self.procs.get(identity),
+        .boxy_thunk => |identity| self.thunks.get(identity),
+        .rc_helper => |name| self.helpers.get(name),
+    } orelse return null;
+    return if (self.ambiguous_definitions.contains(definition)) null else definition;
 }
 
 fn indexDefinition(self: *Self, map: anytype, key: anytype, index: u32) Allocator.Error!void {
@@ -74,20 +98,25 @@ fn indexDefinition(self: *Self, map: anytype, key: anytype, index: u32) Allocato
         return;
     }
     const previous = entry.value_ptr.*;
-    const selected = if (providerRank(self.set.artifacts[index]) > providerRank(self.set.artifacts[previous])) index else previous;
-    const other = if (selected == index) previous else index;
-    if (self.ambiguous_definitions.contains(previous) or
-        !compatibleDefinition(self.set.artifacts[other], self.set.artifacts[selected]))
+    const artifact = self.set.artifacts[index];
+    const supported = artifact.context_complete and artifact.context_contract != null and artifact.context_dependencies != null and
+        (switch (artifact.kind) {
+            .proc, .boxy_thunk => artifact.callable_contract != null,
+            else => true,
+        });
+    if (!supported or self.ambiguous_definitions.contains(previous) or
+        !sameValue(ProcArtifact.Artifact, artifact, self.set.artifacts[previous]))
     {
-        try self.ambiguous_definitions.put(selected, {});
+        try self.ambiguous_definitions.put(previous, {});
     }
-    entry.value_ptr.* = selected;
 }
 
 pub fn deinit(self: *Self) void {
     self.ambiguous_definitions.deinit();
     self.allocator.free(self.symbolic_targets);
     self.allocator.free(self.symbolic_offsets);
+    self.allocator.free(self.data_targets);
+    self.allocator.free(self.data_offsets);
     self.order.deinit(self.allocator);
     self.seen.deinit();
     self.helpers.deinit();
@@ -99,6 +128,10 @@ pub fn deinit(self: *Self) void {
 /// a local definition. Serving-closure admission rejects unresolved dependencies.
 pub fn symbolicTargets(self: *const Self, artifact: u32) []const ?u32 {
     return self.symbolic_targets[self.symbolic_offsets[artifact]..self.symbolic_offsets[artifact + 1]];
+}
+
+pub fn dataTargets(self: *const Self, artifact: u32) []const ?u32 {
+    return self.data_targets[self.data_offsets[artifact]..self.data_offsets[artifact + 1]];
 }
 
 /// Artifact indices valid until the next query. Missing symbolic definitions
@@ -118,6 +151,13 @@ pub fn ofMany(self: *Self, roots: []const u32) Allocator.Error![]const u32 {
         const artifact = self.set.artifacts[node];
         for (artifact.refs) |ref| try self.visit(ref.target);
         for (self.symbolicTargets(node)) |target| {
+            if (target) |index| {
+                try self.visit(index);
+            } else {
+                self.complete = false;
+            }
+        }
+        for (self.dataTargets(node)) |target| {
             if (target) |index| {
                 try self.visit(index);
             } else {
@@ -161,6 +201,12 @@ pub fn components(self: *const Self) Allocator.Error!Components {
             try callees[index].append(a, ref.target);
         }
         for (self.symbolicTargets(@intCast(index))) |target| {
+            if (target) |callee| {
+                try callers[callee].append(a, @intCast(index));
+                try callees[index].append(a, callee);
+            }
+        }
+        for (self.dataTargets(@intCast(index))) |target| {
             if (target) |callee| {
                 try callers[callee].append(a, @intCast(index));
                 try callees[index].append(a, callee);
@@ -237,6 +283,51 @@ pub const ContextRequirements = struct {
     }
 };
 
+/// Expect preservation and emitted observation obligations are independent of
+/// machine-context bindability. Absence must be produced, never inferred from
+/// a fragment lacking hooks.
+pub const ObservationRequirements = struct {
+    source: lir.Program.ProducerObservations = .absent,
+    requires_hooks: bool = false,
+    complete: bool = true,
+
+    fn merge(self: *ObservationRequirements, other: ObservationRequirements) void {
+        self.source = self.source.join(other.source);
+        self.requires_hooks = self.requires_hooks or other.requires_hooks;
+        self.complete = self.complete and other.complete;
+    }
+};
+
+pub fn observationRequirements(self: *const Self, groups: *const Components) Allocator.Error![]ObservationRequirements {
+    const a = self.allocator;
+    const summaries = try a.alloc(ObservationRequirements, groups.callees.len);
+    defer a.free(summaries);
+    @memset(summaries, .{});
+    for (self.set.artifacts, groups.nodes, 0..) |artifact, component, node| {
+        var direct = ObservationRequirements{
+            .source = artifact.source_observations,
+            .requires_hooks = artifact.requires_ctfe_observations orelse false,
+            .complete = artifact.requires_ctfe_observations != null and
+                artifact.source_observations != .unknown and artifact.source_observations != .omitted,
+        };
+        for (self.symbolicTargets(@intCast(node))) |target| if (target == null) {
+            direct.complete = false;
+        };
+        for (self.dataTargets(@intCast(node))) |target| if (target == null) {
+            direct.complete = false;
+        };
+        summaries[component].merge(direct);
+    }
+    var cursor = summaries.len;
+    while (cursor != 0) {
+        cursor -= 1;
+        for (groups.callees[cursor]) |callee| summaries[cursor].merge(summaries[callee]);
+    }
+    const output = try a.alloc(ObservationRequirements, groups.nodes.len);
+    for (groups.nodes, output) |component, *summary| summary.* = summaries[component];
+    return output;
+}
+
 /// Producer emission facts flow from callees to callers. Unrelated siblings
 /// cannot add requirements to a serving offer. The returned array is owned by
 /// the graph allocator; it is session data, not a reconstructed pack contract.
@@ -253,6 +344,12 @@ pub fn contextRequirements(self: *const Self, groups: *const Components) Allocat
         for (self.symbolicTargets(@intCast(node))) |target| {
             if (target == null) direct.complete = false;
         }
+        for (self.dataTargets(@intCast(node))) |target| {
+            if (target == null) direct.complete = false;
+        }
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            if (relocation.function and !relocation.external and relocation.code_target == null) direct.complete = false;
+        };
         summaries[component].merge(direct);
     }
     var cursor = summaries.len;
@@ -267,6 +364,45 @@ pub fn contextRequirements(self: *const Self, groups: *const Components) Allocat
 
 test "artifact context requirements combine recursion and flow only to callers" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testContextRequirements, .{});
+}
+
+test "artifact observation requirements preserve recursive obligations and reject only unknown ancestors" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testObservationRequirements, .{});
+}
+
+fn testObservationRequirements(allocator: Allocator) !void {
+    var artifacts: [6]ProcArtifact.Artifact = undefined;
+    for (&artifacts, 0..) |*artifact, index| artifact.* = .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(index)) },
+        .code = "",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .source_observations = .absent,
+        .requires_ctfe_observations = false,
+    };
+    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+    artifacts[1].refs = &.{.{ .site = 0, .form = .call, .target = 0, .delta = 0 }};
+    artifacts[1].source_observations = .shared;
+    artifacts[1].requires_ctfe_observations = true;
+    artifacts[2].source_observations = .omitted;
+    artifacts[3].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
+    artifacts[4].requires_ctfe_observations = null;
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    var graph = try Self.init(allocator, &set);
+    defer graph.deinit();
+    var groups = try graph.components();
+    defer groups.deinit();
+    const summaries = try graph.observationRequirements(&groups);
+    defer allocator.free(summaries);
+    try std.testing.expectEqualDeep(summaries[0], summaries[1]);
+    try std.testing.expectEqual(lir.Program.ProducerObservations.shared, summaries[0].source);
+    try std.testing.expect(summaries[0].complete and summaries[0].requires_hooks);
+    try std.testing.expect(!summaries[2].complete and !summaries[3].complete and !summaries[4].complete);
+    try std.testing.expect(summaries[5].complete and !summaries[5].requires_hooks);
+    try std.testing.expectEqual(lir.Program.ProducerObservations.absent, summaries[5].source);
 }
 
 fn testContextRequirements(allocator: Allocator) !void {
@@ -343,9 +479,6 @@ pub fn propagateInvalid(self: *const Self, valid: []bool) Allocator.Error!void {
     var edges = std.ArrayList(Edge).empty;
     defer edges.deinit(allocator);
     for (self.set.artifacts, 0..) |artifact, index| {
-        if (self.aliases.len != 0 and self.aliases[index] != index) {
-            try edges.append(allocator, .{ .from = @intCast(index), .to = self.aliases[index] });
-        }
         for (artifact.refs) |ref| try edges.append(allocator, .{ .from = @intCast(index), .to = ref.target });
         for (self.symbolicTargets(@intCast(index))) |target| {
             if (target) |to| {
@@ -354,6 +487,16 @@ pub fn propagateInvalid(self: *const Self, valid: []bool) Allocator.Error!void {
                 valid[index] = false;
             }
         }
+        for (self.dataTargets(@intCast(index))) |target| {
+            if (target) |to| {
+                try edges.append(allocator, .{ .from = @intCast(index), .to = to });
+            } else {
+                valid[index] = false;
+            }
+        }
+        for (artifact.data) |item| for (item.relocations) |relocation| {
+            if (relocation.function and !relocation.external and relocation.code_target == null) valid[index] = false;
+        };
     }
     const offsets = try allocator.alloc(usize, valid.len + 1);
     defer allocator.free(offsets);
@@ -450,9 +593,9 @@ pub fn compatibleDefinition(original: ProcArtifact.Artifact, selected: ProcArtif
     return true;
 }
 
-/// A CTFE-only immutable image plan. Missing mappings are rejected offers,
+/// An immutable physical-variant image plan. Missing mappings are rejected offers,
 /// established before a cache reader can authorize source-body elision.
-pub const Canonical = struct {
+pub const Variants = struct {
     set: ProcArtifact.Set,
     source_offsets: []const u32,
     old_to_new: []const ?u32,
@@ -460,57 +603,20 @@ pub const Canonical = struct {
     new_to_source: []const u32,
     /// Transitive producer context facts for each physical serving definition.
     requirements: []const ContextRequirements,
+    observations: []const ObservationRequirements,
 
-    pub fn deinit(self: *Canonical) void {
+    pub fn deinit(self: *Variants) void {
         self.set.deinit();
     }
 };
 
-fn preferredRank(artifact: ProcArtifact.Artifact, preference: Preference) u2 {
-    if (artifact.context_contract) |contract| {
-        if (preference == .complete_runtime) {
-            if (artifact.domain == .runtime and contract.static_data_readonly and !contract.hooks_enabled) return 3;
-        } else {
-            // Neutral CTFE definitions can still depend on zero dict seeds or
-            // another definition's instrumented/static contract. Keep the
-            // original CTFE namespace coherent, not only hook-bearing nodes.
-            if (contract.hooks_enabled and !contract.static_data_readonly) return 3;
-        }
-    }
-    return providerRank(artifact);
-}
-
-fn providerRank(artifact: ProcArtifact.Artifact) u2 {
-    if (artifact.domain == .ctfe) return 2;
-    // Neutral CTFE fragments do not displace a runtime-capable definition
-    // merely because hook emission was enabled elsewhere in their producer.
-    if (artifact.context_contract) |contract| {
-        if (contract.static_data_readonly and !contract.hooks_enabled) return 1;
-    }
-    return 0;
-}
-
-pub fn canonicalize(
+pub fn prepareVariants(
     allocator: Allocator,
     sources: []const *const ProcArtifact.Set,
     context: *anyopaque,
     accepts: *const fn (*anyopaque, ProcArtifact.Artifact) bool,
-) Allocator.Error!Canonical {
-    return canonicalizePreferred(allocator, sources, context, accepts, .ctfe);
-}
-
-pub const Preference = enum { ctfe, complete_runtime };
-
-/// A shared runtime provision must not lose its independently valid serving
-/// closure merely because instrumented siblings were also captured by checking.
-pub fn canonicalizePreferred(
-    allocator: Allocator,
-    sources: []const *const ProcArtifact.Set,
-    context: *anyopaque,
-    accepts: *const fn (*anyopaque, ProcArtifact.Artifact) bool,
-    preference: Preference,
-) Allocator.Error!Canonical {
-    // Preparation borrows payloads; only the accepted canonical graph is
+) Allocator.Error!Variants {
+    // Preparation borrows payloads; only the accepted physical graph is
     // deep-owned. Avoid cloning whole packs twice on every warm preparation.
     var combined = ProcArtifact.Set{
         .arena = std.heap.ArenaAllocator.init(allocator),
@@ -563,59 +669,36 @@ pub fn canonicalizePreferred(
             }
             artifact.refs = try refs.toOwnedSlice(a);
             artifact.symbolic_refs = try external.toOwnedSlice(a);
+            const data = try a.dupe(ProcArtifact.DataItem, original.data);
+            var data_cursor: usize = 0;
+            for (data) |*item| {
+                const relocations = try a.dupe(ProcArtifact.DataRelocation, item.relocations);
+                for (relocations) |*relocation| {
+                    if (relocation.code_target == null) continue;
+                    const target = local.dataTargets(@intCast(index))[data_cursor];
+                    data_cursor += 1;
+                    if (target) |node| {
+                        relocation.code_target = .{ .local = offsets[source_index] + node };
+                    } else {
+                        valid[offsets[source_index] + index] = false;
+                    }
+                }
+                item.relocations = relocations;
+            }
+            artifact.data = data;
         }
     }
     var graph = try Self.init(allocator, &combined);
     defer graph.deinit();
     for (artifacts, 0..) |artifact, index| valid[index] = valid[index] and accepts(context, artifact);
-    // An unusable CTFE sibling must not displace an otherwise complete runtime
-    // closure. Establish provider eligibility before choosing representatives.
+    // Admission belongs to each physical closure independently. A logical
+    // identity does not authorize substituting a sibling definition.
     try graph.propagateInvalid(valid);
-    // Preference is global over definitions, not dependent on root splice order.
-    for (artifacts, 0..) |artifact, index| {
-        if (!valid[index]) continue;
-        const representative = switch (artifact.kind) {
-            .proc => |identity| graph.procs.getPtr(identity).?,
-            .boxy_thunk => |identity| graph.thunks.getPtr(identity).?,
-            .rc_helper => |name| graph.helpers.getPtr(name).?,
-            .entrypoint, .message_pool_run, .branch_island => continue,
-        };
-        if (!valid[representative.*] or preferredRank(artifact, preference) > preferredRank(artifacts[representative.*], preference)) representative.* = @intCast(index);
-    }
-    const aliases = try a.alloc(u32, artifacts.len);
-    for (artifacts, 0..) |artifact, index| {
-        aliases[index] = switch (artifact.kind) {
-            .proc => |identity| graph.procs.get(identity).?,
-            .boxy_thunk => |identity| graph.thunks.get(identity).?,
-            .rc_helper => |name| graph.helpers.get(name).?,
-            .entrypoint, .message_pool_run, .branch_island => @intCast(index),
-        };
-    }
-    for (artifacts, 0..) |artifact, index| {
-        valid[index] = valid[index] and
-            (aliases[index] == index or compatibleDefinition(artifact, artifacts[aliases[index]]));
-        for (artifact.refs) |ref| {
-            if (aliases[ref.target] != ref.target and ref.delta != artifacts[ref.target].entry) valid[index] = false;
-        }
-    }
-    graph.aliases = aliases;
-    try graph.propagateInvalid(valid);
-    const marked = try a.alloc(bool, artifacts.len);
-    for (artifacts, 0..) |*artifact, index| {
-        marked[index] = valid[index] and aliases[index] == index;
-        if (!marked[index]) continue;
-        const refs = @constCast(artifact.refs);
-        for (refs) |*ref| {
-            const target = aliases[ref.target];
-            if (target != ref.target) ref.delta = artifacts[target].entry;
-            ref.target = target;
-        }
-    }
-    var selected = try selectMarked(allocator, &combined, marked);
+    var selected = try selectMarked(allocator, &combined, valid);
     errdefer selected.deinit();
     const owned = selected.set.arena.allocator();
     const mapping = try owned.alloc(?u32, artifacts.len);
-    for (mapping, 0..) |*mapped, index| mapped.* = if (valid[index]) selected.old_to_new[aliases[index]] else null;
+    for (mapping, 0..) |*mapped, index| mapped.* = selected.old_to_new[index];
     const owned_offsets = try owned.dupe(u32, offsets);
     const provenance = try owned.alloc(u32, selected.set.artifacts.len);
     for (sources, 0..) |_, source| {
@@ -629,12 +712,15 @@ pub fn canonicalizePreferred(
     defer groups.deinit();
     const requirements = try selected_graph.contextRequirements(&groups);
     defer allocator.free(requirements);
+    const observations = try selected_graph.observationRequirements(&groups);
+    defer allocator.free(observations);
     return .{
         .set = selected.set,
         .source_offsets = owned_offsets,
         .old_to_new = mapping,
         .new_to_source = provenance,
         .requirements = try owned.dupe(ContextRequirements, requirements),
+        .observations = try owned.dupe(ObservationRequirements, observations),
     };
 }
 
@@ -649,7 +735,7 @@ test "canonical CTFE closure owns an empty cold provider plan" {
         }
         fn run(allocator: Allocator) !void {
             var context: u8 = 0;
-            var canonical = try canonicalize(allocator, &.{}, &context, accepts);
+            var canonical = try prepareVariants(allocator, &.{}, &context, accepts);
             defer canonical.deinit();
             try std.testing.expectEqual(@as(usize, 0), canonical.set.artifacts.len);
             try std.testing.expectEqualSlices(u32, &.{0}, canonical.source_offsets);
@@ -718,10 +804,9 @@ test "consumer preference preserves mixed static and neutral-seed serving closur
                 }
             }.node;
             var context: u8 = 0;
-            for ([_]Preference{ .ctfe, .complete_runtime }) |preference| {
-                var image = try canonicalizePreferred(allocator, &sources, &context, accepts, preference);
+            for (0..sources.len) |wanted_source| {
+                var image = try prepareVariants(allocator, &sources, &context, accepts);
                 defer image.deinit();
-                const wanted_source: usize = if ((preference == .ctfe) == reverse) 0 else 1;
                 const root = image.old_to_new[image.source_offsets[wanted_source]].?;
                 var graph = try Self.init(allocator, &image.set);
                 defer graph.deinit();
@@ -734,7 +819,7 @@ test "consumer preference preserves mixed static and neutral-seed serving closur
     }
 }
 
-test "canonical CTFE closure rejects conflicting ARC and emitter contracts before offers" {
+test "variant graph preserves independently valid conflicting ARC and emitter closures" {
     try testCanonicalMixed(std.testing.allocator, true);
 }
 
@@ -827,14 +912,17 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
     var context: u8 = 0;
     for ([_]bool{ false, true }) |reverse_sources| {
         const sources = if (reverse_sources) [_]*const ProcArtifact.Set{ &ctfe_set, &runtime_set } else [_]*const ProcArtifact.Set{ &runtime_set, &ctfe_set };
-        var canonical = try canonicalize(allocator, &sources, &context, Accept.node);
+        var canonical = try prepareVariants(allocator, &sources, &context, Accept.node);
         defer canonical.deinit();
         const runtime_source: usize = if (reverse_sources) 1 else 0;
         const ctfe_source: usize = if (reverse_sources) 0 else 1;
         const a = canonical.old_to_new[canonical.source_offsets[runtime_source]];
         const c = canonical.old_to_new[canonical.source_offsets[ctfe_source]].?;
-        try std.testing.expectEqual(conflict, a == null);
+        try std.testing.expect(a != null);
         const b = canonical.set.artifacts[c].refs[0].target;
+        const runtime_b = canonical.set.artifacts[a.?].refs[0].target;
+        try std.testing.expect(b != runtime_b);
+        try std.testing.expectEqualDeep(runtime[1], canonical.set.artifacts[runtime_b]);
         try std.testing.expectEqual(Context.Domain.ctfe, canonical.set.artifacts[b].domain);
         try std.testing.expectEqual(@as(usize, 2), canonical.set.artifacts[b].context_bindings.len);
         try std.testing.expect(canonical.set.artifacts[b].context_bindings[0].failure.checked_error);
@@ -845,8 +933,6 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
         branches[0] = .from_raw_offsets(20, 30);
         try std.testing.expectEqual(@as(u32, 4), canonical.set.artifacts[b].context_bindings[1].site.branch_regions[0].start.offset);
         branches[0] = .from_raw_offsets(4, 8);
-        if (conflict) continue;
-        try std.testing.expectEqual(b, canonical.set.artifacts[a.?].refs[0].target);
         inline for (.{ false, true }) |reverse_roots| {
             var store = lir.LirStore.init(allocator);
             defer store.deinit();
@@ -864,7 +950,7 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             defer data.deinit(allocator);
             const roots = if (reverse_roots) [_]u32{ c, a.? } else [_]u32{ a.?, c };
             for (roots) |root| try ProcArtifact.spliceIndexed(CG, allocator, &receiver, &graph, &.{root}, &procs, &placed, &data);
-            try std.testing.expectEqual(@as(usize, 3), placed.count());
+            try std.testing.expectEqual(@as(usize, 4), placed.count());
             try std.testing.expectEqual(@as(usize, 2), receiver.context_bindings.items.len);
             try std.testing.expect(receiver.context_bindings.items[0].failure.checked_error);
             try std.testing.expectEqual(@as(?u32, 7), receiver.context_bindings.items[1].site.checked_site);
@@ -873,7 +959,7 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             defer recaptured.deinit();
             var found_hook_definition = false;
             for (recaptured.artifacts) |artifact| {
-                if (artifact.kind != .proc or !std.meta.eql(artifact.kind.proc, b_identity)) continue;
+                if (artifact.kind != .proc or !std.meta.eql(artifact.kind.proc, b_identity) or artifact.domain != .ctfe) continue;
                 try std.testing.expectEqualDeep(canonical.set.artifacts[b], artifact);
                 found_hook_definition = true;
             }
@@ -885,9 +971,8 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
     runtime[1].callable_contract = ctfe[1].callable_contract;
     runtime[1].context_dependencies.?.dict_seed = true;
     try std.testing.expect(!compatibleDefinition(runtime[1], ctfe[1]));
-    // A declared runtime consumer retains the historical full-native provision.
-    // Preserve it in either physical load order and reject only the CTFE
-    // caller whose selected callee contract is incompatible.
+    // Both consumers retain their own seed contracts in either physical load
+    // order. No callee substitution is needed to serve either root.
     ctfe[1].domain = .runtime;
     ctfe[1].code = "\xc3";
     ctfe[1].context_dependencies = .{ .dict_seed = true };
@@ -898,15 +983,17 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
         ctfe[1].context_dependencies.?.dict_seed = seed_dependent;
         for ([_]bool{ false, true }) |reverse_sources| {
             const sources = if (reverse_sources) [_]*const ProcArtifact.Set{ &ctfe_set, &runtime_set } else [_]*const ProcArtifact.Set{ &runtime_set, &ctfe_set };
-            var canonical = try canonicalizePreferred(allocator, &sources, &context, Accept.node, .complete_runtime);
+            var canonical = try prepareVariants(allocator, &sources, &context, Accept.node);
             defer canonical.deinit();
             const runtime_source: usize = if (reverse_sources) 1 else 0;
             const ctfe_source: usize = if (reverse_sources) 0 else 1;
             const root = canonical.old_to_new[canonical.source_offsets[runtime_source]].?;
             const b = canonical.set.artifacts[root].refs[0].target;
             const neutral_root = canonical.old_to_new[canonical.source_offsets[ctfe_source]];
-            try std.testing.expectEqual(seed_dependent, neutral_root == null);
-            if (neutral_root) |callee| try std.testing.expectEqual(b, canonical.set.artifacts[callee].refs[0].target);
+            try std.testing.expect(neutral_root != null);
+            const other = canonical.set.artifacts[neutral_root.?].refs[0].target;
+            try std.testing.expect(b != other);
+            try std.testing.expectEqual(@as(u32, @intCast(ctfe_source)), canonical.new_to_source[other]);
             try std.testing.expectEqual(@as(u32, @intCast(runtime_source)), canonical.new_to_source[b]);
             try std.testing.expect(canonical.set.artifacts[b].context_contract.?.static_data_readonly);
         }
@@ -1033,14 +1120,16 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
             .static_data_readonly = true,
         },
     };
-    const Variant = enum { compatible, conflicting, unsupported };
-    for ([_]Variant{ .compatible, .conflicting, .unsupported }) |variant| {
-        const conflict = variant != .compatible;
+    const Variant = enum { identical, instrumented, conflicting, unsupported };
+    for ([_]Variant{ .identical, .instrumented, .conflicting, .unsupported }) |variant| {
+        const conflict = variant != .identical;
         var ctfe = runtime;
-        ctfe.domain = .ctfe;
-        ctfe.context_contract.?.hooks_enabled = true;
-        ctfe.context_contract.?.static_data_readonly = false;
-        ctfe.context_dependencies = .{ .comptime_hooks = true };
+        if (variant != .identical) {
+            ctfe.domain = .ctfe;
+            ctfe.context_contract.?.hooks_enabled = true;
+            ctfe.context_contract.?.static_data_readonly = false;
+            ctfe.context_dependencies = .{ .comptime_hooks = true };
+        }
         if (variant == .conflicting) ctfe.callable_contract = [_]u8{9} ** 32;
         if (variant == .unsupported) ctfe.callable_contract = null;
         for ([_]bool{ false, true }) |reverse| {
@@ -1060,7 +1149,7 @@ test "symbolic index declines ambiguous same-identity contracts in either defini
             try std.testing.expectEqual(!conflict, graph.complete);
             if (!conflict) {
                 const target = graph.symbolicTargets(0)[0].?;
-                try std.testing.expectEqual(@import("CtfeContext.zig").Domain.ctfe, artifacts[target].domain);
+                try std.testing.expectEqual(@import("CtfeContext.zig").Domain.runtime, artifacts[target].domain);
             }
             _ = try graph.of(3);
             try std.testing.expect(graph.complete);
@@ -1098,6 +1187,17 @@ pub fn selectMarked(allocator: Allocator, source: *const ProcArtifact.Set, marke
         const refs = try a.dupe(ProcArtifact.Reference, artifact.refs);
         for (refs) |*ref| ref.target = remap[ref.target].?;
         artifact.refs = refs;
+        const data = try a.dupe(ProcArtifact.DataItem, artifact.data);
+        for (data) |*item| {
+            const relocations = try a.dupe(ProcArtifact.DataRelocation, item.relocations);
+            for (relocations) |*relocation| {
+                if (relocation.code_target) |*target| {
+                    if (target.* == .local) target.local = remap[target.local].?;
+                }
+            }
+            item.relocations = relocations;
+        }
+        artifact.data = data;
     }
     const view = ProcArtifact.Set{ .arena = temporary, .artifacts = artifacts.items };
     var set = try ProcArtifact.combine(allocator, &.{&view});

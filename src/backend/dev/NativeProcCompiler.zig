@@ -275,7 +275,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
-    var data = Artifact.PreparedData.init(allocator, destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
+    var data = Artifact.PreparedData.init(allocator, destination.store.getProcSpecs(), destination.static_strings.exports, options.constant_exports, &.{}) catch |err| return invariant(err);
     defer data.deinit();
     const specs = destination.store.getProcSpecs();
     var demanded = try std.DynamicBitSetUnmanaged.initEmpty(allocator, specs.len);

@@ -1226,6 +1226,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fragment_context: FragmentContextDependencies = .{},
         /// Facts for the currently emitted definition, independent of siblings.
         region_context: FragmentContextDependencies = .{},
+        region_requires_ctfe_observations: bool = false,
         region_context_complete: bool = true,
         context_catalog: CtfeContext.Catalog = .{},
         context_bindings: std.ArrayList(CtfeContext.Binding) = .empty,
@@ -1406,6 +1407,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             artifact_context_contract: ?FragmentContract = null,
             artifact_domain: ?CtfeContext.Domain = null,
             artifact_helper_name: ?[]const u8 = null,
+            artifact_source_observations: ?lir.Program.ProducerObservations = null,
+            requires_ctfe_observations: ?bool = null,
             /// Session-only name of this physical callable, never artifact identity.
             physical_symbol: ?SymbolTable.Id = null,
         };
@@ -1424,6 +1427,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             region.artifact_callable_contract = artifact.callable_contract;
             region.artifact_context_contract = artifact.context_contract;
             region.artifact_domain = artifact.domain;
+            region.artifact_source_observations = artifact.source_observations;
+            region.requires_ctfe_observations = artifact.requires_ctfe_observations;
         }
 
         /// Frame metadata carried with an assembled region so its unwind
@@ -15824,6 +15829,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .kind = .{ .rc_helper = cache_key },
                 .context_dependencies = self.region_context,
                 .context_complete = self.region_context_complete,
+                .requires_ctfe_observations = self.region_requires_ctfe_observations,
             });
             return final_offset;
         }
@@ -16032,6 +16038,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .kind = .{ .rc_helper = cache_key },
                 .context_dependencies = self.region_context,
                 .context_complete = self.region_context_complete,
+                .requires_ctfe_observations = self.region_requires_ctfe_observations,
             });
             return final_offset;
         }
@@ -21328,6 +21335,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .kind = .{ .proc = proc_id },
                         .context_dependencies = self.region_context,
                         .context_complete = self.region_context_complete,
+                        .requires_ctfe_observations = self.region_requires_ctfe_observations,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -21412,6 +21420,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .kind = .{ .proc = proc_id },
                         .context_dependencies = self.region_context,
                         .context_complete = self.region_context_complete,
+                        .requires_ctfe_observations = self.region_requires_ctfe_observations,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -23281,6 +23290,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .expect => |expect_stmt| {
+                            self.region_requires_ctfe_observations = true;
                             const cond_loc = try self.emitValueLocal(expect_stmt.condition);
                             const cond_reg = try self.ensureInGeneralReg(cond_loc);
                             if (expect_stmt.site) |site| {
@@ -23330,6 +23340,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .comptime_exhaustiveness_failed => |marker| {
+                            self.region_requires_ctfe_observations = true;
                             if (self.comptime_hooks) |hooks| {
                                 try self.emitComptimeExhaustivenessFailed(hooks, marker.site);
                             } else {
@@ -23339,6 +23350,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         },
 
                         .comptime_branch_taken => |marker| {
+                            self.region_requires_ctfe_observations = true;
                             if (self.comptime_hooks) |hooks| {
                                 try self.emitComptimeBranchTaken(hooks, marker.site, marker.branch_index);
                             }
@@ -24462,6 +24474,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocDbgFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
@@ -24469,6 +24482,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
@@ -24477,6 +24491,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitCheckedErrorCrashFromStackStr(self: *Self, str_offset: i32) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             try builder.addLeaArg(frame_ptr, str_offset);
@@ -24484,6 +24499,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocExpectErrFromStackStr(self: *Self, str_offset: i32, region: base.Region) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addLeaArg(frame_ptr, str_offset);
@@ -24493,6 +24509,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn emitRocExpectFailed(self: *Self) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             // Stamp the failing statement's region/location before the call,
             // exactly as for crashes, so compile-time expect failures resolve
             // their declaring module (the host consumes the pending location
@@ -24505,18 +24522,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.context_catalog = catalog;
         }
 
-        const RegionContext = struct { dependencies: FragmentContextDependencies, complete: bool };
+        const RegionContext = struct { dependencies: FragmentContextDependencies, complete: bool, requires_observations: bool };
 
         fn beginRegionContext(self: *Self) RegionContext {
-            const saved = RegionContext{ .dependencies = self.region_context, .complete = self.region_context_complete };
+            const saved = RegionContext{
+                .dependencies = self.region_context,
+                .complete = self.region_context_complete,
+                .requires_observations = self.region_requires_ctfe_observations,
+            };
             self.region_context = .{};
             self.region_context_complete = true;
+            self.region_requires_ctfe_observations = false;
             return saved;
         }
 
         fn restoreRegionContext(self: *Self, saved: RegionContext) void {
             self.region_context = saved.dependencies;
             self.region_context_complete = saved.complete;
+            self.region_requires_ctfe_observations = saved.requires_observations;
         }
 
         fn addContextArg(self: *Self, builder: *Builder, value: u32, binding: ?CtfeContext.Binding, comptime kind: []const u8, producer: u32) Allocator.Error!void {
@@ -24634,6 +24657,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Emit a `roc_crashed` call with a static message.
         fn emitRocCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.emitRocStaticMessageCall(.roc_crashed, msg);
         }
@@ -24641,6 +24665,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Crash at code checking rejected, through the builtin that records
         /// the fact before crashing.
         fn emitCheckedErrorCrash(self: *Self, msg: []const u8) Allocator.Error!void {
+            self.region_requires_ctfe_observations = true;
             if (self.comptime_hooks) |hooks| try self.emitComptimeFailureRegion(hooks);
             try self.spillAllVectorLocals();
             const msg_reg = try self.allocTempGeneral();
@@ -25075,6 +25100,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .kind = .{ .boxy_thunk = proc_id },
                 .context_dependencies = self.region_context,
                 .context_complete = self.region_context_complete,
+                .requires_ctfe_observations = self.region_requires_ctfe_observations,
             });
             return func_start;
         }

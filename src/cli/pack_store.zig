@@ -633,6 +633,12 @@ pub const LoadedPacks = struct {
                 };
                 if (self.admission) |admission| {
                     if (!try admission.accept(admission.context, &pack.set, spec.artifact)) continue;
+                    // A source-retiring consumer needs the offer's source
+                    // facts to agree with its exact physical definition.
+                    // Declining this offer never changes complete runtime
+                    // indexing or another independently valid candidate.
+                    if (spec.observations == .unknown or spec.observations == .omitted or
+                        spec.observations != root.source_observations) continue;
                 } else if (!runtime_admission.?[spec.artifact]) {
                     continue;
                 }
