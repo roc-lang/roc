@@ -51,8 +51,9 @@ binary_before = digest(binary)
 helper_before = digest(source / "CallableHelper.roc")
 
 
-def run(label, args, *, trace=False, expected=0):
+def run(label, args, *, trace=False, expected=0, selected_cache=cache):
     env = dict(base_env)
+    env["ROC_CACHE_DIR"] = str(selected_cache)
     if trace:
         env["ROC_PACK_TRACE"] = "1"
     command = [str(binary), *args, "--no-color"]
@@ -120,6 +121,42 @@ for name, reported_at in (("Rejecting", "Rejecting.roc"), ("RejectingAtRuntime",
         )
         results.append((status, result.stderr))
     assert results[0] == results[1] == results[2], f"{name}: cached diagnostic changed"
+
+# Seed application versions of the same static-reading helpers using a runtime
+# input, then verify compiler failure reporting both with and without CTFE packs.
+static_fixture = project / "test/cli/ctfe_static_cache"
+run(
+    "static-runtime-seed",
+    [
+        "build",
+        "--opt=dev",
+        str(static_fixture / "RuntimeSeed.roc"),
+        "--output=" + str(root / "static-runtime-output"),
+    ],
+)
+runtime_only = root / "runtime-only-cache"
+shutil.copytree(cache, runtime_only)
+for path in runtime_only.rglob("*.rpk"):
+    if any("-ctfe-" in part for part in path.parts):
+        path.unlink()
+for name, marker in (
+    ("Overflow", "Integer addition overflowed"),
+    ("FailedGuard", "I64 division by zero"),
+):
+    path = str(static_fixture / f"{name}.roc")
+    baseline = run(f"{name}-runtime-seed-uncached", ["check", "--no-cache", path], expected=1)
+    assert marker in baseline.stderr and "module Static" in baseline.stderr
+    for mode, selected in (("mixed", cache), ("runtime-only", runtime_only)):
+        for repeat in range(2):
+            result = run(
+                f"{name}-runtime-seed-{mode}-{repeat}",
+                ["check", path],
+                expected=1,
+                selected_cache=selected,
+            )
+            assert (result.stdout, result.stderr) == (baseline.stdout, baseline.stderr), (
+                f"{name}: {mode} cache changed failure classification or source"
+            )
 
 summary = {
     "binary": str(binary),
