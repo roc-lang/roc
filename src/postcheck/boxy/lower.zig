@@ -20922,9 +20922,9 @@ const ProcBodyBuilder = struct {
         }
 
         // list_sort_with calls its comparator through a fixed ABI whose
-        // ordering result is the closed `[Before, Same, After]`. A comparator
-        // written as a callback returns that union open, so cross into the
-        // comparator's exact ABI representation before the call.
+        // ordering result is the closed `[Before, Same, After]` in its host
+        // representation. A comparator whose representation differs crosses
+        // into that exact ABI representation before the call.
         if (op == .list_sort_with) {
             if (lowered.len != 2) boxyLowerInvariant("list_sort_with did not take a list and a comparator");
             const boxed_comparator_rep = self.repForType(self.module.checked_bodies.expr(args[1]).ty);

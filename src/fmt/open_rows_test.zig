@@ -243,7 +243,7 @@ test "open rows - local alias composes its formal's variance" {
     );
 }
 
-test "open rows - mixed inherited and output formal follows the reference position" {
+test "open rows - a formal inside and outside a function result follows the reference position" {
     try expectFormatsTo(
         \\Mixed(a) : (a, (Str -> a))
         \\

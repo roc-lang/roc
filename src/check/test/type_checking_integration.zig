@@ -7208,9 +7208,9 @@ test "check type - polarity - try may not flow an unlisted error into the annota
 }
 
 test "check type - polarity - a rejected callback row keeps the annotated type" {
-    // The callback result opens, and `?` relates its row to the enclosing
-    // result, so `Err(NotAFunction)` would add a tag the callback's annotation
-    // does not list. That relation is rejected where it happens, and `run`
+    // The callback result is an input of `run`, so its row is closed, and
+    // `?` relates that row to the enclosing result, so `Err(NotAFunction)`
+    // would add a tag the callback's annotation does not list. That relation is rejected where it happens, and `run`
     // keeps its annotated type.
     const source =
         \\run : ({} -> Try(I64, [WrongArity])) -> Try(I64, _)
@@ -9485,10 +9485,10 @@ test "check type - polarity - alias and direct annotation graphs agree at both u
     }
 }
 
-test "check type - polarity - mixed inherited and output formal shares its row" {
-    // A shared formal must satisfy both occurrences. Unlike two separately
-    // written [E] literals, these occurrences have exactly one extension:
-    // the inherited occurrence closes it at input uses, and both open at outputs.
+test "check type - polarity - a formal inside and outside a function result shares its row" {
+    // Both occurrences stand at the reference's own polarity, and unlike two
+    // separately written [E] literals they have exactly one extension: closed
+    // at input uses and open at output uses.
     for ([_][]const u8{ "(a, (Str -> a))", "((Str -> a), a)" }) |backing| {
         for ([_]bool{ false, true }) |output| {
             const annotation = if (output) "Str -> Mixed([E])" else "Mixed([E]) -> Str";

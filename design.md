@@ -12028,8 +12028,9 @@ storage.
 
 The sort low-level calls its boxed comparator through a planned ABI
 representation: the comparator's arguments keep their worker representation and
-its ordering result is that closed union. Lowering wraps a callback whose result
-row is open in an adapter for that ABI before the call.
+its ordering result is that closed union in its host representation. Lowering
+wraps a comparator whose representation differs from that ABI in an adapter
+before the call.
 
 The host ABI is independent of lowering strategy. `.boxy` changes only private
 Roc implementation procedures. Any LIR root whose checked root metadata has
