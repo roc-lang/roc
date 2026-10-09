@@ -33,6 +33,7 @@ const ManifestFile = Cache.Manifest.File;
 /// the working directory, the Zig lib directory, the local cache, the global
 /// cache and the build root.
 const prefix_count = 5;
+const prefix_names = [prefix_count][]const u8{ "<cwd>", "<zig lib>", "<local cache>", "<global cache>", "<build root>" };
 
 const usage =
     \\Usage: restamp-zig-cache [--zig <path>]
@@ -83,6 +84,9 @@ const Observations = struct {
     /// A null value records a path that could not be read.
     map: std.StringHashMapUnmanaged(?Observed) = .empty,
     key_buffer: std.ArrayList(u8) = .empty,
+    /// Keys of `map` that an entry found missing or changed, for the report.
+    missing: std.StringArrayHashMapUnmanaged(void) = .empty,
+    changed: std.StringArrayHashMapUnmanaged(void) = .empty,
 
     fn get(self: *Observations, io: Io, prefixes: []const Io.Dir, prefix: usize, path: []const u8) RestampError!?*Observed {
         self.key_buffer.clearRetainingCapacity();
@@ -102,6 +106,26 @@ const Observations = struct {
             };
         }
         return if (gop.value_ptr.*) |*observed| observed else null;
+    }
+
+    /// Record the path most recently passed to `get` in `list`.
+    fn note(self: *Observations, list: *std.StringArrayHashMapUnmanaged(void)) Allocator.Error!void {
+        try list.put(self.arena, self.map.getKey(self.key_buffer.items).?, {});
+    }
+
+    /// Print how many distinct paths `list` holds, and the first few.
+    fn report(stdout: *Io.Writer, list: std.StringArrayHashMapUnmanaged(void), description: []const u8) Io.Writer.Error!void {
+        if (list.count() == 0) return;
+        const shown = @min(list.count(), 10);
+        try stdout.print("{d} distinct paths {s}; the first {d}:\n", .{ list.count(), description, shown });
+        for (list.keys()[0..shown]) |key| {
+            // A path outside every prefix is recorded in full.
+            if (std.fs.path.isAbsolute(key[1..])) {
+                try stdout.print("  {s}\n", .{key[1..]});
+            } else {
+                try stdout.print("  {s}{c}{s}\n", .{ prefix_names[key[0]], std.fs.path.sep, key[1..] });
+            }
+        }
     }
 };
 
@@ -138,10 +162,12 @@ fn restampManifest(
         // An empty path names the prefix directory itself.
         const path: []const u8 = if (recorded_path.len == 0) "." else recorded_path;
         const observed = try observations.get(io, prefixes, file.flags.prefix, path) orelse {
+            try observations.note(&observations.missing);
             tally.missing += 1;
             continue;
         };
         if (observed.is_directory != file.flags.is_directory) {
+            try observations.note(&observations.changed);
             tally.changed += 1;
             continue;
         }
@@ -151,6 +177,7 @@ fn restampManifest(
         }
         // A directory's size is the file system's business, not its listing's.
         if (!observed.is_directory and observed.size != file.size) {
+            try observations.note(&observations.changed);
             tally.changed += 1;
             continue;
         }
@@ -159,6 +186,7 @@ fn restampManifest(
             const computed = contentDigest(io, observations.arena, prefixes[file.flags.prefix], path, observed.is_directory) catch |err| switch (err) {
                 error.Canceled, error.OutOfMemory => |e| return e,
                 else => {
+                    try observations.note(&observations.missing);
                     tally.missing += 1;
                     continue;
                 },
@@ -167,6 +195,7 @@ fn restampManifest(
             break :digest computed;
         };
         if (!std.mem.eql(u8, &digest, &file.digest)) {
+            try observations.note(&observations.changed);
             tally.changed += 1;
             continue;
         }
@@ -373,6 +402,8 @@ pub fn main(init: std.process.Init) !void {
         var observations: Observations = .{ .arena = arena };
         const fs_now = try filesystemNow(io, manifest_dir);
         try restampManifestDir(io, std.heap.smp_allocator, manifest_dir, &prefixes, &observations, fs_now, &counts);
+        try Observations.report(stdout, observations.missing, "are recorded but missing");
+        try Observations.report(stdout, observations.changed, "have different contents from the record");
     }
 
     try stdout.print(
@@ -510,6 +541,19 @@ test "an input with different contents stays a miss" {
     try testing.expectEqual(@as(usize, 0), counts.restamped);
     try testing.expectEqual(@as(usize, 1), counts.changed);
     try testing.expect((try fixture.check()) != .hit);
+}
+
+test "a recorded input that no longer exists is reported, not re-stamped" {
+    var fixture: TestCache = undefined;
+    try fixture.init();
+    defer fixture.deinit();
+
+    try testing.expectEqual(.incomplete_manifest, try fixture.check());
+
+    try fixture.tmp.dir.deleteFile(testing.io, TestCache.input_name);
+    const counts = try fixture.restamp(try filesystemNow(testing.io, fixture.tmp.dir));
+    try testing.expectEqual(@as(usize, 0), counts.manifests_rewritten);
+    try testing.expectEqual(@as(usize, 1), counts.missing);
 }
 
 test "an input modified in the current clock tick is not re-stamped" {
