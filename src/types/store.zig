@@ -138,6 +138,39 @@ const ClassWatch = struct {
     }
 };
 
+/// Descriptors a scan recorded as settled: the content reachable from each
+/// one has been found to need no further work by that scan. Every descriptor
+/// reachable from a settled one is settled too, so the set stays exact as long
+/// as no settled descriptor's observable content changes; any such change, and
+/// any rollback, empties the whole set.
+const SettledDescs = struct {
+    bits: std.DynamicBitSetUnmanaged = .{},
+    list: std.ArrayListUnmanaged(u32) = .empty,
+
+    fn deinit(self: *SettledDescs, gpa: Allocator) void {
+        self.bits.deinit(gpa);
+        self.list.deinit(gpa);
+    }
+
+    fn contains(self: *const SettledDescs, desc_idx: DescStore.Idx) bool {
+        const index: u32 = @backingInt(desc_idx);
+        return index < self.bits.bit_length and self.bits.isSet(index);
+    }
+
+    fn insert(self: *SettledDescs, gpa: Allocator, desc_idx: DescStore.Idx) Allocator.Error!void {
+        const index: u32 = @backingInt(desc_idx);
+        if (index >= self.bits.bit_length) try self.bits.resize(gpa, @max(index + 1, self.bits.bit_length * 2), false);
+        if (self.bits.isSet(index)) return;
+        try self.list.append(gpa, index);
+        self.bits.set(index);
+    }
+
+    fn clear(self: *SettledDescs) void {
+        for (self.list.items) |index| self.bits.unset(index);
+        self.list.clearRetainingCapacity();
+    }
+};
+
 /// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(enum) {
     root: DescStore.Idx,
@@ -210,6 +243,13 @@ pub const Store = struct {
     /// Classes callers' memos depend on. Runtime-only: never serialized,
     /// cloned, or relocated.
     class_watch: ClassWatch = .{},
+
+    /// Descriptors a scan recorded as settled (see `SettledDescs`).
+    /// Runtime-only: never serialized, cloned, or relocated.
+    settled_descs: SettledDescs = .{},
+    /// Set while `union_` relinks storage roots whose observable content it
+    /// has already compared, so the relinking itself settles nothing away.
+    relinking_compared_classes: bool = false,
 
     /// Advances whenever a write could make a variable-free type reach a
     /// variable or an error: a class merged into a leaf from concrete
@@ -320,6 +360,7 @@ pub const Store = struct {
         // instantiation worklist scratch
         self.instantiate_scratch.deinit(self.gpa);
         self.class_watch.deinit(self.gpa);
+        self.settled_descs.deinit(self.gpa);
 
         // speculation undo trail
         self.slot_trail.deinit(self.gpa);
@@ -527,6 +568,7 @@ pub const Store = struct {
     /// Undo everything done since `savepoint` was created.
     pub fn rollbackToSavepoint(self: *Self, savepoint: *Savepoint) void {
         self.class_watch.noteRollback();
+        self.settled_descs.clear();
         // Replay journaled in-place writes in reverse so each pre-existing entry
         // lands back on its original value.
         var di = self.desc_trail.items.len;
@@ -618,7 +660,15 @@ pub const Store = struct {
             try self.slot_trail.append(self.gpa, .{ .idx = idx, .old = self.slots.get(idx) });
         }
         switch (self.slots.get(idx)) {
-            .root => |desc_idx| self.class_watch.noteWrite(desc_idx),
+            .root => |desc_idx| {
+                self.class_watch.noteWrite(desc_idx);
+                // The slot's vars stop resolving to a settled descriptor.
+                if (!self.relinking_compared_classes and self.settled_descs.contains(desc_idx) and
+                    !std.meta.eql(val, Slot{ .root = desc_idx }))
+                {
+                    self.settled_descs.clear();
+                }
+            },
             .redirect => {},
         }
         switch (val) {
@@ -643,7 +693,22 @@ pub const Store = struct {
             try self.desc_trail.append(self.gpa, .{ .idx = idx, .old = self.descs.get(idx) });
         }
         self.class_watch.noteWrite(idx);
+        if (self.settled_descs.contains(idx) and !std.meta.eql(self.descs.get(idx).content, val.content)) {
+            self.settled_descs.clear();
+        }
         self.descs.set(idx, val);
+    }
+
+    /// Record the class of each of `vars` as settled. The caller guarantees
+    /// that every class reachable from these classes is among them or already
+    /// settled.
+    pub fn markSettled(self: *Self, vars: []const Var) Allocator.Error!void {
+        for (vars) |var_| try self.settled_descs.insert(self.gpa, self.resolveVar(var_).desc_idx);
+    }
+
+    /// Whether `var_`'s class is settled (see `markSettled`).
+    pub fn isSettled(self: *const Self, var_: Var) bool {
+        return self.settled_descs.contains(self.resolveVar(var_).desc_idx);
     }
 
     /// In-place equivalence-class root metadata write. See setSlot.
@@ -1853,10 +1918,26 @@ pub const Store = struct {
             return;
         }
 
+        // a's vars come to see the merged descriptor. When its content is
+        // what a settled side already had, that side's settledness carries
+        // over to the merged class; otherwise a settled side has changed.
+        const settled_before = self.settled_descs.list.items.len;
+        const a_settled = self.settled_descs.contains(a_data.desc_idx);
+        const b_settled = self.settled_descs.contains(b_data.desc_idx);
+        const a_kept = std.meta.eql(a_data.desc.content, merged_desc.content);
+        const b_kept = std.meta.eql(b_data.desc.content, merged_desc.content);
+        if (a_settled and !a_kept) self.settled_descs.clear();
+
         // The unifier computes merged content for b's descriptor destination.
         // Keep that destination even when balancing retains a's storage root.
         try self.setDesc(b_data.desc_idx, merged_desc);
+        self.relinking_compared_classes = true;
+        defer self.relinking_compared_classes = false;
         try self.linkStorageRoots(a_data, b_data, b_data.desc_idx, b_data.meta.checked_var);
+        const nothing_changed = self.settled_descs.list.items.len == settled_before and settled_before != 0;
+        if (nothing_changed and ((a_settled and a_kept) or (b_settled and b_kept))) {
+            try self.settled_descs.insert(self.gpa, b_data.desc_idx);
+        }
     }
 
     /// `union_` when either class is frozen. The merged class keeps the frozen
@@ -2593,6 +2674,42 @@ test "dangerousSetVarRedirect requires a declared rule by signature" {
     try std.testing.expectEqual(4, fn_info.param_types.len);
     try std.testing.expectEqual(Store.RedirectRule, fn_info.param_types[1].?);
     comptime std.debug.assert(@typeInfo(Store.RedirectRule).@"enum".mode == .exhaustive);
+}
+
+test "settled classes survive content-preserving merges and clear on any observable change" {
+    const gpa = std.testing.allocator;
+    var store = try Store.init(gpa);
+    defer store.deinit();
+
+    // A flex merged into a settled class keeps the settled content, and the
+    // merged class stays settled.
+    const settled = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markSettled(&.{settled});
+    const joining = try store.fresh();
+    try store.union_(joining, settled, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expect(store.isSettled(settled));
+    try std.testing.expect(store.isSettled(joining));
+
+    // Changing a settled class's content clears every settled class.
+    const other = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markSettled(&.{other});
+    try store.setVarContent(settled, .err);
+    try std.testing.expect(!store.isSettled(other));
+    try std.testing.expect(!store.isSettled(settled));
+
+    // A settled flex whose vars come to see other content has changed.
+    const settled_flex = try store.fresh();
+    const witness = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.markSettled(&.{ settled_flex, witness });
+    const structure = try store.freshFromContent(.{ .structure = .empty_record });
+    try store.union_(settled_flex, structure, .{ .content = .{ .structure = .empty_record }, .rank = Rank.outermost });
+    try std.testing.expect(!store.isSettled(witness));
+
+    // A rollback clears every settled class.
+    try store.markSettled(&.{witness});
+    var savepoint = try store.createSavepoint();
+    store.rollbackToSavepoint(&savepoint);
+    try std.testing.expect(!store.isSettled(witness));
 }
 
 test "savepoint clone cross-check is compiled in for test builds" {

@@ -36569,7 +36569,23 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
         }
 
         // --- 3. Commit every component (disjoint, so order is unobservable). ---
-        for (0..self.literal_defaulting_open_roots.items.len) |leader| {
+        // Thread each component's members, in index order, from its leader,
+        // so every component visits only its own members.
+        const literal_count = self.literal_defaulting_open_roots.items.len;
+        const component_head = try self.gpa.alloc(usize, literal_count);
+        defer self.gpa.free(component_head);
+        const component_next = try self.gpa.alloc(usize, literal_count);
+        defer self.gpa.free(component_next);
+        const no_member = std.math.maxInt(usize);
+        @memset(component_head, no_member);
+        var member_cursor = literal_count;
+        while (member_cursor > 0) {
+            member_cursor -= 1;
+            const leader = componentFind(self.literal_defaulting_component_parent.items, member_cursor);
+            component_next[member_cursor] = component_head[leader];
+            component_head[leader] = member_cursor;
+        }
+        for (0..literal_count) |leader| {
             if (componentFind(self.literal_defaulting_component_parent.items, leader) != leader) continue;
             self.literal_defaulting_group_drivers.clearRetainingCapacity();
             var member_count: usize = 0;
@@ -36580,8 +36596,10 @@ fn runLiteralDefaultingRounds(self: *Self, env: *Env, universe: LiteralDefaultUn
             // makes the outcome independent of which member carries the
             // driving constraint (mirror-image programs commit identically).
             var component_fits = exact_numeral.FitSet.full;
-            for (self.literal_defaulting_open_roots.items, 0..) |member_root, member_idx| {
-                if (componentFind(self.literal_defaulting_component_parent.items, member_idx) != leader) continue;
+            var member = component_head[leader];
+            while (member != no_member) : (member = component_next[member]) {
+                const member_idx = member;
+                const member_root = self.literal_defaulting_open_roots.items[member_idx];
                 member_count += 1;
                 const member_range = self.types.resolveVar(member_root).desc.content.flex.constraints;
                 for (self.types.sliceStaticDispatchConstraints(member_range)) |constraint| {
@@ -37136,13 +37154,72 @@ fn dispatchConstraintOriginFlag(origin: StaticDispatchConstraint.Origin) bool {
 /// The identities of a generalized type, ignoring requirements, with any row
 /// that repeats a label normalized first. A conflict is reported at `value`.
 fn generalizedIdentityVars(self: *Self, var_: Var, value: ?Var, env: *Env) Allocator.Error![]Var {
+    return try self.generalizedIdentityVarsIn(var_, value, env, .whole_type);
+}
+
+/// `outside_settled` leaves out every class the store records as settled: a
+/// settled class holds no identity with more than one constraint and no row,
+/// so the walk's answer to whether a scheme can deduplicate anything, and the
+/// rows it normalizes, are the same.
+fn generalizedIdentityVarsIn(
+    self: *Self,
+    var_: Var,
+    value: ?Var,
+    env: *Env,
+    comptime extent: enum { whole_type, outside_settled },
+) Allocator.Error![]Var {
     self.canonical_key_writer.setReportDuplicateRows(true);
     defer self.canonical_key_writer.setReportDuplicateRows(false);
     while (true) {
-        const identity_vars = try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(var_);
+        const identity_vars = switch (extent) {
+            .whole_type => try self.canonical_key_writer.identityVarsFromVarIgnoringConstraints(var_),
+            .outside_settled => try self.canonical_key_writer.identityVarsFromVarIgnoringConstraintsOutsideSettled(var_),
+        };
         if (!try self.normalizeReportedDuplicateRow(value, env)) return identity_vars;
         self.gpa.free(identity_vars);
     }
+}
+
+/// Whether deduplicating `scheme_var`'s requirements could merge anything:
+/// some identity it reaches holds more than one constraint, or its scheme
+/// holds more than one requirement. Rows that repeat a label are normalized
+/// on the way, exactly as the full walk does.
+///
+/// Classes already settled are not walked again. When nothing can merge, the
+/// classes this walk visited are settled in turn, provided none of them is a
+/// row: a row's description reads its extension chain without visiting it, so
+/// a row's class alone does not cover everything it depends on. Each nested
+/// lambda's generalization therefore walks only the part of its type that
+/// enclosed lambdas have not already walked.
+fn generalizedSchemeHasDeduplicationCandidates(self: *Self, scheme_var: Var, value: ?Var, env: *Env) Allocator.Error!bool {
+    const identity_vars = try self.generalizedIdentityVarsIn(scheme_var, value, env, .outside_settled);
+    defer self.gpa.free(identity_vars);
+    const has_receiver_candidates = for (identity_vars) |identity_var| {
+        const resolved = self.types.resolveVar(identity_var);
+        const constraints = contentConstraintRange(resolved.desc.content) orelse continue;
+        if (constraints.len() > 1) break true;
+    } else false;
+    const has_scheme_candidates = if (self.typeSchemeIndexForRoot(scheme_var)) |scheme_idx|
+        self.type_schemes.items[scheme_idx].dispatch_requirements.items.len > 1
+    else
+        false;
+    if (has_receiver_candidates or has_scheme_candidates) return true;
+
+    var nodes = self.canonical_key_writer.lastWalkVisited();
+    while (nodes.next()) |node| {
+        const settles = switch (self.types.resolveVar(@fromBackingInt(@intCast(node.*))).desc.content) {
+            .flex, .rigid, .alias => true,
+            .structure => |flat| switch (flat) {
+                .fn_pure, .fn_effectful, .fn_unbound, .tuple, .nominal_type, .empty_record, .empty_tag_union => true,
+                .record, .tag_union => false,
+            },
+            .field_presence, .err => false,
+        };
+        if (!settles) return false;
+    }
+    nodes = self.canonical_key_writer.lastWalkVisited();
+    while (nodes.next()) |node| try self.types.markSettled(&.{@fromBackingInt(@intCast(node.*))});
+    return false;
 }
 
 fn appendGeneralizedIdentityVars(self: *Self, var_: Var, out: *std.ArrayListUnmanaged(Var), value: ?Var, env: *Env) Allocator.Error!void {
@@ -37164,6 +37241,7 @@ fn deduplicateGeneralizedDispatchRequirements(
     value: ?Var,
     env: *Env,
 ) Allocator.Error!void {
+    if (!try self.generalizedSchemeHasDeduplicationCandidates(scheme_var, value, env)) return;
     const identity_vars = try self.generalizedIdentityVars(scheme_var, value, env);
     defer self.gpa.free(identity_vars);
 
