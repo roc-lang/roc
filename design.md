@@ -19200,7 +19200,13 @@ reached again through a loop back edge likewise starts the next iteration's
 fresh value with every field intact: the previous value is dead past its
 redefinition, so a take that the back edge reaches again is not a second take
 of the same unit. Without that, a record rebuilt on every iteration (the
-result a per-position helper returns) would poison all of its fields. A later write first checks its value operand against
+result a per-position helper returns) would poison all of its fields.
+A borrowed tag-payload view supplies no ownership unit: both future-field
+observation and take-state flow use the union root's value-producing definition
+as their fresh-value boundary. Recreating the view inside a loop preserves the
+root's consumed-field state, so a union defined outside that loop retains each
+owned field read; rebuilding the union inside the loop supplies fresh units.
+A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
