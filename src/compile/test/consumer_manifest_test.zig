@@ -92,7 +92,7 @@ test "source-only queued specializations retain native cache root demand without
         hits: usize = 0,
         retained: bool = false,
 
-        fn select(raw: *anyopaque, _: lir.CheckedPipeline.SolvedPolicy, _: lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!eval.CompileTimeFinalization.CompileTimeObjectCache {
+        fn select(raw: *anyopaque, _: lir.CheckedPipeline.SolvedPolicy, _: lir.CheckedPipeline.CheckedModuleSet, _: bool) Allocator.Error!eval.CompileTimeFinalization.CompileTimeObjectCache {
             const self: *@This() = @ptrCast(@alignCast(raw));
             self.use[0] = .{ .module = self.root.key.bytes, .root = @intFromEnum(self.root.compile_time_roots.roots[0].id) };
             self.selected = true;
