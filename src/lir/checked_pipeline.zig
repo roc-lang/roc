@@ -146,6 +146,8 @@ pub const TargetConfig = struct {
     /// SpecConstr itself.
     spec_constr_clone_inlining: SpecConstrCloneInlining = .all_calls,
     inline_expects: InlineExpectMode = .run,
+    /// Authoritative producer policy; source requirements are per template.
+    producer_observations: @import("lir_core").Program.ProducerObservations = .unknown,
     /// Whether ARC may consume a dead Box lender while unboxing.
     consume_dead_boxes: bool = false,
     /// Allow `List.map` and `List.update` to reuse a unique input list's
@@ -1326,6 +1328,12 @@ pub fn prepareCheckedModulesMonotype(
     // it discovers which procedures the evaluator reaches.
     var prepared_target = target;
     prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
+    prepared_target.producer_observations = if (target.comptime_value_reads)
+        .shared
+    else if (target.inline_expects == .run)
+        .runtime
+    else
+        .omitted;
 
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
@@ -1678,6 +1686,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
         .keep_specialization_procs = target.keep_specialization_procs,
         .post_check_executor = target.post_check_executor,
         .inline_expects = target.inline_expects,
+        .producer_observations = target.producer_observations,
         .list_in_place_map = target.list_in_place_map,
         .dict_seed_mode = if (target.comptime_value_reads) .runtime else switch (target.checked_module_state) {
             .complete => .runtime,

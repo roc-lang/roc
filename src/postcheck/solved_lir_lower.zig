@@ -149,6 +149,42 @@ pub const Output = struct {
     }
 };
 
+/// Only fresh bodies may refine producer facts for the actual consumer mode.
+/// Cached bytes retain their original facts; an external body proves nothing.
+fn observationsForProc(
+    producer: LirProgram.ProducerObservations,
+    mode: InlineExpectMode,
+    cached: ?Common.SpecCacheHit,
+    external: bool,
+) LirProgram.ProducerObservations {
+    if (cached) |hit| return hit.observations;
+    if (external) return .unknown;
+    return switch (producer) {
+        .unknown, .absent, .omitted => producer,
+        .runtime, .shared => if (mode == .omit) .omitted else producer,
+    };
+}
+
+test "cached and external observations cannot manufacture fresh producer proof" {
+    try std.testing.expectEqual(LirProgram.ProducerObservations.unknown, observationsForProc(.shared, .run, null, true));
+    try std.testing.expectEqual(LirProgram.ProducerObservations.unknown, observationsForProc(.unknown, .run, null, false));
+    try std.testing.expectEqual(LirProgram.ProducerObservations.omitted, observationsForProc(.omitted, .run, null, false));
+    try std.testing.expectEqual(LirProgram.ProducerObservations.omitted, observationsForProc(.shared, .omit, null, false));
+    try std.testing.expectEqual(LirProgram.ProducerObservations.absent, observationsForProc(.absent, .omit, null, false));
+    const hit: Common.SpecCacheHit = .{
+        .identity = [_]u8{0} ** 32,
+        .observations = .runtime,
+        .rc_borrowed_params = 0,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 0,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    };
+    try std.testing.expectEqual(LirProgram.ProducerObservations.runtime, observationsForProc(.shared, .run, hit, true));
+}
+
 /// Whether inline expects should materialize during lowering.
 pub const InlineExpectMode = enum {
     run,
@@ -217,6 +253,7 @@ pub const Options = struct {
     /// finalization and tests leave this enabled; optimized runtime builds omit
     /// inline expects before LIR reaches any backend.
     inline_expects: InlineExpectMode = .run,
+    producer_observations: LirProgram.ProducerObservations = .unknown,
     /// Allow `List.map` to reuse a unique input list's allocation for its
     /// output when the input and output element layouts are interchangeable.
     /// When disabled, `list_map_can_reuse` lowers to a constant 0 and the
@@ -483,6 +520,7 @@ const FnEntry = struct {
 };
 
 const LoweredFnBody = struct {
+    inlined_observations: LirProgram.ProducerObservations = .absent,
     body: LIR.CFStmtId,
     frame_locals: LIR.LocalSpan,
     stack_probe: LIR.StackProbe,
@@ -498,6 +536,7 @@ const WorkerBodyFeatures = struct {
 };
 
 const CompletedFnBodyShard = struct {
+    inlined_observations: LirProgram.ProducerObservations = .absent,
     allocator: std.mem.Allocator,
     worker_id: usize,
     fn_id: Type.FnId,
@@ -788,6 +827,7 @@ const Lowerer = struct {
     inline_plan: SolvedInline.Plan,
     inline_scope_rebases: std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId),
     inline_expects: InlineExpectMode,
+    producer_observations: LirProgram.ProducerObservations,
     observe_expects: bool,
     list_in_place_map: bool,
     dict_seed_mode: DictSeedMode,
@@ -881,6 +921,7 @@ const Lowerer = struct {
     current_ret_ty: ?Type.TypeId = null,
     current_proc_locals: ?*ProcLocalSet = null,
     current_fn: ?Type.FnId = null,
+    inlined_observations: LirProgram.ProducerObservations = .absent,
     current_proc: ?LIR.LirProcSpecId = null,
     current_erased_reuse: ?LIR.LocalId = null,
     current_return_target: ?LIR.LocalId = null,
@@ -1083,6 +1124,7 @@ const Lowerer = struct {
             .inline_plan = options.inline_plan,
             .inline_scope_rebases = std.AutoHashMap(InlineScopeRebaseKey, LIR.InlineScopeId).init(allocator),
             .inline_expects = options.inline_expects,
+            .producer_observations = options.producer_observations,
             .observe_expects = options.test_plan_metadata.len != 0,
             .list_in_place_map = options.list_in_place_map,
             .dict_seed_mode = options.dict_seed_mode,
@@ -1295,6 +1337,7 @@ const Lowerer = struct {
             const proc = self.result.store.getProcSpec(spec_proc.proc);
             if (proc.body == null and proc.hosted == null and !proc.external) continue;
             self.result.spec_procs.items[kept] = spec_proc;
+            self.result.spec_procs.items[kept].observations = proc.source_observations;
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
@@ -1832,6 +1875,7 @@ const Lowerer = struct {
             .stack_probe = body.stack_probe,
             .tail_calls = body.tail_calls,
             .shapes = body.shapes,
+            .inlined_observations = body.inlined_observations,
             .join_point_count = worker.next_join_point,
             .features = worker.worker_features,
             .discovered_fns = discovered_fns,
@@ -2501,6 +2545,7 @@ const Lowerer = struct {
         proc.frame_locals = appended.frame_locals;
         proc.stack_probe = shard.stack_probe;
         proc.shapes = shard.shapes;
+        proc.source_observations = proc.source_observations.join(shard.inlined_observations);
         proc.tail_calls = if (shard.tail_calls) |sites|
             appended.relocation.tailCalls(shard.prefix, sites)
         else
@@ -2673,6 +2718,9 @@ const Lowerer = struct {
                 self.current_proc_locals = &proc_locals;
                 self.current_ret_ty = entry.ret;
                 self.current_fn = fn_id;
+                const saved_observations = self.inlined_observations;
+                self.inlined_observations = .absent;
+                defer self.inlined_observations = saved_observations;
                 self.current_proc = proc_id;
                 self.current_erased_reuse = switch (spec.abi) {
                     .erased => if (try self.erasedResultDemand(entry.ret) == .single_slot)
@@ -2735,6 +2783,7 @@ const Lowerer = struct {
                     .stack_probe = self.stackProbeForProc(proc.args, frame_locals, proc.ret_layout),
                     .tail_calls = try tail_calls.finish(&self.result.store),
                     .shapes = self.result.store.shapes,
+                    .inlined_observations = self.inlined_observations,
                 };
                 if (!self.worker_callback) {
                     const proc_ptr = self.result.store.getProcSpecPtr(proc_id);
@@ -2743,6 +2792,7 @@ const Lowerer = struct {
                     proc_ptr.stack_probe = lowered_body.?.stack_probe;
                     proc_ptr.tail_calls = lowered_body.?.tail_calls;
                     proc_ptr.shapes = lowered_body.?.shapes;
+                    proc_ptr.source_observations = proc_ptr.source_observations.join(self.inlined_observations);
                 }
             },
             .hosted => {
@@ -2977,6 +3027,7 @@ const Lowerer = struct {
                     .proc = existing,
                     .owner = checkedSpecOwner(template),
                     .platform_requirement_relation = dependency_relation,
+                    .observations = self.result.store.getProcSpec(existing).source_observations,
                 });
             };
             entry.proc = existing;
@@ -3033,6 +3084,15 @@ const Lowerer = struct {
         const proc = try self.result.store.addProcSpec(.{
             .name = lirSymbol(entry.symbol),
             .identity = identity,
+            .source_observations = if (entry.forwards_to != null)
+                .absent
+            else
+                observationsForProc(
+                    if (source_fn.source) |template| template.observations else .unknown,
+                    self.inline_expects,
+                    cached,
+                    source_fn.body == .hosted,
+                ),
             .args = args_span,
             .iterator_fusion_scope = source_fn.iterator_fusion_scope,
             .erased_reuse_arg = erased_reuse_arg,
@@ -3075,6 +3135,7 @@ const Lowerer = struct {
                         .proc = proc,
                         .owner = checkedSpecOwner(template),
                         .platform_requirement_relation = dependency_relation,
+                        .observations = observationsForProc(template.observations, self.inline_expects, cached, source_fn.body == .hosted),
                     });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
@@ -5890,6 +5951,8 @@ const Lowerer = struct {
         const proc = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .identity = try self.uniformListConstructorIdentity(id, layout_idx),
+            // This producer emits only value-construction scaffolding.
+            .source_observations = .absent,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = try store.addLocalSpan(new_locals.items),
             .join_points = LIR.JoinPointSpan.empty(),
@@ -5951,6 +6014,8 @@ const Lowerer = struct {
         const accessor = try store.addProcSpec(.{
             .name = lirSymbol(self.symbols.fresh()),
             .identity = try self.comptimeRootAccessorIdentity(root, ty, layout_idx),
+            // This producer emits only an access to completed storage.
+            .source_observations = .absent,
             .args = LIR.LocalSpan.empty(),
             .frame_locals = frame_locals,
             .body = read,
@@ -9670,6 +9735,13 @@ const Lowerer = struct {
         if (spec.abi != .finite) Common.invariant("inline plan selected a non-finite function spec");
         if (spec.capture_ty != null) Common.invariant("inline plan selected a capturing function spec");
 
+        if (self.current_fn != null) {
+            const source_fn = self.solved.lifted.getFn(spec.source);
+            const observations = if (source_fn.source) |source| source.observations else .unknown;
+            self.inlined_observations = self.inlined_observations.join(
+                observationsForProc(observations, self.inline_expects, null, source_fn.body == .hosted),
+            );
+        }
         return body_expr;
     }
 

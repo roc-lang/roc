@@ -1577,6 +1577,10 @@ pub const LirProcSpec = struct {
     name: Symbol,
     /// Content identity; every symbol emitted for this procedure derives from it.
     identity: ProcIdentity,
+    /// Producer-authored inline-expect obligations of this emitted body.
+    /// Out-of-line dependency closure and diagnostic/dbg/failure provenance
+    /// are separate contracts; no-hooks code cannot synthesize this fact.
+    source_observations: @import("program.zig").ProducerObservations = .unknown,
     /// Session-local code-generation provenance, not semantic identity.
     /// Compare only inside the same LIR producer domain, with matching target
     /// and emission policy; equal revisions across separate lowers prove nothing.

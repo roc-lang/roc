@@ -224,6 +224,8 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Source observation requirements recorded before expect omission.
+    observations: @import("lir_core").Program.ProducerObservations = .unknown,
     /// Storage demand is producer data even when a non-native consumer retains
     /// this body; native late splicing still needs the same root declarations.
     cached_root_uses: []const Common.CheckedRootUse = &.{},

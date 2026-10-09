@@ -362,6 +362,7 @@ pub const CheckedRootUse = struct {
 
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    observations: lir_core.Program.ProducerObservations = .unknown,
     /// Complete serving-closure demand, borrowed from the immutable provider.
     /// Consumers declare these checked roots before retiring a source body.
     checked_root_uses: []const CheckedRootUse = &.{},

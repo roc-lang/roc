@@ -7838,6 +7838,8 @@ const Builder = struct {
         body_ctx.owner_context_fn_key = source_fn_key;
         body_ctx.current_fn_key = source_fn_key;
         const lowered = try body_ctx.lowerTemplateBodyAtNode(template_ref, template, root_node);
+        var observed_template = fn_template;
+        observed_template.observations = body_ctx.producerObservations();
         const final_signature_relation = self.active_template_root.?.signature_relation;
         const completed_root = blk: {
             var relations_timing_scope = ProcedureTimingScope.begin(self.timing, .body_graph_setup);
@@ -7853,7 +7855,7 @@ const Builder = struct {
         };
         return .{
             .reservation = reservation,
-            .fn_template = fn_template,
+            .fn_template = observed_template,
             .signature_relation = final_signature_relation,
             .root_node = completed_root,
             .lowered = lowered,
@@ -8389,6 +8391,7 @@ const Builder = struct {
 
         var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
+        completed_template.observations = body_ctx.producerObservations();
         _ = try source_ctx.draft.addNestedDef(.{
             .symbol = symbol,
             .fn_def = completed_template,
@@ -8522,6 +8525,7 @@ const Builder = struct {
 
         var completed_template = source_ctx.draft.fns.items[@intFromEnum(fn_id)].source;
         completed_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
+        completed_template.observations = body_ctx.producerObservations();
         source_ctx.draft.setDef(top_level_def, .{
             .symbol = spec.symbol,
             .fn_def = completed_template,
@@ -11006,6 +11010,7 @@ const Builder = struct {
         const completed_ret_cell = DraftTypeCell.fromGraphNode(completed_fn_ret);
         var nested_fn_template = source_ctx.draft.fns.items[@intFromEnum(draft.fn_id)].source;
         nested_fn_template.mono_fn_ty = DraftTypeCell.fromGraphNode(completed_fn_node);
+        nested_fn_template.observations = draft.nested_ctx.producerObservations();
         _ = try source_ctx.draft.addNestedDef(.{
             .symbol = draft.symbol,
             .fn_def = nested_fn_template,
@@ -14868,6 +14873,7 @@ const DraftFnTemplate = struct {
     source_fn_key: names.TypeDigest,
     mono_fn_ty: DraftTypeCell,
     evidence_digest: Ast.EvidenceDigest = .{},
+    observations: @import("lir_core").Program.ProducerObservations = .unknown,
     const_evidence: DraftSpan(check.ConstStore.ConstFnEvidence) = DraftSpan(check.ConstStore.ConstFnEvidence).empty(),
     const_evidence_frames: DraftSpan(check.ConstStore.ConstFnEvidenceFrame) = DraftSpan(check.ConstStore.ConstFnEvidenceFrame).empty(),
     const_evidence_frame_head: ?u32 = null,
@@ -18619,6 +18625,7 @@ const BodyDraftStore = struct {
             .source_fn_key = template.source_fn_key,
             .mono_fn_ty = try template.mono_fn_ty.sealCommitted(committed_types),
             .evidence_digest = template.evidence_digest,
+            .observations = template.observations,
             .const_evidence = .{ .start = evidence_start + template.const_evidence.start, .len = template.const_evidence.len },
             .const_evidence_frames = .{ .start = evidence_frames_start + template.const_evidence_frames.start, .len = template.const_evidence_frames.len },
             .const_evidence_frame_head = template.const_evidence_frame_head,
@@ -19832,6 +19839,8 @@ const ParserErrorRowKey = struct {
 const BodyContext = struct {
     allocator: Allocator,
     builder: *Builder,
+    /// Updated at source expect processing, including expects omitted later.
+    has_inline_expects: bool = false,
     /// Checked module whose ordered registry scope governs generated method
     /// dispatch in this specialization. This can differ from `view` when an
     /// imported template is specialized for a caller's concrete types.
@@ -21744,6 +21753,7 @@ const BodyContext = struct {
                 .source_fn_ty = source.source_fn_ty,
                 .source_fn_key = source.source_fn_key,
                 .mono_fn_ty = try self.draftTypeCell(source.mono_fn_ty),
+                .observations = source.observations,
                 .const_evidence = draft_evidence.nodes,
                 .const_evidence_frames = draft_evidence.frames,
                 .const_evidence_frame_head = stored_evidence.head,
@@ -24643,6 +24653,20 @@ const BodyContext = struct {
             },
             .opaque_without_backing => null,
         };
+    }
+
+    fn producerObservations(self: *const BodyContext) @import("lir_core").Program.ProducerObservations {
+        return @import("lir_core").Program.ProducerObservations.forFreshProducer(
+            self.has_inline_expects,
+            self.builder.inline_expects == .shared,
+            self.builder.inline_expects != .omit,
+        );
+    }
+
+    /// Expansions contribute to the emitting body, unlike separately owned
+    /// nested functions. Call only after the expansion has emitted its result.
+    fn mergeSameBodyObservations(self: *BodyContext, expansion: *const BodyContext) void {
+        self.has_inline_expects = self.has_inline_expects or expansion.has_inline_expects;
     }
 
     fn lowerTemplateBodyAtNode(
@@ -27594,6 +27618,7 @@ const BodyContext = struct {
     }
 
     fn destroyCallContext(self: *BodyContext, call_ctx: *BodyContext) void {
+        self.mergeSameBodyObservations(call_ctx);
         call_ctx.deinit();
         self.allocator.destroy(call_ctx);
     }
@@ -29322,6 +29347,7 @@ const BodyContext = struct {
 
     fn destroyBranchContext(self: *BodyContext, slot: *?*BodyContext) void {
         const branch_ctx = slot.* orelse return;
+        self.mergeSameBodyObservations(branch_ctx);
         branch_ctx.deinit();
         self.allocator.destroy(branch_ctx);
         slot.* = null;
@@ -29696,6 +29722,7 @@ const BodyContext = struct {
                     materialized.body,
                 ),
             };
+            self.mergeSameBodyObservations(entry.ctx);
             index += 1;
         }
         const data: BodyExprData = .{ .match_ = .{
@@ -30103,6 +30130,7 @@ const BodyContext = struct {
                 };
             },
             .expect => |child| {
+                self.has_inline_expects = true;
                 if (self.builder.inline_expects == .omit) {
                     const unit_ty = try self.unitType();
                     return self.finishStatement(task, .{ .expr = try self.addExpr(.{ .ty = unit_ty, .data = .unit }) }, .none);
@@ -30375,6 +30403,7 @@ const BodyContext = struct {
 
     fn divergentDataStep(self: *BodyContext, task: *DivergentTask, checked_expr: checked.CheckedExpr, ty: Type.TypeId) Allocator.Error!LowerStep {
         const expr_id = task.expr;
+        if (checked_expr.data == .expect) self.has_inline_expects = true;
         const data: BodyExprData = switch (checked_expr.data) {
             .crash => |msg| .{ .crash = try self.lowerStringLiteral(msg) },
             .runtime_error => .{ .checked_error = try self.addStringLiteral("runtime error") },
@@ -32360,10 +32389,11 @@ const BodyContext = struct {
                 .expr = expect_err.expr,
                 .expect_err_snippet = expect_err.snippet,
             } }),
-            .expect => |child| if (self.builder.inline_expects == .omit)
-                .unit
-            else
-                return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
+            .expect => |child| blk: {
+                self.has_inline_expects = true;
+                if (self.builder.inline_expects == .omit) break :blk .unit;
+                return requestLowerTask(self, .{ .expr = .{ .expr = child } });
+            },
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
             .for_ => |for_| return requestLowerTask(self, .{ .loop = .{ .kind = .{ .for_ = checkedForLoop(for_) } } }),
@@ -34372,12 +34402,14 @@ const BodyContext = struct {
         try body_ctx.constrainTypeToMono(template.checked_fn_root, mono_fn_ty);
         try body_ctx.constrainKnownType(root.checked_type, mono_fn_ty);
 
-        return try body_ctx.lowerPendingCallableEvalRoot(
+        const expanded = try body_ctx.lowerPendingCallableEvalRoot(
             view,
             template.root,
             wrapper.body_expr,
             try body_ctx.activeNodeFromType(mono_fn_ty),
         );
+        self.mergeSameBodyObservations(&body_ctx);
+        return expanded;
     }
 
     fn lowerCallableEvalBindingValueAtNode(
@@ -34438,12 +34470,14 @@ const BodyContext = struct {
         try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
         try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
 
-        return try body_ctx.lowerPendingCallableEvalRoot(
+        const expanded = try body_ctx.lowerPendingCallableEvalRoot(
             view,
             template.root,
             wrapper.body_expr,
             request_fn_node,
         );
+        self.mergeSameBodyObservations(&body_ctx);
+        return expanded;
     }
 
     /// The checker permits root slots only for context-free concrete values.
@@ -42406,7 +42440,9 @@ const BodyContext = struct {
         try self.graph.unify(try body_ctx.instNode(wrapper.checked_fn_root), wrapper_fn_node);
         try self.graph.unify(try body_ctx.instNode(template.checked_fn_root), request_fn_node);
         try self.graph.unify(try body_ctx.instNode(root.checked_type), request_fn_node);
-        return try body_ctx.forwardedLookupCalleeAtNode(lookup, request_fn_node);
+        const callee = try body_ctx.forwardedLookupCalleeAtNode(lookup, request_fn_node);
+        self.mergeSameBodyObservations(&body_ctx);
+        return callee;
     }
 
     /// The direct callee an alias's lookup names, requested at the alias
@@ -44102,8 +44138,12 @@ const BodyContext = struct {
             body.body_expr,
             DraftTypeCell.fromGraphNode(request_node),
         );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        const expanded = if (has_active_const_binding)
+            try body_ctx.finishActiveConstBinding(active_const_scope.active, restored)
+        else
+            restored;
+        self.mergeSameBodyObservations(&body_ctx);
+        return expanded;
     }
 
     fn restoreConstNode(
@@ -64327,6 +64367,102 @@ fn numeralTargetFromPrimitive(primitive: Type.Primitive) exact_numeral.Target {
         .bool, .str, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2 => Common.invariant("non-numeric Monotype primitive has no numeral target"),
         inline .u8, .i8, .u16, .i16, .u32, .i32, .u64, .i64, .u128, .i128, .f32, .f64, .dec => |p| @field(exact_numeral.Target, @tagName(p)),
     };
+}
+
+test "observations from an omitted expect in a constant expansion belong to the emitting body" {
+    const allocator = std.testing.allocator;
+    var program = Ast.Program.init(allocator);
+    defer program.deinit();
+    var checked_types: checked.CheckedTypeStore = .{};
+    defer checked_types.deinit(allocator);
+    const unit = try checked_types.reserveSyntheticTypeRoot(allocator, .{}, false);
+    try checked_types.fillSyntheticTypeRoot(allocator, unit, .empty_record);
+    const wrapper_fn = try checked_types.appendSyntheticFunctionRoot(allocator, .pure, &.{}, unit);
+    const owner: names.ProcTemplate = .{
+        .artifact = .{ .bytes = [_]u8{19} ** 32 },
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
+    var templates: checked.CheckedProcedureTemplateTable = .{};
+    defer templates.deinit(allocator);
+    const template: checked.CheckedProcedureTemplate = .{
+        .proc_base = @enumFromInt(0),
+        .template_id = @enumFromInt(0),
+        .body = .{ .checked_body = @enumFromInt(0) },
+        .checked_fn_scheme = .{},
+        .checked_fn_root = wrapper_fn,
+        .static_dispatch_plans = .{},
+        .direct_dispatch_plans = .{},
+        .dispatch_relations = .{},
+        .resolved_value_refs = .{},
+        .top_level_value_uses = .{},
+        .nested_proc_sites = .{},
+        .target = .roc,
+    };
+    try templates.templates.append(allocator, template);
+    var const_bodies = [_]checked.CheckedConstBody{.{
+        .id = @enumFromInt(0),
+        .root = @enumFromInt(0),
+        .body_expr = @enumFromInt(0),
+        .checked_type = unit,
+    }};
+    const const_body_table: checked.CheckedConstBodyTable = .{ .bodies = &const_bodies };
+    const exprs = [_]checked.StoredCheckedExpr{.{
+        .id = @enumFromInt(0),
+        .ty = unit,
+        .source_region = std.mem.zeroes(base.Region),
+        // The condition is deliberately unreachable when expects are omitted.
+        .data = .{ .expect = @enumFromInt(0) },
+    }};
+    var view_data: ModuleViewData = undefined;
+    view_data.key = .{ .bytes = owner.artifact.bytes };
+    view_data.types = checked_types.view();
+    view_data.bodies = .{ .stored_exprs = &exprs };
+    view_data.names = &program.names;
+    view_data.templates = &templates;
+    view_data.checked_const_bodies = &const_body_table;
+    const hoisted_constants: checked.HoistedConstTable = .{};
+    view_data.hoisted_constants = &hoisted_constants;
+
+    var builder: Builder = undefined;
+    builder.program = &program;
+    builder.inline_expects = .omit;
+    builder.comptime_value_reads = false;
+    builder.timing = null;
+    builder.diagnostics = null;
+    builder.active_spec_job_diagnostics = null;
+    builder.next_instantiation_scope = 0;
+    builder.current_loc = base.SourceLoc.none;
+    builder.current_region = std.mem.zeroes(base.Region);
+    builder.source_file_ids = SourceFileIds.init(allocator);
+    defer builder.source_file_ids.deinit();
+    builder.borrowed_source_file_ids = null;
+    try builder.source_file_ids.put(owner.artifact.bytes, 0);
+    var graph_types = Type.Store.init(allocator);
+    defer graph_types.deinit();
+    const graph = try InstGraph.create(allocator, &graph_types, &program.names);
+    defer graph.destroy();
+    var draft = BodyDraftStore.init(allocator);
+    defer draft.deinit();
+    var ctx = try BodyContext.initWithMethodScope(allocator, &builder, &view_data, &view_data, owner, graph, &draft);
+    defer ctx.deinit();
+    const request = try ctx.instNode(unit);
+    try std.testing.expectEqual(@import("lir_core").Program.ProducerObservations.absent, ctx.producerObservations());
+    const expanded = try ctx.lowerConstEvalTemplateUseAtNode(
+        &view_data,
+        .{ .body = @enumFromInt(0), .entry_template = owner, .source_scheme = .{} },
+        .{
+            .artifact = .{ .bytes = owner.artifact.bytes },
+            .owner = .{ .hoisted_expr = std.mem.zeroes(checked.ConstHoistedOwner) },
+            .template = @enumFromInt(0),
+            .source_scheme = .{},
+        },
+        request,
+        null,
+        null,
+    );
+    try std.testing.expectEqual(@import("lir_core").Program.ProducerObservations.omitted, ctx.producerObservations());
+    try std.testing.expect(draft.exprs.items[@intFromEnum(expanded)].data == .unit);
 }
 
 test "completion path retains ancestors across distinct sibling visits" {

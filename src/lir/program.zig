@@ -631,6 +631,60 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
     return try std.fmt.allocPrint(allocator, "roc__d{d}_{d}", .{ owner, index });
 }
 
+/// Authoritative inline-expect production facts. `absent` proves absence in
+/// a fresh source body; inline transforms join the obligations they compose.
+/// Out-of-line serving dependencies require a separate directional closure.
+/// This is not an absence-of-hooks claim.
+/// Runtime preservation alone does not prove CTFE diagnostic provenance.
+pub const ProducerObservations = enum(u8) {
+    unknown = 0,
+    absent = 1,
+    omitted = 2,
+    runtime = 3,
+    shared = 4,
+
+    /// Join obligations of bodies actually composed by an inline transform.
+    /// This is not a serving-closure certificate or diagnostic provenance.
+    pub fn join(a: ProducerObservations, b: ProducerObservations) ProducerObservations {
+        if (a == .unknown or b == .unknown) return .unknown;
+        if (a == .absent) return b;
+        if (b == .absent) return a;
+        if (a == .omitted or b == .omitted) return .omitted;
+        if (a == .runtime or b == .runtime) return .runtime;
+        return .shared;
+    }
+
+    pub fn forFreshProducer(has_expects: bool, shared: bool, run: bool) ProducerObservations {
+        if (!has_expects) return .absent;
+        if (!run) return .omitted;
+        return if (shared) .shared else .runtime;
+    }
+};
+
+test "producer observations distinguish omission preservation and source absence" {
+    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.forFreshProducer(true, false, false));
+    try std.testing.expectEqual(ProducerObservations.runtime, ProducerObservations.forFreshProducer(true, false, true));
+    try std.testing.expectEqual(ProducerObservations.shared, ProducerObservations.forFreshProducer(true, true, true));
+    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.forFreshProducer(true, true, false));
+    try std.testing.expectEqual(ProducerObservations.absent, ProducerObservations.forFreshProducer(false, false, false));
+}
+
+test "producer observation join preserves inlined and recursive obligations" {
+    for (std.enums.values(ProducerObservations)) |a| {
+        try std.testing.expectEqual(a, a.join(.absent));
+        try std.testing.expectEqual(a, a.join(a));
+        for (std.enums.values(ProducerObservations)) |b| {
+            try std.testing.expectEqual(a.join(b), b.join(a));
+            for (std.enums.values(ProducerObservations)) |c| {
+                try std.testing.expectEqual(a.join(b).join(c), a.join(b.join(c)));
+            }
+        }
+    }
+    try std.testing.expectEqual(ProducerObservations.omitted, ProducerObservations.absent.join(.omitted));
+    try std.testing.expectEqual(ProducerObservations.runtime, ProducerObservations.shared.join(.runtime));
+    try std.testing.expectEqual(ProducerObservations.unknown, ProducerObservations.shared.join(.unknown));
+}
+
 /// Complete LIR program and side data consumed by ARC, backends, and eval.
 /// A template specialization's content key and the procedure lowered for it.
 pub const SpecProc = struct {
@@ -642,6 +696,7 @@ pub const SpecProc = struct {
     /// Producer-established app filling on which this procedure depends;
     /// absent for code reusable independently of any platform requirement.
     platform_requirement_relation: ?[32]u8 = null,
+    observations: ProducerObservations = .unknown,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the

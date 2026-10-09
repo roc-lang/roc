@@ -1982,6 +1982,15 @@ const Pass = struct {
             const call_expr = uses.external_call_expr orelse
                 Common.invariant("single-use specialized worker had no external call expression");
             try self.localizeTailRecursiveWorker(worker_id, call_expr);
+            if (uses.external_call_owner) |owner| {
+                var caller = self.program.getFn(owner);
+                if (caller.source) |*source| {
+                    source.observations = source.observations.join(
+                        if (worker.source) |worker_source| worker_source.observations else .unknown,
+                    );
+                    self.program.setFn(owner, caller);
+                }
+            }
 
             // Localization clones one worker body into its caller, changing
             // downstream use edges. Collect a fresh program-wide usage snapshot
@@ -2727,7 +2736,7 @@ const Pass = struct {
 
         self.program.setFn(spec_fn_id, .{
             .symbol = symbol,
-            .source = source_fn.source,
+            .source = cloner.observedSource(source_fn.source),
             .root_identity = source_fn.root_identity,
             .spec_constr_pattern = try patternDigest(self.program, spec.pattern),
             .signature = null,
@@ -4468,7 +4477,7 @@ const Pass = struct {
         const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
-            .source = fn_.source,
+            .source = cloner.observedSource(fn_.source),
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
             .signature = fn_.signature,
@@ -4515,7 +4524,7 @@ const Pass = struct {
         const shapes = self.program.finishFnShapes(outer_shapes).merged(fn_.shapes);
         self.program.setFn(fn_id, .{
             .symbol = fn_.symbol,
-            .source = fn_.source,
+            .source = cloner.observedSource(fn_.source),
             .spec_constr_pattern = fn_.spec_constr_pattern,
             .root_identity = fn_.root_identity,
             .signature = fn_.signature,
@@ -5470,6 +5479,7 @@ const Cloner = struct {
     /// reach here—so reaching `value_wrapper_strip_cap` is a compiler bug.
     materialize_strip_depth: usize,
     inline_calls: InlineCallMode,
+    inlined_observations: @import("lir_core").Program.ProducerObservations = .absent,
     iterator_inline_depth: usize,
     inline_direct_requires_known_arg: bool,
     rewrite_call_patterns: bool,
@@ -10708,11 +10718,21 @@ const Cloner = struct {
     }
 
     fn finishInlinedCall(self: *Cloner, task: anytype, value: Value, callee: Ast.FnId) CloneStep {
+        const source = self.pass.program.getFn(callee).source;
+        self.inlined_observations = self.inlined_observations.join(
+            if (source) |template| template.observations else .unknown,
+        );
         self.current_inline_scope = task.saved_inline_scope;
         const popped = self.inline_stack.pop() orelse Common.invariant("call-pattern inline stack underflow");
         if (popped.fn_id != callee) Common.invariant("call-pattern inline stack was corrupted");
         self.subst.restore(task.change_start);
         return retValue(value);
+    }
+
+    fn observedSource(self: *const Cloner, source: ?@import("../monotype/ast.zig").FnTemplate) ?@import("../monotype/ast.zig").FnTemplate {
+        var result = source orelse return null;
+        result.observations = result.observations.join(self.inlined_observations);
+        return result;
     }
 
     fn stepInlineCallable(self: *Cloner, frame: *CloneFrame, task: *InlineCallableTask, input: ?CloneResult) Common.LowerError!CloneStep {
@@ -11519,6 +11539,7 @@ const Cloner = struct {
         worker_capture_values: []CaptureValue = &.{},
         change_start: usize = 0,
         saved_strip_depth: usize = 0,
+        saved_observations: @import("lir_core").Program.ProducerObservations = .absent,
         outer_shapes: Ast.Program.FnShapesScope = undefined,
     };
 
@@ -11533,7 +11554,7 @@ const Cloner = struct {
                 self.materialize_strip_depth = task.saved_strip_depth;
                 self.pass.program.setFn(task.worker_fn_id, .{
                     .symbol = task.symbol,
-                    .source = task.source_fn.source,
+                    .source = self.observedSource(self.pass.program.getFn(task.worker_fn_id).source),
                     .signature = null,
                     .args = task.args_span,
                     .captures = task.captures_span,
@@ -11541,6 +11562,7 @@ const Cloner = struct {
                     .ret = task.source_fn.ret,
                     .shapes = worker_shapes,
                 });
+                self.inlined_observations = task.saved_observations;
                 frame.cursor = 2;
                 return .{ .call = .{ .materialize_with_captures = .{
                     .ty = callable.ty,
@@ -11679,6 +11701,8 @@ const Cloner = struct {
         // start their strip depth from zero.
         task.saved_strip_depth = self.materialize_strip_depth;
         self.materialize_strip_depth = 0;
+        task.saved_observations = self.inlined_observations;
+        self.inlined_observations = .absent;
         task.outer_shapes = self.pass.program.beginFnShapes(task.worker_fn_id);
         frame.cursor = 1;
         return .{ .call = try self.withoutReuseTask(.{ .expr = source_body }) };
@@ -17365,6 +17389,68 @@ test "SpecConstr bounds cumulative inlining across small acyclic wrappers" {
     }
     try std.testing.expect(retained_call);
     try std.testing.expect(growth < Cloner.inline_body_work_budget * 2);
+}
+
+test "SpecConstr inlined callee observations survive an already omitted expect body" {
+    const allocator = std.testing.allocator;
+    const Observations = @import("lir_core").Program.ProducerObservations;
+    for (std.enums.values(Observations)) |observations| {
+        var program = emptyLiftedProgramForTest(allocator);
+        defer program.deinit();
+        const unit_ty = try program.types.add(.zst);
+        const pair_ty = try program.types.add(.{ .tuple = try program.types.addSpan(&.{ unit_ty, unit_ty }) });
+        const unit_expr = try program.addExpr(.{ .ty = unit_ty, .data = .unit });
+        const pair_expr = try program.addExpr(.{
+            .ty = pair_ty,
+            .data = .{ .tuple = try program.addExprSpan(&.{ unit_expr, unit_expr }) },
+        });
+        const source: @import("../monotype/ast.zig").FnTemplate = .{
+            .fn_def = .{ .local_template = .{
+                .artifact = .{ .bytes = [_]u8{19} ** 32 },
+                .proc_base = @enumFromInt(0),
+                .template = @enumFromInt(0),
+            } },
+            .source_fn_ty = @enumFromInt(0),
+            .source_fn_key = .{},
+            .mono_fn_ty = @enumFromInt(0),
+            .observations = observations,
+        };
+        const arg = try program.addLocal(@enumFromInt(1), pair_ty);
+        const leaf = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @enumFromInt(2),
+            .source = source,
+            .args = try program.addTypedLocalSpan(&.{.{ .local = arg, .ty = pair_ty }}),
+            .captures = .empty(),
+            // An omitted expect leaves ordinary unit code: hooks cannot
+            // recover the source obligation this metadata carries.
+            .body = .{ .roc = unit_expr },
+            .ret = unit_ty,
+        });
+        const call = try program.addExpr(.{ .ty = unit_ty, .data = .{ .call_proc = .{
+            .callee = .{ .lifted = leaf },
+            .args = try program.addExprSpan(&.{pair_expr}),
+            .captures = .empty(),
+        } } });
+        var caller_source = source;
+        caller_source.observations = .absent;
+        const caller = try program.addFn(.{
+            .shapes = program.finishFnShapes(.{}),
+            .symbol = @enumFromInt(3),
+            .source = caller_source,
+            .args = .empty(),
+            .captures = .empty(),
+            .body = .{ .roc = call },
+            .ret = unit_ty,
+        });
+        var pass = try Pass.init(allocator, &program);
+        defer pass.deinit();
+        try pass.cloneFnBodyInPlace(caller);
+        try std.testing.expectEqual(observations, program.getFn(caller).source.?.observations);
+        try std.testing.expectEqual(observations, program.getFn(leaf).source.?.observations);
+        const body = program.getFn(caller).body.roc;
+        try std.testing.expect(program.getExpr(body).data != .call_proc);
+    }
 }
 
 test "issue 10760 SpecConstr bounds cloning of rewritten inline bodies" {
