@@ -679,8 +679,11 @@ jobs:
                       print("Collected " + str(report))
           PYTHON
 
+      # Uploaded for passing shards too: each phase's log ends with the
+      # `zig build --summary all` tree, the only record of which steps the
+      # shard compiled and which it took from the build job's cache.
       - name: Upload MiniCI report and logs
-        if: failure()
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7.0.1 # ratchet:actions/upload-artifact@v7.0.1
         with:
           name: minici-${{ matrix.minici_shard }}
