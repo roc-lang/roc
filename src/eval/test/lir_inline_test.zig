@@ -239,6 +239,7 @@ const LowerMonotypeOptions = struct {
     diagnostics: ?*MonoLower.Diagnostics = null,
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     root_selection: enum { all, test_expects } = .all,
+    inline_expects: MonoLower.InlineExpectMode = .run,
 };
 
 fn lowerMonotypeModuleWithOptions(
@@ -288,6 +289,7 @@ fn lowerMonotypeModuleWithOptions(
             .specialization_counters = options.specialization_counters,
             .diagnostics = options.diagnostics,
             .post_check_executor = options.post_check_executor,
+            .inline_expects = options.inline_expects,
         },
     );
     errdefer mono.deinit();
@@ -8936,6 +8938,160 @@ test "literal conversion ownership includes nested codec evidence" {
         }
         try std.testing.expectEqual(@as(usize, 1), dependent_conversions);
     }
+}
+
+test "omitted block expects retain ordinary procedure producer facts" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\main : U64 -> U64
+        \\main = |value| {
+        \\    expect value > 0
+        \\    value
+        \\}
+    ;
+    var lowered = try lowerMonotypeModuleWithOptions(allocator, source, .{ .inline_expects = .omit });
+    defer lowered.deinit(allocator);
+    const program = lowered.mono.view();
+    var omitted: usize = 0;
+    for (program.fns) |fn_| {
+        if (fn_.source.observations == .omitted) omitted += 1;
+    }
+    try std.testing.expect(omitted != 0);
+    for (program.exprs) |expr| try std.testing.expect(expr.data != .expect);
+    for (program.stmts) |stmt| try std.testing.expect(stmt != .expect);
+    var emitted = try lowerModuleWithOptions(allocator, source, .none, .{ .inline_expects = .omit });
+    defer emitted.deinit(allocator);
+    const store = &emitted.lowered.lir_result.store;
+    try std.testing.expectEqual(lir.Program.ProducerObservations.omitted, store.getProcSpec(emitted.lowered.main_proc.?).source_observations);
+    for (store.getCFStmts()) |stmt| try std.testing.expect(stmt != .expect);
+}
+
+test "generated codec and field-name callbacks publish producer facts" {
+    const allocator = std.testing.allocator;
+    for ([_]StructuralJsonOperation{ .parse, .encode }) |operation| {
+        const source = try structuralJsonSource(allocator, 2, "Str", operation);
+        defer allocator.free(source);
+        var lowered = try lowerMonotypeModule(allocator, source);
+        defer lowered.deinit(allocator);
+        var generated: usize = 0;
+        for (lowered.mono.view().fns) |fn_| {
+            switch (fn_.source.fn_def) {
+                .parser_runtime, .encoder_for_runtime, .checked_generated => {},
+                else => continue,
+            }
+            generated += 1;
+            try std.testing.expect(fn_.source.observations != .unknown);
+        }
+        try std.testing.expect(generated != 0);
+    }
+}
+
+test "generated interpolation callback facts are independent from enclosing expects" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Rendered := [Rendered(Str)].{
+        \\    from_interpolation : Str, Iter((Str, Str)) -> Rendered
+        \\    from_interpolation = |first, rest|
+        \\        Rendered(rest.fold(first, |acc, (part, segment)| acc.concat(part).concat(segment)))
+        \\}
+        \\
+        \\main : Str -> Rendered
+        \\main = |name| {
+        \\    expect name != ""
+        \\    "hello ${name} ${name}!"
+        \\}
+    ;
+    for ([_]MonoLower.InlineExpectMode{ .run, .shared, .omit }) |mode| {
+        var lowered_source = try lowerMonotypeModuleWithOptions(allocator, source, .{
+            .inline_expects = mode,
+        });
+        defer lowered_source.deinit(allocator);
+        const expected: lir.Program.ProducerObservations = switch (mode) {
+            .run => .runtime,
+            .shared => .shared,
+            .omit => .omitted,
+        };
+        const program = lowered_source.mono.view();
+        var observed: usize = 0;
+        var absent: usize = 0;
+        // Generated steps must not inherit the enclosing body's expect, even
+        // when that expect is omitted before its condition is lowered.
+        for (program.fns) |fn_| {
+            if (fn_.source.observations == expected) observed += 1;
+            if (fn_.source.fn_def != .checked_generated) continue;
+            try std.testing.expectEqual(lir.Program.ProducerObservations.absent, fn_.source.observations);
+            if (fn_.source.observations == .absent) absent += 1;
+        }
+        try std.testing.expect(observed != 0);
+        try std.testing.expect(absent != 0);
+    }
+}
+
+test "literal conversion root rejection retains its declared source location" {
+    const allocator = std.testing.allocator;
+    const source =
+        \\Label := [Label(Str)].{
+        \\    from_quote : Str -> Try(Label, [BadQuotedBytes(Str)])
+        \\    from_quote = |str| if str.is_empty() Err(BadQuotedBytes("empty")) else Ok(Label(str))
+        \\}
+        \\
+        \\label : Label
+        \\label = "hi"
+        \\
+        \\make_label = |ignored| "specialized"
+        \\
+        \\specialized : Label
+        \\specialized = make_label({})
+        \\
+        \\main = (label, specialized)
+    ;
+    var resources = try helpers.parseAndCanonicalizeProgramWithBuiltin(
+        allocator,
+        .module,
+        source,
+        &.{},
+        try sharedPrePublishedBuiltin(),
+    );
+    defer helpers.cleanupParseAndCanonical(allocator, resources);
+    const imported = [_]check.CheckedArtifact.ImportedModuleView{
+        check.CheckedArtifact.importedView(resources.borrowed_builtin_artifact.?),
+    };
+    var lowered = try lir.CheckedPipeline.lowerCheckedModulesToLir(
+        allocator,
+        .{
+            .root = check.CheckedArtifact.loweringView(&resources.checked_artifact),
+            .imports = &imported,
+        },
+        .{ .requests = resources.checked_artifact.root_requests.compile_time_requests },
+        .{
+            .target_usize = base.target.TargetUsize.native,
+            .checked_module_state = .checking_finalization,
+        },
+    );
+    defer lowered.deinit();
+    const store = &lowered.lir_result.store;
+    var rejections: usize = 0;
+    var direct = false;
+    var specialized = false;
+    for (store.getCFStmts(), 0..) |stmt, index| {
+        if (stmt != .crash or stmt.crash.literal_rejection == null) continue;
+        rejections += 1;
+        const id: lir.LIR.CFStmtId = @enumFromInt(@as(u32, @intCast(index)));
+        const loc = store.stmtLoc(id);
+        const region = store.stmtRegion(id);
+        try std.testing.expect(loc.hasLocation());
+        const literal = source[region.start.offset..region.end.offset];
+        if (std.mem.eql(u8, literal, "\"hi\"")) {
+            direct = true;
+        } else {
+            try std.testing.expectEqualStrings("\"specialized\"", literal);
+            specialized = true;
+        }
+        try std.testing.expectEqualSlices(u8, &resources.checked_artifact.key.bytes, &store.sourceFileCheckedModule(loc.file).?);
+    }
+    try std.testing.expect(rejections != 0);
+    try std.testing.expect(direct);
+    try std.testing.expect(specialized);
 }
 
 test "custom literal field default gets an ordinary conversion root" {

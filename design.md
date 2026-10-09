@@ -772,6 +772,10 @@ Expect preservation is stamped before omission, propagated through actual
 inlining, and retained on every procedure and cached offer. Body-derived call
 and ownership variants inherit the source producer's fact unchanged, including
 omission and unknown provenance; a cloned body cannot establish absence.
+Generated callable bodies own separate observation facts from their enclosing
+expressions. Statement retirement records omitted expects before excluding their
+conditions. Literal-conversion entry wrappers retain the declared literal's source
+scope so generated rejection branches remain bindable without caller substitution.
 Emitter-owned diagnostic, debug, and exhaustiveness obligations are recorded before choosing
 hook-enabled emission. These facts propagate upstream over the same recursive
 components as context requirements. Missing facts, omitted expects, or a runtime

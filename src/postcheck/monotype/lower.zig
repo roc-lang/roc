@@ -13859,6 +13859,8 @@ const Builder = struct {
         defer precomputed_plan.deinit();
         try fn_ctx.buildParserRestoredPrecomputedPlan(&precomputed_plan, fn_value, store_view, fn_view, shape_ty, str_ty);
 
+        const observations = BodyContext.CallableObservationScope.enter(&fn_ctx);
+        defer observations.leave();
         const parsed = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -13885,6 +13887,7 @@ const Builder = struct {
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .observations = observations.observations(),
         });
         var parser_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
@@ -14003,6 +14006,8 @@ const Builder = struct {
             fn_ctx.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
 
+        const observations = BodyContext.CallableObservationScope.enter(&fn_ctx);
+        defer observations.leave();
         const encoded = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -14030,6 +14035,7 @@ const Builder = struct {
             .source_fn_key = fn_value.source_fn_key,
             .mono_fn_ty = ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .observations = observations.observations(),
         });
         var encoder_expr = try fn_ctx.addExpr(.{ .ty = ty, .data = .{ .lambda = .{
             .fn_id = draftFinalFn(runtime_fn_id),
@@ -24663,6 +24669,27 @@ const BodyContext = struct {
         );
     }
 
+    /// Generated callable bodies share a lowering context, not an observation
+    /// owner, with their enclosing expression.
+    const CallableObservationScope = struct {
+        ctx: *BodyContext,
+        saved: bool,
+
+        fn enter(ctx: *BodyContext) CallableObservationScope {
+            const scope = CallableObservationScope{ .ctx = ctx, .saved = ctx.has_inline_expects };
+            ctx.has_inline_expects = false;
+            return scope;
+        }
+
+        fn observations(self: CallableObservationScope) @import("lir_core").Program.ProducerObservations {
+            return self.ctx.producerObservations();
+        }
+
+        fn leave(self: CallableObservationScope) void {
+            self.ctx.has_inline_expects = self.saved;
+        }
+    };
+
     /// Expansions contribute to the emitting body, unlike separately owned
     /// nested functions. Call only after the expansion has emitted its result.
     fn mergeSameBodyObservations(self: *BodyContext, expansion: *const BodyContext) void {
@@ -29144,6 +29171,7 @@ const BodyContext = struct {
         item_ty: Type.TypeId = undefined,
         value_expr: DraftExprId = undefined,
         demand_scope: ?CallableBodyDemandScope = null,
+        observation_scope: ?CallableObservationScope = null,
     };
 
     /// A call-site intrinsic whose arguments lower as child tasks, in
@@ -31600,6 +31628,8 @@ const BodyContext = struct {
             .interpolation_iter => |*task| {
                 if (task.demand_scope) |scope| scope.leave();
                 task.demand_scope = null;
+                if (task.observation_scope) |scope| scope.leave();
+                task.observation_scope = null;
                 self.allocator.free(task.len_exprs);
                 task.len_exprs = &.{};
             },
@@ -36903,6 +36933,8 @@ const BodyContext = struct {
             .source_fn_ty = checked_source_ty,
             .source_fn_key = generatedFieldNamesIterStepKey(self.current_fn_key, source_expr_id, index, mode),
             .mono_fn_ty = step_fn_ty,
+            // This generator emits only field tests, names, and iterator tags.
+            .observations = .absent,
         });
         return try self.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -45536,6 +45568,8 @@ const BodyContext = struct {
             str_ty,
         );
 
+        const observations = CallableObservationScope.enter(self);
+        defer observations.leave();
         const parsed = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -45579,6 +45613,7 @@ const BodyContext = struct {
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
+            .observations = observations.observations(),
         } });
         var parser_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
@@ -45675,6 +45710,8 @@ const BodyContext = struct {
             self.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
 
+        const observations = CallableObservationScope.enter(self);
+        defer observations.leave();
         const encoded = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -45719,6 +45756,7 @@ const BodyContext = struct {
             .const_evidence_frames = draft_evidence.frames,
             .const_evidence_frame_head = stored_evidence.head,
             .evidence_digest = evidence_digest,
+            .observations = observations.observations(),
         } });
         var encoder_expr = try self.addExprWithTypeCell(request_cell, .{ .lambda = .{
             .fn_id = .{ .draft = runtime_fn_id },
@@ -46610,7 +46648,9 @@ const BodyContext = struct {
                     .name = one_tag.name,
                     .payloads = try self.addExprSpan(&[_]DraftExprId{payload_expr}),
                 } } });
-                const step_expr = try self.lowerInterpolationStepLambda(interpolation.step_fn_ty, task.source_expr_id, task.index, task.step_fn_ty, body);
+                const step_expr = try self.lowerInterpolationStepLambda(interpolation.step_fn_ty, task.source_expr_id, task.index, task.step_fn_ty, body, task.observation_scope.?.observations());
+                task.observation_scope.?.leave();
+                task.observation_scope = null;
                 task.demand_scope.?.leave();
                 task.demand_scope = null;
                 const record_expr = try self.lowerInterpolationIterRecord(task.iter_ty, task.backing_ty, task.len_exprs[task.index], step_expr);
@@ -46633,6 +46673,7 @@ const BodyContext = struct {
         task.rest_pat = try self.bindPat(rest_local, iter_ty);
         task.rest_ref = try self.localExpr(rest_local, iter_ty);
         task.demand_scope = try self.enterCallableBodyDemandScope(&.{}, &.{iter_ty});
+        task.observation_scope = CallableObservationScope.enter(self);
         task.item_ty = self.iterItemType(iter_ty);
         const item_fields = self.tupleItemTypes(task.item_ty);
         if (item_fields.len != 2) Common.invariant("generated interpolation iterator item was not a pair");
@@ -46707,7 +46748,7 @@ const BodyContext = struct {
             .name = done_tag.name,
             .payloads = .empty(),
         } } });
-        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body);
+        return try self.lowerInterpolationStepLambda(source_fn_ty, source_expr_id, index, step_fn_ty, body, .absent);
     }
 
     fn lowerInterpolationOnePayload(
@@ -46747,12 +46788,14 @@ const BodyContext = struct {
         index: usize,
         step_fn_ty: Type.TypeId,
         body: DraftExprId,
+        observations: @import("lir_core").Program.ProducerObservations,
     ) Allocator.Error!DraftExprId {
         const fn_id = try self.addFn(.{
             .fn_def = .{ .checked_generated = self.owner_template },
             .source_fn_ty = source_fn_ty,
             .source_fn_key = generatedInterpolationStepKey(self.current_fn_key, source_expr_id, index),
             .mono_fn_ty = step_fn_ty,
+            .observations = observations,
         });
         return try self.addExpr(.{ .ty = step_fn_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -48744,6 +48787,10 @@ const BodyContext = struct {
         expr_id: checked.CheckedExprId,
         ret_cell: DraftTypeCell,
     ) Allocator.Error!DraftExprId {
+        // This entry bypasses the ordinary checked-expression lowering frame.
+        // Its generated rejection still belongs to the declared literal.
+        var saved_source: ?SavedSourceLocation = try self.saveSourceLocation(self.view.bodies.expr(expr_id));
+        defer self.restoreSourceLocation(&saved_source);
         const plan = self.literalConversionPlan(expr_id);
         const try_ty = self.literalConversionTryType(plan);
         const try_node = try self.instNode(try_ty);
@@ -52950,6 +52997,8 @@ const BodyContext = struct {
             str_ty,
         );
 
+        const observations = CallableObservationScope.enter(self);
+        defer observations.leave();
         const parsed = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -52976,6 +53025,7 @@ const BodyContext = struct {
             .source_fn_key = generatedParserRuntimeKey(self.current_fn_key, plan.expr),
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .observations = observations.observations(),
         });
         var parser_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -53058,6 +53108,8 @@ const BodyContext = struct {
             self.generated_encoder_lambda_index = saved_encoder_lambda_index;
         }
 
+        const observations = CallableObservationScope.enter(self);
+        defer observations.leave();
         const encoded = blk: {
             var capture_tys = std.ArrayList(Type.TypeId).empty;
             defer capture_tys.deinit(self.allocator);
@@ -53085,6 +53137,7 @@ const BodyContext = struct {
             .source_fn_key = runtime_source_fn_key,
             .mono_fn_ty = ret_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            .observations = observations.observations(),
         });
         var encoder_expr = try self.addExpr(.{ .ty = ret_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -54538,6 +54591,9 @@ const BodyContext = struct {
             .source_fn_key = generatedEncoderCallbackKey(self.current_fn_key, source_expr, lambda_index),
             .mono_fn_ty = lambda_ty,
             .evidence_digest = Ast.fnEvidenceDigest(&.{}, &.{}, null),
+            // Encoder callbacks emit only shape construction and method calls;
+            // called source procedures retain their independent facts.
+            .observations = .absent,
         });
         return try self.addExpr(.{ .ty = lambda_ty, .data = .{ .lambda = .{
             .fn_id = .{ .draft = fn_id },
@@ -61878,7 +61934,12 @@ const BodyContext = struct {
             .return_,
             .runtime_error,
             => true,
-            .expect => self.builder.inline_expects.includesConditions(),
+            .expect => blk: {
+                // Omission can retire this statement before stepStatement sees
+                // it, but cannot erase the emitting body's producer fact.
+                self.has_inline_expects = true;
+                break :blk self.builder.inline_expects.includesConditions();
+            },
             // A promoted procedure is declared by its own template, not by a
             // statement of the body that contains its source.
             .promoted_proc => false,
