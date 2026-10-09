@@ -2048,11 +2048,15 @@ pub fn build(b: *std.Build) void {
     // Each MiniCI shard runs this from the build artifact before any `zig`
     // command, so it is installed with the other tools. It hashes every file
     // the cache refers to, which is why it is not a debug build.
+    //
+    // Unlike the other tools it runs on a different machine from the one that
+    // built it, and CI runners do not all have the same CPU: a build for
+    // `b.graph.host` died of SIGILL on a shard. So it targets the baseline CPU.
     const restamp_zig_cache_exe = b.addExecutable(.{
         .name = "restamp-zig-cache",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/restamp_zig_cache.zig"),
-            .target = b.graph.host,
+            .target = b.resolveTargetQuery(.{ .cpu_model = .baseline }),
             .optimize = .safe,
         }),
     });
