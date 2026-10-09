@@ -221,7 +221,6 @@ pub fn components(self: *const Self) Allocator.Error!Components {
             std.debug.assert(callee.* > component);
             targets[index] = callee.*;
         }
-        std.mem.sort(u32, targets, {}, std.sort.asc(u32));
         owned.* = targets;
     }
     return .{ .arena = arena, .nodes = nodes, .callees = output };
@@ -857,7 +856,7 @@ fn testCanonicalMixed(allocator: Allocator, conflict: bool) !void {
             defer receiver.deinit();
             var graph = try Self.init(allocator, &canonical.set);
             defer graph.deinit();
-            var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+            var procs = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
             defer procs.deinit();
             var placed = std.AutoHashMap(u32, usize).init(allocator);
             defer placed.deinit();

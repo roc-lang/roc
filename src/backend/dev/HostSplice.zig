@@ -465,7 +465,7 @@ fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out:
             .proc => |proc_id| try codegen.store.getProcSpec(proc_id).identity.symbolName(allocator),
             .spliced_proc => |identity| try identity.symbolName(allocator),
             .rc_helper => |key| try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key),
-            .spliced_helper => try allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse continue),
+            .spliced_helper => try allocator.dupe(u8, region.artifact_helper_name orelse codegen.splicedHelperName(region.start + region.entry) orelse continue),
             .boxy_thunk, .spliced_boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
         };
         errdefer allocator.free(name);

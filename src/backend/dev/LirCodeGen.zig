@@ -1405,13 +1405,18 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             artifact_callable_contract: ?[32]u8 = null,
             artifact_context_contract: ?FragmentContract = null,
             artifact_domain: ?CtfeContext.Domain = null,
+            artifact_helper_name: ?[]const u8 = null,
         };
 
         /// Assembly preserves the original producer's proof, not the receiving
         /// code generator's options or its body-less procedure declarations.
-        pub fn recordAssembledArtifact(self: *Self, start: usize, artifact: @import("ProcArtifact.zig").Artifact) void {
+        pub fn recordAssembledArtifact(self: *Self, start: usize, artifact: @import("ProcArtifact.zig").Artifact) Allocator.Error!void {
             const region = &self.code_regions.items[self.code_regions.items.len - 1];
             std.debug.assert(region.start == start);
+            if (artifact.kind == .rc_helper) {
+                if (self.context_import_arena == null) self.context_import_arena = std.heap.ArenaAllocator.init(self.allocator);
+                region.artifact_helper_name = try self.context_import_arena.?.allocator().dupe(u8, artifact.kind.rc_helper);
+            }
             region.context_dependencies = artifact.context_dependencies;
             region.context_complete = artifact.context_complete;
             region.artifact_callable_contract = artifact.callable_contract;
@@ -25970,6 +25975,12 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         pub fn registerAssembledProc(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
             const gop = try self.spliced_proc_starts.getOrPut(identity);
             if (!gop.found_existing) gop.value_ptr.* = entry;
+        }
+
+        /// The consumer explicitly bound this physical variant to its LIR
+        /// procedure. Dependency placement alone never establishes this choice.
+        pub fn bindAssembledProc(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {
+            try self.spliced_proc_starts.put(identity, entry);
         }
 
         pub fn registerAssembledThunk(self: *Self, identity: lir.ProcIdentity, entry: usize) Allocator.Error!void {

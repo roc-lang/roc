@@ -890,7 +890,7 @@ pub fn extractPrepared(
             .branch_island, .hosted_stub => unreachable,
             .spliced_proc => |identity| .{ .proc = identity },
             .spliced_boxy_thunk => |identity| .{ .boxy_thunk = identity },
-            .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
+            .spliced_helper => .{ .rc_helper = try arena_allocator.dupe(u8, region.artifact_helper_name orelse codegen.splicedHelperName(region.start + region.entry) orelse return error.DanglingReference) },
         };
 
         var frame: ?Frame = null;
@@ -1173,7 +1173,7 @@ pub fn appendPrepared(
             .branch_island => .branch_island,
         };
         starts[index] = try codegen.appendAssembledRegion(artifact.code, kind, artifact.entry, artifact.frame);
-        try appendMetadata(CG, codegen, artifact, starts[index], true);
+        try appendMetadata(CG, codegen, artifact, starts[index], true, true);
         for (artifact.relocations) |relocation| {
             const symbol = try codegen.internSymbolName(relocation.name, relocation.scope);
             const offset: u64 = starts[index] + relocation.offset;
@@ -1209,8 +1209,8 @@ pub fn appendPrepared(
     }
 }
 
-fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, include_lines: bool) Allocator.Error!void {
-    if (@hasDecl(CG, "recordAssembledArtifact")) codegen.recordAssembledArtifact(start, artifact);
+fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, include_lines: bool, bind_symbols: bool) Allocator.Error!void {
+    if (@hasDecl(CG, "recordAssembledArtifact")) try codegen.recordAssembledArtifact(start, artifact);
     if (@hasField(CG, "context_bindings")) {
         codegen.context_complete = codegen.context_complete and artifact.context_complete;
         if (artifact.context_dependencies) |dependencies| {
@@ -1229,18 +1229,18 @@ fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: us
             }
         }
     }
-    switch (artifact.kind) {
+    if (bind_symbols) switch (artifact.kind) {
         .proc => |identity| try codegen.registerAssembledProc(identity, start + artifact.entry),
         .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
         .boxy_thunk => |identity| try codegen.registerAssembledThunk(identity, start + artifact.entry),
         .entrypoint, .message_pool_run, .branch_island => {},
-    }
-    for (artifact.symbolic_refs) |ref| {
+    };
+    if (bind_symbols) for (artifact.symbolic_refs) |ref| {
         var rebased = ref;
         rebased.site = @intCast(start + ref.site);
         rebased.veneer = if (ref.veneer) |offset| @intCast(start + offset) else null;
         try codegen.queueAssembledSymbolicRef(rebased);
-    }
+    };
     for (artifact.refs) |ref| {
         if (ref.form == .call) {
             try codegen.registerAssembledRefVeneer(start + ref.site, if (ref.veneer) |veneer| start + veneer else null);
@@ -1407,7 +1407,16 @@ pub fn splice(
 ) SpliceError!void {
     var graph = try @import("ArtifactClosure.zig").init(allocator, set);
     defer graph.deinit();
-    return spliceIndexed(CG, allocator, codegen, &graph, roots, procs_by_identity, placed, data_out);
+    var bindings = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
+    defer bindings.deinit();
+    for (roots) |root| {
+        const identity = switch (set.artifacts[root].kind) {
+            .proc, .boxy_thunk => |identity| identity,
+            else => continue,
+        };
+        if (procs_by_identity.get(identity)) |proc| try bindings.put(root, proc);
+    }
+    return spliceIndexed(CG, allocator, codegen, &graph, roots, &bindings, placed, data_out);
 }
 
 /// The caller retains one graph per source set across all root placements.
@@ -1417,7 +1426,10 @@ pub fn spliceIndexed(
     codegen: *CG,
     graph: *const @import("ArtifactClosure.zig"),
     roots: []const u32,
-    procs_by_identity: *const std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId),
+    /// Exact serving definitions selected for the consumer's LIR procedures.
+    /// Dependency variants with the same logical identity do not acquire this
+    /// binding merely because another root is selected for that procedure.
+    bindings: *const std.AutoHashMap(u32, lir.LIR.LirProcSpecId),
     placed: *std.AutoHashMap(u32, usize),
     data_out: *std.ArrayList(DataItem),
 ) SpliceError!void {
@@ -1435,19 +1447,8 @@ pub fn spliceIndexed(
         if (placed.contains(index)) continue;
         const gop = try seen.getOrPut(index);
         if (gop.found_existing) continue;
-        // The provider plan has already certified one definition for this
-        // symbol across serving closures. Identity alone is not that proof.
-        const artifact = set.artifacts[index];
-        const existing: ?usize = switch (artifact.kind) {
-            .proc => |identity| codegen.splicedProcStart(identity),
-            .boxy_thunk => |identity| if (codegen.assembledThunkEntry(identity)) |entry| entry - artifact.entry else null,
-            .rc_helper => |name| if (codegen.splicedHelperEntry(name)) |entry| entry - artifact.entry else null,
-            .entrypoint, .message_pool_run, .branch_island => null,
-        };
-        if (existing) |start| {
-            try placed.putNoClobber(index, start);
-            continue;
-        }
+        // Only this physical artifact's placement proves reuse. A logical
+        // symbol can name multiple compiled variants with different closures.
         try order.append(allocator, index);
         const refs = set.artifacts[index].refs;
         var i = refs.len;
@@ -1465,8 +1466,8 @@ pub fn spliceIndexed(
     for (order.items) |index| {
         const artifact = set.artifacts[index];
         const kind: CG.CodeRegionKind = switch (artifact.kind) {
-            .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
-            .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .spliced_boxy_thunk = identity },
+            .proc => |identity| if (bindings.get(index)) |proc_id| .{ .proc = proc_id } else .{ .spliced_proc = identity },
+            .boxy_thunk => |identity| if (bindings.get(index)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .spliced_boxy_thunk = identity },
             .rc_helper => .spliced_helper,
             .entrypoint => .entrypoint,
             .message_pool_run => .{ .message_pool_run = 0 },
@@ -1476,13 +1477,13 @@ pub fn spliceIndexed(
         // Persistent packs do not carry a source-file domain binding. Keep
         // their exact stored lines, but do not misinterpret their file indices
         // as belonging to this program. Session append does preserve lines.
-        try appendMetadata(CG, codegen, artifact, start, false);
-        switch (artifact.kind) {
+        try appendMetadata(CG, codegen, artifact, start, false, false);
+        if (bindings.contains(index) or std.mem.indexOfScalar(u32, roots, index) != null) switch (artifact.kind) {
+            .proc => |identity| try codegen.bindAssembledProc(identity, start + artifact.entry),
+            .boxy_thunk => |identity| try codegen.registerAssembledThunk(identity, start + artifact.entry),
             .rc_helper => |name| try codegen.registerSplicedHelper(name, start + artifact.entry),
-            .proc => |identity| try codegen.registerSplicedProc(identity, start),
-            .boxy_thunk => {},
             .entrypoint, .message_pool_run, .branch_island => {},
-        }
+        };
         try placed.putNoClobber(index, start);
         for (artifact.data) |item| try data_out.append(allocator, item);
         for (artifact.relocations) |relocation| {
@@ -1514,6 +1515,16 @@ pub fn spliceIndexed(
                 target,
                 target_start + ref.delta,
             );
+        }
+        for (artifact.symbolic_refs, graph.symbolicTargets(index)) |ref, resolved| {
+            const target_index = resolved orelse unreachable; // Serving admission proved this edge.
+            const target_start = placed.get(target_index) orelse unreachable;
+            const target = target_start + set.artifacts[target_index].entry;
+            try codegen.patchAssembledRef(start + ref.site, switch (ref.form) {
+                .call => .call,
+                .inline_call => .inline_call,
+                .addr => .addr,
+            }, .{ .offset = target }, target);
         }
     }
 }
@@ -1568,9 +1579,9 @@ test "indexed artifact calls retain exact placement despite logical procedure ma
     };
     var graph = try @import("ArtifactClosure.zig").init(allocator, &set);
     defer graph.deinit();
-    var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+    var procs = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
     defer procs.deinit();
-    try procs.put(identity, proc);
+    try procs.put(1, proc);
     var placed = std.AutoHashMap(u32, usize).init(allocator);
     defer placed.deinit();
     var data = std.ArrayList(DataItem).empty;
@@ -1578,6 +1589,140 @@ test "indexed artifact calls retain exact placement despite logical procedure ma
     try spliceIndexed(CG, allocator, &image, &graph, &.{0}, &procs, &placed, &data);
     try std.testing.expectEqual(@as(usize, 1), image.code_refs.items.len);
     try std.testing.expectEqualDeep(CG.CodeRefTarget{ .offset = placed.get(1).? }, image.code_refs.items[0].target);
+}
+
+test "indexed artifact placement preserves duplicate logical definitions in either root order" {
+    const allocator = std.testing.allocator;
+    const CG = LirCodeGenMod.LirCodeGen(.arm64linux);
+    const identity = lir.ProcIdentity.forTest(23);
+    const leaf = Artifact{
+        .kind = .{ .proc = identity },
+        .code = "\xc0\x03\x5f\xd6",
+        .entry = 0,
+        .frame = .{
+            .prologue_size = 0,
+            .stack_alloc = 0,
+            .frame_size = 0,
+            .callee_saved_mask = 0,
+            .epilogue_offset = 0,
+            .uses_frame_pointer = false,
+        },
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+    };
+    const caller = Artifact{
+        .kind = .entrypoint,
+        .code = "\x00\x00\x00\x94\xc0\x03\x5f\xd6",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }},
+        .relocations = &.{},
+        .data = &.{},
+    };
+    var artifacts = [_]Artifact{ caller, leaf, leaf, caller };
+    artifacts[3].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
+    const set = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    inline for (.{ false, true }) |reverse| {
+        var store = lir.LirStore.init(allocator);
+        defer store.deinit();
+        var layouts = try layout.Store.init(allocator, .u64);
+        defer layouts.deinit();
+        const message = try store.insertString("unused source body");
+        const proc = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = identity,
+            .args = .empty(),
+            .body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message } } }, .test_fixture),
+            .ret_layout = .zst,
+        }, .none);
+        var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+        defer image.deinit();
+        var graph = try @import("ArtifactClosure.zig").init(allocator, &set);
+        defer graph.deinit();
+        var bindings = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
+        defer bindings.deinit();
+        try bindings.put(2, proc);
+        var placed = std.AutoHashMap(u32, usize).init(allocator);
+        defer placed.deinit();
+        var data = std.ArrayList(DataItem).empty;
+        defer data.deinit(allocator);
+        const roots = if (reverse) [_]u32{ 3, 0 } else [_]u32{ 0, 3 };
+        for (roots) |root| try spliceIndexed(CG, allocator, &image, &graph, &.{root}, &bindings, &placed, &data);
+        try std.testing.expectEqual(@as(usize, 4), placed.count());
+        try std.testing.expect(placed.get(1).? != placed.get(2).?);
+        try std.testing.expectEqual(placed.get(2).?, image.compiledProcSymbol(proc).?.code_start);
+        for (image.code_refs.items) |ref| {
+            const expected = if (ref.site == placed.get(0).?) placed.get(1).? else placed.get(2).?;
+            try std.testing.expectEqualDeep(CG.CodeRefTarget{ .offset = expected }, ref.target);
+        }
+        try image.finishImage();
+        var recaptured = try extract(CG, allocator, &image, store.getProcSpecs(), &layouts, &.{}, &.{}, &.{});
+        defer recaptured.deinit();
+        var definitions: usize = 0;
+        for (recaptured.artifacts) |artifact| {
+            if (artifact.kind == .proc and std.meta.eql(artifact.kind.proc, identity)) definitions += 1;
+        }
+        try std.testing.expectEqual(@as(usize, 2), definitions);
+    }
+}
+
+test "indexed symbolic calls keep their source namespace after another variant was placed" {
+    const allocator = std.testing.allocator;
+    const CG = LirCodeGenMod.LirCodeGen(.arm64linux);
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer image.deinit();
+    const identity = lir.ProcIdentity.forTest(47);
+    const leaf = Artifact{
+        .kind = .{ .proc = identity },
+        .code = "\xc0\x03\x5f\xd6",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+    };
+    const previous = Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{leaf} };
+    const source = Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{
+            .{
+                .kind = .entrypoint,
+                .code = "\x00\x00\x00\x94\xc0\x03\x5f\xd6",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{},
+                .symbolic_refs = &.{.{ .site = 0, .form = .call, .target = .{ .proc = identity } }},
+                .relocations = &.{},
+                .data = &.{},
+            },
+            leaf,
+        },
+    };
+    var first_graph = try @import("ArtifactClosure.zig").init(allocator, &previous);
+    defer first_graph.deinit();
+    var graph = try @import("ArtifactClosure.zig").init(allocator, &source);
+    defer graph.deinit();
+    var bindings = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator);
+    defer bindings.deinit();
+    var first_placed = std.AutoHashMap(u32, usize).init(allocator);
+    defer first_placed.deinit();
+    var placed = std.AutoHashMap(u32, usize).init(allocator);
+    defer placed.deinit();
+    var data = std.ArrayList(DataItem).empty;
+    defer data.deinit(allocator);
+    try spliceIndexed(CG, allocator, &image, &first_graph, &.{0}, &bindings, &first_placed, &data);
+    try spliceIndexed(CG, allocator, &image, &graph, &.{0}, &bindings, &placed, &data);
+    try std.testing.expect(first_placed.get(0).? != placed.get(1).?);
+    try std.testing.expectEqual(first_placed.get(0).?, image.splicedProcStart(identity).?);
+    try std.testing.expectEqual(@as(usize, 0), image.assembled_symbolic_refs.items.len);
+    try std.testing.expectEqual(@as(usize, 1), image.code_refs.items.len);
+    try std.testing.expectEqualDeep(CG.CodeRefTarget{ .offset = placed.get(1).? }, image.code_refs.items[0].target);
+    try image.finishImage();
 }
 
 test "independent message pools preserve their targets across repeated artifact assembly" {
@@ -1774,7 +1919,7 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
         .relocations = &.{},
         .data = &.{},
     };
-    try appendMetadata(Recorder, &recorder, artifact, 100, true);
+    try appendMetadata(Recorder, &recorder, artifact, 100, true, true);
     try std.testing.expectEqual(@as(usize, 101), recorder.proc_entry);
     try std.testing.expectEqual(@as(u32, 100), recorder.refs[0].site);
     try std.testing.expectEqual(@as(?u32, 103), recorder.refs[0].veneer);
@@ -1787,7 +1932,7 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
         try std.testing.expectEqualDeep(original.loc, rebased.loc);
     }
     var persistent = Recorder{};
-    try appendMetadata(Recorder, &persistent, artifact, 100, false);
+    try appendMetadata(Recorder, &persistent, artifact, 100, false, true);
     try std.testing.expectEqual(@as(usize, 0), persistent.lines_len);
     try std.testing.expectEqual(@as(usize, 2), persistent.refs_len);
 }

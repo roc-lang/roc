@@ -738,23 +738,21 @@ pub fn spliceExternalProcs(
     source: SpliceSource,
     data_out: *std.ArrayList(ProcArtifact.DataItem),
 ) Allocator.Error!void {
-    var procs_by_identity = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
-    defer procs_by_identity.deinit();
-    for (proc_specs, 0..) |proc, index| {
-        if (proc.is_static_initializer) continue;
-        try procs_by_identity.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
-    }
-
     const PackState = struct {
         placed: std.AutoHashMap(u32, usize),
+        bindings: std.AutoHashMap(u32, lir.LIR.LirProcSpecId),
         graph: @import("ArtifactClosure.zig"),
     };
+    const Root = struct { set: *const ProcArtifact.Set, index: u32 };
+    var roots = std.ArrayList(Root).empty;
+    defer roots.deinit(allocator);
     var packs = std.AutoHashMap(*const ProcArtifact.Set, PackState).init(allocator);
     defer {
         var states = packs.valueIterator();
         while (states.next()) |state| {
             state.graph.deinit();
             state.placed.deinit();
+            state.bindings.deinit();
         }
         packs.deinit();
     }
@@ -775,11 +773,20 @@ pub fn spliceExternalProcs(
             errdefer graph.deinit();
             try packs.putNoClobber(located.set, .{
                 .placed = std.AutoHashMap(u32, usize).init(allocator),
+                .bindings = std.AutoHashMap(u32, lir.LIR.LirProcSpecId).init(allocator),
                 .graph = graph,
             });
         }
         const state = packs.getPtr(located.set).?;
-        try ProcArtifact.spliceIndexed(CodeGen, allocator, codegen, &state.graph, &.{located.index}, &procs_by_identity, &state.placed, data_out);
+        try state.bindings.putNoClobber(located.index, proc_id);
+        try roots.append(allocator, .{ .set = located.set, .index = located.index });
+    }
+    // Freeze all root bindings before any closure is placed. A dependency can
+    // precede another selected root in discovery order; placement must still
+    // publish the exact selected definition for that consumer procedure.
+    for (roots.items) |root| {
+        const state = packs.getPtr(root.set).?;
+        try ProcArtifact.spliceIndexed(CodeGen, allocator, codegen, &state.graph, &.{root.index}, &state.bindings, &state.placed, data_out);
     }
 }
 
