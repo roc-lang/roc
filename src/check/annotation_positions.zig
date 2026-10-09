@@ -62,7 +62,7 @@ const Adapter = struct {
         };
     }
 
-    pub fn declaration(_: *Adapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize, nominal: bool } {
+    pub fn declaration(_: *Adapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize } {
         const header, const body = switch (key.owner.store.getStatement(key.statement)) {
             .s_alias_decl => |decl| .{ decl.header, decl.anno },
             .s_nominal_decl => |decl| .{ decl.header, decl.anno },
@@ -89,7 +89,7 @@ const Adapter = struct {
         if (body == .placeholder) return null;
         const formals = key.owner.store.sliceTypeAnnos(key.owner.store.getTypeHeader(header).args);
 
-        return .{ .body = body, .formal_count = formals.len, .nominal = key.owner.store.getStatement(key.statement) == .s_nominal_decl };
+        return .{ .body = body, .formal_count = formals.len };
     }
 
     pub fn node(self: *Adapter, key: Key, initial: Annotation) Allocator.Error!Analysis.Node {
@@ -152,7 +152,7 @@ pub fn analyze(allocator: Allocator, resolver: OwnerResolver, owner: *const Modu
     return switch (adapter.reference(owner, apply.base)) {
         .builtin => blk: {
             const result = try allocator.alloc(Positions, args.len);
-            @memset(result, .{ .inherited = true });
+            @memset(result, .{ .used = true, .same = true });
             break :blk result;
         },
         .invalid => null,

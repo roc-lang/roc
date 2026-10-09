@@ -19476,9 +19476,9 @@ const GenTypeAnnoCtx = union(enum) {
 
     /// Generate everything at and beneath this position with a different
     /// opening behaviour. Used for an argument substituted for a formal whose
-    /// declaration is rejected: opening is disabled at every depth, not just
-    /// at the argument's own root: a nested function establishes an output
-    /// return even beneath an input position.
+    /// declaration is rejected or that is invariant: opening is disabled at
+    /// every depth, not just at the argument's own root, because a closing
+    /// polarity reopens one function argument position further down.
     fn withOpening(self: GenTypeAnnoCtx, opening: AnnotationGenCtx.OpeningBehavior) GenTypeAnnoCtx {
         return switch (self) {
             .annotation => |anno_ctx| .{ .annotation = .{
@@ -19538,7 +19538,7 @@ const GenTypeAnnoCtx = union(enum) {
             // decide); a nominal body has no use-site polarity, so its rows
             // close as written.
             .type_decl => |decl| switch (decl.type_) {
-                .alias => .preserve_output,
+                .alias => .preserve_one_sided,
                 .nominal => .close,
             },
         };
@@ -20280,14 +20280,15 @@ fn declarationPositions(self: *Self, owner: *const ModuleEnv, statement: CIR.Sta
     return entry.value_ptr.*;
 }
 
-fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Polarity {
+fn nominalArgumentPosition(context: *anyopaque, nominal: types_mod.NominalType, index: u32, surrounding: Polarity) std.mem.Allocator.Error!?Instantiator.NominalArgumentPosition {
     const self: *Self = @ptrCast(@alignCast(context));
     // Compiler primitives have no source body; their actuals inherit position.
-    const statement = nominal.sourceDeclOptional() orelse return surrounding;
+    const statement = nominal.sourceDeclOptional() orelse return .{ .at = surrounding };
     const owner = self.moduleEnvForIdentity(self.cir, nominal.origin_module).env;
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no position transfer.
     std.debug.assert(index < positions.len);
-    return positions[index].polarity(surrounding);
+    if (positions[index].isInvariant()) return .both;
+    return .{ .at = positions[index].polarity(surrounding) };
 }
 
 fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) std.mem.Allocator.Error!?bool {
@@ -20299,7 +20300,7 @@ fn aliasArgumentUnused(context: *anyopaque, alias: types_mod.Alias, index: u32) 
     }
     const positions = (try self.declarationPositions(owner, @fromBackingInt(@intCast(statement)))) orelse return null; // Rejected source has no argument-usage facts.
     std.debug.assert(index < positions.len);
-    return positions[index].isEmpty();
+    return positions[index].isUnused();
 }
 
 /// Report and poison a type reference that names a where alias, which is a set
@@ -21486,11 +21487,13 @@ const anno_gen_done: TypeGenStep = .{ .done = .anno };
 /// Then, any reference to `b` or `c` are replaced with `a` in `generateAnnoTypeInPlace`.
 ///
 /// `polarity` is the position of this anno within the annotation being
-/// generated: annotations start at `.pos` (output), and each function resets
-/// arguments to `.neg` and its return to `.pos`. Extensionless tag unions are implicitly opened in
-/// `.pos` positions (see `AnnotationGenCtx.opening`); within type
-/// declarations polarity is unused because the open-vs-closed decision is
-/// deferred to use-site instantiation via polarity vars.
+/// generated: annotations start at `.pos` (output), function argument
+/// positions flip it, and returns keep it. Extensionless tag unions are
+/// implicitly opened in `.pos` positions (see `AnnotationGenCtx.opening`);
+/// within an alias declaration body every such union defers the
+/// open-vs-closed decision to use-site instantiation via a polarity var, and
+/// polarity there only places nested declaration references relative to the
+/// body's root.
 fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *Env) std.mem.Allocator.Error!TypeGenStep {
     const anno_idx = frame.anno_idx;
     const ctx = frame.ctx;
@@ -21661,13 +21664,14 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
         },
         .apply => |a| return self.stepApplyAnnoGen(frame, a, input, env),
         .@"fn" => |func| {
-            // Each function establishes its own input and output positions.
+            // Argument positions flip the surrounding polarity; the return
+            // keeps it.
             if (entering) frame.state = .{ .func = .{} };
             const state = &frame.state.func;
             const args_anno_slice = self.cir.store.sliceTypeAnnos(func.args);
             if (frame.index < args_anno_slice.len) {
                 frame.index += 1;
-                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), .neg);
+                return annoGenChild(args_anno_slice[frame.index - 1], ctx.withReach(.nested), polarity.flip());
             }
             if (!state.ret_requested) {
                 state.ret_requested = true;
@@ -21680,7 +21684,7 @@ fn stepAnnoGen(self: *Self, frame: *AnnoGenFrame, input: ?TypeGenResult, env: *E
                     // `withReach` is a no-op on `.type_decl` (see `withReach`).
                     .type_decl => ctx.withReach(.nested),
                 };
-                return annoGenChild(func.ret, ret_ctx, .pos);
+                return annoGenChild(func.ret, ret_ctx, polarity);
             }
             const args_var_slice: []Var = @ptrCast(args_anno_slice);
             const fn_type = inner_blk: {
@@ -21966,8 +21970,10 @@ fn stepApplyAnnoGen(self: *Self, frame: *AnnoGenFrame, a: CIR.TypeAnno.Apply, in
             frame.index += 1;
             const reached_arg_ctx = ctx.withReach(state.reaches[arg_index]);
             // A null result belongs only to rejected declaration/arity
-            // diagnostics, never to a valid type application.
-            const arg_ctx = if (state.positions == null)
+            // diagnostics, never to a valid type application. An invariant
+            // formal's argument stands on both sides at every depth.
+            const as_written = if (state.positions) |positions| positions[arg_index].isInvariant() else true;
+            const arg_ctx = if (as_written)
                 reached_arg_ctx.withOpening(.as_written)
             else
                 reached_arg_ctx;
@@ -22382,10 +22388,7 @@ fn stepTagUnionAnnoGen(self: *Self, frame: *AnnoGenFrame, tag_union: std.meta.fi
         break :inner_blk switch (ctx) {
             .annotation => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             .type_decl => |decl| switch (decl.type_) {
-                .alias => if (polarity == .pos)
-                    try self.freshAliasHiddenExt(env, anno_region)
-                else
-                    try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
+                .alias => try self.freshAliasHiddenExt(env, anno_region),
                 .nominal => try self.freshFromContent(.{ .structure = .empty_tag_union }, env, anno_region),
             },
         };

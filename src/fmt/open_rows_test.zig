@@ -140,21 +140,21 @@ test "open rows - empty union and named extension are kept" {
     );
 }
 
-test "open rows - arguments of a callback remain inputs" {
-    try expectUnchanged(
+test "open rows - arguments of a callback are outputs" {
+    try expectFormatsTo(
         \\call : ([A, ..] -> Str) -> Str
+        \\call = |f| f(A)
+        \\
+    ,
+        \\call : ([A] -> Str) -> Str
         \\call = |f| f(A)
         \\
     );
 }
 
-test "open rows - result of a callback is an output" {
-    try expectFormatsTo(
+test "open rows - result of a callback is an input" {
+    try expectUnchanged(
         \\run : (Str -> [A, ..]) -> Str
-        \\run = |_| "x"
-        \\
-    ,
-        \\run : (Str -> [A]) -> Str
         \\run = |_| "x"
         \\
     );
@@ -202,9 +202,10 @@ test "open rows - input positions keep nested `..`" {
 }
 
 test "open rows - local alias composes its formal's variance" {
-    // `Handler` holds `e` in an input position, so `Handler([A, ..])` written
-    // as an output or input stands for `[A, ..] -> Str` and keeps its `..`.
-    // `Producer` always establishes an output for its formal.
+    // `Handler` holds `e` in a function argument, so the polarity of
+    // `Handler([A, ..])`'s row is the flip of the reference's: it keeps its
+    // `..` as an output and drops it as an input. `Producer` holds `e` in a
+    // function result, so its row has the reference's own polarity.
     try expectFormatsTo(
         \\Handler(e) : e -> Str
         \\
@@ -230,19 +231,19 @@ test "open rows - local alias composes its formal's variance" {
         \\handler : Str -> Handler([A, ..])
         \\handler = |_| |_| "x"
         \\
-        \\use_handler : Handler([A, ..]) -> Str
+        \\use_handler : Handler([A]) -> Str
         \\use_handler = |h| h(A)
         \\
         \\producer : Str -> Producer([A])
         \\producer = |_| |_| A
         \\
-        \\use_producer : Producer([A]) -> Str
+        \\use_producer : Producer([A, ..]) -> Str
         \\use_producer = |_| "x"
         \\
     );
 }
 
-test "open rows - mixed inherited and output formal follows the reference position" {
+test "open rows - a formal inside and outside a function result follows the reference position" {
     try expectFormatsTo(
         \\Mixed(a) : (a, (Str -> a))
         \\
@@ -280,9 +281,9 @@ test "open rows - mixed inherited and output formal follows the reference positi
     );
 }
 
-test "open rows - invariant formal is generated at the negative polarity" {
-    // `Both` holds `e` on both sides, so its argument is generated closed; a
-    // nested function still establishes its own input and output positions.
+test "open rows - invariant formal is generated as written at every depth" {
+    // `Both` holds `e` on both sides, so its argument is generated closed, and
+    // every position nested in the argument stands on both sides too.
     try expectFormatsTo(
         \\Both(e) : e -> e
         \\
@@ -328,7 +329,7 @@ test "open rows - alias chains compose through every declaration" {
         \\outer : Str -> Outer([A, ..])
         \\outer = |_| |_| "x"
         \\
-        \\twice : Str -> Twice([A, ..])
+        \\twice : Str -> Twice([A])
         \\twice = |_| |_| "x"
         \\
     );

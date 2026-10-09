@@ -8820,8 +8820,8 @@ const Builder = struct {
 
     /// The sort low-level calls its boxed comparator through a fixed ABI: the
     /// comparator's arguments keep their worker representation, and its
-    /// ordering result is the closed `[Before, Same, After]` that the ABI
-    /// context gives the open callback result.
+    /// ordering result is the closed `[Before, Same, After]` in its host
+    /// representation.
     fn planSortComparatorAbi(self: *Builder, boxed_comparator_rep: TypeRepId) Allocator.Error!void {
         const comparator_rep = self.repQuery().requiredSingleChild(boxed_comparator_rep, .box_payload).rep;
         if (self.plan.sort_comparator_abis.get(comparator_rep) != null) return;
