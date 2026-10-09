@@ -15794,7 +15794,11 @@ instead of double-boxed. `list_map_can_reuse` also carries its compile-time
 layout decision at LIR lowering: the lowerer computes the per-pointer-width
 interchangeability bits from committed item layouts and emits either a
 constant false value or an `assign_low_level` with explicit
-`interchangeable` metadata.
+`interchangeable` metadata. The same statement carries the committed output
+item layout that the lowerer used for that decision. ARC emission and body
+cloning preserve it, so downstream LIR consumers with their own storage
+representations read it there and never reconstruct the transform's return
+type to recover it.
 
 A low-level operation whose checked result type is the builtin `Try` (the
 typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
@@ -22714,8 +22718,3 @@ the pass/fail bar while the language is 128-bit-only.
   ordering compares on `U64x2` are omitted because no cataloged kernel
   uses them and hardware support is ragged; any of them can be added later
   without disturbing existing meaning.
-
-Downstream LIR consumers receive the committed output element layout on
-`assign_low_level.map_output_elem` for `list_map_can_reuse`. Lowering records it
-when computing layout compatibility; ARC emission and body cloning preserve it.
-Consumers do not reconstruct transform return types to recover this fact.
