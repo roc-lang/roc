@@ -20,6 +20,7 @@
 //! place. `enableRuntimeInserts` can re-open it for insertion if ever needed.
 
 const std = @import("std");
+const invariant = @import("invariant.zig").invariant;
 const builtin = @import("builtin");
 const collections = @import("collections");
 
@@ -241,9 +242,6 @@ const Policy = struct {
     pub fn count(self: *const SerialStringInterner) u32 {
         return @intCast(self.ranges.items.items.len);
     }
-    pub fn entryCount(self: *const SerialStringInterner, _: *const Index) u32 {
-        return @intCast(self.ranges.items.items.len);
-    }
     pub fn cellForId(id: Id) Cell {
         return id + 1;
     }
@@ -275,8 +273,8 @@ const Policy = struct {
 fn assertSupportsInserts(supports_inserts: bool) void {
     if (supports_inserts) return;
 
-    if (comptime builtin.mode == .Debug) {
-        std.debug.panic("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
+    if (comptime builtin.mode == .debug) {
+        invariant("SerialStringInterner invariant violated: attempted to insert into frozen interner", .{});
     }
     unreachable;
 }
@@ -296,15 +294,6 @@ pub fn insert(self: *SerialStringInterner, gpa: Allocator, string: []const u8) A
         self.index = index.cells;
     }
     return index.insert(self, gpa, string);
-}
-
-/// Add the given offset to the memory addresses of all pointers in `self`.
-/// Used by serialized compiler artifacts whose internal pointers are stored
-/// relative to the artifact buffer.
-pub fn relocate(self: *SerialStringInterner, offset: isize) void {
-    self.bytes.relocate(offset);
-    self.ranges.relocate(offset);
-    self.index.relocate(offset);
 }
 
 /// Re-open a deserialized interner for insertion by copying its data into fresh,

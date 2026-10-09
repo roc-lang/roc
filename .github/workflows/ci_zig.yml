@@ -31,7 +31,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -105,7 +105,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -222,7 +222,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Install Rust wasm target
@@ -364,7 +364,7 @@ jobs:
       # Parser code coverage - run on ARM64 Linux (native build).
       # x86_64 coverage stays disabled: Zig's x86_64 backend emitted .debug_line
       # sections that libdw could not parse (observed on Zig 0.15.2). That has
-      # not been re-verified on the current Zig (0.16.0); enabling x86_64
+      # not yet been re-verified on Zig 0.17.0; enabling x86_64
       # coverage needs that re-check first (see build.zig's coverage notes).
       - name: Install kcov dependencies
         if: matrix.os == 'ubuntu-24.04-arm'
@@ -397,7 +397,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -474,7 +474,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages
@@ -518,7 +518,7 @@ jobs:
 
       - uses: xyzzylabs/setup-zig@09d85d9dbb73308882e7a26e61a8f706eed40df1 # ratchet:xyzzylabs/setup-zig@v1.0.2
         with:
-          version: 0.16.0
+          version: 0.17.0
           use-cache: false
 
       - name: Cache Zig dependency packages

@@ -87,18 +87,18 @@ pub const extern_host = struct {
 comptime {
     // extern_host and shim_symbols.runtime_set must list the same symbols in
     // the same order.
-    const decls = @typeInfo(extern_host).@"struct".decls;
+    const decls = @typeInfo(extern_host).@"struct".decl_names;
     if (decls.len != shim_symbols.runtime_set.len) {
         @compileError("host_abi.extern_host is out of sync with shim_symbols.runtime_set");
     }
     for (decls, shim_symbols.runtime_set) |decl, name| {
-        if (decl.name.len != name.len) {
-            @compileError("host_abi.extern_host declares " ++ decl.name ++
+        if (decl.len != name.len) {
+            @compileError("host_abi.extern_host declares " ++ decl ++
                 " where shim_symbols.runtime_set has " ++ name);
         }
-        for (decl.name, name) |decl_byte, name_byte| {
+        for (decl, name) |decl_byte, name_byte| {
             if (decl_byte != name_byte) {
-                @compileError("host_abi.extern_host declares " ++ decl.name ++
+                @compileError("host_abi.extern_host declares " ++ decl ++
                     " where shim_symbols.runtime_set has " ++ name);
             }
         }
@@ -319,12 +319,12 @@ fn expectChildTraps(comptime work: fn () void) error{ ForkFailed, WaitFailed, Sk
 
     var status: c_int = 0;
     while (std.c.waitpid(pid, &status, 0) < 0) {
-        if (@as(std.c.E, @enumFromInt(std.c._errno().*)) != .INTR) return error.WaitFailed;
+        if (@as(std.c.E, @fromBackingInt(@intCast(std.c._errno().*))) != .INTR) return error.WaitFailed;
     }
     const raw: u32 = @bitCast(status);
     const signal = raw & 0x7f;
     // A child that ran on past the crash exits normally, with signal 0.
-    try std.testing.expect(signal == @intFromEnum(std.c.SIG.ILL) or signal == @intFromEnum(std.c.SIG.TRAP));
+    try std.testing.expect(signal == @backingInt(std.c.SIG.ILL) or signal == @backingInt(std.c.SIG.TRAP));
 }
 
 test "a host returning from roc_crashed traps after Dec division by zero" {

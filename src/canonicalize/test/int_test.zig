@@ -204,7 +204,7 @@ test "integer literal one above u128 max records exact digits without canon diag
     try testing.expect(!literal.isNegative());
 
     // 2^128 in big-endian base-256 digits: a leading 1 followed by 16 zero bytes.
-    const expected_digits = [_]u8{1} ++ [_]u8{0} ** 16;
+    const expected_digits = [_]u8{1} ++ @as([16]u8, @splat(0));
     try testing.expectEqualSlices(u8, &expected_digits, test_env.module_env.numeralDigitsBefore(literal));
 }
 
@@ -229,7 +229,7 @@ test "integer literal one below i128 min records exact digits without canon diag
     try testing.expect(literal.isNegative());
 
     // 2^127 + 1 in big-endian base-256 digits: 0x80, fourteen zero bytes, then 1.
-    const expected_digits = [_]u8{0x80} ++ [_]u8{0} ** 14 ++ [_]u8{1};
+    const expected_digits = [_]u8{0x80} ++ @as([14]u8, @splat(0)) ++ [_]u8{1};
     try testing.expectEqualSlices(u8, &expected_digits, test_env.module_env.numeralDigitsBefore(literal));
 }
 
@@ -286,7 +286,7 @@ test "hexadecimal integer literals" {
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
@@ -345,7 +345,7 @@ test "binary integer literals" {
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());
@@ -404,7 +404,7 @@ test "octal integer literals" {
         var czer = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer czer.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try czer.canonicalizeExpr(expr_idx);
 
         const expr = env.store.getExpr(canonical_expr_idx.get_idx());

@@ -263,14 +263,13 @@ TYPE MISMATCH - fuzz_crash_028.md:64:2:64:2
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:95:1:95:34
 TOO FEW ARGS - fuzz_crash_028.md:104:2:106:3
 REFERENCE HAS NO VALUE - fuzz_crash_028.md:115:3:115:10
-TYPE MISMATCH - fuzz_crash_028.md:133:5:133:12
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:18
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:25
 TYPE MISMATCH - fuzz_crash_028.md:133:5:133:31
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:141:1:141:7
 DECLARATION HAS NO VALUE - fuzz_crash_028.md:144:1:144:13
-MISSING METHOD - fuzz_crash_028.md:133:5:133:12
-MISSING METHOD - fuzz_crash_028.md:133:5:133:18
+TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:12
+TYPE NOT DETERMINED - fuzz_crash_028.md:133:5:133:18
 # PROBLEMS
 ~~~clojure
 (reports
@@ -2278,7 +2277,19 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(annotation-start code-block)
 			(indent 1)
-			(text "[Blue, Red, ..], _arg -> Error")
+			(text "[Blue, Red, ..d], _arg -> j")
+			(line-break)
+			(indent 1)
+			(text "  where [")
+			(line-break)
+			(indent 1)
+			(text "    d.is_eq : d, d -> Bool,")
+			(line-break)
+			(indent 1)
+			(text "    j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)]),")
+			(line-break)
+			(indent 1)
+			(text "  ]")
 			(annotation-end)
 			(line-break)
 			(line-break)
@@ -2294,48 +2305,6 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(line-break)
 			(line-break)
 			(reflow "Give that declaration a value body, or stop referring to it here.")))
-	(report
-		(severity runtime_error)
-		(title "Type Mismatch")
-		(region (start 133 5) (end 133 12))
-		(headline
-			(reflow "This")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "may return early with a type that doesn't match the function body."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
-			(line-break)
-			(reflow "On error, this")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "returns an")
-			(reflow " ")
-			(annotated code "Err")
-			(reflow ", so this function must return a")
-			(reflow " ")
-			(annotated code "Try")
-			(reflow ".")
-			(line-break)
-			(line-break)
-			(reflow "But its body evaluates to:")
-			(line-break)
-			(line-break)
-			(annotation-start code-block)
-			(indent 1)
-			(text "[Blue]")
-			(annotation-end)
-			(line-break)
-			(line-break)
-			(annotated emphasis "Hint:")
-			(reflow " ")
-			(reflow "The error types from all")
-			(reflow " ")
-			(annotated code "?")
-			(reflow " ")
-			(reflow "operators and the function body must be compatible, since any of them could be the actual return value.")))
 	(report
 		(severity runtime_error)
 		(title "Type Mismatch")
@@ -2486,36 +2455,50 @@ MISSING METHOD - fuzz_crash_028.md:133:5:133:18
 			(reflow "Add a value body here, or put hosted functions in a platform type mod so they are published through the host boundary.")))
 	(report
 		(severity runtime_error)
-		(title "Missing Method")
+		(title "Type Not Determined")
 		(region (start 133 5) (end 133 12))
 		(headline
-			(reflow "This is trying to dispatch a method named")
+			(reflow "Nothing in this program determines the type this")
 			(reflow " ")
 			(annotated code "od")
 			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
+			(reflow "method is called on:"))
 		(document
 			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 12) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
 			(line-break)
-			(annotated emphasis "Hint:")
+			(reflow "Without knowing which type it is, there's no way to tell which")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods.")))
-	(report
-		(severity runtime_error)
-		(title "Missing Method")
-		(region (start 133 5) (end 133 18))
-		(headline
-			(reflow "This is trying to dispatch a method named")
+			(annotated code "od")
 			(reflow " ")
-			(annotated code "ned")
-			(reflow " ")
-			(reflow "on an unresolved type variable, but unresolved type variables have no methods."))
-		(document
-			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(reflow "method to use.")
+			(line-break)
 			(line-break)
 			(annotated emphasis "Hint:")
 			(reflow " ")
-			(reflow "You can replace this static dispatch call with an ordinary function call, or force the type variable to become more concrete—for example, by adding a type annotation that narrows its type to something that actually has methods."))))
+			(reflow "Add a type annotation saying which type it should be.")))
+	(report
+		(severity runtime_error)
+		(title "Type Not Determined")
+		(region (start 133 5) (end 133 18))
+		(headline
+			(reflow "Nothing in this program determines the type this")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method is called on:"))
+		(document
+			(source-region (file "fuzz_crash_028.md") (start 133 5) (end 133 18) (annotation error) (line-text "le =(arg1)?.od()?.ned()?.recd?"))
+			(line-break)
+			(reflow "Without knowing which type it is, there's no way to tell which")
+			(reflow " ")
+			(annotated code "ned")
+			(reflow " ")
+			(reflow "method to use.")
+			(line-break)
+			(line-break)
+			(annotated emphasis "Hint:")
+			(reflow " ")
+			(reflow "Add a type annotation saying which type it should be."))))
 ~~~
 # TOKENS
 ~~~zig
@@ -3161,7 +3144,11 @@ EndOfFile,
 								(p-assign (ident "other")))))))))
 	(d-let
 		(p-assign (ident "match_time"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-assign (ident "a"))
+				(p-assign (ident "b")))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "main!"))
 		(e-runtime-error (tag "erroneous_value_expr"))
@@ -3191,12 +3178,10 @@ EndOfFile,
 				(s-return
 					(e-lookup-local
 						(p-assign (ident "tag"))))
-				(s-expr
-					(e-runtime-error (tag "expr_syntax_error")))
-				(s-expr
-					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "expr_syntax_error"))
 				(s-expr
 					(e-runtime-error (tag "erroneous_value_expr")))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(s-expr
 					(e-run-low-level (op "crash")
 						(args
@@ -3215,7 +3200,7 @@ EndOfFile,
 							(p-assign (ident "#interp_0"))
 							(e-lookup-local
 								(p-assign (ident "world"))))
-						(e-interpolation (constraint-fn-var 1400) (dispatcher-var 280)
+						(e-interpolation (constraint-fn-var 1351) (dispatcher-var 280)
 							(first
 								(e-literal (string "H, ")))
 							(parts
@@ -3224,30 +3209,57 @@ EndOfFile,
 								(e-literal (string ""))))))
 				(s-let
 					(p-assign (ident "t"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-for
 					(p-assign (ident "n"))
 					(e-runtime-error (tag "ident_not_in_scope"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-block
+						(e-runtime-error (tag "erroneous_value_expr")
+							(e-runtime-error (tag "erroneous_value_expr")))))
 				(s-let
 					(p-assign (ident "rd"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "H")))
+						(e-lookup-local
+							(p-assign (ident "tag")))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "world")))))
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-let
 					(p-assign (ident "tuple"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "World")))
+						(e-lookup-local
+							(p-assign (ident "tag")))
+						(e-tag (name "Ok")
+							(args
+								(e-lookup-local
+									(p-assign (ident "world")))))
+						(e-runtime-error (tag "erroneous_value_expr"))))
 				(s-let
 					(p-assign (ident "mle"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-num (value "123"))
+						(e-string
+							(e-literal (string "World")))
+						(e-runtime-error (tag "ident_not_in_scope"))))
 				(s-let
 					(p-assign (ident "b"))
 					(e-if
 						(if-branches
 							(if-branch
-								(e-dispatch-call (method "is_gt") (constraint-fn-var 1590)
+								(e-dispatch-call (method "is_gt") (constraint-fn-var 1534)
 									(receiver
 										(e-runtime-error (tag "erroneous_value_expr")))
 									(args
-										(e-dispatch-call (method "times") (constraint-fn-var 1587)
+										(e-dispatch-call (method "times") (constraint-fn-var 1531)
 											(receiver
 												(e-num (value "5")))
 											(args
@@ -3262,18 +3274,18 @@ EndOfFile,
 										(e-if
 											(if-branches
 												(if-branch
-													(e-dispatch-call (method "is_lt") (constraint-fn-var 1623)
+													(e-dispatch-call (method "is_lt") (constraint-fn-var 1567)
 														(receiver
-															(e-dispatch-call (method "plus") (constraint-fn-var 1613)
+															(e-dispatch-call (method "plus") (constraint-fn-var 1557)
 																(receiver
 																	(e-num (value "13")))
 																(args
 																	(e-num (value "2")))))
 														(args
 															(e-num (value "5"))))
-													(e-dispatch-call (method "is_gte") (constraint-fn-var 1650)
+													(e-dispatch-call (method "is_gte") (constraint-fn-var 1594)
 														(receiver
-															(e-dispatch-call (method "minus") (constraint-fn-var 1640)
+															(e-dispatch-call (method "minus") (constraint-fn-var 1584)
 																(receiver
 																	(e-num (value "10")))
 																(args
@@ -3288,11 +3300,11 @@ EndOfFile,
 											(builtin)
 											(e-tag (name "True")))))
 								(if-else
-									(e-dispatch-call (method "is_lte") (constraint-fn-var 1687)
+									(e-dispatch-call (method "is_lte") (constraint-fn-var 1633)
 										(receiver
 											(e-num (value "12")))
 										(args
-											(e-dispatch-call (method "div_by") (constraint-fn-var 1684)
+											(e-dispatch-call (method "div_by") (constraint-fn-var 1630)
 												(receiver
 													(e-num (value "3")))
 												(args
@@ -3307,12 +3319,12 @@ EndOfFile,
 										(e-match
 											(match
 												(cond
-													(e-dispatch-call (method "ned") (constraint-fn-var 1762)
+													(e-dispatch-call (method "ned") (constraint-fn-var 1699)
 														(receiver
 															(e-match
 																(match
 																	(cond
-																		(e-dispatch-call (method "od") (constraint-fn-var 1725)
+																		(e-dispatch-call (method "od") (constraint-fn-var 1669)
 																			(receiver
 																				(e-runtime-error (tag "erroneous_value_expr")))
 																			(args)))
@@ -3423,7 +3435,11 @@ EndOfFile,
 	(s-expect
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(s-expect
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(s-let
+				(p-assign (ident "f"))
+				(e-num (value "1")))
+			(e-runtime-error (tag "erroneous_value_expr")))))
 ~~~
 # TYPES
 ~~~clojure
@@ -3433,7 +3449,7 @@ EndOfFile,
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(patt (type "U64 -> U64"))
 		(patt (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(patt (type "[Blue, Red, ..], _arg -> Error"))
+		(patt (type "[Blue, Red, ..d], _arg -> j where [d.is_eq : d, d -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(patt (type "Error -> Error"))
 		(patt (type "_arg -> [Blue]"))
 		(patt (type "{}"))
@@ -3461,7 +3477,7 @@ EndOfFile,
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
 		(expr (type "U64 -> U64"))
 		(expr (type "Bool -> d where [d.from_numeral : Numeral -> Try(d, [InvalidNumeral(Str)])]"))
-		(expr (type "[Blue, Red, ..], _arg -> Error"))
+		(expr (type "[Blue, Red, ..d], _arg -> j where [d.is_eq : d, d -> Bool, j.from_numeral : Numeral -> Try(j, [InvalidNumeral(Str)])]"))
 		(expr (type "Error -> Error"))
 		(expr (type "_arg -> [Blue]"))
 		(expr (type "{}"))

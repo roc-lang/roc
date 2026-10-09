@@ -19,6 +19,7 @@ pub const Store = store.Store;
 // Re-export all problem data types
 pub const ExtraStringIdx = types.ExtraStringIdx;
 pub const MissingPatternsRange = types.MissingPatternsRange;
+pub const RelationOwner = types.RelationOwner;
 
 // Type mismatch types
 pub const TypeMismatch = types.TypeMismatch;
@@ -34,6 +35,7 @@ pub const DispatcherDoesNotImplMethod = types.DispatcherDoesNotImplMethod;
 pub const TypeDoesNotSupportEquality = types.TypeDoesNotSupportEquality;
 pub const TypeDoesNotSupportMap = types.TypeDoesNotSupportMap;
 pub const UndeterminedCodecType = types.UndeterminedCodecType;
+pub const UndeterminedType = types.UndeterminedType;
 pub const UnresolvedDispatcher = types.UnresolvedDispatcher;
 pub const RecursiveDispatch = types.RecursiveDispatch;
 
@@ -44,6 +46,7 @@ pub const InvalidNumericLiteral = types.InvalidNumericLiteral;
 pub const TupleAccessNeedsAnnotation = types.TupleAccessNeedsAnnotation;
 pub const OptionalAccessOfRequiredField = types.OptionalAccessOfRequiredField;
 pub const DerivedParserErrorRow = types.DerivedParserErrorRow;
+pub const DerivedCodecOpenRecord = types.DerivedCodecOpenRecord;
 pub const UnsetOfRequiredField = types.UnsetOfRequiredField;
 pub const UnsetOfDefaultedField = types.UnsetOfDefaultedField;
 pub const EffectfulDefaultValue = types.EffectfulDefaultValue;
@@ -91,10 +94,11 @@ pub const AnnotationOnlyValue = types.AnnotationOnlyValue;
 /// Public `AnnotationOnlyValueUse` re-export.
 pub const AnnotationOnlyValueUse = types.AnnotationOnlyValueUse;
 pub const DerivedMethodValueUse = types.DerivedMethodValueUse;
-pub const CapturingLocalTypeEscape = types.CapturingLocalTypeEscape;
+pub const CapturingMethod = types.CapturingMethod;
 pub const UnsupportedGeneratedMethod = types.UnsupportedGeneratedMethod;
 pub const AssociatedItemNotFound = types.AssociatedItemNotFound;
 pub const PolymorphicVarAnnotation = types.PolymorphicVarAnnotation;
+pub const PolymorphicValueAnnotation = types.PolymorphicValueAnnotation;
 pub const EffectfulTopLevel = types.EffectfulTopLevel;
 pub const EffectfulComptimeExpression = types.EffectfulComptimeExpression;
 pub const EffectfulExpect = types.EffectfulExpect;
@@ -105,6 +109,7 @@ pub const ComptimeOrigin = types.ComptimeOrigin;
 pub const ComptimeCrash = types.ComptimeCrash;
 pub const ComptimeInvalidNumeral = types.ComptimeInvalidNumeral;
 pub const ComptimeInvalidQuote = types.ComptimeInvalidQuote;
+pub const ComptimeInvalidInterpolation = types.ComptimeInvalidInterpolation;
 pub const ComptimeExpectFailed = types.ComptimeExpectFailed;
 pub const ComptimeEvalError = types.ComptimeEvalError;
 

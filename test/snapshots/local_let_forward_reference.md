@@ -97,18 +97,18 @@ EndOfFile,
 			(e-lambda
 				(args
 					(p-assign (ident "x")))
-				(e-dispatch-call (method "plus") (constraint-fn-var 233)
+				(e-dispatch-call (method "plus") (constraint-fn-var 238)
 					(receiver
 						(e-lookup-local
 							(p-assign (ident "x"))))
 					(args
 						(e-num (value "1"))))))
-		(e-call (constraint-fn-var 245)
+		(e-call (constraint-fn-var 250)
 			(e-lookup-local
 				(p-assign (ident "g")))
 			(e-num (value "1")))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "_arg -> Error"))
+(expr (type "_arg -> _ret"))
 ~~~

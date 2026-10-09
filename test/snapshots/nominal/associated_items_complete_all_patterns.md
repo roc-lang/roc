@@ -12000,7 +12000,8 @@ L2 := [DS].{
 		(e-runtime-error (tag "ident_not_in_scope")))
 	(d-let
 		(p-assign (ident "Test.InnerA.valA"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-runtime-error (tag "erroneous_value_expr")
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "Test.InnerB.valB"))
 		(e-num (value "800")))
@@ -12009,7 +12010,7 @@ L2 := [DS].{
 		(e-runtime-error (tag "erroneous_value_expr")))
 	(d-let
 		(p-assign (ident "Test.L2.L3.val3"))
-		(e-dispatch-call (method "plus") (constraint-fn-var 765)
+		(e-dispatch-call (method "plus") (constraint-fn-var 769)
 			(receiver
 				(e-lookup-local
 					(p-assign (ident "val1"))))

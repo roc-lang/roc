@@ -35,10 +35,10 @@ fn expectSingleNamingWarning(
 fn expectVarPattern(test_env: *TestEnv, expected_ident: []const u8) TestEnv.TestEnvError!void {
     var raw_node_idx: u32 = 0;
     while (raw_node_idx < test_env.module_env.store.nodes.len()) : (raw_node_idx += 1) {
-        const node_idx: can.CIR.Node.Idx = @enumFromInt(raw_node_idx);
+        const node_idx: can.CIR.Node.Idx = @fromBackingInt(@intCast(raw_node_idx));
         if (test_env.module_env.store.nodes.get(node_idx).tag != .statement_var) continue;
 
-        const statement: can.CIR.Statement.Idx = @enumFromInt(raw_node_idx);
+        const statement: can.CIR.Statement.Idx = @fromBackingInt(@intCast(raw_node_idx));
         const var_stmt = test_env.module_env.store.getStatement(statement).s_var;
         const pattern = test_env.module_env.store.getPattern(var_stmt.pattern_idx);
         try std.testing.expectEqual(.var_assign, std.meta.activeTag(pattern));

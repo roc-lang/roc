@@ -114,7 +114,7 @@ f = |value| {
 			(e-block
 				(s-let
 					(p-assign (ident "_first"))
-					(e-dispatch-call (method "convert") (constraint-fn-var 255)
+					(e-dispatch-call (method "convert") (constraint-fn-var 259)
 						(receiver
 							(e-lookup-local
 								(p-assign (ident "value"))))
@@ -123,7 +123,10 @@ f = |value| {
 								(e-literal (string "ok"))))))
 				(s-let
 					(p-assign (ident "_second"))
-					(e-runtime-error (tag "erroneous_value_expr")))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-lookup-local
+							(p-assign (ident "value")))
+						(e-typed-int (value "1") (type "U64"))))
 				(e-empty_record)))
 		(annotation
 			(ty-fn (effectful false)

@@ -76,7 +76,7 @@ is a parallel harness; pass `-- --threads N` to cap workers or
 ### Expanding to ZLS
 
 This fast config can also be used with `zls`. Simply follow these steps:
-1. run `zls --version` and make sure it supports Zig `0.16.0`.
+1. run `zls --version` and make sure it supports Zig `0.17.0`.
 2. run `zls env` and grab the `config_file` path.
 3. Edit the config file to include
 ```json

@@ -2,6 +2,7 @@
 //! Symbol relocations are the only pointer authority; source bytes are never
 //! interpreted as addresses and no initializer is evaluated.
 const std = @import("std");
+const compilerInvariant = @import("base").invariant;
 const builtins = @import("builtins");
 const layout = @import("layout");
 const lir = @import("lir");
@@ -19,7 +20,7 @@ pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result
 
 /// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
-    const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
+    const target = target_program.static_data_values.items[@backingInt(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
     if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
@@ -31,7 +32,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
     defer arena.deinit();
     var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
     const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target_root.layout_idx), builder.alignment(target_root.layout_idx));
-    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
+    try builder.enqueue(source_root.plan, source_root.layout_idx, target_root.plan, target_root.layout_idx, .{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset }, .{ .symbol = symbol }, .value, .value);
     var index: usize = 0;
     while (index < builder.jobs.items.len) : (index += 1) try builder.visit(builder.jobs.items[index]);
     return builder.finish(allocator);
@@ -39,7 +40,7 @@ fn transcodePlans(allocator: Allocator, source_program: *const Program.Result, s
 
 /// Re-encode failure status and message using the paired slots' explicit fields.
 pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
-    const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
+    const target = target_program.static_data_values.items[@backingInt(target_slot)];
     const source_identity = source_slot.compile_time_root orelse invariant("source slot lacks compile-time producer authority");
     const target_identity = target.compile_time_root orelse invariant("target slot lacks compile-time producer authority");
     if (!std.meta.eql(source_identity.module, target_identity.module) or !source_identity.root.eql(target_identity.root) or std.meta.activeTag(source_identity.role) != std.meta.activeTag(target_identity.role)) invariant("paired slots do not name the same producer role");
@@ -49,8 +50,8 @@ pub fn transcodeFailure(allocator: Allocator, source_program: *const Program.Res
     defer arena.deinit();
     var builder = Builder{ .allocator = arena.allocator(), .source_program = source_program, .program = target_program, .source_exports = source_exports, .slot = target_slot };
     const symbol = try builder.addNode(try Program.staticDataSymbolName(builder.allocator, target_slot), builder.size(target.layout_idx), builder.alignment(target.layout_idx));
-    builder.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
-    try builder.stringValue(.{ .symbol = source_symbol, .offset = source_exports[@intFromEnum(source_symbol)].symbol_offset + source_fields.message_offset }, .{ .symbol = symbol, .offset = target_fields.message_offset });
+    builder.bytes(.{ .symbol = symbol, .offset = target_fields.failed_offset }, 1)[0] = builder.sourceBytes(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.failed_offset }, 1)[0];
+    try builder.stringValue(.{ .symbol = source_symbol, .offset = source_exports[@backingInt(source_symbol)].symbol_offset + source_fields.message_offset }, .{ .symbol = symbol, .offset = target_fields.message_offset });
     return builder.finish(allocator);
 }
 
@@ -91,18 +92,18 @@ const Builder = struct {
     fn addNode(self: *Builder, name: []const u8, byte_count: usize, alignment_: u32) Allocator.Error!SymbolId {
         const data = try self.allocator.alloc(u8, byte_count);
         @memset(data, 0);
-        const symbol: SymbolId = @enumFromInt(self.nodes.items.len);
+        const symbol: SymbolId = @fromBackingInt(@intCast(self.nodes.items.len));
         try self.nodes.append(self.allocator, .{ .name = name, .bytes = data, .alignment = alignment_ });
         return symbol;
     }
     fn node(self: *Builder, dest: Destination) *Node {
-        return &self.nodes.items[@intFromEnum(dest.symbol)];
+        return &self.nodes.items[@backingInt(dest.symbol)];
     }
     fn bytes(self: *Builder, dest: Destination, count: usize) []u8 {
         return self.node(dest).bytes[dest.offset..][0..count];
     }
     fn sourceBytes(self: *Builder, src: Destination, count: usize) []const u8 {
-        return self.source_exports[@intFromEnum(src.symbol)].bytes[src.offset..][0..count];
+        return self.source_exports[@backingInt(src.symbol)].bytes[src.offset..][0..count];
     }
     fn writeWord(self: *Builder, dest: Destination, value: u64) void {
         switch (self.word()) {
@@ -119,13 +120,13 @@ const Builder = struct {
         };
     }
     fn sourceRelocation(self: *Builder, src: Destination) ?static_data.StaticDataRelocation {
-        for (self.source_exports[@intFromEnum(src.symbol)].relocations) |rel| if (rel.offset == src.offset) return rel;
+        for (self.source_exports[@backingInt(src.symbol)].relocations) |rel| if (rel.offset == src.offset) return rel;
         return null;
     }
     fn pointer(self: *Builder, src: Destination) Destination {
         const rel = self.sourceRelocation(src) orelse invariant("frozen pointer lacked a relocation");
         return switch (rel.target) {
-            .data_symbol => |symbol| .{ .symbol = symbol, .offset = @intCast(@as(i64, self.source_exports[@intFromEnum(symbol)].symbol_offset) + rel.addend) },
+            .data_symbol => |symbol| .{ .symbol = symbol, .offset = @intCast(@as(i64, self.source_exports[@backingInt(symbol)].symbol_offset) + rel.addend) },
             .named => invariant("frozen data pointer lacked symbolic graph identity"),
         };
     }
@@ -139,7 +140,7 @@ const Builder = struct {
     fn reserveAllocation(self: *Builder, key: AllocationKey, byte_count: usize, alignment_: u32, rc: bool, count: ?usize) Allocator.Error!struct { dest: Destination, fresh: bool } {
         if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
         const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
         const dest = Destination{ .symbol = symbol, .offset = offset };
         if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);
@@ -172,8 +173,8 @@ const Builder = struct {
     fn visit(self: *Builder, job: Job) Allocator.Error!void {
         const source_physical = self.source_program.layouts.getLayout(job.source_layout);
         const physical = self.program.layouts.getLayout(job.layout_idx);
-        const source_plan = self.source_program.const_plans.items[@intFromEnum(job.source_plan)];
-        const plan = self.program.const_plans.items[@intFromEnum(job.plan)];
+        const source_plan = self.source_program.const_plans.items[@backingInt(job.source_plan)];
+        const plan = self.program.const_plans.items[@backingInt(job.plan)];
         if (std.meta.activeTag(source_plan) != std.meta.activeTag(plan)) invariant("paired canonical const plan shapes differ");
         // An explicit `Box` is part of the value; any other box breaks a
         // recursive type's cycle in that program's layout.
@@ -222,11 +223,11 @@ const Builder = struct {
             },
             .fn_value => |set_id| {
                 const disc = self.discriminant(job.source_layout, job.source);
-                const source_set = self.source_program.fn_sets.items[@intFromEnum(source_plan.fn_value)];
+                const source_set = self.source_program.fn_sets.items[@backingInt(source_plan.fn_value)];
                 const source_variant = for (source_set.variants) |variant| {
                     if (variant.discriminant == disc) break variant;
                 } else invariant("source callable variant absent");
-                const target_set = self.program.fn_sets.items[@intFromEnum(set_id)];
+                const target_set = self.program.fn_sets.items[@backingInt(set_id)];
                 requireUniqueFrozenFunction(Program.FnVariant, source_variant.template, target_set.variants);
                 for (target_set.variants) |variant| {
                     if (!sameFrozenFunction(source_variant.template, variant.template)) continue;
@@ -329,18 +330,18 @@ const Builder = struct {
     }
 
     fn frozenDescriptor(self: *Builder, id: Program.BoxyTypeDescId) Allocator.Error!Destination {
-        const descriptor = &self.program.boxy_type_descs.items[@intFromEnum(id)];
+        const descriptor = &self.program.boxy_type_descs.items[@backingInt(id)];
         if (descriptor.closure != .closed) invariant("target frozen descriptor retains runtime context");
-        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
+        const symbol = try self.addNode(try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len)), @sizeOf(Program.BoxyTypeDesc), @alignOf(Program.BoxyTypeDesc));
         const dest = Destination{ .symbol = symbol };
         @memcpy(self.bytes(dest, @sizeOf(Program.BoxyTypeDesc)), std.mem.asBytes(descriptor));
         return dest;
     }
 
     fn frozenDictionary(self: *Builder, id: Program.BoxyDictId) Allocator.Error!Destination {
-        const dict = self.program.boxy_dicts.items[@intFromEnum(id)];
+        const dict = self.program.boxy_dicts.items[@backingInt(id)];
         if (dict.template) invariant("frozen dictionary retained a runtime template");
-        const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
+        const name = try Program.staticDataNodeSymbolName(self.allocator, @backingInt(self.slot), @intCast(self.nodes.items.len));
         const symbol = try self.addNode(name, @sizeOf(Program.BoxyDict), @alignOf(Program.BoxyDict));
         const dest = Destination{ .symbol = symbol, .offset = 0 };
         @memcpy(self.bytes(dest, @sizeOf(Program.BoxyDict)), std.mem.asBytes(&dict));
@@ -351,27 +352,31 @@ const Builder = struct {
         const src = self.pointer(job.source);
         const code = self.sourceRelocation(src) orelse invariant("erased code lacked relocation");
         const source_proc = code.procedure orelse invariant("erased code lacked procedure identity");
-        const source_entries = self.source_program.erased_fns.items[@intFromEnum(source_set)].entries;
+        const source_entries = self.source_program.erased_fns.items[@backingInt(source_set)].entries;
         const source_entry = if (code.boxy_recipe) |index| source_entries[index] else for (source_entries) |entry| {
             if (entry.entry == source_proc) break entry;
         } else invariant("erased procedure absent from source plan");
         if (source_entry.entry != source_proc) invariant("frozen recipe disagreed with its procedure");
         var count: usize = 0;
-        for (self.program.erased_fns.items[@intFromEnum(target_set)].entries) |entry| {
+        for (self.program.erased_fns.items[@backingInt(target_set)].entries) |entry| {
             if (sameErasedFunction(source_entry, entry)) count += 1;
         }
         if (count != 1) invariant("frozen erased callable lacks unique target identity");
-        for (self.program.erased_fns.items[@intFromEnum(target_set)].entries, 0..) |entry, recipe_index| {
+        for (self.program.erased_fns.items[@backingInt(target_set)].entries, 0..) |entry, recipe_index| {
             if (!sameErasedFunction(source_entry, entry)) continue;
-            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment);
-            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset + (if (entry.boxy != null) std.mem.alignForward(usize, self.size(entry.capture_layout), self.word()) + self.word() else self.size(entry.capture_layout)), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
+            // The target program's erased capture prefix stays zeroed: a
+            // static value is never dropped, so nothing reads its header.
+            const prefix: usize = self.program.erased_capture_prefix;
+            const capture_offset = std.mem.alignForward(usize, 2 * self.word(), builtins.erased_callable.payload_alignment) + prefix;
+            const capture_size = prefix + self.size(entry.capture_layout);
+            const result = try self.reserveAllocation(.{ .source = src, .plan = job.plan, .layout_idx = job.layout_idx, .count = 1, .kind = .erased }, capture_offset - prefix + (if (entry.boxy != null) std.mem.alignForward(usize, capture_size, self.word()) + self.word() else capture_size), builtins.erased_callable.payload_alignment, builtins.erased_callable.allocation_has_refcounted_children, null);
             try self.relocate(job.dest, result.dest);
             if (!result.fresh) return;
             try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset, .target_symbol_name = try static_data.procSymbolName(self.allocator, self.program.store.getProcSpec(entry.entry).identity), .kind = .function_pointer, .callable_capture_offset = @intCast(capture_offset), .procedure = entry.entry, .boxy_recipe = if (entry.boxy != null) @intCast(recipe_index) else null });
             switch (entry.on_drop) {
                 .none => {},
                 .rc_helper => |helper| try self.node(result.dest).relocations.append(self.allocator, .{ .offset = result.dest.offset + self.word(), .target_symbol_name = try static_data.atomicRcHelperSymbolName(self.allocator, &self.program.layouts, helper), .kind = .function_pointer, .rc_helper = helper }),
-                .boxy_capture, .interpreter_context_drop => invariant("frozen callable target lacks durable drop authority"),
+                .boxy_capture => invariant("frozen callable target lacks durable drop authority"),
             }
 
             if (entry.boxy) |boxy| {
@@ -388,7 +393,7 @@ const Builder = struct {
                         .dictionary => |id| try self.relocate(dest, try self.frozenDictionary(id)),
                     }
                 }
-                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset + std.mem.alignForward(usize, self.size(entry.capture_layout), self.word())), try self.frozenDescriptor(id));
+                if (boxy.result_desc) |id| try self.relocate(result.dest.offsetBy(capture_offset - prefix + std.mem.alignForward(usize, capture_size, self.word())), try self.frozenDescriptor(id));
             } else try self.captures(source_entry.captures, source_entry.capture_layout, entry.captures, entry.capture_layout, src.offsetBy(code.callable_capture_offset orelse invariant("erased source lacked capture offset")), result.dest.offsetBy(capture_offset));
             return;
         }
@@ -431,7 +436,7 @@ const Builder = struct {
             const relocations: []static_data.StaticDataRelocation = @constCast(export_.relocations);
             for (relocations) |*relocation| {
                 switch (relocation.target) {
-                    .data_symbol => |symbol| relocation.target_symbol_name = exports[@intFromEnum(symbol)].symbol_name,
+                    .data_symbol => |symbol| relocation.target_symbol_name = exports[@backingInt(symbol)].symbol_name,
                     .named => {
                         relocation.target_symbol_name = try allocator.dupe(u8, relocation.target_symbol_name);
                         relocation.owns_target_symbol_name = true;
@@ -443,7 +448,7 @@ const Builder = struct {
     }
 };
 fn invariant(comptime message: []const u8) noreturn {
-    if (@import("builtin").mode == .Debug) std.debug.panic("frozen root transcode invariant violated: {s}", .{message});
+    if (@import("builtin").mode == .debug) compilerInvariant("frozen root transcode invariant violated: {s}", .{message});
     unreachable;
 }
 
@@ -461,13 +466,13 @@ fn sameFrozenFunction(source: Program.FnTemplate, target: Program.FnTemplate) bo
 }
 
 fn testSlot(program: *Program.Result, idx: layout.Idx) Allocator.Error!lir.LIR.StaticDataId {
-    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = idx });
     return id;
 }
 
 fn testRootSymbol(exports: []const static_data.StaticDataExport) SymbolId {
-    for (exports, 0..) |item, index| if (item.value_id != null) return @enumFromInt(index);
+    for (exports, 0..) |item, index| if (item.value_id != null) return @fromBackingInt(@intCast(index));
     unreachable;
 }
 
@@ -483,9 +488,9 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     try source.const_plans.append(allocator, .str);
-    const list_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const list_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     try source.const_plans.append(allocator, .{ .list = str_plan });
     try target.const_plans.append(allocator, .str);
     try target.const_plans.append(allocator, .{ .list = str_plan });
@@ -507,14 +512,14 @@ test "frozen root transcode preserves shared list strings across pointer widths"
     try std.testing.expectEqual(@as(usize, 12), converted[0].bytes.len);
     try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, converted[0].bytes[4..8], .little));
     const list_rel = converted[0].relocations[0];
-    const list_export = converted[@intFromEnum(list_rel.target.data_symbol)];
+    const list_export = converted[@backingInt(list_rel.target.data_symbol)];
     const list_offset: usize = @intCast(list_rel.addend);
     try std.testing.expectEqual(@as(u32, 2), std.mem.readInt(u32, list_export.bytes[list_offset - 8 ..][0..4], .little));
     try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, list_export.bytes[list_offset - 4 ..][0..4], .little));
     try std.testing.expectEqual(@as(u32, text.len), std.mem.readInt(u32, list_export.bytes[list_offset + 8 ..][0..4], .little));
     try std.testing.expectEqual(list_export.relocations[0].target.data_symbol, list_export.relocations[1].target.data_symbol);
     const str_rel = list_export.relocations[0];
-    try std.testing.expectEqualStrings(text, converted[@intFromEnum(str_rel.target.data_symbol)].bytes[@intCast(str_rel.addend)..]);
+    try std.testing.expectEqualStrings(text, converted[@backingInt(str_rel.target.data_symbol)].bytes[@intCast(str_rel.addend)..]);
 }
 
 test "frozen root transcode promotes inline strings when target width shrinks" {
@@ -523,7 +528,7 @@ test "frozen root transcode promotes inline strings when target width shrinks" {
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     try source.const_plans.append(allocator, .str);
     try target.const_plans.append(allocator, .str);
     const text = "sixteen-byte-str";
@@ -535,7 +540,7 @@ test "frozen root transcode promotes inline strings when target width shrinks" {
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(u32, text.len), std.mem.readInt(u32, converted[0].bytes[8..12], .little));
     const rel = converted[0].relocations[0];
-    try std.testing.expectEqualStrings(text, converted[@intFromEnum(rel.target.data_symbol)].bytes[@intCast(rel.addend)..]);
+    try std.testing.expectEqualStrings(text, converted[@backingInt(rel.target.data_symbol)].bytes[@intCast(rel.addend)..]);
 }
 
 fn requireUniqueFrozenFunction(comptime Entry: type, source: Program.FnTemplate, targets: []const Entry) void {
@@ -554,7 +559,7 @@ test "frozen root transcode preserves fixed U64 values on 32-bit targets" {
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     try source.const_plans.append(allocator, .scalar);
     try target.const_plans.append(allocator, .scalar);
     var value: u64 = 0x123456789abcdef0;
@@ -566,15 +571,15 @@ test "frozen root transcode preserves fixed U64 values on 32-bit targets" {
 }
 
 fn recursiveCallable(allocator: Allocator, program: *Program.Result) Allocator.Error!layout.Idx {
-    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
-    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .{ .fn_value = @fromBackingInt(@intCast(program.fn_sets.items.len)) });
     const box_layout = try program.layouts.reserveLayout(layout.Layout.box(.zst));
     const fn_layout = try program.layouts.putTagUnion(&.{box_layout});
     program.layouts.updateLayout(box_layout, layout.Layout.box(fn_layout));
-    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
+    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @fromBackingInt(@intCast(3)), .slot = 0, .ty = undefined, .plan = plan, .storage = .recursive_box }});
     const variants = try allocator.dupe(Program.FnVariant, &.{.{ .id = undefined, .discriminant = 0, .variant_index = 0, .payload_layout = box_layout, .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 17, .fn_type = 1, .captures = .{ .own = 1 } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = captures }});
     // Fill every variant identity from its allocated slice index before publication.
-    for (variants, 0..) |*variant, index| variant.id = @enumFromInt(index);
+    for (variants, 0..) |*variant, index| variant.id = @fromBackingInt(@intCast(index));
     try program.fn_sets.append(allocator, .{ .layout = fn_layout, .variants = variants });
     return fn_layout;
 }
@@ -585,7 +590,7 @@ test "frozen root transcode closes recursive callable graphs at target pointer w
     defer source.deinit();
     var target = try Program.Result.init(allocator, .u32);
     defer target.deinit();
-    const plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     const source_layout = try recursiveCallable(allocator, &source);
     const target_layout = try recursiveCallable(allocator, &target);
     var recursive_capture: usize = undefined;
@@ -597,7 +602,7 @@ test "frozen root transcode closes recursive callable graphs at target pointer w
     try std.testing.expectEqual(@as(usize, 2), converted.len);
     try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
     const pointer = converted[0].relocations[0];
-    const backing = converted[@intFromEnum(pointer.target.data_symbol)];
+    const backing = converted[@backingInt(pointer.target.data_symbol)];
     try std.testing.expectEqual(pointer.target.data_symbol, backing.relocations[0].target.data_symbol);
     try std.testing.expectEqual(pointer.addend, backing.relocations[0].addend);
     try std.testing.expectEqual(@as(u32, 0), std.mem.readInt(u32, backing.bytes[@intCast(pointer.addend - 4)..][0..4], .little));
@@ -612,19 +617,19 @@ test "frozen root transcode maps erased worker and drop identities across target
     const source_proc = try source.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(42), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const other_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(71), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
     const target_proc = try target.store.addProcSpec(.{ .name = lir.Symbol.fromRaw(99), .identity = lir.LIR.ProcIdentity.forTest(1), .args = .empty(), .ret_layout = .zst }, .none);
-    const str_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     const source_layout = try source.layouts.insertErasedCallable();
     const target_layout = try target.layouts.insertErasedCallable();
     try source.const_plans.append(allocator, .str);
     try target.const_plans.append(allocator, .str);
-    const fn_plan: Program.ConstPlanId = @enumFromInt(source.const_plans.items.len);
+    const fn_plan: Program.ConstPlanId = @fromBackingInt(@intCast(source.const_plans.items.len));
     for ([_]*Program.Result{ &source, &target }) |program| {
-        try program.const_plans.append(allocator, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
+        try program.const_plans.append(allocator, .{ .erased_fn = @fromBackingInt(@intCast(program.erased_fns.items.len)) });
     }
     const template = Program.FnTemplate{ .frozen_fn = 12, .frozen_context = .{ .abi = .erased, .source = 12, .fn_type = 1, .captures = .{ .own = 1 } }, .frozen_worker = @as([96]u8, @splat(1)), .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined };
     var other_template = template;
     other_template.frozen_worker = @as([96]u8, @splat(2));
-    const capture = Program.CaptureSlot{ .id = @enumFromInt(5), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
+    const capture = Program.CaptureSlot{ .id = @fromBackingInt(@intCast(5)), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value };
     const source_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const target_captures = try allocator.dupe(Program.CaptureSlot, &.{capture});
     const drop = lir.LIR.ErasedCallableOnDrop{ .rc_helper = .{ .op = .host_drop, .layout_idx = .str } };
@@ -649,7 +654,7 @@ test "frozen root transcode maps erased worker and drop identities across target
     const converted = try transcodeRoot(allocator, &source, testRoot(fn_plan, source_layout), native, testRootSymbol(native), &target, testRoot(fn_plan, target_layout), try testSlot(&target, target_layout));
     defer static_data.deinitStaticData(allocator, converted);
     const root_pointer = converted[0].relocations[0];
-    const payload = converted[@intFromEnum(root_pointer.target.data_symbol)];
+    const payload = converted[@backingInt(root_pointer.target.data_symbol)];
     try std.testing.expectEqual(target_proc, payload.relocations[0].procedure.?);
     try std.testing.expectEqual(@as(u32, 16), payload.relocations[0].callable_capture_offset.?);
     try std.testing.expectEqualDeep(drop.rc_helper, payload.relocations[1].rc_helper.?);
@@ -661,7 +666,7 @@ test "frozen root transcode maps erased worker and drop identities across target
 fn failureSlot(allocator: Allocator, program: *Program.Result, root: @import("check").CheckedArtifact.ComptimeRootId) Allocator.Error!lir.LIR.StaticDataId {
     const idx = try program.layouts.putStructFields(&.{ .{ .index = 0, .layout = .u8 }, .{ .index = 1, .layout = .str } });
     const data = program.layouts.getLayout(idx).getStruct().idx;
-    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = idx, .compile_time_root = .{ .module = .{ .bytes = @splat(0) }, .root = .{ .checked = root }, .const_locator = null, .role = .{ .failure_message = .{ .failed_field = 0, .message_field = 1, .failed_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 0), .message_offset = program.layouts.getStructFieldOffsetByOriginalIndex(data, 1) } } } });
     return id;
 }
@@ -675,12 +680,12 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     const checked = @import("check").CheckedArtifact;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @enumFromInt(roots.items.len);
+    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
-    const source_id = try failureSlot(allocator, &source, roots.items[@intFromEnum(root_id)].id);
-    const target_id = try failureSlot(allocator, &target, roots.items[@intFromEnum(root_id)].id);
-    const slot = source.static_data_values.items[@intFromEnum(source_id)];
+    const source_id = try failureSlot(allocator, &source, roots.items[@backingInt(root_id)].id);
+    const target_id = try failureSlot(allocator, &target, roots.items[@backingInt(root_id)].id);
+    const slot = source.static_data_values.items[@backingInt(source_id)];
     const fields = slot.compile_time_root.?.role.failure_message;
     const bytes = try allocator.alloc(u8, source.layouts.layoutSize(source.layouts.getLayout(slot.layout_idx)));
     defer allocator.free(bytes);
@@ -695,21 +700,21 @@ test "frozen root transcode preserves failure flag and message using explicit fi
     try std.testing.expectEqual(@as(u8, 1), converted[0].bytes[target_fields.failed_offset]);
     try std.testing.expectEqual(@as(u32, 12), std.mem.readInt(u32, converted[0].bytes[target_fields.message_offset + 8 ..][0..4], .little));
     const rel = converted[0].relocations[0];
-    try std.testing.expectEqualStrings("failed value", converted[@intFromEnum(rel.target.data_symbol)].bytes[@intCast(rel.addend)..]);
+    try std.testing.expectEqualStrings("failed value", converted[@backingInt(rel.target.data_symbol)].bytes[@intCast(rel.addend)..]);
 }
 
 fn reorderedCallable(allocator: Allocator, program: *Program.Result, reverse: bool) Allocator.Error!PlanView {
-    const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+    const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
     try program.const_plans.append(allocator, .str);
-    const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
-    try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
+    const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+    try program.const_plans.append(allocator, .{ .fn_value = @fromBackingInt(@intCast(program.fn_sets.items.len)) });
     const idx = try program.layouts.putTagUnion(if (reverse) &.{ .str, .zst } else &.{ .zst, .str });
-    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(3), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value }});
+    const captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @fromBackingInt(@intCast(3)), .slot = 0, .ty = undefined, .plan = str_plan, .storage = .value }});
     const selected: u16 = if (reverse) 0 else 1;
     const variants = try allocator.alloc(Program.FnVariant, 2);
     for (variants, 0..) |*variant, i| {
         const has_capture = i == selected;
-        variant.* = .{ .id = @enumFromInt(i), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .frozen_context = .{ .abi = .finite, .source = if (has_capture) 17 else 18, .fn_type = 1, .captures = .{ .own = @intFromBool(has_capture) } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
+        variant.* = .{ .id = @fromBackingInt(@intCast(i)), .discriminant = @intCast(i), .variant_index = @intCast(i), .payload_layout = if (has_capture) .str else .zst, .template = .{ .frozen_fn = if (has_capture) 17 else 18, .frozen_context = .{ .abi = .finite, .source = if (has_capture) 17 else 18, .fn_type = 1, .captures = .{ .own = @intFromBool(has_capture) } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined }, .captures = if (has_capture) captures else &.{} };
     }
     try program.fn_sets.append(allocator, .{ .layout = idx, .variants = variants });
     return .{ .plan = plan, .layout_idx = idx };
@@ -751,22 +756,22 @@ test "frozen root transcode distinguishes zero-sized capture contexts of one fun
     defer target.deinit();
     var plans: [2]Program.ConstPlanId = undefined;
     for ([_]*Program.Result{ &source, &target }, 0..) |program, side| {
-        const unit_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+        const unit_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
         try program.const_plans.append(allocator, .zst);
-        plans[side] = @enumFromInt(program.const_plans.items.len);
-        try program.const_plans.append(allocator, .{ .fn_value = @enumFromInt(program.fn_sets.items.len) });
+        plans[side] = @fromBackingInt(@intCast(program.const_plans.items.len));
+        try program.const_plans.append(allocator, .{ .fn_value = @fromBackingInt(@intCast(program.fn_sets.items.len)) });
         const variants = try allocator.alloc(Program.FnVariant, 2);
         for (variants, 0..) |*variant, index| {
             const context = if (side == 0) index else variants.len - 1 - index;
             // Checked metadata is unused by graph transcode. The explicit
             // source contexts distinguish equal-layout unit captures.
             variant.* = .{
-                .id = @enumFromInt(index),
+                .id = @fromBackingInt(@intCast(index)),
                 .discriminant = @intCast(index),
                 .variant_index = @intCast(index),
                 .payload_layout = .zst,
                 .template = .{ .frozen_fn = 17, .frozen_context = .{ .abi = .finite, .source = 9, .fn_type = 12, .captures = .{ .solved = .{ .start = @intCast(context), .len = 1 } } }, .fn_def = undefined, .source_fn_ty = undefined, .source_fn_key = undefined },
-                .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @enumFromInt(context), .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
+                .captures = try allocator.dupe(Program.CaptureSlot, &.{.{ .id = @fromBackingInt(@intCast(context)), .slot = 0, .ty = undefined, .plan = unit_plan, .storage = .value }}),
             };
         }
         try program.fn_sets.append(allocator, .{ .layout = .bool, .variants = variants });
@@ -791,12 +796,12 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
 
     const Plans = struct {
         fn append(program: *Program.Result, gpa: Allocator) Allocator.Error!Program.ConstPlanId {
-            const str_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+            const str_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
             try program.const_plans.append(gpa, .str);
             const variants = try gpa.alloc(Program.ConstTagVariant, 2);
             variants[0] = .{ .name = try gpa.dupe(u8, "Leaf"), .checked_name = undefined, .discriminant = 0, .payloads = try gpa.alloc(Program.ConstPlanId, 0) };
             variants[1] = .{ .name = try gpa.dupe(u8, "Wrap"), .checked_name = undefined, .discriminant = 1, .payloads = try gpa.dupe(Program.ConstPlanId, &.{str_plan}) };
-            const tag_plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+            const tag_plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
             try program.const_plans.append(gpa, .{ .tag_union = variants });
             return tag_plan;
         }
@@ -825,11 +830,11 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     const checked = @import("check").CheckedArtifact;
     var roots = std.ArrayList(checked.CompileTimeRoot).empty;
     defer roots.deinit(allocator);
-    const root_id: checked.ComptimeRootId = @enumFromInt(roots.items.len);
+    const root_id: checked.ComptimeRootId = @fromBackingInt(@intCast(roots.items.len));
     // Transcoding reads only the published root identity, not its source body/type.
     try roots.append(allocator, .{ .id = root_id, .module_idx = 0, .kind = .constant, .source = undefined, .pattern = null, .expr = undefined, .checked_type = undefined, .request_eligibility = .eligible, .payload = .discarded });
 
-    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[@intFromEnum(root_id)].id);
+    const source_slot_id = try boxedValueSlot(&source, source_box, source_plan, roots.items[@backingInt(root_id)].id);
     const native = try @import("native_root_export.zig").freezeRootIntoSlot(
         allocator,
         &source,
@@ -845,11 +850,11 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqual(@sizeOf(usize), native[0].bytes.len);
     try std.testing.expectEqual(@as(usize, 1), native[0].relocations.len);
 
-    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[@intFromEnum(root_id)].id);
+    const target_slot_id = try boxedValueSlot(&target, target_box, target_plan, roots.items[@backingInt(root_id)].id);
     const converted = try transcodeValueSlot(
         allocator,
         &source,
-        source.static_data_values.items[@intFromEnum(source_slot_id)],
+        source.static_data_values.items[@backingInt(source_slot_id)],
         native,
         testRootSymbol(native),
         &target,
@@ -860,12 +865,12 @@ test "frozen root transcode re-points a boxed slot at its payload across pointer
     try std.testing.expectEqual(@as(usize, 4), converted[0].bytes.len);
     try std.testing.expectEqual(@as(usize, 1), converted[0].relocations.len);
     const payload_pointer = converted[0].relocations[0];
-    const payload_export = converted[@intFromEnum(payload_pointer.target.data_symbol)];
+    const payload_export = converted[@backingInt(payload_pointer.target.data_symbol)];
     const payload_bytes = payload_export.bytes[@intCast(payload_pointer.addend)..];
     const target_data = target.layouts.getTagUnionData(target.layouts.getLayout(target_tag).getTagUnion().idx);
     try std.testing.expectEqual(@as(u32, 1), target_data.readDiscriminant(payload_bytes.ptr, target.layouts.targetUsize()));
     const str_pointer = payload_export.relocations[0];
-    try std.testing.expectEqualStrings(text, converted[@intFromEnum(str_pointer.target.data_symbol)].bytes[@intCast(str_pointer.addend)..]);
+    try std.testing.expectEqualStrings(text, converted[@backingInt(str_pointer.target.data_symbol)].bytes[@intCast(str_pointer.addend)..]);
 }
 
 fn boxedValueSlot(
@@ -874,9 +879,9 @@ fn boxedValueSlot(
     plan: Program.ConstPlanId,
     root: @import("check").CheckedArtifact.ComptimeRootId,
 ) Allocator.Error!lir.LIR.StaticDataId {
-    const failure_slot: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const failure_slot: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{ .initializer = null, .layout_idx = .zst });
-    const id: lir.LIR.StaticDataId = @enumFromInt(program.static_data_values.items.len);
+    const id: lir.LIR.StaticDataId = @fromBackingInt(@intCast(program.static_data_values.items.len));
     try program.static_data_values.append(program.store.allocator, .{
         .initializer = null,
         .layout_idx = box_idx,
@@ -908,11 +913,11 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
             for (0..2) |index| {
                 const string = (index == 1) != reverse;
                 const payload_layout: layout.Idx = if (string) .str else .u64;
-                const payload: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+                const payload: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
                 try program.const_plans.append(gpa, if (string) .str else .scalar);
-                const boxed: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
+                const boxed: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
                 try program.const_plans.append(gpa, .{ .boxy_box = .{ .payload = payload, .layout_idx = payload_layout } });
-                const desc: Program.BoxyTypeDescId = @enumFromInt(program.boxy_type_descs.items.len);
+                const desc: Program.BoxyTypeDescId = @fromBackingInt(@intCast(program.boxy_type_descs.items.len));
                 try program.boxy_type_descs.append(gpa, .{ .payload_layout = payload_layout, .contains_refcounted = string, .shape = .primitive, .closure = .closed });
                 if (string) string_desc = desc;
                 entries[index] = .{ .entry = proc, .capture_layout = capture, .boxy = .{
@@ -921,8 +926,8 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
                     .captures = try gpa.dupe(Program.BoxyFrozenCapture, &.{ .{ .slot = 0, .value = .{ .value = boxed } }, .{ .slot = 1, .value = .{ .descriptor = desc } } }),
                 } };
             }
-            const plan: Program.ConstPlanId = @enumFromInt(program.const_plans.items.len);
-            try program.const_plans.append(gpa, .{ .erased_fn = @enumFromInt(program.erased_fns.items.len) });
+            const plan: Program.ConstPlanId = @fromBackingInt(@intCast(program.const_plans.items.len));
+            try program.const_plans.append(gpa, .{ .erased_fn = @fromBackingInt(@intCast(program.erased_fns.items.len)) });
             try program.erased_fns.append(gpa, .{ .layout = callable, .entries = entries });
             return .{ .proc = proc, .plan = plan, .callable = callable, .capture = capture, .string_desc = string_desc };
         }
@@ -941,7 +946,7 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
     var capture: [2]usize = @splat(0);
     const source_struct = source.layouts.getLayout(source_fixture.capture).getStruct().idx;
     capture[source.layouts.getStructFieldOffsetByOriginalIndex(source_struct, 0) / @sizeOf(usize)] = @intFromPtr(&string);
-    capture[source.layouts.getStructFieldOffsetByOriginalIndex(source_struct, 1) / @sizeOf(usize)] = @intFromPtr(&source.boxy_type_descs.items[@intFromEnum(source_fixture.string_desc)]);
+    capture[source.layouts.getStructFieldOffsetByOriginalIndex(source_struct, 1) / @sizeOf(usize)] = @intFromPtr(&source.boxy_type_descs.items[@backingInt(source_fixture.string_desc)]);
     var pointer = @intFromPtr(&capture);
     const Resolver = struct {
         fn resolve(context: ?*anyopaque, data: [*]u8) error{RuntimeError}!@import("native_root_export.zig").CallableResolution {
@@ -953,11 +958,11 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
     const native = try @import("native_root_export.zig").freezeRoot(allocator, &source, try testSlot(&source, source_fixture.callable), testRoot(source_fixture.plan, source_fixture.callable), .{ .ptr = @ptrCast(&pointer) }, .{ .context = &proc, .resolve = Resolver.resolve, .runtime = &runtime.runtime });
     defer static_data.deinitStaticData(allocator, native);
     const native_pointer = native[0].relocations[0];
-    try std.testing.expectEqual(@as(u32, 1), native[@intFromEnum(native_pointer.target.data_symbol)].relocations[0].boxy_recipe.?);
+    try std.testing.expectEqual(@as(u32, 1), native[@backingInt(native_pointer.target.data_symbol)].relocations[0].boxy_recipe.?);
     const converted = try transcodeRoot(allocator, &source, testRoot(source_fixture.plan, source_fixture.callable), native, testRootSymbol(native), &target, testRoot(target_fixture.plan, target_fixture.callable), try testSlot(&target, target_fixture.callable));
     defer static_data.deinitStaticData(allocator, converted);
     const root_pointer = converted[0].relocations[0];
-    const closure = converted[@intFromEnum(root_pointer.target.data_symbol)];
+    const closure = converted[@backingInt(root_pointer.target.data_symbol)];
     try std.testing.expectEqual(@as(u32, 0), closure.relocations[0].boxy_recipe.?);
     try std.testing.expectEqual(target_fixture.proc, closure.relocations[0].procedure.?);
     const target_struct = target.layouts.getLayout(target_fixture.capture).getStruct().idx;
@@ -965,7 +970,7 @@ test "frozen root transcode preserves Boxy recipe identity and generic boxed cap
     const value_pointer = for (closure.relocations) |relocation| {
         if (relocation.offset == value_offset) break relocation;
     } else return error.TestUnexpectedResult;
-    const payload = converted[@intFromEnum(value_pointer.target.data_symbol)];
+    const payload = converted[@backingInt(value_pointer.target.data_symbol)];
     const offset: usize = @intCast(value_pointer.addend);
     try std.testing.expectEqualStrings("capture", payload.bytes[offset..][0..7]);
     try std.testing.expectEqual(@as(u8, 0x87), payload.bytes[offset + 11]);

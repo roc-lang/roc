@@ -94,7 +94,7 @@ pub fn validateBuiltinIndices(env: *const ModuleEnv, indices: CIR.BuiltinIndices
 }
 
 fn statementQualifiedName(env: *const ModuleEnv, stmt_idx: CIR.Statement.Idx) ?[]const u8 {
-    if (@intFromEnum(stmt_idx) >= env.store.nodes.len()) return null;
+    if (@backingInt(stmt_idx) >= env.store.nodes.len()) return null;
     const stmt = env.store.getStatement(stmt_idx);
     const header_idx = if (stmt == .s_nominal_decl)
         stmt.s_nominal_decl.header

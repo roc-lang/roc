@@ -28,7 +28,7 @@ pub const tests = [_]TestCase{
         .expected = .{ .inspect_str = "(True, False)" },
     },
     .{
-        .name = "literal pattern checked equality: local equality captures",
+        .name = "literal pattern checked equality: a local equality that captures is rejected",
         .source_kind = .module,
         .source =
         \\run : U32 -> (Bool, Bool)
@@ -51,7 +51,7 @@ pub const tests = [_]TestCase{
         \\}
         \\main = run(10)
         ,
-        .expected = .{ .inspect_str = "(True, False)" },
+        .expected = .{ .problem_and_crash = {} },
     },
     .{
         .name = "literal pattern checked equality: derived record",

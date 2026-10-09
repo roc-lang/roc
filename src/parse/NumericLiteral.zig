@@ -241,19 +241,10 @@ fn splitDeprecatedSuffix(text: []const u8, kind: Kind) Split {
 
 /// Return the deprecated suffix represented by `text`, or `.none`.
 pub fn deprecatedSuffixFromText(text: []const u8) DeprecatedSuffix {
-    if (std.mem.eql(u8, text, "u8")) return .u8;
-    if (std.mem.eql(u8, text, "i8")) return .i8;
-    if (std.mem.eql(u8, text, "u16")) return .u16;
-    if (std.mem.eql(u8, text, "i16")) return .i16;
-    if (std.mem.eql(u8, text, "u32")) return .u32;
-    if (std.mem.eql(u8, text, "i32")) return .i32;
-    if (std.mem.eql(u8, text, "u64")) return .u64;
-    if (std.mem.eql(u8, text, "i64")) return .i64;
-    if (std.mem.eql(u8, text, "u128")) return .u128;
-    if (std.mem.eql(u8, text, "i128")) return .i128;
-    if (std.mem.eql(u8, text, "f32")) return .f32;
-    if (std.mem.eql(u8, text, "f64")) return .f64;
-    if (std.mem.eql(u8, text, "dec")) return .dec;
+    inline for (comptime std.enums.values(DeprecatedSuffix)) |suffix| {
+        const old_text = comptime suffix.oldText() orelse continue;
+        if (std.mem.eql(u8, text, old_text)) return suffix;
+    }
     return .none;
 }
 
@@ -290,52 +281,74 @@ pub fn deprecatedSuffixFromSource(text: []const u8) DeprecatedSuffixSource {
     };
 }
 
+/// A base prefix letter (the `x` of `0x1F`): its lowercase spelling, the
+/// uppercase spelling that is accepted with a diagnostic, and its radix.
+pub const BasePrefix = struct { lower: u8, upper: u8, radix: u8 };
+
+/// Every base prefix a number literal can open with, after its leading `0`.
+pub const base_prefixes = [_]BasePrefix{
+    .{ .lower = 'x', .upper = 'X', .radix = 16 },
+    .{ .lower = 'o', .upper = 'O', .radix = 8 },
+    .{ .lower = 'b', .upper = 'B', .radix = 2 },
+};
+
+/// The byte that may separate the digits of a number literal.
+pub const digit_separator = '_';
+
+/// Whether `byte` is a digit of `radix`.
+pub inline fn isDigitInRadix(byte: u8, radix: u8) bool {
+    const value = digitValue(byte) orelse return false;
+    return value < radix;
+}
+
+/// Whether `byte` opens the exponent of a fractional literal.
+pub inline fn isExponentMarker(byte: u8) bool {
+    return byte == 'e' or byte == 'E';
+}
+
+/// The radix of an unsigned integer literal and the length of its base
+/// prefix: 10 and 0 unless the text opens with `0` and a base prefix letter.
+fn radixAndPrefixLen(unsigned_text: []const u8) struct { u8, usize } {
+    if (unsigned_text.len > 1 and unsigned_text[0] == '0') {
+        inline for (base_prefixes) |prefix| {
+            if (unsigned_text[1] == prefix.lower or unsigned_text[1] == prefix.upper) return .{ prefix.radix, 2 };
+        }
+    }
+    return .{ 10, 0 };
+}
+
 fn numberTextEnd(text: []const u8, kind: Kind) usize {
     var index: usize = if (text.len > 0 and text[0] == '-') 1 else 0;
     if (index >= text.len) return text.len;
 
-    if (text[index] == '0' and index + 1 < text.len) {
-        const maybe_base = text[index + 1];
-        if (maybe_base == 'x' or maybe_base == 'X' or maybe_base == 'o' or maybe_base == 'O' or maybe_base == 'b' or maybe_base == 'B') {
-            const radix: u8 = switch (maybe_base) {
-                'x', 'X' => 16,
-                'o', 'O' => 8,
-                'b', 'B' => 2,
-                else => unreachable,
-            };
-            index += 2;
-            while (index < text.len) : (index += 1) {
-                const digit = digitValue(text[index]) orelse {
-                    if (text[index] == '_') continue;
-                    break;
-                };
-                if (digit >= radix) break;
-            }
-            return index;
-        }
+    const radix, const prefix_len = radixAndPrefixLen(text[index..]);
+    if (prefix_len != 0) {
+        index += prefix_len;
+        while (index < text.len and isDigitOrSeparator(text[index], radix)) : (index += 1) {}
+        return index;
     }
 
-    while (index < text.len and isDecDigitOrUnderscore(text[index])) : (index += 1) {}
+    while (index < text.len and isDigitOrSeparator(text[index], 10)) : (index += 1) {}
 
     if (kind == .frac and index < text.len and text[index] == '.') {
         index += 1;
-        while (index < text.len and isDecDigitOrUnderscore(text[index])) : (index += 1) {}
+        while (index < text.len and isDigitOrSeparator(text[index], 10)) : (index += 1) {}
     }
 
-    if (kind == .frac and index < text.len and (text[index] == 'e' or text[index] == 'E')) {
+    if (kind == .frac and index < text.len and isExponentMarker(text[index])) {
         const exponent_start = index;
         index += 1;
         if (index < text.len and (text[index] == '+' or text[index] == '-')) index += 1;
         const digits_start = index;
-        while (index < text.len and isDecDigitOrUnderscore(text[index])) : (index += 1) {}
+        while (index < text.len and isDigitOrSeparator(text[index], 10)) : (index += 1) {}
         if (digits_start == index) return exponent_start;
     }
 
     return index;
 }
 
-fn isDecDigitOrUnderscore(byte: u8) bool {
-    return (byte >= '0' and byte <= '9') or byte == '_';
+fn isDigitOrSeparator(byte: u8, radix: u8) bool {
+    return isDigitInRadix(byte, radix) or byte == digit_separator;
 }
 
 fn digitValue(byte: u8) ?u8 {
@@ -360,24 +373,8 @@ fn parseExactInteger(allocator: std.mem.Allocator, text: []const u8) (Allocator.
     var first_digit: usize = @intFromBool(is_negative);
     if (first_digit >= text.len) return error.InvalidNumeral;
 
-    var radix: u8 = 10;
-    if (text[first_digit] == '0' and first_digit + 1 < text.len) {
-        switch (text[first_digit + 1]) {
-            'x', 'X' => {
-                radix = 16;
-                first_digit += 2;
-            },
-            'o', 'O' => {
-                radix = 8;
-                first_digit += 2;
-            },
-            'b', 'B' => {
-                radix = 2;
-                first_digit += 2;
-            },
-            else => {},
-        }
-    }
+    const radix, const prefix_len = radixAndPrefixLen(text[first_digit..]);
+    first_digit += prefix_len;
     if (first_digit >= text.len) return error.InvalidNumeral;
 
     const magnitude_digits = trimLeadingZeros(text[first_digit..]);
@@ -463,7 +460,7 @@ fn decimalParts(allocator: std.mem.Allocator, unsigned_text: []const u8) (Alloca
     var saw_digit = false;
     for (mantissa) |byte| {
         switch (byte) {
-            '_' => {},
+            digit_separator => {},
             '.' => {
                 if (saw_point) return error.InvalidNumeral;
                 saw_point = true;
@@ -664,7 +661,7 @@ fn firstNonZeroJoined(first: []const u8, second: []const u8) ?usize {
 fn sourceDigitsMayFitBase256(digits: []const u8, radix: u8) bool {
     var digit_count: u64 = 0;
     for (digits) |byte| {
-        if (byte != '_') digit_count += 1;
+        if (byte != digit_separator) digit_count += 1;
     }
 
     const max_source_digits: u64 = switch (radix) {
@@ -683,24 +680,8 @@ fn compactInt(text: []const u8) ?Compact {
     var first_digit: usize = @intFromBool(is_negative);
     if (first_digit >= text.len) return null;
 
-    var radix: u8 = 10;
-    if (text[first_digit] == '0' and first_digit + 1 < text.len) {
-        switch (text[first_digit + 1]) {
-            'x', 'X' => {
-                radix = 16;
-                first_digit += 2;
-            },
-            'o', 'O' => {
-                radix = 8;
-                first_digit += 2;
-            },
-            'b', 'B' => {
-                radix = 2;
-                first_digit += 2;
-            },
-            else => {},
-        }
-    }
+    const radix, const prefix_len = radixAndPrefixLen(text[first_digit..]);
+    first_digit += prefix_len;
     if (first_digit >= text.len) return null;
 
     const magnitude = parseUnsignedMagnitude(text[first_digit..], radix) orelse return null;
@@ -724,7 +705,7 @@ fn parseUnsignedMagnitude(digits: []const u8, radix: u8) ?u128 {
     var value: u128 = 0;
     var saw_digit = false;
     for (digits) |byte| {
-        if (byte == '_') continue;
+        if (byte == digit_separator) continue;
         const digit = digitValue(byte) orelse return null;
         if (digit >= radix) return null;
         saw_digit = true;
@@ -876,12 +857,12 @@ fn parseI64NoUnderscores(allocator: std.mem.Allocator, text: []const u8) (Alloca
 fn withoutUnderscores(allocator: std.mem.Allocator, text: []const u8) std.mem.Allocator.Error![]u8 {
     var count = text.len;
     for (text) |byte| {
-        if (byte == '_') count -= 1;
+        if (byte == digit_separator) count -= 1;
     }
     const out = try allocator.alloc(u8, count);
     var index: usize = 0;
     for (text) |byte| {
-        if (byte == '_') continue;
+        if (byte == digit_separator) continue;
         out[index] = byte;
         index += 1;
     }
@@ -893,7 +874,7 @@ fn intDigitsToBase256(allocator: std.mem.Allocator, digits: []const u8, radix: u
     defer bytes_le.deinit(allocator);
 
     for (digits) |byte| {
-        if (byte == '_') continue;
+        if (byte == digit_separator) continue;
         const digit = digitValue(byte) orelse return error.InvalidNumeral;
         if (digit >= radix) return error.InvalidNumeral;
         try appendRadixDigit(&bytes_le, allocator, radix, digit);
@@ -1047,6 +1028,12 @@ test "deprecated suffix source splits without mistaking hex digits for suffixes"
         try std.testing.expectEqualStrings(case.number_text, split.number_text);
         try std.testing.expectEqual(case.suffix, split.deprecated_suffix);
         try std.testing.expectEqualStrings(case.suffix_text, split.deprecated_suffix_text);
+    }
+}
+
+test "every deprecated suffix is recovered from its source text" {
+    inline for (comptime std.enums.values(DeprecatedSuffix)) |suffix| {
+        if (suffix.oldText()) |text| try std.testing.expectEqual(suffix, deprecatedSuffixFromText(text));
     }
 }
 

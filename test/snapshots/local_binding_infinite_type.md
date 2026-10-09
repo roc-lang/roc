@@ -84,17 +84,7 @@ f = |_x| {
 			(args
 				(p-assign (ident "_x")))
 			(e-block
-				(s-let
-					(p-assign (ident "bad"))
-					(e-lambda
-						(args
-							(p-assign (ident "x")))
-						(e-call (constraint-fn-var 221)
-							(e-runtime-error (tag "erroneous_value_use"))
-							(e-list
-								(elems
-									(e-lookup-local
-										(p-assign (ident "x"))))))))
+				(s-runtime-error (tag "erroneous_value_expr"))
 				(e-num (value "0"))))))
 ~~~
 # TYPES

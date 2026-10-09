@@ -250,19 +250,33 @@ keeps = Keeps.{}
 (can-ir
 	(d-let
 		(p-assign (ident "f"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-let
+				(p-assign (ident "n"))
+				(e-num (value "1")))
+			(e-closure
+				(captures
+					(capture (ident "n")))
+				(e-lambda
+					(args
+						(p-underscore))
+					(e-runtime-error (tag "erroneous_value_expr")
+						(e-runtime-error (tag "erroneous_value_expr")))))))
 	(d-let
 		(p-assign (ident "apply"))
 		(e-lambda
 			(args
 				(p-assign (ident "g")))
-			(e-call (constraint-fn-var 300)
+			(e-call (constraint-fn-var 305)
 				(e-lookup-local
 					(p-assign (ident "g")))
 				(e-empty_record))))
 	(d-let
 		(p-assign (ident "make"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-lambda
+			(args
+				(p-underscore))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(d-let
 		(p-assign (ident "make_handler"))
 		(e-lambda
@@ -305,9 +319,9 @@ keeps = Keeps.{}
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "_arg -> Error"))
+		(patt (type "_arg -> _ret"))
 		(patt (type "({} -> b) -> b"))
-		(patt (type "_arg -> Error"))
+		(patt (type "_arg -> _ret"))
 		(patt (type "_arg -> U8"))
 		(patt (type "Keeps")))
 	(type_decls
@@ -318,9 +332,9 @@ keeps = Keeps.{}
 		(nominal (type "Keeps")
 			(ty-header (name "Keeps"))))
 	(expressions
-		(expr (type "_arg -> Error"))
+		(expr (type "_arg -> _ret"))
 		(expr (type "({} -> b) -> b"))
-		(expr (type "_arg -> Error"))
+		(expr (type "_arg -> _ret"))
 		(expr (type "_arg -> U8"))
 		(expr (type "Keeps"))))
 ~~~

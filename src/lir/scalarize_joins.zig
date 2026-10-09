@@ -78,7 +78,7 @@ fn runMeasured(store: *LirStore, layouts: *const layout_mod.Store, metrics: ?*Me
     // converges on its own before moving on; a proc that changes nothing is
     // scanned exactly once instead of once per global round.
     for (0..store.procSpecCount()) |proc_index| {
-        try pass.transformProc(@enumFromInt(@as(u32, @intCast(proc_index))));
+        try pass.transformProc(@fromBackingInt(@intCast(@as(u32, @intCast(proc_index)))));
     }
 }
 
@@ -687,7 +687,7 @@ const Pass = struct {
                         try self.stack.append(self.allocator, s.initialized_branch);
                         try self.stack.append(self.allocator, s.uninitialized_branch);
                     },
-                    .str_match => |s| {
+                    inline .str_match, .boxy_tag_match => |s| {
                         try self.stack.append(self.allocator, s.on_match);
                         try self.stack.append(self.allocator, s.on_miss);
                     },
@@ -696,11 +696,7 @@ const Pass = struct {
                         for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
                         try self.stack.append(self.allocator, s.on_miss);
                     },
-                    .boxy_tag_match => |s| {
-                        try self.stack.append(self.allocator, s.on_match);
-                        try self.stack.append(self.allocator, s.on_miss);
-                    },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                         try self.stack.append(self.allocator, s.next);
                     },
                     .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1808,7 +1804,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                .str_match => |*s| {
+                inline .str_match, .boxy_tag_match => |*s| {
                     s.on_match = self.resolveRemoved(s.on_match);
                     s.on_miss = self.resolveRemoved(s.on_miss);
                     try self.stack.append(self.allocator, s.on_match);
@@ -1829,19 +1825,13 @@ const Pass = struct {
                     s.on_miss = self.resolveRemoved(s.on_miss);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
-                .boxy_tag_match => |*s| {
-                    s.on_match = self.resolveRemoved(s.on_match);
-                    s.on_miss = self.resolveRemoved(s.on_miss);
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
                 .join => |*j| {
                     j.body = self.resolveRemoved(j.body);
                     j.remainder = self.resolveRemoved(j.remainder);
                     try self.stack.append(self.allocator, j.body);
                     try self.stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |*s| {
                     s.next = self.resolveRemoved(s.next);
                     try self.stack.append(self.allocator, s.next);
                 },
@@ -1910,7 +1900,7 @@ const Pass = struct {
                     try self.stack.append(self.allocator, s.initialized_branch);
                     try self.stack.append(self.allocator, s.uninitialized_branch);
                 },
-                .str_match => |s| {
+                inline .str_match, .boxy_tag_match => |s| {
                     try self.stack.append(self.allocator, s.on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
@@ -1919,11 +1909,7 @@ const Pass = struct {
                     for (0..arms.len) |index| try self.stack.append(self.allocator, GuardedList.at(arms, index).on_match);
                     try self.stack.append(self.allocator, s.on_miss);
                 },
-                .boxy_tag_match => |s| {
-                    try self.stack.append(self.allocator, s.on_match);
-                    try self.stack.append(self.allocator, s.on_miss);
-                },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |a| {
                     try self.stack.append(self.allocator, a.next);
                 },
                 .jump, .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
@@ -1982,11 +1968,8 @@ const Pass = struct {
                                 continue;
                             }
                         },
-                        .discriminant => |op| try self.noteTagRead(op.source, current),
-                        .tag_payload => |op| try self.noteTagRead(op.source, current),
-                        .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
-                        .list_reinterpret => |op| try self.noteUse(op.backing_ref),
-                        .nominal => |op| try self.noteUse(op.backing_ref),
+                        inline .discriminant, .tag_payload, .tag_payload_struct => |op| try self.noteTagRead(op.source, current),
+                        inline .list_reinterpret, .nominal => |op| try self.noteUse(op.backing_ref),
                     }
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
@@ -2081,6 +2064,20 @@ const Pass = struct {
                 .assign_boxy_inspect => |assign| {
                     try self.noteUse(assign.source);
                     try self.noteDescUse(assign.source_desc);
+                    try self.noteWrite(assign.target);
+                    try self.stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_eq => |assign| {
+                    try self.noteUse(assign.lhs);
+                    try self.noteUse(assign.rhs);
+                    try self.noteDescUse(assign.desc);
+                    try self.noteWrite(assign.target);
+                    try self.stack.append(self.allocator, assign.next);
+                },
+                .assign_boxy_hash => |assign| {
+                    try self.noteUse(assign.value);
+                    try self.noteUse(assign.hasher);
+                    try self.noteDescUse(assign.desc);
                     try self.noteWrite(assign.target);
                     try self.stack.append(self.allocator, assign.next);
                 },
@@ -2239,20 +2236,12 @@ const Pass = struct {
                 },
                 .ret => |ret_stmt| try self.noteUse(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteUse(message),
-                .incref => |rc| {
-                    try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
-                },
-                .decref => |rc| {
+                inline .incref, .decref, .free => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },
                 .decref_if_initialized => |rc| {
                     try self.noteUse(rc.cond);
-                    try self.noteUse(rc.value);
-                    try self.stack.append(self.allocator, rc.next);
-                },
-                .free => |rc| {
                     try self.noteUse(rc.value);
                     try self.stack.append(self.allocator, rc.next);
                 },
@@ -2294,7 +2283,7 @@ const ScalarizeTest = struct {
     }
 
     fn freshJoinPointId(self: *ScalarizeTest) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
         self.next_join_point += 1;
         return id;
     }
@@ -2383,7 +2372,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
         for (0..store.procSpecCount()) |index| {
             var scratch = std.heap.ArenaAllocator.init(testing.allocator);
             defer scratch.deinit();
-            try runProc(store, &f.layouts, @enumFromInt(index), scratch.allocator());
+            try runProc(store, &f.layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
         }
     } else {
         try run(store, &f.layouts);
@@ -3075,7 +3064,7 @@ test "scalarize dissolves nested wrappers in one round" {
     // One eliminating round and one confirming round, each collecting the
     // proc's statements twice.
     try testing.expect(metrics.collected_statements <= 4 * (2 * depth + 1));
-    const final_body = store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?;
+    const final_body = store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?;
     const first = store.getCFStmt(final_body);
     try testing.expect(first == .assign_ref);
     try testing.expectEqual(reads[0], first.assign_ref.target);
@@ -3108,7 +3097,7 @@ test "scalarize propagates escaping alias chains in linear work" {
     var metrics = Metrics{};
     try runMeasured(store, &fixture.layouts, &metrics);
     try testing.expect(metrics.alias_edges <= aliases.len);
-    try testing.expectEqual(body, store.getProcSpec(@enumFromInt(@as(u32, 0))).body.?);
+    try testing.expectEqual(body, store.getProcSpec(@fromBackingInt(@intCast(@as(u32, 0)))).body.?);
 }
 
 test "scalarize keeps a constructor with an alias definition and its source" {
@@ -3198,25 +3187,25 @@ test "scalarize alias roots share resolved tails and identify cycles explicitly"
     // Root resolution never reads statement IDs; this fixture only supplies alias edges.
     const unused_stmt: LIR.CFStmtId = undefined;
     for (0..10_000) |index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(@as(u32, @intCast(index + 1))), .def_count = 1 });
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @fromBackingInt(@intCast(@as(u32, @intCast(index + 1)))), .def_count = 1 });
         try transparent.put(local, {});
     }
     // A cycle and a separate incoming edge have no constructor/parameter
     // root. Their exact graph is retained instead of selecting a guessed root.
     for ([_]u32{ 10_002, 10_001, 10_002 }, 10_001..) |source, index| {
-        const local: LIR.LocalId = @enumFromInt(@as(u32, @intCast(index)));
-        try aliases.put(local, .{ .stmt = unused_stmt, .source = @enumFromInt(source), .def_count = 1 });
+        const local: LIR.LocalId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
+        try aliases.put(local, .{ .stmt = unused_stmt, .source = @fromBackingInt(@intCast(source)), .def_count = 1 });
         try transparent.put(local, {});
     }
     try resolveTransparentRoots(allocator, &aliases, &transparent, null);
     for (0..10_000) |index| {
-        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
-        try testing.expectEqual(@as(LIR.LocalId, @enumFromInt(10_000)), def.root.?);
+        try testing.expectEqual(@as(LIR.LocalId, @fromBackingInt(@intCast(10_000))), def.root.?);
     }
     for (10_001..10_004) |index| {
-        const def = aliases.get(@enumFromInt(@as(u32, @intCast(index)))).?;
+        const def = aliases.get(@fromBackingInt(@intCast(@as(u32, @intCast(index))))).?;
         try testing.expectEqual(.complete, def.root_state);
         try testing.expectEqual(null, def.root);
     }

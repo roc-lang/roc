@@ -108,7 +108,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn putAssumeCapacity(self: *Self, key: K, value: V) void {
-            self.put(key, value) catch @panic("DenseMap.putAssumeCapacity exceeded reserved storage");
+            self.put(key, value) catch collectionsInvariant("{s}", .{"DenseMap.putAssumeCapacity exceeded reserved storage"});
         }
 
         pub fn getOrPut(self: *Self, key: K) Allocator.Error!GetOrPutResult {
@@ -132,7 +132,7 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
         }
 
         pub fn getOrPutAssumeCapacity(self: *Self, key: K) GetOrPutResult {
-            return self.getOrPut(key) catch @panic("DenseMap.getOrPutAssumeCapacity exceeded reserved storage");
+            return self.getOrPut(key) catch collectionsInvariant("{s}", .{"DenseMap.getOrPutAssumeCapacity exceeded reserved storage"});
         }
 
         pub fn getOrPutValue(self: *Self, key: K, value: V) Allocator.Error!GetOrPutResult {
@@ -188,6 +188,10 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return .{ .inner = .{ .map = self } };
         }
 
+        pub fn constKeyIterator(self: *const Self) ConstKeyIterator {
+            return .{ .map = self };
+        }
+
         pub fn valueIterator(self: *Self) ValueIterator {
             return .{ .map = self };
         }
@@ -213,6 +217,19 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             pub fn next(self: *KeyIterator) ?*const K {
                 const entry = self.inner.next() orelse return null;
                 return entry.key_ptr;
+            }
+        };
+
+        /// Iterates the keys of a map it cannot change.
+        pub const ConstKeyIterator = struct {
+            map: *const Self,
+            position: usize = 0,
+
+            pub fn next(self: *ConstKeyIterator) ?K {
+                if (self.position >= self.map.active_indices.items.len) return null;
+                const index = self.map.active_indices.items[self.position];
+                self.position += 1;
+                return keyFromIndex(K, index);
             }
         };
 
@@ -374,14 +391,14 @@ fn keyIndex(key: anytype) usize {
     const K = @TypeOf(key);
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "denseIndex")) return key.denseIndex();
     if (comptime @typeInfo(K) == .int) return @intCast(key);
-    if (comptime @typeInfo(K) == .@"enum") return @intCast(@intFromEnum(key));
+    if (comptime @typeInfo(K) == .@"enum") return @intCast(@backingInt(key));
     unreachable;
 }
 
 fn keyFromIndex(comptime K: type, index: usize) K {
     if (comptime @typeInfo(K) == .@"enum" and @hasDecl(K, "fromDenseIndex")) return K.fromDenseIndex(index);
     if (comptime @typeInfo(K) == .int) return @intCast(index);
-    if (comptime @typeInfo(K) == .@"enum") return @enumFromInt(index);
+    if (comptime @typeInfo(K) == .@"enum") return @fromBackingInt(@intCast(index));
     unreachable;
 }
 
@@ -390,16 +407,16 @@ test "DenseMap directly indexes integer and enum IDs" {
     var map = DenseMap(TestId, u32).init(std.testing.allocator);
     defer map.deinit();
 
-    try map.put(@enumFromInt(7), 42);
-    try std.testing.expectEqual(@as(?u32, 42), map.get(@enumFromInt(7)));
-    try std.testing.expectEqual(@as(?u32, null), map.get(@enumFromInt(6)));
+    try map.put(@fromBackingInt(@intCast(7)), 42);
+    try std.testing.expectEqual(@as(?u32, 42), map.get(@fromBackingInt(@intCast(7))));
+    try std.testing.expectEqual(@as(?u32, null), map.get(@fromBackingInt(@intCast(6))));
     try std.testing.expectEqual(@as(usize, 1), map.count());
 
-    const existing = try map.getOrPut(@enumFromInt(7));
+    const existing = try map.getOrPut(@fromBackingInt(@intCast(7)));
     try std.testing.expect(existing.found_existing);
     existing.value_ptr.* = 43;
 
-    const inserted = try map.getOrPut(@enumFromInt(2));
+    const inserted = try map.getOrPut(@fromBackingInt(@intCast(2)));
     try std.testing.expect(!inserted.found_existing);
     inserted.value_ptr.* = 11;
 
@@ -411,8 +428,8 @@ test "DenseMap directly indexes integer and enum IDs" {
     try std.testing.expectEqual(@as(u32, 11), second.value_ptr.*);
     try std.testing.expect(iterator.next() == null);
 
-    try std.testing.expectEqual(@as(u32, 43), map.fetchRemove(@enumFromInt(7)).?.value);
-    try std.testing.expect(!map.contains(@enumFromInt(7)));
+    try std.testing.expectEqual(@as(u32, 43), map.fetchRemove(@fromBackingInt(@intCast(7))).?.value);
+    try std.testing.expect(!map.contains(@fromBackingInt(@intCast(7))));
 
     var integer_map = DenseMap(u32, bool).init(std.testing.allocator);
     defer integer_map.deinit();
@@ -470,26 +487,26 @@ test "DenseMap swap-removes and clears compact values" {
     var map = DenseMap(TestId, LargeValue).init(std.testing.allocator);
     defer map.deinit();
 
-    try map.put(@enumFromInt(300), [_]u8{1} ** 1024);
-    try map.put(@enumFromInt(700), [_]u8{2} ** 1024);
+    try map.put(@fromBackingInt(@intCast(300)), @as([1024]u8, @splat(1)));
+    try map.put(@fromBackingInt(@intCast(700)), @as([1024]u8, @splat(2)));
     try std.testing.expectEqual(@as(usize, 2), map.values.items.len);
-    try std.testing.expect(map.remove(@enumFromInt(300)));
+    try std.testing.expect(map.remove(@fromBackingInt(@intCast(300))));
     try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
-    try std.testing.expectEqual(@as(u8, 2), map.get(@enumFromInt(700)).?[0]);
+    try std.testing.expectEqual(@as(u8, 2), map.get(@fromBackingInt(@intCast(700))).?[0]);
 
     map.clearRetainingCapacity();
     try std.testing.expectEqual(@as(usize, 0), map.count());
-    try std.testing.expectEqual(@as(?LargeValue, null), map.get(@enumFromInt(700)));
+    try std.testing.expectEqual(@as(?LargeValue, null), map.get(@fromBackingInt(@intCast(700))));
 
-    try map.put(@enumFromInt(300), [_]u8{3} ** 1024);
-    try std.testing.expectEqual(@as(u8, 3), map.get(@enumFromInt(300)).?[0]);
+    try map.put(@fromBackingInt(@intCast(300)), @as([1024]u8, @splat(3)));
+    try std.testing.expectEqual(@as(u8, 3), map.get(@fromBackingInt(@intCast(300))).?[0]);
     try std.testing.expectEqual(@as(usize, 1), map.values.items.len);
 
     var set = DenseMap(TestId, void).init(std.testing.allocator);
     defer set.deinit();
-    try set.put(@enumFromInt(900), {});
-    try std.testing.expect(set.contains(@enumFromInt(900)));
-    try std.testing.expect(set.remove(@enumFromInt(900)));
+    try set.put(@fromBackingInt(@intCast(900)), {});
+    try std.testing.expect(set.contains(@fromBackingInt(@intCast(900))));
+    try std.testing.expect(set.remove(@fromBackingInt(@intCast(900))));
 }
 
 test "DenseMapPool reuses released map storage and supports nested acquires" {
@@ -498,20 +515,27 @@ test "DenseMapPool reuses released map storage and supports nested acquires" {
     defer pool.deinit();
 
     var outer = pool.acquire();
-    try outer.put(@enumFromInt(5_000), 1);
+    try outer.put(@fromBackingInt(@intCast(5_000)), 1);
     const outer_chunks = outer.sparse_chunks.items.len;
 
     var inner = pool.acquire();
-    try inner.put(@enumFromInt(5_000), 2);
-    try std.testing.expectEqual(@as(?u32, 1), outer.get(@enumFromInt(5_000)));
+    try inner.put(@fromBackingInt(@intCast(5_000)), 2);
+    try std.testing.expectEqual(@as(?u32, 1), outer.get(@fromBackingInt(@intCast(5_000))));
     pool.release(&inner);
     pool.release(&outer);
 
     var reused = pool.acquire();
     defer pool.release(&reused);
     try std.testing.expectEqual(@as(usize, 0), reused.count());
-    try std.testing.expectEqual(@as(?u32, null), reused.get(@enumFromInt(5_000)));
+    try std.testing.expectEqual(@as(?u32, null), reused.get(@fromBackingInt(@intCast(5_000))));
     try std.testing.expectEqual(outer_chunks, reused.sparse_chunks.items.len);
-    try reused.put(@enumFromInt(5_000), 3);
-    try std.testing.expectEqual(@as(?u32, 3), reused.get(@enumFromInt(5_000)));
+    try reused.put(@fromBackingInt(@intCast(5_000)), 3);
+    try std.testing.expectEqual(@as(?u32, 3), reused.get(@fromBackingInt(@intCast(5_000))));
+}
+
+/// A violated compiler invariant (design.md): builds with runtime safety
+/// panic with this message, and optimized builds treat it as unreachable.
+inline fn collectionsInvariant(comptime fmt: []const u8, args: anytype) noreturn {
+    if (std.debug.runtime_safety) std.debug.panic(fmt, args);
+    unreachable;
 }
