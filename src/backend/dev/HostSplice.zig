@@ -496,6 +496,53 @@ test "physical region symbols preserve duplicate proc helper and thunk offsets" 
     try std.testing.expectEqual(@as(usize, 8), symbols.count());
 }
 
+test "selected procedure logical symbols and recapture preserve nonzero entry" {
+    if (comptime !LirCodeGenMod.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(913);
+    const message = try store.insertString("unused body");
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = identity,
+        .args = .empty(),
+        .body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message } } }, .test_fixture),
+        .ret_layout = .zst,
+    }, .none);
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    _ = try cg.appendAssembledRegion("\x00" ** 8, .entrypoint, 0, null);
+    const start = try cg.appendAssembledRegion("\x00" ** 8, .{ .proc = proc }, 4, .{
+        .prologue_size = 0,
+        .stack_alloc = 0,
+        .frame_size = 0,
+        .callee_saved_mask = 0,
+        .epilogue_offset = 0,
+        .uses_frame_pointer = false,
+    });
+    try std.testing.expectEqual(start + 4, cg.compiledProcSymbol(proc).?.code_start);
+    try std.testing.expectEqual(start, cg.codeRegions()[1].start);
+    var symbols = std.StringHashMap(usize).init(allocator);
+    defer {
+        var names = symbols.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        symbols.deinit();
+    }
+    try collectCodeSymbols(allocator, &cg, &symbols);
+    const logical = try identity.symbolName(allocator);
+    defer allocator.free(logical);
+    try std.testing.expectEqual(start + 4, symbols.get(logical).?);
+    const physical = cg.codeRegions()[1].physical_symbol.?;
+    try std.testing.expectEqual(start + 4, symbols.get(cg.symbolName(physical)).?);
+    try cg.finishImage();
+    var recaptured = try ProcArtifact.extract(HostLirCodeGen, allocator, &cg, store.getProcSpecs(), &layouts, &.{}, &.{}, &.{});
+    defer recaptured.deinit();
+    try std.testing.expectEqual(@as(u32, 4), recaptured.artifacts[1].entry);
+}
+
 fn comptimeDictSeed() callconv(.c) u64 {
     return 0;
 }

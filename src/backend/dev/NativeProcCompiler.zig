@@ -76,6 +76,8 @@ pub const Retained = struct {
     contract: Emitter.FragmentContract,
     procedures: std.ArrayList(Procedure) = .empty,
     helpers: std.ArrayList(Helper) = .empty,
+    image_data: std.ArrayList(Artifact.DataItem) = .empty,
+    image_data_arena: ?std.heap.ArenaAllocator = null,
 
     /// Final image/object linking consumes carried data separately from code.
     /// The returned slice is caller-owned; its fields borrow this retained owner.
@@ -84,16 +86,38 @@ pub const Retained = struct {
         errdefer items.deinit(allocator);
         var names = std.StringHashMap(void).init(allocator);
         defer names.deinit();
-        for (self.procedures.items) |proc| try collectData(allocator, &proc.fragment, &items, &names);
-        for (self.helpers.items) |helper| try collectData(allocator, &helper.fragment, &items, &names);
+        for (self.image_data.items) |item| {
+            const entry = try names.getOrPut(item.name);
+            if (!entry.found_existing) try items.append(allocator, item);
+        }
         return items.toOwnedSlice(allocator);
     }
 
-    fn collectData(allocator: Allocator, fragment: *const Artifact.Fragment, items: *std.ArrayList(Artifact.DataItem), names: *std.StringHashMap(void)) Allocator.Error!void {
+    /// Capture receiving-image handles independently of immutable reusable
+    /// fragments. No fragment-local ordinal can escape through `dataItems`.
+    fn appendImageData(self: *Retained, comptime CG: type, codegen: *CG, fragment: *const Artifact.Fragment, starts: []const usize) Allocator.Error!void {
         for (fragment.set.artifacts) |artifact| {
             for (artifact.data) |item| {
-                const entry = try names.getOrPut(item.name);
-                if (!entry.found_existing) try items.append(allocator, item);
+                var rebound = item;
+                var copied = false;
+                for (item.relocations, 0..) |relocation, index| {
+                    const target = relocation.code_target orelse continue;
+                    std.debug.assert(target != .image_offset);
+                    if (target != .local) continue;
+                    if (self.image_data_arena == null) self.image_data_arena = std.heap.ArenaAllocator.init(self.allocator);
+                    const a = self.image_data_arena.?.allocator();
+                    if (!copied) {
+                        rebound.relocations = try a.dupe(Artifact.DataRelocation, item.relocations);
+                        copied = true;
+                    }
+                    const start = starts[target.local];
+                    const entry = fragment.set.artifacts[target.local].entry;
+                    const symbol = try codegen.internRegionCodeSymbol(start, entry);
+                    const out = &@constCast(rebound.relocations)[index];
+                    out.name = try a.dupe(u8, codegen.symbolName(symbol));
+                    out.code_target = .{ .image_offset = start + entry };
+                }
+                try self.image_data.append(self.allocator, rebound);
             }
         }
     }
@@ -104,6 +128,8 @@ pub const Retained = struct {
         for (self.helpers.items) |*helper| helper.fragment.deinit();
         self.procedures.deinit(self.allocator);
         self.helpers.deinit(self.allocator);
+        self.image_data.deinit(self.allocator);
+        if (self.image_data_arena) |*arena| arena.deinit();
         self.* = undefined;
     }
 };
@@ -337,7 +363,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
             destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-            Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            const starts = Artifact.appendPreparedWithPlacement(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+            defer allocator.free(starts);
+            try retained.appendImageData(CG, destination, fragment, starts);
             const id = job.proc.?;
             const spec = specs[@intFromEnum(id)];
             try retained.procedures.append(allocator, .{ .id = id, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment.* });
@@ -366,7 +394,9 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
             return err;
         };
         destination.boxy_runtime_used = destination.boxy_runtime_used or fragment.context_dependencies.boxy_runtime;
-        Artifact.appendPrepared(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+        const starts = Artifact.appendPreparedWithPlacement(CG, allocator, destination, &fragment.set, &identities, &helper_keys) catch |err| return invariant(err);
+        defer allocator.free(starts);
+        try retained.appendImageData(CG, destination, fragment, starts);
         try retained.helpers.append(allocator, .{ .key = key, .fragment = fragment.* });
         account(&metrics, fragment, job.reused, true);
         job.fragment = null;
@@ -675,6 +705,75 @@ fn testCoordinatorAllocationFailure(a: Allocator) Allocator.Error!void {
 test "native driver coordinator allocation failures drain and release owners" {
     if (comptime !Emitter.host_lir_codegen_available) return error.SkipZigTest;
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testCoordinatorAllocationFailure, .{});
+}
+
+test "native retained data binds local self pointers through nonzero fragment placement" {
+    const a = std.testing.allocator;
+    const CG = Emitter.LirCodeGen(.x64linux);
+    var store = lir.LirStore.init(a);
+    defer store.deinit();
+    var layouts = try layout.Store.init(a, .u64);
+    defer layouts.deinit();
+    const proc = try testProc(&store, 42);
+    const spec = store.getProcSpec(proc);
+    var cg = try CG.init(a, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    _ = try cg.appendAssembledRegion("\x90" ** 8, .entrypoint, 0, null);
+    const source = Artifact.Set{
+        .arena = std.heap.ArenaAllocator.init(a),
+        .artifacts = &.{.{
+            .kind = .{ .proc = spec.identity },
+            .code = "\x90\x48\x8b\x05\x00\x00\x00\x00\xc3",
+            .entry = 1,
+            .frame = .{
+                .prologue_size = 0,
+                .stack_alloc = 0,
+                .frame_size = 0,
+                .callee_saved_mask = 0,
+                .epilogue_offset = 7,
+                .uses_frame_pointer = false,
+            },
+            .refs = &.{},
+            .relocations = &.{.{ .offset = 4, .name = "self-pointer", .scope = .shared, .kind = .{ .data = .rel32 } }},
+            .data = &.{.{
+                .name = "self-pointer",
+                .bytes = "\x00" ** 8,
+                .alignment = 8,
+                .symbol_offset = 0,
+                .relocations = &.{.{ .offset = 0, .name = "original-proc", .addend = 0, .function = true, .code_target = .{ .local = 0 } }},
+            }},
+        }},
+    };
+    var fragment = Artifact.Fragment{
+        .set = try Artifact.combine(a, &.{&source}),
+        .required_helpers = &.{},
+        .context_dependencies = .{},
+    };
+    var fragment_owned = true;
+    defer if (fragment_owned) fragment.deinit();
+    var retained = Retained{ .allocator = a, .contract = cg.getFragmentContract() };
+    defer retained.deinit();
+    var identities = std.AutoHashMap(lir.ProcIdentity, ProcId).init(a);
+    defer identities.deinit();
+    try identities.put(spec.identity, proc);
+    var helpers = Artifact.HelperKeys.init(a);
+    defer helpers.deinit();
+    const starts = try Artifact.appendPreparedWithPlacement(CG, a, &cg, &fragment.set, &identities, &helpers);
+    defer a.free(starts);
+    try retained.appendImageData(CG, &cg, &fragment, starts);
+    try retained.procedures.append(a, .{ .id = proc, .identity = spec.identity, .revision = spec.native_code_revision, .fragment = fragment });
+    fragment_owned = false;
+    const items = try retained.dataItems(a);
+    defer a.free(items);
+    try std.testing.expectEqual(@as(usize, 8), starts[0]);
+    try std.testing.expectEqual(starts[0] + 1, cg.compiledProcSymbol(proc).?.code_start);
+    try std.testing.expectEqual(starts[0] + 1, items[0].relocations[0].code_target.?.image_offset);
+    try std.testing.expectEqual(@as(u32, 0), retained.procedures.items[0].fragment.set.artifacts[0].data[0].relocations[0].code_target.?.local);
+    try cg.finishImage();
+    var recaptured = try Artifact.extract(CG, a, &cg, store.getProcSpecs(), &layouts, &.{}, &.{}, items);
+    defer recaptured.deinit();
+    try std.testing.expectEqual(@as(u32, 1), recaptured.artifacts[1].entry);
+    try std.testing.expectEqual(@as(u32, 1), recaptured.artifacts[1].data[0].relocations[0].code_target.?.local);
 }
 
 test "native driver shared literal data outlives source and reused fragment owners" {

@@ -9789,6 +9789,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateStaticDataLiteral(self: *Self, id: lir.LIR.StaticDataId, target_layout: layout.Idx) Allocator.Error!ValueLocation {
+            // Reading a root demands its initialization/failure outcome even
+            // when this consumer embeds the completed readonly value.
+            self.region_requires_ctfe_observations = true;
             const mode = if (self.fragment_mode) self.fragment_source_mode else self.generation_mode;
             const current_context = self.comptime_hooks != null and mode != .object_file;
             const access: @FieldType(FragmentContextDependencies, "static_data_access") = if (current_context)
@@ -25985,7 +25988,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const frame_info = frame orelse unreachable;
                     try self.proc_registry.put(@intFromEnum(proc_id), .{
                         .id = proc_id,
-                        .code_start = start,
+                        .code_start = start + entry,
                         .code_end = end,
                         .name = proc.name,
                         .args = proc.args,
@@ -29209,6 +29212,41 @@ test "independent fragment ownership survives allocation failure" {
             defer a.free(keys);
         }
     }.run, .{ &store, &layouts.layout_store, proc });
+}
+
+test "readonly static root fragments record initialization requirements without hooks or expects" {
+    if (comptime !host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try TestLayoutState.init(allocator);
+    defer layouts.deinit();
+    const data_id: LIR.StaticDataId = @enumFromInt(8);
+    const proc = try addLiteralProc(&store, .{ .static_data = data_id }, .i64);
+    store.getProcSpecPtr(proc).source_observations = .absent;
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts.layout_store, .{}, &.{}, .default);
+    defer cg.deinit();
+    cg.generation_mode = .object_file;
+    try cg.setStaticDataSymbols(&.{.{
+        .symbol_name = "readonly_root_value",
+        .value_id = data_id,
+        .bytes = &.{},
+        .alignment = 8,
+    }});
+    var fragment = try @import("ProcArtifact.zig").compileProcFragment(HostLirCodeGen, allocator, &cg, proc, store.getProcSpecs(), &layouts.layout_store, &.{}, &.{});
+    defer fragment.deinit();
+    var found = false;
+    for (fragment.set.artifacts) |artifact| {
+        if (artifact.kind != .proc) continue;
+        found = true;
+        try std.testing.expectEqual(lir.Program.ProducerObservations.absent, artifact.source_observations);
+        try std.testing.expectEqual(@as(?bool, true), artifact.requires_ctfe_observations);
+        try std.testing.expect(!artifact.context_contract.?.hooks_enabled);
+        try std.testing.expect(!artifact.context_dependencies.?.comptime_hooks);
+        try std.testing.expectEqual(@FieldType(FragmentContextDependencies, "static_data_access").readonly_symbols, artifact.context_dependencies.?.static_data_access);
+        try std.testing.expectEqual(@as(usize, 0), artifact.context_bindings.len);
+    }
+    try std.testing.expect(found);
 }
 
 test "independent fragment symbolic hooks record actual context use" {

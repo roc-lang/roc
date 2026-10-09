@@ -1179,6 +1179,10 @@ test "runtime expect absence cannot certify compile-time failure provenance" {
     try std.testing.expect(!cache.policyAdmitted(artifact));
     artifact.source_observations = .unknown;
     try std.testing.expect(!cache.policyAdmitted(artifact));
+    artifact.source_observations = .absent;
+    artifact.requires_ctfe_observations = true;
+    artifact.context_dependencies = .{ .static_data = true, .static_data_access = .readonly_symbols };
+    try std.testing.expect(!cache.policyAdmitted(artifact));
 }
 
 test "CTFE preparation cannot remove complete runtime offers" {

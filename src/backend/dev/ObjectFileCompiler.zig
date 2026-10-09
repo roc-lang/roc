@@ -894,14 +894,43 @@ const SelectedCodeSymbols = struct {
 
 test "physical region symbols static exports use selected provider not logical spelling" {
     const allocator = std.testing.allocator;
+    const CG = LirCodeGenMod.LirCodeGen(.x64linux);
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(914);
+    const message = try store.insertString("unused body");
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = identity,
+        .args = .empty(),
+        .body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message } } }, .test_fixture),
+        .ret_layout = .zst,
+    }, .none);
+    var cg = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    _ = try cg.appendAssembledRegion("\x90" ** 16, .{ .spliced_proc = identity }, 0, null);
+    const start = try cg.appendAssembledRegion("\x90" ** 16, .{ .proc = proc }, 4, .{
+        .prologue_size = 0,
+        .stack_alloc = 0,
+        .frame_size = 0,
+        .callee_saved_mask = 0,
+        .epilogue_offset = 0,
+        .uses_frame_pointer = false,
+    });
+    try std.testing.expectEqual(@as(usize, 20), cg.compiledProcSymbol(proc).?.code_start);
     var table: SymbolTable.Table = .{};
     defer table.deinit(allocator);
     const old = try table.intern(allocator, "roc__variant_0_0", .program);
     const current = try table.intern(allocator, "roc__variant_16_4", .program);
     var selected = SelectedCodeSymbols.init(allocator);
     defer selected.deinit();
-    const proc: lir.LIR.LirProcSpecId = @enumFromInt(0);
-    try selected.functions.put(proc, current);
+    var physical_entries = std.AutoHashMap(usize, SymbolTable.Id).init(allocator);
+    defer physical_entries.deinit();
+    try physical_entries.put(0, old);
+    try physical_entries.put(start + 4, current);
+    try selected.functions.put(proc, physical_entries.get(cg.compiledProcSymbol(proc).?.code_start).?);
     var symbols = std.ArrayList(SymbolDefinition).empty;
     defer symbols.deinit(allocator);
     try symbols.appendSlice(allocator, &.{

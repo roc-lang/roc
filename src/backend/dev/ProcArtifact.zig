@@ -1339,8 +1339,23 @@ pub fn appendPrepared(
     procs_by_identity: *const std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId),
     helper_keys: *const HelperKeys,
 ) AssembleError!void {
-    const starts = try allocator.alloc(usize, set.artifacts.len);
+    const starts = try appendPreparedWithPlacement(CG, allocator, codegen, set, procs_by_identity, helper_keys);
     defer allocator.free(starts);
+}
+
+/// The caller owns the returned source-artifact-to-image placement map.
+/// Reusable fragments keep their local data targets; a receiving image binds
+/// a separate data view through this exact map.
+pub fn appendPreparedWithPlacement(
+    comptime CG: type,
+    allocator: Allocator,
+    codegen: *CG,
+    set: *const Set,
+    procs_by_identity: *const std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId),
+    helper_keys: *const HelperKeys,
+) AssembleError![]usize {
+    const starts = try allocator.alloc(usize, set.artifacts.len);
+    errdefer allocator.free(starts);
 
     for (set.artifacts, 0..) |artifact, index| {
         const kind: CG.CodeRegionKind = switch (artifact.kind) {
@@ -1365,15 +1380,7 @@ pub fn appendPrepared(
 
     for (set.artifacts, 0..) |artifact, index| {
         for (artifact.refs) |ref| {
-            const target_artifact = set.artifacts[ref.target];
-            const target: CG.CodeRefTarget = switch (target_artifact.kind) {
-                .proc => |identity| .{ .proc = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
-                .rc_helper => |name| .{ .rc_helper = helper_keys.get(name) orelse return error.UnknownRcHelper },
-                .boxy_thunk => |identity| .{ .boxy_thunk = procs_by_identity.get(identity) orelse return error.UnknownProcIdentity },
-                // Imported pools do not share the destination's message-ID
-                // domain. Preserve this exact placed target for later extraction.
-                .message_pool_run, .entrypoint, .branch_island => .{ .offset = starts[ref.target] + ref.delta },
-            };
+            const target: CG.CodeRefTarget = .{ .offset = starts[ref.target] + ref.delta };
             try codegen.patchAssembledRef(
                 starts[index] + ref.site,
                 switch (ref.form) {
@@ -1386,6 +1393,7 @@ pub fn appendPrepared(
             );
         }
     }
+    return starts;
 }
 
 fn appendMetadata(comptime CG: type, codegen: *CG, artifact: Artifact, start: usize, include_lines: bool, bind_symbols: bool) Allocator.Error!void {
