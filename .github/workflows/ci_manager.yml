@@ -651,8 +651,7 @@ jobs:
     if: needs.check-changes.outputs.heavy == 'true'
     name: minici (${{ matrix.minici_shard }})
     runs-on: macos-15
-    # A cold macos-core run (test wiring + evaluator) takes ~115 min.
-    timeout-minutes: ${{ matrix.minici_shard == 'macos-core' && 180 || 120 }}
+    timeout-minutes: 120
     env: *minici_shard_env
     strategy:
       fail-fast: false
