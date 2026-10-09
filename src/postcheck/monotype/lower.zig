@@ -1176,6 +1176,16 @@ fn valuePositionMask(
     const arena = scratch.allocator();
     const excluded = try arena.alloc(bool, targets.len);
     @memset(excluded, false);
+    // Every visited type asks whether it is a target, so many targets are
+    // indexed; the first position of a repeated target answers.
+    const target_scan_limit = 16;
+    var target_positions = collections.DenseMap(checked.CheckedTypeId, u32).init(arena);
+    if (targets.len > target_scan_limit) {
+        for (targets, 0..) |target, index| {
+            const entry = try target_positions.getOrPut(target);
+            if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+        }
+    }
     const Visit = struct { ty: checked.CheckedTypeId, value_position: bool };
     var pending = std.ArrayList(Visit).empty;
     var visited = [_]collections.DenseMap(checked.CheckedTypeId, void){
@@ -1185,7 +1195,9 @@ fn valuePositionMask(
     try pending.append(arena, .{ .ty = root, .value_position = true });
     while (pending.pop()) |visit| {
         if ((try visited[@intFromBool(visit.value_position)].getOrPut(visit.ty)).found_existing) continue;
-        const target_index = for (targets, 0..) |target, index| {
+        const target_index: ?usize = if (targets.len > target_scan_limit)
+            if (target_positions.get(visit.ty)) |index| index else null
+        else for (targets, 0..) |target, index| {
             if (target == visit.ty) break index;
         } else null;
         if (target_index) |index| {
@@ -3138,11 +3150,20 @@ const HostedBindingView = struct {
 const NestedRelationBase = struct {
     ctx: BodyContext,
     related: collections.DenseMap(checked.PatternBinderId, DraftLocalId),
+    /// Every variable node the relations instantiated, in instantiation
+    /// order; `ctx` records them through `relation_variables`.
+    variables: std.ArrayList(InstantiatedVariable) = .empty,
 
     fn relate(self: *NestedRelationBase, entry: BinderMap.Entry) Allocator.Error!void {
         try self.ctx.constrainCheckedInterfaceToCell(checkedBinderType(self.ctx.view, entry.binder), self.ctx.localTypeCell(entry.local));
         try self.related.put(entry.binder, entry.local);
     }
+};
+
+/// A checked variable and the node an instantiation gave it.
+const InstantiatedVariable = struct {
+    checked_ty: checked.CheckedTypeId,
+    node: NodeId,
 };
 
 /// Each lexical environment has its own version. Forks share inherited bindings;
@@ -4321,6 +4342,13 @@ const Builder = struct {
     /// Whether each checked type reaches the error type (see
     /// `checkedTypeContainsError`).
     checked_type_contains_error: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
+    /// Whether each checked type is representation-fixed (see
+    /// `checkedTypeRepresentationFixed`).
+    checked_type_representation_fixed: std.AutoHashMapUnmanaged(CheckedTypeAddress, bool) = .empty,
+    /// Each scheme's quantified variables by slot, keyed by the scheme's
+    /// variable list, for resolving an enclosing variable to its evidence
+    /// frame's substitution.
+    scheme_var_slots: std.AutoHashMapUnmanaged(SchemeVarsAddress, std.AutoHashMapUnmanaged(checked.CheckedTypeId, u32)) = .empty,
     reassigned_binder_pool: std.ArrayList(checked.PatternBinderId) = .empty,
     const_expr_cache: std.AutoHashMap(ConstExprAddress, Ast.ExprId),
     static_data_ids: std.AutoHashMap(StaticDataUse, Common.StaticDataId),
@@ -4733,6 +4761,10 @@ const Builder = struct {
         self.nested_site_cache.deinit();
         self.reassigned_binders_memo.deinit(self.allocator);
         self.checked_type_contains_error.deinit(self.allocator);
+        self.checked_type_representation_fixed.deinit(self.allocator);
+        var scheme_var_slots = self.scheme_var_slots.valueIterator();
+        while (scheme_var_slots.next()) |slots| slots.deinit(self.allocator);
+        self.scheme_var_slots.deinit(self.allocator);
         self.reassigned_binder_pool.deinit(self.allocator);
         self.lowered_nested_by_fn.deinit();
         self.lowered_templates.deinit();
@@ -4766,6 +4798,38 @@ const Builder = struct {
         if (self.counters) |counters| {
             @field(counters, field) += @intCast(amount);
         }
+    }
+
+    /// The slot of `variable` among a scheme's quantified variables. Small
+    /// schemes are scanned; larger ones are indexed once per compilation.
+    fn schemeVarSlot(
+        self: *Builder,
+        scheme_vars: []const checked.CheckedTypeId,
+        variable: checked.CheckedTypeId,
+    ) Allocator.Error!?u32 {
+        const scan_limit = 16;
+        if (scheme_vars.len <= scan_limit) {
+            for (scheme_vars, 0..) |scheme_var, slot| {
+                if (scheme_var == variable) return @intCast(slot);
+            }
+            return null;
+        }
+        const entry = try self.scheme_var_slots.getOrPut(self.allocator, .{
+            .ptr = @intFromPtr(scheme_vars.ptr),
+            .len = scheme_vars.len,
+        });
+        if (!entry.found_existing) {
+            entry.value_ptr.* = .empty;
+            errdefer _ = self.scheme_var_slots.remove(entry.key_ptr.*);
+            try entry.value_ptr.ensureTotalCapacity(self.allocator, @intCast(scheme_vars.len));
+            // The first slot of a repeated variable answers, as a scan would.
+            var slot = scheme_vars.len;
+            while (slot > 0) {
+                slot -= 1;
+                entry.value_ptr.putAssumeCapacity(scheme_vars[slot], @intCast(slot));
+            }
+        }
+        return entry.value_ptr.get(variable);
     }
 
     fn countBodyDiagnostic(self: *Builder, comptime field: []const u8) void {
@@ -11033,7 +11097,7 @@ const Builder = struct {
 
         const nested_ctx = try self.allocator.create(BodyContext);
         errdefer self.allocator.destroy(nested_ctx);
-        nested_ctx.* = try source_ctx.nestedInstantiationContext(source_fn_key, nested.site, requested_evidence, false);
+        nested_ctx.* = try source_ctx.nestedInstantiationContext(source_fn_key, requested_evidence, &.{});
         nested_ctx.in_deferred_body = true;
         errdefer nested_ctx.deinit();
         if (codec_contract) |contract| {
@@ -11043,7 +11107,17 @@ const Builder = struct {
                 contract.shape_node,
             );
         }
-        const root_node = try nested_ctx.instNode(source_fn_ty);
+        // A request whose class already holds this function's pure instance
+        // under the nested evidence is the nested body's instance itself:
+        // instantiating the checked function afresh and relating it to the
+        // request would add nothing to the request's class.
+        const reuses_request = owned_scope == null and codec_contract == null and
+            !try nested_ctx.graph.containsGeneratedPrivate(request_fn_node) and
+            nested_ctx.holdsPureInstance(source_fn_ty, request_fn_node);
+        const root_node = if (reuses_request) blk: {
+            try nested_ctx.adoptPureInstance(source_fn_ty, request_fn_node);
+            break :blk request_fn_node;
+        } else try nested_ctx.instNode(source_fn_ty);
         if (owned_scope) |scope| {
             try nested_ctx.graph.unify(root_node, try nested_ctx.lowerExprTypeNode(expr_id));
             const raw_site = @backingInt(nested.site);
@@ -19424,6 +19498,9 @@ const TypeInstantiationContext = struct {
     /// instNominalBackingNode.
     decl_scopes: std.ArrayList(*InstantiatingNodeMap) = .empty,
     field_kind_decl_scopes: std.ArrayList(*collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind)) = .empty,
+    /// Nodes this scope instantiated as pure instances under its evidence
+    /// (see `BodyContext.recordPureInstance`).
+    pure_nodes: collections.DenseMap(NodeId, void),
     closed_types: ClosedTypeInstantiation = .structure,
     /// Closed checked types a `.measuring` context built, each with its node,
     /// in the order their builds finished.
@@ -19442,10 +19519,12 @@ const TypeInstantiationContext = struct {
             .field_kind_map = collections.DenseMap(checked.CheckedTypeId, InstantiatedFieldKind).init(allocator),
             .direct_call_requests = collections.DenseMap(checked.CheckedExprId, DirectCallRequest).init(allocator),
             .expr_type_reads = collections.DenseMap(checked.CheckedExprId, NodeId).init(allocator),
+            .pure_nodes = collections.DenseMap(NodeId, void).init(allocator),
         };
     }
 
     fn deinit(self: *TypeInstantiationContext) void {
+        self.pure_nodes.deinit();
         self.measured.deinit(self.allocator);
         self.decl_scopes.deinit(self.allocator);
         self.field_kind_decl_scopes.deinit(self.allocator);
@@ -19535,6 +19614,19 @@ const BodyContext = struct {
     /// If any argument finalizes as uninhabited, the body is unreachable.
     /// This callee-owned proof is separate from call-chain frame identity.
     function_entry_demand_guards: []const NodeId = &.{},
+    /// A nested body's instantiation answers each enclosing quantified
+    /// variable from its lexical evidence frames when it first reaches the
+    /// variable (see `enclosingVariableNode`). Other contexts own their
+    /// variables' cells.
+    resolves_enclosing_variables: bool = false,
+    /// Set on a `NestedRelationBase`'s context: every variable node its
+    /// instantiation creates or resolves is recorded here, so each nested
+    /// context forked from it can join its own answer for the variable.
+    relation_variables: ?*std.ArrayList(InstantiatedVariable) = null,
+    /// The quantified variables of a generalized scope this context is
+    /// constructing: they stay fresh until the construction request
+    /// determines them.
+    constructing_scheme_vars: []const checked.CheckedTypeId = &.{},
     propagate_constructor_value_evidence: bool = false,
     /// One shared request interface per direct call expression of this body;
     /// see `DirectCallRequest`.
@@ -22295,9 +22387,8 @@ const BodyContext = struct {
     fn nestedInstantiationContext(
         self: *BodyContext,
         current_fn_key: names.TypeDigest,
-        site_id: names.NestedProcSiteId,
         evidence: EvidenceChain,
-        constructing_scope: bool,
+        constructing_scheme_vars: []const checked.CheckedTypeId,
     ) Allocator.Error!BodyContext {
         var child = try self.childContextWithTypeCells(current_fn_key, false);
         errdefer child.deinit();
@@ -22313,7 +22404,15 @@ const BodyContext = struct {
             .stored_function => try child.instantiateStoredEvidence(evidence),
         };
         child.function_entry_demand_guards = &.{};
-        try child.bindNestedTypes(site_id, constructing_scope);
+        child.resolves_enclosing_variables = true;
+        child.constructing_scheme_vars = constructing_scheme_vars;
+        // A variable the base relations instantiated holds the base's node,
+        // which the child's evidence may answer differently; the child's
+        // answer joins its class, exactly as relating the binders in the
+        // child would have joined them.
+        for (relation_base.variables.items) |instantiated| {
+            if (try child.enclosingVariableNode(instantiated.checked_ty)) |bound| try child.graph.unify(instantiated.node, bound);
+        }
         return child;
     }
 
@@ -22356,6 +22455,7 @@ const BodyContext = struct {
             .related = collections.DenseMap(checked.PatternBinderId, DraftLocalId).init(self.allocator),
         };
         self.nested_relation_base = relation_base;
+        relation_base.ctx.relation_variables = &relation_base.variables;
         for (entries) |entry| try relation_base.relate(entry);
         return relation_base;
     }
@@ -22365,41 +22465,37 @@ const BodyContext = struct {
         self.nested_relation_base = null;
         relation_base.ctx.deinit();
         relation_base.related.deinit();
+        relation_base.variables.deinit(self.allocator);
         self.allocator.destroy(relation_base);
     }
 
-    /// The checked inventory is sorted by lexical depth. Visit each frame
-    /// once, indexing its substitution directly; no enclosing type map is
-    /// copied and no checked type is searched for by identity.
-    fn bindNestedTypes(self: *BodyContext, site_id: names.NestedProcSiteId, constructing_scope: bool) Allocator.Error!void {
-        const site = self.view.nested_proc_sites.sites[@backingInt(site_id)];
-        const span = site.type_bindings;
-        const bindings = self.view.nested_proc_sites.type_bindings[span.start .. span.start + span.len];
-        var frame: *const EvidenceChain = &self.evidence;
-        // A scope's construction has its parent's evidence. Its own slots
-        // are fresh until the construction request determines them.
-        var depth: u32 = if (constructing_scope) 1 else 0;
-        for (bindings) |binding| {
-            if (constructing_scope and binding.depth == 0) continue;
-            while (depth < binding.depth) : (depth += 1) {
-                frame = frame.parent orelse Common.invariant("nested type binding omitted its lexical frame");
-            }
-            const schema = frame.schema orelse Common.invariant("nested type binding frame had no substitution schema");
-            if (binding.slot >= frame.subst.len or schema.scheme_vars[binding.slot] != binding.ty) {
-                Common.invariant("nested type binding differed from its checked lexical substitution");
-            }
-            switch (frame.subst[binding.slot]) {
-                .node => |node| {
-                    const scoped = self.scopedCheckedType(binding.ty);
-                    // The inherited binder relations may already hold a node
-                    // for this variable; the binding replaces it in the same
-                    // class.
-                    if (try self.scopedNode(scoped)) |related| try self.graph.unify(related, node);
-                    try self.putScopedNode(scoped, node);
-                },
-                .checked_error => {},
-            }
+    /// The cell a nested body's instantiation gives a quantified variable of
+    /// an enclosing scope: the substitution of the innermost lexical evidence
+    /// frame whose scheme quantifies it. Null leaves the variable fresh: it
+    /// belongs to no enclosing scheme, its slot is a checked error, or it is
+    /// quantified by the generalized scope under construction.
+    fn enclosingVariableNode(self: *BodyContext, variable: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        for (self.constructing_scheme_vars) |scheme_var| {
+            if (scheme_var == variable) return null;
         }
+        return try self.evidenceBinding(variable);
+    }
+
+    /// The substitution the innermost frame of this context's evidence chain
+    /// whose scheme quantifies `variable` gives it.
+    fn evidenceBinding(self: *BodyContext, variable: checked.CheckedTypeId) Allocator.Error!?NodeId {
+        var chain: ?*const EvidenceChain = &self.evidence;
+        while (chain) |frame| : (chain = frame.parent) {
+            const schema = frame.schema orelse continue;
+            if (!moduleBytesEqual(schema.view.key.bytes, self.view.key.bytes)) continue;
+            const slot = (try self.builder.schemeVarSlot(schema.scheme_vars, variable)) orelse continue;
+            if (slot >= frame.subst.len) Common.invariant("evidence frame substitution omitted a quantified variable of its scheme");
+            return switch (frame.subst[slot]) {
+                .node => |node| node,
+                .checked_error => null,
+            };
+        }
+        return null;
     }
 
     fn childContextWithTypeCells(
@@ -23452,6 +23548,58 @@ const BodyContext = struct {
         return false;
     }
 
+    /// Whether a checked type is built only from functions, tuples, empty
+    /// rows, primitives, and variables. No representation evidence can attach
+    /// to any part of such a type: generated-private representations belong
+    /// to nominal types, and a variable's cell is its binding's. Answers are
+    /// memoized per module for the compilation, like `checkedTypeContainsError`.
+    fn checkedTypeRepresentationFixed(self: *BodyContext, root: checked.CheckedTypeId) Allocator.Error!bool {
+        const memo = &self.builder.checked_type_representation_fixed;
+        if (memo.get(checkedTypeAddress(self.view, root))) |known| return known;
+        var visited = collections.DenseMap(checked.CheckedTypeId, void).init(self.allocator);
+        defer visited.deinit();
+        var visited_order: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer visited_order.deinit(self.allocator);
+        var pending: std.ArrayList(checked.CheckedTypeId) = .empty;
+        defer pending.deinit(self.allocator);
+        try pending.append(self.allocator, root);
+        while (pending.pop()) |checked_ty| {
+            if (visited.contains(checked_ty)) continue;
+            if (memo.get(checkedTypeAddress(self.view, checked_ty))) |known| {
+                if (known) continue;
+                try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), false);
+                return false;
+            }
+            try visited.put(checked_ty, {});
+            try visited_order.append(self.allocator, checked_ty);
+            const fixed = switch (checkedPayload(self.view, checked_ty)) {
+                .flex, .rigid, .empty_record, .empty_tag_union => true,
+                .tuple => |items| blk: {
+                    try pending.appendSlice(self.allocator, items);
+                    break :blk true;
+                },
+                .function => |function| blk: {
+                    try pending.appendSlice(self.allocator, function.args);
+                    try pending.append(self.allocator, function.ret);
+                    break :blk true;
+                },
+                .nominal => |nominal| switch (nominal.representation) {
+                    .builtin => |builtin| checked.builtinRuntimeEncoding(builtin) == .primitive,
+                    .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
+                },
+                .alias, .record, .tag_union, .pending, .err => false,
+            };
+            if (!fixed) {
+                try memo.put(self.builder.allocator, checkedTypeAddress(self.view, root), false);
+                return false;
+            }
+        }
+        for (visited_order.items) |checked_ty| {
+            try memo.put(self.builder.allocator, checkedTypeAddress(self.view, checked_ty), true);
+        }
+        return true;
+    }
+
     fn activeNodeFromType(self: *BodyContext, ty: Type.TypeId) Allocator.Error!NodeId {
         var timing_scope = BodyWorkTimingScope.begin(self.builder.timing, .type_graph);
         defer timing_scope.end();
@@ -23832,10 +23980,21 @@ const BodyContext = struct {
             switch (checkedPayload(self.view, task.checked_ty)) {
                 .pending => Common.invariant("pending checked type reached Monotype instantiation"),
                 .err => Common.invariant("erroneous checked type reached Monotype instantiation"),
-                .flex, .rigid => |variable| break :built try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
-                    variable.numeric_default_phase,
-                    variable.row_default,
-                ) }),
+                .flex, .rigid => |variable| {
+                    const variable_node = resolved: {
+                        if (self.resolves_enclosing_variables) {
+                            if (try self.enclosingVariableNode(task.checked_ty)) |bound| break :resolved bound;
+                        }
+                        break :resolved try self.graph.newNode(.{ .unresolved = InstVariable.checkedVariable(
+                            variable.numeric_default_phase,
+                            variable.row_default,
+                        ) });
+                    };
+                    if (self.relation_variables) |variables| {
+                        try variables.append(self.allocator, .{ .checked_ty = task.checked_ty, .node = variable_node });
+                    }
+                    break :built variable_node;
+                },
                 .empty_record => break :built try self.graph.newNode(.empty_record),
                 .empty_tag_union => break :built try self.graph.newNode(.empty_tag_union),
                 // Aliases are checked views, not value identities. Instantiate
@@ -23873,6 +24032,9 @@ const BodyContext = struct {
         const node = try entry.finish(self.graph, built);
         try map.put(task.scoped_ty, entry);
         task.reserved = false;
+        if (self.instantiation.decl_scopes.items.len == 0 and try self.instantiatedNodeIsPure(task.scoped_ty)) {
+            try self.recordPureInstance(task.scoped_ty, node);
+        }
         switch (self.instantiation.closed_types) {
             .structure, .leaves => {},
             .measuring => if (self.checkedTypeIsClosed(task.scoped_ty)) {
@@ -23880,6 +24042,90 @@ const BodyContext = struct {
             },
         }
         return .{ .ret = .{ .node = node } };
+    }
+
+    // Pure instances //
+    //
+    // An instance of a checked type is pure under this context's evidence
+    // when every variable it reaches is the substitution the evidence gives
+    // that variable and every other part is a function, tuple, empty row, or
+    // primitive. Such an instance has no cell of its own that a later
+    // relation could refine: its variables are the evidence's shared cells,
+    // and no representation evidence can attach to the rest. Two pure
+    // instances of one checked type under one evidence are therefore the
+    // same type wherever they occur, so a fresh pure instance related to a
+    // class that already holds one adds nothing to that class.
+
+    fn instantiatedNodeIsPure(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
+        return switch (checkedPayload(self.view, checked_ty)) {
+            .function => |function| {
+                for (function.args) |arg| {
+                    if (!try self.instantiatedChildIsPure(arg)) return false;
+                }
+                return try self.instantiatedChildIsPure(function.ret);
+            },
+            .tuple => |items| {
+                for (items) |item| {
+                    if (!try self.instantiatedChildIsPure(item)) return false;
+                }
+                return true;
+            },
+            .empty_record, .empty_tag_union => true,
+            .nominal => |nominal| switch (nominal.representation) {
+                .builtin => |builtin| checked.builtinRuntimeEncoding(builtin) == .primitive,
+                .local_declaration, .imported_declaration, .local_box_payload_capability, .imported_box_payload_capability, .opaque_without_backing => false,
+            },
+            // A variable is pure exactly when it is its evidence binding,
+            // which `instantiatedChildIsPure` reads directly.
+            .flex, .rigid, .alias, .record, .tag_union, .pending, .err => false,
+        };
+    }
+
+    fn instantiatedChildIsPure(self: *BodyContext, checked_ty: checked.CheckedTypeId) Allocator.Error!bool {
+        const node = (try self.scopedNode(checked_ty)) orelse return false;
+        return switch (checkedPayload(self.view, checked_ty)) {
+            .flex, .rigid => {
+                const bound = (try self.evidenceBinding(checked_ty)) orelse return false;
+                return self.graph.sameClass(bound, node);
+            },
+            .function, .tuple, .empty_record, .empty_tag_union, .nominal, .alias, .record, .tag_union, .pending, .err => self.instantiation.pure_nodes.contains(node),
+        };
+    }
+
+    /// An evidence chain's substitutions and schemes are immutable, live as
+    /// long as the graph, and its parents are shared frames, so the head
+    /// frame's scheme, substitution, and parent name every binding the chain
+    /// gives.
+    fn pureInstanceKey(self: *const BodyContext, checked_ty: checked.CheckedTypeId) solve.PureInstanceKey {
+        return .{
+            .module_bytes = self.view.key.bytes,
+            .checked_ty = @backingInt(checked_ty),
+            .scheme_vars_ptr = if (self.evidence.schema) |schema| @intFromPtr(schema.scheme_vars.ptr) else 0,
+            .subst_ptr = @intFromPtr(self.evidence.subst.ptr),
+            .subst_len = self.evidence.subst.len,
+            .parent = if (self.evidence.parent) |parent| @intFromPtr(parent) else 0,
+        };
+    }
+
+    fn recordPureInstance(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        try self.instantiation.pure_nodes.put(node, {});
+        try self.graph.recordPureInstance(self.pureInstanceKey(checked_ty), node);
+    }
+
+    /// Whether `node`'s class already holds a pure instance of `checked_ty`
+    /// under this context's evidence. Instantiating the type afresh and
+    /// relating it to `node` would then add nothing, so this context can use
+    /// `node` as its instance.
+    fn holdsPureInstance(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) bool {
+        const instance = self.graph.pureInstance(self.pureInstanceKey(checked_ty)) orelse return false;
+        return self.graph.sameClass(instance, node);
+    }
+
+    /// Use `node`, whose class holds a pure instance of `checked_ty` under
+    /// this context's evidence, as this context's instance of that type.
+    fn adoptPureInstance(self: *BodyContext, checked_ty: checked.CheckedTypeId, node: NodeId) Allocator.Error!void {
+        try self.putScopedNode(self.scopedCheckedType(checked_ty), node);
+        try self.instantiation.pure_nodes.put(node, {});
     }
 
     const InstSliceTask = struct {
@@ -24751,12 +24997,7 @@ const BodyContext = struct {
                     if (local.is_alias) {
                         try local_ctx.seedSubstitution(local_ctx.evidence.schema.?, use_evidence.subst);
                     } else {
-                        try local_ctx.bindNestedTypes(try self.builder.nestedSiteForExpr(
-                            self.view,
-                            self.owner_template,
-                            local.expr,
-                            self.in_default_expr,
-                        ), false);
+                        local_ctx.resolves_enclosing_variables = true;
                     }
                     const local_root_node = try local_ctx.checkedTemplateInterfaceScopeRootNode(local_scope);
                     try relateFunctionRequestInterface(self.graph, local_root_node, request_node);
@@ -27190,6 +27431,8 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
         hosted_try_capability: ?HostedTryAdapterCapability,
         capture_constructor_argument_evidence: bool,
+        /// The callee is a value of the caller's: an indirect call.
+        callee_value: bool = false,
         fn_node: NodeId = undefined,
         formal_nodes: []const NodeId = &.{},
         ret_node: NodeId = undefined,
@@ -28031,7 +28274,7 @@ const BodyContext = struct {
             if (function.args.len != task.checked_args.len) {
                 Common.invariant("checked direct call arity differs from its function type");
             }
-            task.fn_node = try self.instNode(task.source_fn_ty);
+            task.fn_node = (try self.calleeValueInstance(task)) orelse try self.instNode(task.source_fn_ty);
             const fn_graph = switch ((try self.graph.content(task.fn_node))) {
                 .func => |func| func,
                 .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .tag_union, .record, .empty_tag_union, .empty_record, .named, .erased, .zst => Common.invariant("checked direct call had a non-function instantiation node"),
@@ -28115,6 +28358,22 @@ const BodyContext = struct {
                 try checkedMonoRequestNode(self.graph, task.ret_node, expected, .exact);
         }
         return .{ .ret = .{ .node = try functionRequestNode(self.graph, fn_node, request_args, request_ret) } };
+    }
+
+    /// An indirect call's callee is a value of the caller, so its function
+    /// type is the caller's instance of that checked type, which the callee's
+    /// lowering relates to the request. When no representation evidence can
+    /// attach to the type and none is present, every relation the call makes
+    /// is plain unification, so a fresh instance would join the caller's
+    /// entirely; the call uses the caller's instance directly. An explicit
+    /// result request keeps the fresh instance that owns its exact result.
+    fn calleeValueInstance(self: *BodyContext, task: *InstantiateCallTask) Allocator.Error!?NodeId {
+        if (!task.callee_value or task.expected_ret_node != null or task.hosted_try_capability != null) return null;
+        if (!try self.checkedTypeRepresentationFixed(task.source_fn_ty)) return null;
+        const node = try task.caller.instNode(task.source_fn_ty);
+        if (try self.graph.containsGeneratedPrivate(node)) return null;
+        try self.putScopedNode(self.scopedCheckedType(task.source_fn_ty), node);
+        return node;
     }
 
     /// Instantiate a dispatch plan's callable from the caller's operand
@@ -41676,7 +41935,7 @@ const BodyContext = struct {
         hosted_try_capability: ?HostedTryAdapterCapability,
         capture_constructor_argument_evidence: bool,
     ) Allocator.Error!NodeId {
-        return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .hosted_try_capability = hosted_try_capability, .capture_constructor_argument_evidence = capture_constructor_argument_evidence } })).nodeValue();
+        return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .hosted_try_capability = hosted_try_capability, .capture_constructor_argument_evidence = capture_constructor_argument_evidence, .callee_value = true } })).nodeValue();
     }
 
     fn hostedTryWidenedRequestNode(
@@ -43578,6 +43837,12 @@ const BodyContext = struct {
         draft_fn: DraftFnId,
     ) Allocator.Error!NodeId {
         const current_node = try self.draft.fns.items[@backingInt(draft_fn)].source.mono_fn_ty.toGraphNode(self.graph);
+        // Only a deferred template specialization completes eagerly; every
+        // other function keeps its current node without scanning its type.
+        const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return current_node;
+        const spec = self.draft.template_specs.items[spec_index];
+        if (spec.state != .deferred) return current_node;
+
         const current_fn = try self.graph.functionNodes(current_node);
         const has_iterator_result = try self.graph.containsIteratorInterface(current_fn.ret);
         const has_private_result = try self.graph.containsGeneratedPrivate(current_fn.ret);
@@ -43591,10 +43856,6 @@ const BodyContext = struct {
         for (current_fn.args) |arg| {
             if (try self.graph.containsGeneratedPrivate(arg)) return current_node;
         }
-
-        const spec_index = self.draft.template_spec_by_fn.get(draft_fn) orelse return current_node;
-        const spec = self.draft.template_specs.items[spec_index];
-        if (spec.state != .deferred) return current_node;
         // A same-family request inside the active root is an explicit
         // recursive edge. Its live graph must join the recursive argument and
         // result representations (and select forced-dynamic when required)
@@ -48042,11 +48303,11 @@ const BodyContext = struct {
                 }
                 // The construction instantiates the scope's scheme: its root
                 // related to the request binds every quantified variable.
-                var scheme_ctx = try self.nestedInstantiationContext(self.current_fn_key, site.site, self.evidence, true);
+                const scheme_vars = self.view.templates.scopeSchemeVars(&scope);
+                var scheme_ctx = try self.nestedInstantiationContext(self.current_fn_key, self.evidence, scheme_vars);
                 defer scheme_ctx.deinit();
                 const scheme_root_node = try scheme_ctx.instNode(scope.scheme_root);
                 try relateFunctionRequestInterface(self.graph, scheme_root_node, request_fn_node);
-                const scheme_vars = self.view.templates.scopeSchemeVars(&scope);
                 const subst = try self.substitutionFromSchemeVars(&scheme_ctx, scheme_vars);
                 break :blk EdgeEvidence{
                     .subst = subst,
@@ -64853,18 +65114,6 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     template.scheme_vars = .{ .start = 0, .len = 1 };
     template.evidence_params = .{};
 
-    var site: checked.NestedProcSite = undefined;
-    site.type_bindings = .{ .start = 0, .len = 2 };
-    var bindings = [_]checked.NestedProcTypeBinding{
-        .{ .ty = inner_ty, .depth = 0, .slot = 0 },
-        .{ .ty = outer_ty, .depth = 1, .slot = 0 },
-    };
-    var sites = std.array_list.Managed(checked.NestedProcSite).init(gpa);
-    defer sites.deinit();
-    const site_id: names.NestedProcSiteId = @fromBackingInt(@intCast(sites.items.len));
-    try sites.append(site);
-    const nested_sites = checked.NestedProcSiteTable{ .sites = sites.items, .type_bindings = &bindings };
-
     // Only type instantiation and lexical binding are exercised here.
     var builder: Builder = undefined;
     builder.next_instantiation_scope = 0;
@@ -64883,8 +65132,12 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
     ctx_view.templates = &templates;
-    ctx_view.nested_proc_sites = &nested_sites;
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
 
     const root = try ctx.rootEvidenceAtOwnScheme(template, &.{});
@@ -64905,7 +65158,7 @@ test "issue 11288: root substitutions share lexical cells and isolate separate i
         .subst = &.{.{ .node = inner_node }},
         .parent = &root,
     };
-    try child.bindNestedTypes(site_id, false);
+    child.resolves_enclosing_variables = true;
     try std.testing.expect(graph.sameClass(try child.instNode(outer_ty), str_node));
     try std.testing.expect(graph.sameClass(try child.instNode(inner_ty), inner_node));
 
@@ -66518,6 +66771,12 @@ fn sameTypeDefAcrossStores(
 const CheckedTypeAddress = struct {
     module_bytes: [32]u8,
     type_id: u32,
+};
+
+/// A scheme's quantified-variable list, by the identity of its storage.
+const SchemeVarsAddress = struct {
+    ptr: usize,
+    len: usize,
 };
 
 fn checkedTypeAddress(view: ModuleView, checked_ty: checked.CheckedTypeId) CheckedTypeAddress {
@@ -68722,6 +68981,11 @@ test "issue 11362: checked instantiation reserves only recursive node identities
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
 
     const function_node = try ctx.instNode(function);
@@ -68791,6 +69055,11 @@ test "issue 11362: allocation failure removes active checked instantiation marke
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            ctx.resolves_enclosing_variables = false;
+            ctx.relation_variables = null;
+            ctx.constructing_scheme_vars = &.{};
+            // An evidence chain without frames: no scope is read.
+            ctx.evidence = .{ .scope = undefined };
             defer ctx.instantiation.deinit();
             _ = ctx.instNode(recursive) catch |err| {
                 try std.testing.expect(!ctx.instantiation.node_map.contains(recursive));
@@ -68930,6 +69199,11 @@ fn testLazyCheckedInstantiationAliases(gpa: Allocator) (Allocator.Error || error
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
     errdefer {
         var entries = ctx.instantiation.node_map.valueIterator();
@@ -69013,6 +69287,11 @@ test "issue 11362: checked instantiation allocates placeholders only for recursi
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
 
     const pair_node = try ctx.instNode(pair);
@@ -69067,6 +69346,11 @@ test "issue 11362: allocation failure removes checked instantiation markers" {
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = view;
             ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            ctx.resolves_enclosing_variables = false;
+            ctx.relation_variables = null;
+            ctx.constructing_scheme_vars = &.{};
+            // An evidence chain without frames: no scope is read.
+            ctx.evidence = .{ .scope = undefined };
             defer ctx.instantiation.deinit();
             _ = ctx.instNode(root) catch |err| {
                 std.debug.assert(ctx.instantiation.node_map.get(root) == null);
@@ -69115,6 +69399,11 @@ fn testLazyCheckedInstantiation(allocator: Allocator, recursive: bool) (Allocato
     ctx_view.key = .{ .bytes = @splat(0) };
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(allocator, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
     errdefer {
         var entries = ctx.instantiation.node_map.valueIterator();
@@ -69220,6 +69509,11 @@ test "lazy checked instantiation allocates only recursive placeholders and clear
             ctx_view.key = .{ .bytes = @splat(0) };
             ctx_view.types = checked_types.view();
             ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), ctx.view.key.bytes);
+            ctx.resolves_enclosing_variables = false;
+            ctx.relation_variables = null;
+            ctx.constructing_scheme_vars = &.{};
+            // An evidence chain without frames: no scope is read.
+            ctx.evidence = .{ .scope = undefined };
             defer ctx.instantiation.deinit();
             errdefer {
                 var entries = ctx.instantiation.node_map.valueIterator();
@@ -69273,6 +69567,11 @@ test "lazy checked placeholders obey closed and innermost declaration scopes" {
     ctx.view = &ctx_view;
     ctx_view.types = checked_types.view();
     ctx.instantiation = TypeInstantiationContext.init(gpa, builder.allocateInstantiationScope(), @splat(0));
+    ctx.resolves_enclosing_variables = false;
+    ctx.relation_variables = null;
+    ctx.constructing_scheme_vars = &.{};
+    // An evidence chain without frames: no scope is read.
+    ctx.evidence = .{ .scope = undefined };
     defer ctx.instantiation.deinit();
     var outer = InstantiatingNodeMap.init(gpa);
     defer outer.deinit();

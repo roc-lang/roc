@@ -277,6 +277,18 @@ pub const InstNode = union(enum) {
     zst,
 };
 
+/// A checked type instantiated under one binding environment, by the plain
+/// identities Monotype lowering supplies: the checked module and type, and
+/// the evidence chain whose substitutions bind the type's variables.
+pub const PureInstanceKey = struct {
+    module_bytes: [32]u8,
+    checked_ty: u32,
+    scheme_vars_ptr: usize,
+    subst_ptr: usize,
+    subst_len: usize,
+    parent: usize,
+};
+
 /// Graph-native function shape. These nodes remain live until their owning
 /// specialization graph is sealed.
 pub const FunctionNodes = struct {
@@ -403,6 +415,17 @@ pub const InterfaceConstraints = struct {
         @memset(hole_classes, null);
         const hole_roots = try allocator.alloc(NodeId, holes.len);
         for (holes, hole_roots) |hole, *root| root.* = graph.find(hole);
+        // Every captured class asks whether it is a hole, so a request with
+        // many holes indexes them; the first position of a class answers.
+        var hole_positions: std.AutoHashMapUnmanaged(NodeId, u32) = .empty;
+        defer hole_positions.deinit(allocator);
+        if (hole_roots.len > Capture.hole_scan_limit) {
+            try hole_positions.ensureTotalCapacity(allocator, @intCast(hole_roots.len));
+            for (hole_roots, 0..) |root, index| {
+                const entry = hole_positions.getOrPutAssumeCapacity(root);
+                if (!entry.found_existing) entry.value_ptr.* = @intCast(index);
+            }
+        }
         const scratch = &graph.capture_scratch;
         var retained = GraphTypeFinals.initRetainedTypeViewWithMaps(graph, scratch.retained_sealed, scratch.retained_sealed_types);
         defer {
@@ -419,6 +442,7 @@ pub const InterfaceConstraints = struct {
             .allocator = allocator,
             .scratch = scratch,
             .holes = hole_roots,
+            .hole_positions = &hole_positions,
             .hole_classes = hole_classes,
             .node_ids = scratch.node_ids,
             .kind_ids = scratch.kind_ids,
@@ -952,7 +976,12 @@ pub const InterfaceConstraints = struct {
         open_nodes: std.ArrayList(OpenNode) = .empty,
         kinds: std.ArrayList(Kind) = .empty,
         holes: []const NodeId = &.{},
+        /// `holes` indexed by class when there are more than
+        /// `hole_scan_limit` of them.
+        hole_positions: ?*const std.AutoHashMapUnmanaged(NodeId, u32) = null,
         hole_classes: []?NodeId = &.{},
+
+        const hole_scan_limit = 16;
 
         // Backing groups can span declarations. Cache groups encode the full
         // identity predicate used by sameRelatedNamedInstance, including the
@@ -1215,6 +1244,9 @@ pub const InterfaceConstraints = struct {
         }
 
         fn holeIndex(self: *const Capture, root: NodeId) ?usize {
+            if (self.holes.len > hole_scan_limit) {
+                return if (self.hole_positions.?.get(root)) |index| index else null;
+            }
             for (self.holes, 0..) |hole, index| {
                 if (hole == root) return index;
             }
@@ -2105,6 +2137,9 @@ pub const InstGraph = struct {
     /// when an observable class's content is replaced or a variable wins a
     /// union, each of which advances the epoch.
     resolved_roots: collections.DenseMap(NodeId, u32),
+    /// The first pure instance lowering recorded for each checked type under
+    /// each binding environment.
+    pure_instances: std.AutoHashMapUnmanaged(PureInstanceKey, NodeId) = .empty,
     resolved_epoch: u32,
     /// Advances on every union and every content change, so an equal epoch
     /// proves no class in the graph has changed since.
@@ -2249,6 +2284,7 @@ pub const InstGraph = struct {
         while (containment_entries.next()) |entry| entry.deinit(self.allocator);
         self.containment_cache.clearRetainingCapacity();
         self.resolved_roots.clearRetainingCapacity();
+        self.pure_instances.clearRetainingCapacity();
         self.never_uninhabited.clearRetainingCapacity();
         self.resolved_epoch = 0;
         self.structure_epoch = 0;
@@ -2322,6 +2358,7 @@ pub const InstGraph = struct {
         for (&self.proven_uninhabited_types) |*answers| answers.deinit(self.allocator);
         self.type_uninhabited_scratch.deinit(self.allocator);
         self.resolved_roots.deinit();
+        self.pure_instances.deinit(self.allocator);
         self.node_set_pool.deinit();
         self.never_uninhabited.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
@@ -5355,6 +5392,16 @@ pub const InstGraph = struct {
     /// identity is structural: a transparent named wrapper names the same
     /// function interface as its backing, so requests resolve to the backing
     /// before they become specialization keys or sealed function types.
+    /// Record `node` as the pure instance for `key` unless one is recorded.
+    pub fn recordPureInstance(self: *InstGraph, key: PureInstanceKey, node: NodeId) Allocator.Error!void {
+        const entry = try self.pure_instances.getOrPut(self.allocator, key);
+        if (!entry.found_existing) entry.value_ptr.* = node;
+    }
+
+    pub fn pureInstance(self: *const InstGraph, key: PureInstanceKey) ?NodeId {
+        return self.pure_instances.get(key);
+    }
+
     pub fn functionRequestRoot(self: *InstGraph, node: NodeId) Allocator.Error!NodeId {
         return self.shapeRoot(node, "function request", .inspectable);
     }
@@ -9276,7 +9323,8 @@ test "issue 11362: generated iterator index follows roots provenance and duplica
 }
 
 test "issue 11362: generated iterator index releases allocations on failure" {
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testGeneratedIteratorMigration, .{});
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testGeneratedIteratorMigration, .{});
 }
 
 fn assertGeneratedIteratorIndexConsistent(graph: *InstGraph) void {

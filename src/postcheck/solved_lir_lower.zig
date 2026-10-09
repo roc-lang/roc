@@ -15450,7 +15450,8 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
+    var deterministic = base.DeterministicAllocator.init(allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
