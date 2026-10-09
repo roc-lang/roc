@@ -60,7 +60,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     defer join_params.deinit();
     join_params.next_join_point = body_clone.firstFreshJoinPoint(store);
     for (0..store.procSpecCount()) |proc_index| {
-        const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(proc_index)));
+        const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(proc_index))));
         try runProc(store, layouts, proc_id, store.allocator, &join_params);
     }
 }
@@ -416,7 +416,7 @@ test "forwarding join inline eligibility is scope and body, not ABI" {
 }
 
 fn testFreshJoinPointId(next_join_point: *u32) LIR.JoinPointId {
-    const id: LIR.JoinPointId = @enumFromInt(next_join_point.*);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(next_join_point.*));
     next_join_point.* += 1;
     return id;
 }

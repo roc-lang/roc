@@ -192,7 +192,7 @@ const CheckOccurs = struct {
                                                     const decl = self.types_store.getNominalDecl(decl_idx);
                                                     try self.pushVarToProcess(decl.backing, Edge.nominal);
                                                 } else if (nominal_type.sourceDecl().present) {
-                                                    if (builtin.mode == .Debug) {
+                                                    if (builtin.mode == .debug) {
                                                         base.invariant(
                                                             "occurs invariant violated: nominal application with source declaration has no declaration table entry",
                                                             .{},
@@ -395,6 +395,9 @@ pub const Scratch = struct {
 
     stack: MkSafeList(Frame),
     seen: MkSafeList(SeenEntry),
+    /// Each var on `seen` by its position. A var is pushed only when it is
+    /// not already on the stack, so the positions are unique.
+    seen_positions: std.AutoHashMapUnmanaged(Var, usize) = .empty,
     visited: std.AutoHashMapUnmanaged(DescStoreIdx, void),
 
     /// The var to report when a cycle is detected: the deepest var on the seen
@@ -422,12 +425,14 @@ pub const Scratch = struct {
     pub fn deinit(self: *Self) void {
         self.stack.deinit(self.gpa);
         self.seen.deinit(self.gpa);
+        self.seen_positions.deinit(self.gpa);
         self.visited.deinit(self.gpa);
     }
 
     pub fn reset(self: *Self) void {
         self.stack.items.clearRetainingCapacity();
         self.seen.items.clearRetainingCapacity();
+        self.seen_positions.clearRetainingCapacity();
         self.visited.clearRetainingCapacity();
         self.err_var = null;
     }
@@ -435,10 +440,7 @@ pub const Scratch = struct {
     /// Returns the index of `var_` on the seen stack if it's currently being
     /// traversed (i.e. a cycle), else null. The index marks the cycle head.
     fn hasSeenVar(self: *const Self, var_: Var) ?usize {
-        for (self.seen.items.items, 0..) |entry, i| {
-            if (entry.var_ == var_) return i;
-        }
-        return null;
+        return self.seen_positions.get(var_);
     }
 
     fn hasVisited(self: *const Self, desc_idx: DescStoreIdx) bool {
@@ -446,11 +448,16 @@ pub const Scratch = struct {
     }
 
     fn pushSeen(self: *Self, var_: Var, edge: Edge) std.mem.Allocator.Error!void {
+        try self.seen_positions.ensureUnusedCapacity(self.gpa, 1);
+        const position: usize = @intCast(self.seen.len());
         _ = try self.seen.append(self.gpa, .{ .var_ = var_, .edge = edge });
+        self.seen_positions.putAssumeCapacityNoClobber(var_, position);
     }
 
     fn popSeen(self: *Self) void {
-        _ = self.seen.items.pop();
+        const entry = self.seen.items.pop() orelse return;
+        const removed = self.seen_positions.remove(entry.var_);
+        std.debug.assert(removed);
     }
 
     fn appendVisited(self: *Self, desc_idx: DescStoreIdx) std.mem.Allocator.Error!void {
@@ -927,7 +934,7 @@ test "occursDeclarationGraph: valid recursion through a tag payload" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const backing = try types_store.fresh();
     // Recursive reference: an app of the same declaration inside the payload.
@@ -958,7 +965,7 @@ test "occursDeclarationGraph: self-recursion through a tuple is infinite" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const backing = try types_store.fresh();
     const rec_app = try types_store.freshFromContent(try types_store.mkNominalWithSourceDecl(
@@ -987,7 +994,7 @@ test "occursDeclarationGraph: mutual recursion closes by declaration key" {
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     // Reserve backing vars for both declarations first.
     const t_backing = try types_store.fresh();
@@ -1032,7 +1039,7 @@ test "occursDeclarationGraph: anonymous recursion inside a template is rejected"
     var scratch = try Scratch.init(gpa);
     defer scratch.deinit();
 
-    const origin: base.ModuleIdentity.Idx = @enumFromInt(1);
+    const origin: base.ModuleIdentity.Idx = @fromBackingInt(@intCast(1));
 
     const inner = try types_store.fresh();
     const ext = try types_store.fresh();

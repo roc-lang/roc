@@ -219,7 +219,7 @@ test "Darwin zero-fill libcalls clear exactly the requested bytes" {
     if (!builtin.os.tag.isDarwin()) return error.SkipZigTest;
     for ([_][]const u8{ "bzero", "__bzero" }) |name| {
         const zero: *const fn (?[*]u8, usize) callconv(.c) void = @ptrFromInt(resolve(name).?);
-        var bytes = [_]u8{0xaa} ** 8;
+        var bytes = @as([8]u8, @splat(0xaa));
         zero(bytes[2..].ptr, 4);
         try std.testing.expectEqualSlices(u8, &.{ 0xaa, 0xaa, 0, 0, 0, 0, 0xaa, 0xaa }, &bytes);
     }

@@ -138,8 +138,9 @@ const EmitFrame = union(enum) {
 };
 
 fn emitFromFrame(self: *Self, first: EmitFrame) EmitError!void {
-    var stack_allocator_state = std.heap.stackFallback(8192, self.allocator);
-    const stack_allocator = stack_allocator_state.get();
+    var stack_allocator_state_buffer: [8192]u8 align(@alignOf(usize)) = undefined;
+    var stack_allocator_state = std.heap.BufferFirstAllocator.init(&stack_allocator_state_buffer, self.allocator);
+    const stack_allocator = stack_allocator_state.allocator();
     var frames: std.ArrayList(EmitFrame) = .empty;
     defer frames.deinit(stack_allocator);
 
@@ -331,7 +332,7 @@ fn unaryReceiverNeedsParens(self: *Self, receiver_idx: Expr.Idx) bool {
     if (tag == .e_dec_small) return receiver.e_dec_small.value.numerator < 0;
     if (tag == .e_num_from_numeral or tag == .e_typed_num_from_numeral) {
         const literal = self.module_env.numeralLiteralForNode(ModuleEnv.nodeIdxFrom(receiver_idx)) orelse {
-            base.invariant("missing recorded numeral for expression {}", .{@intFromEnum(receiver_idx)});
+            base.invariant("missing recorded numeral for expression {}", .{@backingInt(receiver_idx)});
         };
         return literal.isNegative();
     }
@@ -825,7 +826,7 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = "(" });
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
-            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(method_call.type_dispatch_stmt)});
+            const alias_str = try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@backingInt(method_call.type_dispatch_stmt)});
             try frames.append(allocator, .{ .write = alias_str });
         },
         .e_type_dispatch_call => |method_call| {
@@ -834,8 +835,8 @@ fn emitExprFrame(
             try frames.append(allocator, .{ .write = self.module_env.getIdent(method_call.method_name) });
             try frames.append(allocator, .{ .write = "." });
             const alias_str = switch (method_call.owner) {
-                .statement => |stmt| try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@intFromEnum(stmt)}),
-                .dispatcher => |dispatcher| try std.fmt.allocPrint(allocator, "__type_dispatch_var_{d}__", .{@intFromEnum(dispatcher)}),
+                .statement => |stmt| try std.fmt.allocPrint(allocator, "__type_dispatch_{d}__", .{@backingInt(stmt)}),
+                .dispatcher => |dispatcher| try std.fmt.allocPrint(allocator, "__type_dispatch_var_{d}__", .{@backingInt(dispatcher)}),
             };
             try frames.append(allocator, .{ .write = alias_str });
         },
@@ -1097,8 +1098,8 @@ comptime {
     // never panic. A future `binopOpToToken` mapping onto a non-operator (or
     // zero-binding-power) token becomes a compile error here instead of a runtime
     // crash during re-emission.
-    for (@typeInfo(Expr.Binop.Op).@"enum".fields) |field| {
-        const op: Expr.Binop.Op = @enumFromInt(field.value);
+    for (@typeInfo(Expr.Binop.Op).@"enum".field_values) |field_value| {
+        const op: Expr.Binop.Op = @fromBackingInt(@intCast(field_value));
         std.debug.assert(parse.Parser.getTokenBP(binopOpToToken(op)) != null);
     }
 }
@@ -1107,10 +1108,10 @@ const EmitError = std.mem.Allocator.Error || std.fmt.BufPrintError;
 
 fn emitRecordedNumeral(self: *Self, node_idx: CIR.Node.Idx, maybe_type_name: ?base.Ident.Idx) EmitError!void {
     const literal = self.module_env.numeralLiteralForNode(node_idx) orelse {
-        base.invariant("missing recorded numeral for node {}", .{@intFromEnum(node_idx)});
+        base.invariant("missing recorded numeral for node {}", .{@backingInt(node_idx)});
     };
     if (!literal.isMaterialized()) {
-        base.invariant("cannot emit an unmaterialized numeral for node {}", .{@intFromEnum(node_idx)});
+        base.invariant("cannot emit an unmaterialized numeral for node {}", .{@backingInt(node_idx)});
     }
 
     if (literal.isNegative()) {

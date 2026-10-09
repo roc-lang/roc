@@ -92,7 +92,7 @@ pub fn run(store: *LirStore, layouts: *const layout_mod.Store) ResourceError!voi
     const proc_count = store.procSpecCount();
     var proc_index: usize = 0;
     while (proc_index < proc_count) : (proc_index += 1) {
-        try pass.transformProc(@enumFromInt(proc_index));
+        try pass.transformProc(@fromBackingInt(@intCast(proc_index)));
     }
 }
 
@@ -115,7 +115,7 @@ pub fn prepareCallees(store: *LirStore, allocator: Allocator) ResourceError!Prep
     };
     errdefer classifier.append_kind.deinit();
     for (0..store.procSpecCount()) |i| {
-        _ = try classifier.classifyProc(@enumFromInt(i));
+        _ = try classifier.classifyProc(@fromBackingInt(@intCast(i)));
     }
     return .{ .kinds = classifier.append_kind };
 }
@@ -891,7 +891,7 @@ const Pass = struct {
                 .join => |join| {
                     const index = scan.joins.items.len;
                     try scan.joins.append(allocator, .{ .stmt = current, .has_back_edge = false });
-                    scan.max_join_id = @max(scan.max_join_id, @intFromEnum(join.id) + 1);
+                    scan.max_join_id = @max(scan.max_join_id, @backingInt(join.id) + 1);
                     const params = self.store.getLocalSpan(join.params);
                     for (0..GuardedList.borrowLen(params)) |i| {
                         try scan.param_join.put(GuardedList.at(params, i), current);
@@ -1144,7 +1144,7 @@ const Pass = struct {
             for (group_members) |member_entry| {
                 const member = member_entry.local;
                 for (order.topology.reads_of.row(member)) |raw| {
-                    const stmt_id: CFStmtId = @enumFromInt(raw);
+                    const stmt_id: CFStmtId = @fromBackingInt(@intCast(raw));
                     const stmt = self.store.getCFStmt(stmt_id);
                     // A transparent alias names the same value; account for
                     // its actual uses, including ones after its source dies.
@@ -1176,7 +1176,7 @@ const Pass = struct {
                 if (shared) break;
                 consume_it = consumes.keyIterator();
                 while (consume_it.next()) |stmt| {
-                    if (try order.usesAfter(@intFromEnum(stmt.*), member_entry.local)) {
+                    if (try order.usesAfter(@backingInt(stmt.*), member_entry.local)) {
                         shared = true;
                         break :outer;
                     }
@@ -1196,8 +1196,8 @@ const Pass = struct {
         local: LocalId,
 
         fn lessThan(_: void, a: FamilyMember, b: FamilyMember) bool {
-            if (a.root != b.root) return @intFromEnum(a.root) < @intFromEnum(b.root);
-            return @intFromEnum(a.local) < @intFromEnum(b.local);
+            if (a.root != b.root) return @backingInt(a.root) < @backingInt(b.root);
+            return @backingInt(a.local) < @backingInt(b.local);
         }
     };
 
@@ -1775,7 +1775,7 @@ const Pass = struct {
         const origin = promoteOrigin(self.store.stmtOrigin(edge.stmt));
         const call = self.store.getCFStmt(edge.stmt).assign_low_level;
 
-        const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
 
         // Merged continuation: both sides leave a uniquely owned list with
@@ -1854,7 +1854,7 @@ const Pass = struct {
         const grown_slack = try self.freshLocal(.u64, new_locals);
         const grow_spare = try self.freshLocal(.u64, new_locals);
 
-        const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
 
         // Join body: the unchecked append bumps the length, which is the
@@ -1980,7 +1980,7 @@ const Pass = struct {
         const enough_for_count = try self.freshLocal(.u8, new_locals);
         const fits = try self.freshLocal(.u8, new_locals);
 
-        const join_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        const join_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
 
         // Hot path: the unchecked append bumps the length by the count, so
@@ -2289,7 +2289,7 @@ const Pass = struct {
         // Deterministic order: statement ids are allocation order.
         std.mem.sort(CFStmtId, candidates.items, {}, struct {
             fn lessThan(_: void, a: CFStmtId, b: CFStmtId) bool {
-                return @intFromEnum(a) < @intFromEnum(b);
+                return @backingInt(a) < @backingInt(b);
             }
         }.lessThan);
         for (candidates.items) |loop_stmt| {
@@ -2621,7 +2621,7 @@ const Pass = struct {
         var renamable = try self.renamableBodyLocals(join.body, proc_body);
         defer renamable.deinit();
 
-        const fast_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        const fast_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
         const rewriter = SlackVersionRewriter{
             .loop_id = join.id,
@@ -2811,7 +2811,7 @@ const Pass = struct {
             }
         }
 
-        const unique_id: LIR.JoinPointId = @enumFromInt(max_join_id.*);
+        const unique_id: LIR.JoinPointId = @fromBackingInt(@intCast(max_join_id.*));
         max_join_id.* += 1;
         const rewriter = VersionRewriter{
             .loop_id = join.id,
@@ -2898,7 +2898,7 @@ const VersionRewriter = struct {
     pub fn interceptStmt(self: *VersionRewriter, cloner: anytype, old_id: CFStmtId, stmt: LIR.CFStmt, origin: LIR.StmtOrigin) ResourceError!body_clone.Intercept {
         switch (stmt) {
             .join => |s| {
-                const fresh: LIR.JoinPointId = @enumFromInt(self.max_join_id.*);
+                const fresh: LIR.JoinPointId = @fromBackingInt(@intCast(self.max_join_id.*));
                 self.max_join_id.* += 1;
                 try self.join_map.put(s.id, fresh);
                 return body_clone.Intercept.two(s.body, s.remainder);
@@ -3014,7 +3014,7 @@ const SlackVersionRewriter = struct {
                 // Every append site the body holds belongs to a chain the
                 // head checked: the body is copied only when all of them fit.
                 if (self.sites.get(old_id)) |site| return body_clone.Intercept.one(site.next);
-                const fresh: LIR.JoinPointId = @enumFromInt(self.max_join_id.*);
+                const fresh: LIR.JoinPointId = @fromBackingInt(@intCast(self.max_join_id.*));
                 self.max_join_id.* += 1;
                 try self.join_map.put(s.id, fresh);
                 return body_clone.Intercept.two(s.body, s.remainder);
@@ -3309,7 +3309,7 @@ const PromoteTest = struct {
     }
 
     fn freshJoinPointId(self: *PromoteTest) LIR.JoinPointId {
-        const id: LIR.JoinPointId = @enumFromInt(self.next_join_point);
+        const id: LIR.JoinPointId = @fromBackingInt(@intCast(self.next_join_point));
         self.next_join_point += 1;
         return id;
     }
@@ -4140,7 +4140,7 @@ test "promote leaves a counted append loop unversioned when its counter steps by
     const first = store.getCFStmt(head.body);
     try testing.expect(first == .assign_literal);
     try testing.expectEqual(@as(i64, 0), first.assign_literal.value.i64_literal.value);
-    const shape = try appendShapeOf(store, head.body, head.id, @enumFromInt(std.math.maxInt(u32)));
+    const shape = try appendShapeOf(store, head.body, head.id, @fromBackingInt(@intCast(std.math.maxInt(u32))));
     try testing.expectEqual(AppendShape{ .switches = 2, .unsafe_appends = 1, .reserves = 1, .jumps_to_head = 1 }, shape);
 }
 

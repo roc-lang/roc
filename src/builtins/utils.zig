@@ -31,16 +31,16 @@ inline fn debugPrint(comptime fmt: []const u8, args: anytype) void {
 /// The `src` parameter should always be `@src()` at the call site - this captures
 /// the file, function, and line number to aid in reproducing alignment bugs.
 pub inline fn alignedPtrCast(comptime T: type, ptr: anytype, src: std.builtin.SourceLocation) T {
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         const ptr_info = @typeInfo(T);
         if (ptr_info != .pointer) @compileError("alignedPtrCast target must be a pointer type");
-        const alignment = ptr_info.pointer.alignment orelse 0;
+        const alignment = ptr_info.pointer.attrs.@"align" orelse 0;
         const ptr_int = @intFromPtr(ptr);
         if (alignment > 0 and ptr_int % alignment != 0) {
             // Alignment errors indicate a bug in the caller.
             // We use unreachable here because:
             // 1. We don't have access to roc_ops in this utility function
-            // 2. This is a debug-only check (comptime builtin.mode == .Debug)
+            // 2. This is a debug-only check (comptime builtin.mode == .debug)
             // 3. On non-WASM, this will trigger a trap with a stack trace
             // 4. The @src() parameter helps identify the call site in logs
             debugPrint("alignedPtrCast alignment failure at {s}:{d}\n", .{ src.file, src.line });
@@ -328,7 +328,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
     const refcount: isize = ptr_to_refcount.*;
 
     // Debug-only assertions to catch refcount bugs early.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         if (refcount == POISON_VALUE) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
@@ -351,7 +351,7 @@ pub fn increfRcPtr(ptr_to_refcount: *isize, amount: isize, atomicity: RcAtomicit
                 const previous = @atomicRmw(isize, ptr_to_refcount, .Add, amount, .monotonic);
                 const new_refcount = previous +% amount;
                 if (new_refcount == POISON_VALUE) {
-                    if (builtin.mode == .Debug) {
+                    if (builtin.mode == .debug) {
                         if (builtin.os.tag != .freestanding) {
                             DebugRefcountTracker.printHistory(@intFromPtr(ptr_to_refcount));
                         }
@@ -413,7 +413,7 @@ pub fn decrefDataPtr(
     if (unmasked_ptr == 0) return;
 
     // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         if (unmasked_ptr % @alignOf(isize) != 0) {
             roc_ops.crash("decrefDataPtr: unmasked pointer is not aligned");
         }
@@ -469,7 +469,7 @@ pub fn increfDataPtr(
     const rc_addr = masked_ptr - @sizeOf(usize);
 
     // Verify alignment before @ptrFromInt
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         if (rc_addr % @alignOf(isize) != 0) {
             roc_ops.crash("increfDataPtr: refcount pointer is not aligned");
         }
@@ -572,7 +572,7 @@ inline fn free_ptr_to_refcount(
 
     // Debug-only: Poison the refcount slot before freeing to detect use-after-free.
     // Any subsequent access to this refcount will see POISON_VALUE and panic.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         refcount_ptr[0] = POISON_VALUE;
     }
 
@@ -607,7 +607,7 @@ inline fn decref_ptr_to_refcount(
 
     // Debug-only assertions to catch refcount bugs early.
     // Use roc_ops.crash() instead of @panic for WASM compatibility.
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         if (refcount == POISON_VALUE) {
             if (builtin.os.tag != .freestanding) {
                 DebugRefcountTracker.printHistory(@intFromPtr(refcount_ptr));
@@ -872,8 +872,8 @@ pub const DebugRefcountTracker = struct {
         site: Site,
     };
 
-    var rc_addrs: [max_tracked]usize = [_]usize{0} ** max_tracked;
-    var shadow_rcs: [max_tracked]isize = [_]isize{0} ** max_tracked;
+    var rc_addrs: [max_tracked]usize = @as([max_tracked]usize, @splat(0));
+    var shadow_rcs: [max_tracked]isize = @as([max_tracked]isize, @splat(0));
     var count: usize = 0;
     var active: bool = false;
 

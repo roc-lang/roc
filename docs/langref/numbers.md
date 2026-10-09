@@ -32,7 +32,7 @@ Roc's compiler will infer the type of your number literal based on how it's used
 List.get(my_list, 3)
 ```
 
-Here, the type of `3` will be `U64` based on how it's used here, because [`List.get`](../List#get) takes a [`List`](../List) as its first argument and a [`U64`](../Num#U64) as its second argument. 
+Here, the type of `3` will be `U64` based on how it's used here, because [`List.get`](../List#get) takes a [`List`](../List) as its first argument and a [`U64`](../Num#U64) as its second argument.
 
 If you want to specify an explicit type for the number (perhaps for documentation, or maybe because you want an error report if it gets used as any other type), you can add the type you want after a dot at the end. For example, here's how you would specify that the number `-12.34` should be interpreted as a [`Dec`](../Num#Dec):
 
@@ -114,6 +114,36 @@ general trade-offs are:
 * Larger integer sizes can represent a wider range of numbers. If you absolutely need to represent numbers in a certain range, make sure to pick an integer size that can hold them!
 * Smaller integer sizes take up less memory. These savings rarely matter in variables and function arguments, but the sizes of integers that you use in data structures can add up. This can also affect whether those data structures fit in [cache lines](https://en.wikipedia.org/wiki/CPU_cache#Cache_performance), which can be a performance bottleneck.
 * Certain CPUs work faster on some numeric sizes than others. If the CPU is taking too long to run numeric calculations, you may find a performance improvement by experimenting with numeric sizes that are larger than otherwise necessary. However, in practice, doing this typically degrades overall performance, so be careful to measure properly!
+
+### Overflow and Division by Zero
+
+If an integer operation's answer doesn't fit in the integer's type, that's called _overflow_. For
+example, `250.U8 + 10` would be 260, which is bigger than the biggest `U8` (255).
+
+In Roc, integer overflow crashes the program, and so does dividing an integer by zero:
+
+```roc
+too_big = 250.U8 + 10 # Crashes with "Integer addition overflowed"
+```
+
+Some languages instead wrap around when integers overflow, so that `250.U8 + 10` would be `4`.
+Roc doesn't do this by default, because when it happens by accident, it can cause bugs that are
+hard to track down; a program that keeps running with a wrong number can be worse than a program
+that stops. (Remember that if the overflow happens during [compile-time evaluation](compile-time),
+the crash will be reported as a compile-time error.)
+
+When you want some other behavior, each integer type has methods for that:
+
+| Method | `250.U8` and `10` | Behavior on overflow |
+| --- | --- | --- |
+| `plus` (what `+` calls) | crashes | Crash |
+| `plus_try` | `Err(Overflow)` | Return an `Err` instead of crashing |
+| `plus_wrap` | `4` | Wrap around |
+| `plus_saturated` | `255` | Stay at the highest (or lowest) possible value |
+| `plus_overflows` | `True` | Return whether it would overflow |
+
+There are `minus` and `times` versions of each of these too. For division, `div_try` returns
+`Err(DivByZero)` instead of crashing when dividing by zero.
 
 ### Fractions
 
@@ -201,19 +231,19 @@ interaction with `U64` is required for the stored step.
 
 We already saw how you can use optional [number type suffixes](#type-suffixes) to specify the type of a number literal instead of letting it be inferred. For example:
 
-```
+```roc
 -12.34.F64
 ```
 
 [`F64`](../Num#F64) is a builtin type, but you can use your own custom number type in the same way. Let's say you made a custom number type called `Ratio` which stores both a numerator and denominator, so it can represent fractions like two-thirds which can't be precisely represented using either decimals or floating-point numbers. You could create a `Ratio` value like this:
 
-```
+```roc
 -12.34.Ratio
 ```
 
 Here's what will happen if you write this:
 
-* Just based on the syntax here, at compile time, Roc will call `Ratio.from_numeral(...)` 
+* Just based on the syntax here, at compile time, Roc will call `Ratio.from_numeral(...)`
 * It will pass an argument to specify that this is a negative number with the digits `12` before the decimal point and `34` after it.
 * `Ratio.from_numeral` will return a `Try` representing whether the specified digits are a valid `Ratio`. (Some custom number types may have limits on the size of the numbers they store, may or may not support negative numbers, may or may not support digits after the decimal point, etc.)
   * If `Ratio.from_numeral` returned a [`Try.Ok`](../Try) tag, then that tag's [payload](tag-unions#tags) will contain the actual number value that these digits resolved to.
@@ -221,12 +251,12 @@ Here's what will happen if you write this:
 
 `from_numeral` is one of Roc's
 [well-known static-dispatch methods](static-dispatch#literal-conversion).
-  
+
 ### Inferred Custom Number Types
 
 Just like with builtin number types, you don't have to annotate your number literals to specify that they use your custom number type. Instead, you can let the compiler infer the type based on usage. For example, let's say you have a function named `from_ratio` which takes a `Ratio`. Then you could write:
 
-```
+```roc
 from_ratio(12.57)
 ```
 
@@ -345,3 +375,44 @@ and then convert the result.
 If the literal isn't valid for the type, return `Err(InvalidNumeral(message))`. The compiler will
 report the message as a compile-time error, pointing at the literal.
 
+## Performance
+
+### Memory
+
+Numbers are always stored inline. They never involve a heap allocation or a
+[reference count](expressions#reference-counting), and each type's size is the same on every
+target (see the tables in [Builtin Number Types](#builtin-number-types)).
+
+When you store lots of numbers, such as in a big [list](../List), the size of each one adds up. A
+`List(U8)` with a million elements takes up about 1 megabyte, whereas a `List(U64)` with the same
+number of elements takes up about 8. Using the smallest type that can hold the values you need
+means more of them fit in the CPU's [cache](https://en.wikipedia.org/wiki/CPU_cache), which can
+make a big difference when going through lots of them.
+
+### Overflow Checks
+
+Since [integer overflow crashes](#overflow-and-division-by-zero), integer `+`, `-`, and `*` each
+check whether the result overflowed. Most CPUs can do this check very cheaply, with a single
+instruction that's almost always correctly predicted not to jump anywhere. On top of that, when
+the compiler can prove an operation can't overflow (for example, because an earlier comparison
+already ruled it out), it leaves the check out entirely.
+
+If you actually want wrapping behavior (in a hash function, for example), use the `_wrap` methods
+like `plus_wrap`. Those never check for overflow, so they compile to the same instruction as
+integer addition in C.
+
+### `Dec` vs. Floats
+
+`F32` and `F64` arithmetic happens in the CPU's floating-point hardware, so it's very fast.
+
+`Dec` arithmetic has to be done in software, using 128-bit integers. Adding and subtracting
+`Dec`s is still fast (about as fast as adding and subtracting `I128`s), but multiplying and
+dividing them takes many more instructions than multiplying or dividing floats. So if your
+program does a lot of multiplication or division on fractional numbers, and doesn't need exact
+decimal answers, floats will be faster.
+
+### Literals
+
+Number literals never cost anything at runtime beyond the number itself. Even for
+[custom number types](#custom-number-types), `from_numeral` gets called at compile time, so the
+program contains the finished value.

@@ -70,7 +70,7 @@ test "issue 10571: repeated failed dispatch on the same receiver reports type mi
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, io),
     );

@@ -319,7 +319,7 @@ pub fn enterScope(
     region: TokenRegion,
 ) std.mem.Allocator.Error!ScopeIdx {
     const parent = if (self.scope_stack.items.len == 0) null else self.scope_stack.items[self.scope_stack.items.len - 1];
-    const idx: ScopeIdx = @enumFromInt(self.scopes.items.len);
+    const idx: ScopeIdx = @fromBackingInt(@intCast(self.scopes.items.len));
     const forward_policy: ForwardPolicy = switch (kind) {
         .module, .associated => .whole_scope,
         .block => .source_order,
@@ -352,13 +352,13 @@ pub fn exitScope(
     _ = self.scope_stack.pop();
 
     const start: u32 = @intCast(self.scope_decl_ids.items.len);
-    const builder = &self.scope_decl_builders.items[@intFromEnum(idx)];
+    const builder = &self.scope_decl_builders.items[@backingInt(idx)];
     try self.scope_decl_ids.appendSlice(self.gpa, builder.items);
     const end: u32 = @intCast(self.scope_decl_ids.items.len);
-    var scope = self.scopes.items[@intFromEnum(idx)];
+    var scope = self.scopes.items[@backingInt(idx)];
     scope.decls = .{ .start = start, .len = end - start };
     scope.region = region;
-    self.scopes.items[@intFromEnum(idx)] = scope;
+    self.scopes.items[@backingInt(idx)] = scope;
 }
 
 /// Return the scope currently being parsed, if any.
@@ -369,23 +369,23 @@ pub fn currentScope(self: *const DeclIndex) ?ScopeIdx {
 
 /// Update a scope owner once the owning AST node index is known.
 pub fn setScopeOwner(self: *DeclIndex, idx: ScopeIdx, owner: ScopeOwner) void {
-    self.scopes.items[@intFromEnum(idx)].owner = owner;
+    self.scopes.items[@backingInt(idx)].owner = owner;
 }
 
 /// Update a scope's associated owner path once known.
 pub fn setScopeOwnerTypePath(self: *DeclIndex, idx: ScopeIdx, owner_type_path: ?TypePathIdx) void {
-    self.scopes.items[@intFromEnum(idx)].owner_type_path = owner_type_path;
+    self.scopes.items[@backingInt(idx)].owner_type_path = owner_type_path;
 }
 
 /// Append a declaration to its owning scope.
 pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
-    const idx: DeclIdx = @enumFromInt(self.decls.items.len);
+    const idx: DeclIdx = @fromBackingInt(@intCast(self.decls.items.len));
     try self.decls.append(self.gpa, decl);
-    try self.scope_decl_builders.items[@intFromEnum(decl.scope)].append(self.gpa, idx);
+    try self.scope_decl_builders.items[@backingInt(decl.scope)].append(self.gpa, idx);
     try self.decl_by_statement.put(self.gpa, decl.statement, idx);
     if (decl.name_ident) |ident| {
         if (declKindMayBindValue(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].value_decls, ident, idx);
+            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].value_decls, ident, idx);
             if (decl.owner_type_path) |owner_path| {
                 try addDeclToBucket(AssocValue, self.gpa, &self.assoc_value_decls, .{
                     .owner = owner_path,
@@ -394,7 +394,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
                 try addDeclToBucket(TypePathIdx, self.gpa, &self.assoc_owner_value_decls, owner_path, idx);
             }
         } else if (declKindMayBindType(decl.kind)) {
-            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(decl.scope)].type_decls, ident, idx);
+            try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(decl.scope)].type_decls, ident, idx);
             if (decl.type_path) |path| {
                 try self.type_path_by_statement.put(self.gpa, decl.statement, path);
                 try addDeclToBucket(TypePathIdx, self.gpa, &self.type_decls_by_path, path, idx);
@@ -409,7 +409,7 @@ pub fn addDecl(self: *DeclIndex, decl: Decl) std.mem.Allocator.Error!DeclIdx {
 /// has no single `name_ident`; each bound name is registered through here so
 /// a reference ahead of the declaration resolves to it.
 pub fn addValueName(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-    const gop = try self.scopes.items[@intFromEnum(scope_idx)].value_decls.getOrPut(self.gpa, ident);
+    const gop = try self.scopes.items[@backingInt(scope_idx)].value_decls.getOrPut(self.gpa, ident);
     if (!gop.found_existing) {
         gop.value_ptr.* = .{};
     }
@@ -471,24 +471,24 @@ fn declKindMayBindType(kind: DeclKind) bool {
 
 /// Return whether a scope directly declares a value-like name.
 pub fn scopeDeclaresValue(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) bool {
-    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    const scope = &self.scopes.items[@backingInt(scope_idx)];
     return scope.value_decls.contains(ident);
 }
 
 /// Return all value-like declarations for a name in a scope.
 pub fn scopeValueDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    const scope = &self.scopes.items[@backingInt(scope_idx)];
     return scope.value_decls.get(ident) orelse .{};
 }
 
 /// Record the module alias introduced by an import declaration.
 pub fn addImportAliasDecl(self: *DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx, decl_idx: DeclIdx) std.mem.Allocator.Error!void {
-    try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@intFromEnum(scope_idx)].import_alias_decls, ident, decl_idx);
+    try addDeclToBucket(Ident.Idx, self.gpa, &self.scopes.items[@backingInt(scope_idx)].import_alias_decls, ident, decl_idx);
 }
 
 /// Return all import declarations that introduce an alias in a scope.
 pub fn scopeImportAliasDecls(self: *const DeclIndex, scope_idx: ScopeIdx, ident: Ident.Idx) NameBucket {
-    const scope = &self.scopes.items[@intFromEnum(scope_idx)];
+    const scope = &self.scopes.items[@backingInt(scope_idx)];
     return scope.import_alias_decls.get(ident) orelse .{};
 }
 
@@ -537,10 +537,10 @@ pub fn internTypePath(self: *DeclIndex, scope_idx: ScopeIdx, parent: ?TypePathId
     if (self.type_path_intern.get(key)) |existing| return existing;
 
     const depth: u16 = if (parent) |parent_idx|
-        self.type_paths.items[@intFromEnum(parent_idx)].depth + 1
+        self.type_paths.items[@backingInt(parent_idx)].depth + 1
     else
         1;
-    const idx: TypePathIdx = @enumFromInt(self.type_paths.items.len);
+    const idx: TypePathIdx = @fromBackingInt(@intCast(self.type_paths.items.len));
     try self.type_paths.append(self.gpa, .{
         .parent = parent,
         .name = name,
@@ -569,7 +569,7 @@ pub fn findRootTypePath(self: *const DeclIndex, scope_idx: ScopeIdx, name: Ident
 /// Find an already-interned type path from source-order path segments.
 pub fn findTypePathBySegments(self: *const DeclIndex, segments: []const Ident.Idx) ?TypePathIdx {
     for (self.scopes.items, 0..) |_, scope_pos| {
-        const scope_idx: ScopeIdx = @enumFromInt(scope_pos);
+        const scope_idx: ScopeIdx = @fromBackingInt(@intCast(scope_pos));
         if (self.findTypePathBySegmentsInScope(scope_idx, segments)) |path| return path;
     }
     return null;
@@ -628,13 +628,13 @@ pub fn typeDeclsForPath(self: *const DeclIndex, path: TypePathIdx) NameBucket {
 
 /// Mark an adjacent annotation and value declaration as one source pair.
 pub fn pairAnnotation(self: *DeclIndex, anno_idx: DeclIdx, decl_idx: DeclIdx) void {
-    self.decls.items[@intFromEnum(anno_idx)].paired_decl = decl_idx;
-    self.decls.items[@intFromEnum(decl_idx)].paired_anno = anno_idx;
+    self.decls.items[@backingInt(anno_idx)].paired_decl = decl_idx;
+    self.decls.items[@backingInt(decl_idx)].paired_anno = anno_idx;
 }
 
 /// Return the direct declarations owned by a scope.
 pub fn scopeDecls(self: *const DeclIndex, scope_idx: ScopeIdx) []const DeclIdx {
-    const scope = self.scopes.items[@intFromEnum(scope_idx)];
+    const scope = self.scopes.items[@backingInt(scope_idx)];
     return self.scope_decl_ids.items[scope.decls.start..][0..scope.decls.len];
 }
 

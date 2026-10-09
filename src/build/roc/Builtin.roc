@@ -5258,7 +5258,7 @@ Builtin :: [].{
 			for item in list if predicate(item) {
 				return Ok(item)
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5270,7 +5270,7 @@ Builtin :: [].{
 			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the index of the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5286,7 +5286,7 @@ Builtin :: [].{
 				}
 				$idx = $idx + 1
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the index of the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5304,7 +5304,7 @@ Builtin :: [].{
 					return Ok($idx)
 				}
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		# Split a list into two parts at a specified index, returning the part before the index and the part from the index onward.

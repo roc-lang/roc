@@ -224,7 +224,7 @@ fn scanElfClass(comptime Word: type, bytes: []const u8, check: *Check) ArchiveEr
     const wide = Word == u64;
     const section_size = if (wide) 64 else 40;
     const symbol_size = if (wide) 24 else 16;
-    if (try int(u16, bytes, 16) != @intFromEnum(std.elf.ET.REL)) return error.NotRelocatable;
+    if (try int(u16, bytes, 16) != @backingInt(std.elf.ET.REL)) return error.NotRelocatable;
     const shoff = std.math.cast(usize, try int(Word, bytes, if (wide) 40 else 32)) orelse return error.MalformedObject;
     const shsize = try int(u16, bytes, if (wide) 58 else 46);
     const shnum = try int(u16, bytes, if (wide) 60 else 48);
@@ -277,7 +277,7 @@ fn scanMachO(bytes: []const u8, check: *Check) ArchiveError!void {
         const size = try int(u32, commands, offset + 4);
         if (size < 8) return error.MalformedObject;
         const command = try slice(commands, offset, size);
-        if (cmd == @intFromEnum(std.macho.LC.SYMTAB)) {
+        if (cmd == @backingInt(std.macho.LC.SYMTAB)) {
             found_table = true;
             const table = try slice(bytes, try int(u32, command, 8), @as(usize, try int(u32, command, 12)) * 16);
             const strings = try slice(bytes, try int(u32, command, 16), try int(u32, command, 20));
@@ -471,7 +471,7 @@ fn putInt(comptime T: type, bytes: []u8, offset: usize, value: T) void {
 
 test "ELF parser checks weak imports, hidden exports, and missing tables" {
     const name = "__clear_cache";
-    var bytes = [_]u8{0} ** (64 + 3 * 64 + 2 * 24 + 1 + name.len + 1);
+    var bytes = @as([(64 + 3 * 64 + 2 * 24 + 1 + name.len + 1)]u8, @splat(0));
     @memcpy(bytes[0..6], "\x7fELF\x02\x01");
     putInt(u16, &bytes, 16, 1); // ET_REL
     putInt(u64, &bytes, 40, 64);
@@ -517,7 +517,7 @@ test "ELF32 parser preserves the symbol contract and rejects out-of-bounds secti
     const table = 52 + 3 * 40;
     const sym = table + 16;
     const strings = table + 32;
-    var bytes = [_]u8{0} ** (strings + name.len + 2);
+    var bytes = @as([(strings + name.len + 2)]u8, @splat(0));
     @memcpy(bytes[0..6], "\x7fELF\x01\x01");
     putInt(u16, &bytes, 16, 1); // ET_REL
     putInt(u32, &bytes, 32, 52);
@@ -557,12 +557,12 @@ test "ELF32 parser preserves the symbol contract and rejects out-of-bounds secti
 
 test "Mach-O parser checks private externs and weak references" {
     const name = "___clear_cache"; // Includes Mach-O's leading underscore.
-    var bytes = [_]u8{0} ** (32 + 24 + 16 + 1 + name.len + 1);
+    var bytes = @as([(32 + 24 + 16 + 1 + name.len + 1)]u8, @splat(0));
     putInt(u32, &bytes, 0, std.macho.MH_MAGIC_64);
     putInt(u32, &bytes, 12, std.macho.MH_OBJECT);
     putInt(u32, &bytes, 16, 1);
     putInt(u32, &bytes, 20, 24);
-    putInt(u32, &bytes, 32, @intFromEnum(std.macho.LC.SYMTAB));
+    putInt(u32, &bytes, 32, @backingInt(std.macho.LC.SYMTAB));
     putInt(u32, &bytes, 36, 24);
     putInt(u32, &bytes, 40, 56);
     putInt(u32, &bytes, 44, 1);
@@ -583,7 +583,7 @@ test "Mach-O parser checks private externs and weak references" {
 
 test "COFF parser checks weak externs and skips auxiliary records" {
     const name = "__clear_cache";
-    var bytes = [_]u8{0} ** (20 + 36 + 4 + name.len + 1);
+    var bytes = @as([(20 + 36 + 4 + name.len + 1)]u8, @splat(0));
     putInt(u16, &bytes, 0, 0xaa64);
     putInt(u32, &bytes, 8, 20);
     putInt(u32, &bytes, 12, 2);
@@ -607,7 +607,7 @@ test "COFF preparation preserves relocations and indexes only public roots" {
     const names = exports ++ .{"compiler_private_constant"};
     const table_start = 20 + 40 + 8 + 10;
     const strings_start = table_start + names.len * 18;
-    var bytes = [_]u8{0} ** 512;
+    var bytes = @as([512]u8, @splat(0));
     putInt(u16, &bytes, 0, 0x8664);
     putInt(u16, &bytes, 2, 1);
     putInt(u32, &bytes, 8, table_start);
@@ -642,7 +642,7 @@ test "COFF preparation preserves relocations and indexes only public roots" {
     try scanCoff(object, &check);
     try check.finish();
 
-    var archive = [_]u8{'\n'} ** 600;
+    var archive = @as([600]u8, @splat('\n'));
     @memcpy(archive[0..8], "!<arch>\n");
     try archiveHeader(archive[8..68], "input.obj/", object.len);
     @memcpy(archive[68..][0..object.len], object);

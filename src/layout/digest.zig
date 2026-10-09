@@ -102,7 +102,7 @@ pub const Digests = struct {
             } else if (!top.expanded) {
                 const gop = try self.visiting.getOrPut(current);
                 if (gop.found_existing) {
-                    base.invariant("layout digest: cyclic layout {d} has no recursive-graph key", .{@intFromEnum(current)});
+                    base.invariant("layout digest: cyclic layout {d} has no recursive-graph key", .{@backingInt(current)});
                 }
                 top.expanded = true;
                 try self.pushChildren(&pending, current);

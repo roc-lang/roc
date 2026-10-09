@@ -1,6 +1,7 @@
 # AGENTS
 
 - Read `design.md` before making code changes. It is the forward-looking design reference for checked modules, the post-check IR pipeline, LIR, ARC, backends, LirImage, and compiler invariants.
+- Follow `docs/langref-style-guide.md` when writing or editing anything in `docs/langref/`.
 - Workarounds are categorically forbidden in this code base.
 - Fallbacks are categorically forbidden in every stage of compilation other than specifically parsing and error reporting.
 - Heuristics are categorically forbidden in every stage of compilation other than specifically parsing and error reporting.

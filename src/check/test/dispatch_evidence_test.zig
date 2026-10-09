@@ -205,7 +205,7 @@ test "record-tail evidence path is normalized to its logical row field" {
     try std.testing.expectEqual(@as(usize, 1), params.items.len);
     const path = try paramPath(gpa, &scratch, params.items[0], &path_steps);
     try std.testing.expectEqual(@as(usize, 1), path.len);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), path[0].kind);
+    try std.testing.expectEqual(@backingInt(dispatch_evidence.PathStep.Kind.record_field), path[0].kind);
     try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), path[0].data);
 }
 
@@ -238,9 +238,9 @@ test "tag-tail evidence path is normalized to its logical tag payload" {
     try std.testing.expectEqual(@as(usize, 1), params.items.len);
     const path = try paramPath(gpa, &scratch, params.items[0], &path_steps);
     try std.testing.expectEqual(@as(usize, 2), path.len);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_tag), path[0].kind);
+    try std.testing.expectEqual(@backingInt(dispatch_evidence.PathStep.Kind.tag_payload_tag), path[0].kind);
     try std.testing.expectEqual(@as(u32, @bitCast(tail_name)), path[0].data);
-    try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.tag_payload_index), path[1].kind);
+    try std.testing.expectEqual(@backingInt(dispatch_evidence.PathStep.Kind.tag_payload_index), path[1].kind);
     try std.testing.expectEqual(@as(u32, 0), path[1].data);
 }
 
@@ -291,7 +291,7 @@ test "deeply nested evidence paths cost one node per distinct prefix" {
     const innermost = try paramPath(gpa, &scratch, params.items[0], &path_steps);
     try std.testing.expectEqual(@as(usize, depth), innermost.len);
     for (innermost) |path_step| {
-        try std.testing.expectEqual(@intFromEnum(dispatch_evidence.PathStep.Kind.record_field), path_step.kind);
+        try std.testing.expectEqual(@backingInt(dispatch_evidence.PathStep.Kind.record_field), path_step.kind);
         try std.testing.expectEqual(@as(u32, @bitCast(inner_name)), path_step.data);
     }
     for (params.items[1..], 1..) |param, level| {
@@ -352,11 +352,11 @@ test "imported scheme copy enumerates the same param list as the defining module
     const env_b = test_env_b.module_env;
     var found_matching_record = false;
     for (env_b.scheme_uses.items.items) |record| {
-        if (record.slot_kind != @intFromEnum(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
+        if (record.slot_kind != @backingInt(ModuleEnv.SchemeUseRecord.Slot.dispatch_target)) continue;
 
         var params_b = std.ArrayListUnmanaged(dispatch_evidence.EvidenceParam).empty;
         defer params_b.deinit(gpa);
-        try enumerate(gpa, env_b, @enumFromInt(record.scheme_root), &params_b);
+        try enumerate(gpa, env_b, @fromBackingInt(@intCast(record.scheme_root)), &params_b);
         if (params_b.items.len != 1) continue;
 
         const name_b = env_b.getIdentStoreConst().getText(params_b.items[0].constraint.fn_name);

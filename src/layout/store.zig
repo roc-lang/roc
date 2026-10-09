@@ -75,9 +75,9 @@ const GraphChildren = struct {
 pub const ModuleVarKey = work_mod.ModuleVarKey;
 
 fn assertAppendIdx(expected: usize, idx: anytype) void {
-    if (comptime builtin.mode == .Debug) {
-        std.debug.assert(@intFromEnum(idx) == expected);
-    } else if (@intFromEnum(idx) != expected) {
+    if (comptime builtin.mode == .debug) {
+        std.debug.assert(@backingInt(idx) == expected);
+    } else if (@backingInt(idx) != expected) {
         unreachable;
     }
 }
@@ -157,10 +157,10 @@ pub const Store = struct {
     pub fn idxFromScalar(scalar: Scalar) Idx {
         return switch (scalar.tag) {
             .str => .str,
-            .int => @enumFromInt(2 + @intFromEnum(scalar.getInt())),
-            .frac => @enumFromInt(@as(u32, 12) + (@intFromEnum(scalar.getFrac()) - @intFromEnum(@TypeOf(scalar.getFrac()).f32))),
+            .int => @fromBackingInt(@intCast(2 + @backingInt(scalar.getInt()))),
+            .frac => @fromBackingInt(@intCast(@as(u32, 12) + (@backingInt(scalar.getFrac()) - @backingInt(@TypeOf(scalar.getFrac()).f32)))),
             .opaque_ptr => .opaque_ptr,
-            .vector => @enumFromInt(@as(u32, 17) + @intFromEnum(scalar.getVector())),
+            .vector => @fromBackingInt(@intCast(@as(u32, 17) + @backingInt(scalar.getVector()))),
         };
     }
 
@@ -382,13 +382,13 @@ pub const Store = struct {
     }
 
     fn appendInternKeyIdx(self: *Self, layout_idx: Idx) std.mem.Allocator.Error!void {
-        const raw_layout: u32 = @intCast(@intFromEnum(layout_idx));
+        const raw_layout: u32 = @intCast(@backingInt(layout_idx));
         try self.appendInternKeyValue(raw_layout);
     }
 
     fn startInternKey(self: *Self, tag: LayoutTag) std.mem.Allocator.Error!void {
         self.scratch_intern_key.clearRetainingCapacity();
-        const raw_tag: u8 = @intCast(@intFromEnum(tag));
+        const raw_tag: u8 = @intCast(@backingInt(tag));
         try self.appendInternKeyValue(raw_tag);
     }
 
@@ -418,7 +418,7 @@ pub const Store = struct {
     ) std.mem.Allocator.Error!void {
         // Size is derived from (sort_key, fields), so it is not part of the key.
         try self.startInternKey(.struct_);
-        try self.appendInternKeyValue(@as(u8, @intFromEnum(sort_key)));
+        try self.appendInternKeyValue(@as(u8, @backingInt(sort_key)));
         try self.appendInternKeyValue(@as(u32, @intCast(fields.len)));
         for (fields) |field| {
             try self.appendInternKeyValue(field.index);
@@ -436,7 +436,7 @@ pub const Store = struct {
         // Size and discriminant offset are derived, so only the discriminant size
         // (plus sort key and variants) participates in the key.
         try self.startInternKey(.tag_union);
-        try self.appendInternKeyValue(@as(u8, @intFromEnum(sort_key)));
+        try self.appendInternKeyValue(@as(u8, @backingInt(sort_key)));
         try self.appendInternKeyValue(discriminant_size);
         try self.appendInternKeyValue(@as(u32, @intCast(variant_layouts.len)));
         for (variant_layouts) |payload_layout| {
@@ -471,7 +471,7 @@ pub const Store = struct {
             .struct_ => {
                 const info = self.getStructInfo(layout);
                 try self.startInternKey(.struct_);
-                try self.appendInternKeyValue(@as(u8, @intFromEnum(layout.getStruct().sort_key)));
+                try self.appendInternKeyValue(@as(u8, @backingInt(layout.getStruct().sort_key)));
                 try self.appendInternKeyValue(@as(u32, @intCast(info.fields.len)));
                 for (0..info.fields.len) |i| {
                     const field = info.fields.get(i);
@@ -483,7 +483,7 @@ pub const Store = struct {
             .tag_union => {
                 const info = self.getTagUnionInfo(layout);
                 try self.startInternKey(.tag_union);
-                try self.appendInternKeyValue(@as(u8, @intFromEnum(layout.getTagUnion().sort_key)));
+                try self.appendInternKeyValue(@as(u8, @backingInt(layout.getTagUnion().sort_key)));
                 try self.appendInternKeyValue(info.data.discriminant_size);
                 try self.appendInternKeyValue(@as(u32, @intCast(info.variants.len)));
                 for (0..info.variants.len) |i| {
@@ -496,7 +496,7 @@ pub const Store = struct {
 
     pub fn reserveLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_list_idx = try self.layouts.append(self.allocator, layout);
-        const idx: Idx = @enumFromInt(@intFromEnum(safe_list_idx));
+        const idx: Idx = @fromBackingInt(@intCast(@backingInt(safe_list_idx)));
         try self.resolved_list_layouts.append(self.allocator, self.computeResolvedListLayoutIdx(idx));
         return idx;
     }
@@ -609,8 +609,8 @@ pub const Store = struct {
     /// Look up a serially prepared pointer layout without touching shared scratch.
     pub fn getPtr(self: *const Self, elem_idx: Idx) ?Idx {
         var key: [1 + @sizeOf(u32)]u8 = undefined;
-        key[0] = @intCast(@intFromEnum(LayoutTag.ptr));
-        const raw_idx: u32 = @intCast(@intFromEnum(elem_idx));
+        key[0] = @intCast(@backingInt(LayoutTag.ptr));
+        const raw_idx: u32 = @intCast(@backingInt(elem_idx));
         @memcpy(key[1..], std.mem.asBytes(&raw_idx));
         return self.interned_layouts.get(&key);
     }
@@ -919,9 +919,9 @@ pub const Store = struct {
                 try engine.strongConnect(@intCast(i));
             }
             for (node_digests, 0..) |*digest, i| {
-                digest.* = switch (resolveNominalRef(graph, .{ .local = @enumFromInt(i) })) {
+                digest.* = switch (resolveNominalRef(graph, .{ .local = @fromBackingInt(@intCast(i)) })) {
                     .canonical => null,
-                    .local => |node_id| engine.digests[@intFromEnum(node_id)],
+                    .local => |node_id| engine.digests[@backingInt(node_id)],
                 };
             }
 
@@ -956,7 +956,7 @@ pub const Store = struct {
         /// discriminator, every non-reference value, and its ordered child
         /// references resolved through nominals via `sink.child`.
         fn encodeNode(graph: *const LayoutGraph, node_index: u32, sink: anytype) Allocator.Error!void {
-            switch (graph.getNode(@enumFromInt(node_index))) {
+            switch (graph.getNode(@fromBackingInt(@intCast(node_index)))) {
                 .pending, .nominal, .committed => unreachable,
                 .box => |child| {
                     try sink.writeByte(0);
@@ -973,7 +973,7 @@ pub const Store = struct {
                 .erased_callable => try sink.writeByte(3),
                 .struct_ => |span| {
                     try sink.writeByte(4);
-                    try sink.writeByte(@intFromEnum(span.order));
+                    try sink.writeByte(@backingInt(span.order));
                     const fields = graph.getFields(span);
                     try sink.writeU32(@intCast(fields.len));
                     for (fields) |field| {
@@ -1100,7 +1100,7 @@ pub const Store = struct {
                 fn child(self_sink: VisitSink, ref: GraphRef) Allocator.Error!void {
                     switch (ref) {
                         .canonical => {},
-                        .local => |node_id| try self_sink.children.append(self_sink.allocator, @intFromEnum(node_id)),
+                        .local => |node_id| try self_sink.children.append(self_sink.allocator, @backingInt(node_id)),
                     }
                 }
             };
@@ -1118,7 +1118,7 @@ pub const Store = struct {
                 fn child(self_sink: EdgeSink, ref: GraphRef) Allocator.Error!void {
                     const child_index: u32 = switch (ref) {
                         .canonical => return,
-                        .local => |node_id| @intFromEnum(node_id),
+                        .local => |node_id| @backingInt(node_id),
                     };
                     const engine = self_sink.engine;
                     if (engine.component[child_index] != self_sink.component_id) return;
@@ -1146,10 +1146,10 @@ pub const Store = struct {
                     switch (ref) {
                         .canonical => |layout_idx| {
                             try self_sink.writeByte(0);
-                            try self_sink.writeU32(@intFromEnum(layout_idx));
+                            try self_sink.writeU32(@backingInt(layout_idx));
                         },
                         .local => |node_id| {
-                            const child_index = @intFromEnum(node_id);
+                            const child_index = @backingInt(node_id);
                             const engine = self_sink.engine;
                             if (engine.component[child_index] == self_sink.component_id) {
                                 try self_sink.writeByte(2);
@@ -1184,10 +1184,10 @@ pub const Store = struct {
                     switch (ref) {
                         .canonical => |layout_idx| {
                             try self_sink.writeByte(0);
-                            try self_sink.writeU32(@intFromEnum(layout_idx));
+                            try self_sink.writeU32(@backingInt(layout_idx));
                         },
                         .local => |node_id| {
-                            const child_index = @intFromEnum(node_id);
+                            const child_index = @backingInt(node_id);
                             const engine = self_sink.engine;
                             if (engine.component[child_index] == self_sink.component_id) {
                                 try self_sink.writeByte(2);
@@ -1443,7 +1443,7 @@ pub const Store = struct {
     fn translateGraphRef(mapping: []const GraphRef, ref: GraphRef) GraphRef {
         return switch (ref) {
             .canonical => ref,
-            .local => |node_id| mapping[@intFromEnum(node_id)],
+            .local => |node_id| mapping[@backingInt(node_id)],
         };
     }
 
@@ -1506,7 +1506,7 @@ pub const Store = struct {
                 .canonical => continue,
                 .local => |node_id| node_id,
             };
-            const working_index = @intFromEnum(working_node_id);
+            const working_index = @backingInt(working_node_id);
             if (initialized[working_index]) continue;
             initialized[working_index] = true;
 
@@ -1569,8 +1569,8 @@ pub const Store = struct {
                 },
                 .local => |node_id| {
                     const commit = &working_commit.?;
-                    raw_layouts[i] = commit.raw_layouts[@intFromEnum(node_id)];
-                    value_layouts[i] = commit.value_layouts[@intFromEnum(node_id)];
+                    raw_layouts[i] = commit.raw_layouts[@backingInt(node_id)];
+                    value_layouts[i] = commit.value_layouts[@backingInt(node_id)];
                 },
             }
         }
@@ -1578,7 +1578,7 @@ pub const Store = struct {
         for (analysis.keys, 0..) |maybe_key, i| {
             const key = maybe_key orelse continue;
             if (self.interned_recursive_graphs.get(key)) |existing| {
-                if (comptime builtin.mode == .Debug) {
+                if (comptime builtin.mode == .debug) {
                     std.debug.assert(existing == value_layouts[i]);
                 } else if (existing != value_layouts[i]) {
                     unreachable;
@@ -1590,7 +1590,7 @@ pub const Store = struct {
 
         const root_idx = switch (translateGraphRef(mapping, root)) {
             .canonical => |layout_idx| layout_idx,
-            .local => |node_id| working_commit.?.value_layouts[@intFromEnum(node_id)],
+            .local => |node_id| working_commit.?.value_layouts[@backingInt(node_id)],
         };
         return .{
             .root_idx = root_idx,
@@ -1654,7 +1654,7 @@ pub const Store = struct {
                 self_finder.next_component_id += 1;
 
                 for (component) |member| {
-                    const index = @intFromEnum(member);
+                    const index = @backingInt(member);
                     self_finder.recursive_nodes[index] = true;
                     self_finder.component_ids[index] = component_id;
                 }
@@ -1667,7 +1667,7 @@ pub const Store = struct {
                                 switch (field.child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@intFromEnum(child_id)] == component_id) {
+                                        if (self_finder.component_ids[@backingInt(child_id)] == component_id) {
                                             has_boxable_slot_edge = true;
                                             break;
                                         }
@@ -1680,7 +1680,7 @@ pub const Store = struct {
                                 switch (child) {
                                     .canonical => {},
                                     .local => |child_id| {
-                                        if (self_finder.component_ids[@intFromEnum(child_id)] != component_id) continue;
+                                        if (self_finder.component_ids[@backingInt(child_id)] != component_id) continue;
                                         switch (self_finder.graph.getNode(child_id)) {
                                             .struct_ => {},
                                             .pending, .committed, .nominal, .box, .list, .closure, .erased_callable, .tag_union => {
@@ -1752,11 +1752,11 @@ pub const Store = struct {
                 try self_finder.enterWalkNode(start, &frames, &walk_children);
                 while (frames.items.len > 0) {
                     const frame = &frames.items[frames.items.len - 1];
-                    const frame_index = @intFromEnum(frame.node);
+                    const frame_index = @backingInt(frame.node);
                     if (frame.next < frame.children_end) {
                         const child_id = walk_children.items[frame.next];
                         frame.next += 1;
-                        const child_index = @intFromEnum(child_id);
+                        const child_index = @backingInt(child_id);
                         if (self_finder.visit_index[child_index] == -1) {
                             try self_finder.enterWalkNode(child_id, &frames, &walk_children);
                         } else if (self_finder.on_stack[child_index]) {
@@ -1768,8 +1768,8 @@ pub const Store = struct {
                     walk_children.shrinkRetainingCapacity(finished.children_start);
                     try self_finder.finishWalkNode(finished.node);
                     if (frames.items.len > 0) {
-                        const parent_index = @intFromEnum(frames.items[frames.items.len - 1].node);
-                        const index = @intFromEnum(finished.node);
+                        const parent_index = @backingInt(frames.items[frames.items.len - 1].node);
+                        const index = @backingInt(finished.node);
                         self_finder.lowlink[parent_index] = @min(self_finder.lowlink[parent_index], self_finder.lowlink[index]);
                     }
                 }
@@ -1782,7 +1782,7 @@ pub const Store = struct {
                 walk_children: *std.ArrayList(GraphNodeId),
             ) std.mem.Allocator.Error!void {
                 const allocator = self_finder.allocator;
-                const index = @intFromEnum(node_id);
+                const index = @backingInt(node_id);
                 self_finder.visit_index[index] = self_finder.next_index;
                 self_finder.lowlink[index] = self_finder.next_index;
                 self_finder.next_index += 1;
@@ -1822,7 +1822,7 @@ pub const Store = struct {
             }
 
             fn finishWalkNode(self_finder: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!void {
-                const index = @intFromEnum(node_id);
+                const index = @backingInt(node_id);
                 if (self_finder.lowlink[index] != self_finder.visit_index[index]) return;
 
                 var component = std.ArrayList(GraphNodeId).empty;
@@ -1830,7 +1830,7 @@ pub const Store = struct {
 
                 while (true) {
                     const member = self_finder.stack.pop() orelse unreachable;
-                    const member_index = @intFromEnum(member);
+                    const member_index = @backingInt(member);
                     self_finder.on_stack[member_index] = false;
                     try component.append(self_finder.allocator, member);
                     if (member == node_id) break;
@@ -1855,7 +1855,7 @@ pub const Store = struct {
 
         for (graph.nodes.items, 0..) |_, i| {
             if (visit_index[i] == -1) {
-                try cycle_finder.strongConnect(@enumFromInt(i));
+                try cycle_finder.strongConnect(@fromBackingInt(@intCast(i)));
             }
         }
 
@@ -1889,7 +1889,7 @@ pub const Store = struct {
             fn valueIdx(self_resolver: *@This(), ref: GraphRef) Idx {
                 return switch (ref) {
                     .canonical => |layout_idx| layout_idx,
-                    .local => |node_id| self_resolver.value_layouts[@intFromEnum(node_id)],
+                    .local => |node_id| self_resolver.value_layouts[@backingInt(node_id)],
                 };
             }
 
@@ -1905,7 +1905,7 @@ pub const Store = struct {
                     };
                     switch (self_resolver.graph.getNode(child_id)) {
                         .nominal => |child| current = child,
-                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => return self_resolver.raw_layouts[@intFromEnum(child_id)],
+                        .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => return self_resolver.raw_layouts[@backingInt(child_id)],
                     }
                 }
             }
@@ -1913,7 +1913,7 @@ pub const Store = struct {
             fn isValueReady(self_resolver: *@This(), ref: GraphRef) bool {
                 return switch (ref) {
                     .canonical => true,
-                    .local => |node_id| self_resolver.resolved[@intFromEnum(node_id)],
+                    .local => |node_id| self_resolver.resolved[@backingInt(node_id)],
                 };
             }
 
@@ -1921,7 +1921,7 @@ pub const Store = struct {
                 return switch (ref) {
                     .canonical => true,
                     .local => |node_id| blk: {
-                        const index = @intFromEnum(node_id);
+                        const index = @backingInt(node_id);
                         if (self_resolver.resolved[index]) break :blk true;
                         break :blk switch (self_resolver.graph.getNode(node_id)) {
                             .box, .list, .closure, .erased_callable => true,
@@ -1935,8 +1935,8 @@ pub const Store = struct {
                 return switch (ref) {
                     .canonical => |layout_idx| self_resolver.store.isZeroSized(self_resolver.store.getLayout(layout_idx)),
                     .local => |node_id| blk: {
-                        if (!self_resolver.resolved[@intFromEnum(node_id)]) break :blk false;
-                        const layout_idx = self_resolver.value_layouts[@intFromEnum(node_id)];
+                        if (!self_resolver.resolved[@backingInt(node_id)]) break :blk false;
+                        const layout_idx = self_resolver.value_layouts[@backingInt(node_id)];
                         break :blk self_resolver.store.isZeroSized(self_resolver.store.getLayout(layout_idx));
                     },
                 };
@@ -1951,8 +1951,8 @@ pub const Store = struct {
                     .canonical => return false,
                     .local => |id| id,
                 };
-                const parent_index = @intFromEnum(parent_id);
-                const child_index = @intFromEnum(child_id);
+                const parent_index = @backingInt(parent_id);
+                const child_index = @backingInt(child_id);
 
                 if (!self_resolver.recursive_nodes[parent_index] or !self_resolver.recursive_nodes[child_index]) {
                     return false;
@@ -1986,7 +1986,7 @@ pub const Store = struct {
             }
 
             fn tryResolveNode(self_resolver: *@This(), node_id: GraphNodeId) std.mem.Allocator.Error!bool {
-                const index = @intFromEnum(node_id);
+                const index = @backingInt(node_id);
                 if (self_resolver.resolved[index]) return false;
 
                 switch (self_resolver.graph.getNode(node_id)) {
@@ -2108,7 +2108,7 @@ pub const Store = struct {
         @memset(parent_starts, 0);
         for (graph.nodes.items) |node| {
             var children = GraphChildren.init(graph, node);
-            while (children.next()) |child| parent_starts[@intFromEnum(child) + 1] += 1;
+            while (children.next()) |child| parent_starts[@backingInt(child) + 1] += 1;
         }
         for (1..parent_starts.len) |i| parent_starts[i] += parent_starts[i - 1];
         const parents = try self.allocator.alloc(GraphNodeId, parent_starts[node_count]);
@@ -2118,8 +2118,8 @@ pub const Store = struct {
         for (graph.nodes.items, 0..) |node, i| {
             var children = GraphChildren.init(graph, node);
             while (children.next()) |child| {
-                const slot = &parent_fill[@intFromEnum(child)];
-                parents[slot.*] = @enumFromInt(i);
+                const slot = &parent_fill[@backingInt(child)];
+                parents[slot.*] = @fromBackingInt(@intCast(i));
                 slot.* += 1;
             }
         }
@@ -2128,12 +2128,12 @@ pub const Store = struct {
         defer pending.deinit(self.allocator);
         // Children are reserved after their parents, so trying the
         // highest ids first resolves most nodes on their first try.
-        for (0..node_count) |i| pending.appendAssumeCapacity(@enumFromInt(i));
+        for (0..node_count) |i| pending.appendAssumeCapacity(@fromBackingInt(@intCast(i)));
         while (pending.pop()) |node_id| {
             if (!try resolver.tryResolveNode(node_id)) continue;
-            const index = @intFromEnum(node_id);
+            const index = @backingInt(node_id);
             for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
-                if (!resolved[@intFromEnum(parent)]) try pending.append(self.allocator, parent);
+                if (!resolved[@backingInt(parent)]) try pending.append(self.allocator, parent);
             }
         }
 
@@ -2188,7 +2188,7 @@ pub const Store = struct {
                             continue;
                         }
                     }
-                    const index = @intFromEnum(node_id);
+                    const index = @backingInt(node_id);
                     return switch (self_finalizer.finalize_state[index]) {
                         .done => .{ .layout = self_finalizer.value_layouts[index] },
                         .active => blk: {
@@ -2209,8 +2209,8 @@ pub const Store = struct {
                     .canonical => return false,
                     .local => |id| id,
                 };
-                const parent_index = @intFromEnum(parent_id);
-                const child_index = @intFromEnum(child_id);
+                const parent_index = @backingInt(parent_id);
+                const child_index = @backingInt(child_id);
 
                 if (!self_finalizer.recursive_nodes[parent_index] or !self_finalizer.recursive_nodes[child_index]) {
                     return false;
@@ -2242,8 +2242,8 @@ pub const Store = struct {
                     switch (self_finalizer.graph.getNode(child_id)) {
                         .nominal => |child| current = child,
                         .pending, .committed, .box, .list, .closure, .erased_callable, .struct_, .tag_union => {
-                            self_finalizer.raw_used[@intFromEnum(child_id)] = true;
-                            return self_finalizer.raw_layouts[@intFromEnum(child_id)];
+                            self_finalizer.raw_used[@backingInt(child_id)] = true;
+                            return self_finalizer.raw_layouts[@backingInt(child_id)];
                         },
                     }
                 }
@@ -2262,7 +2262,7 @@ pub const Store = struct {
             /// becomes native call depth. Layouts are inserted in the order a
             /// direct recursive finalization inserted them.
             fn finalizeNode(self_finalizer: *@This(), start: GraphNodeId) std.mem.Allocator.Error!Idx {
-                const root_index = @intFromEnum(start);
+                const root_index = @backingInt(start);
                 switch (self_finalizer.finalize_state[root_index]) {
                     .done => return self_finalizer.value_layouts[root_index],
                     .active => {
@@ -2320,7 +2320,7 @@ pub const Store = struct {
                         switch (self_finalizer.childLayout(child.ref, child.mode)) {
                             .layout => |layout_idx| input = layout_idx,
                             .finalize => |child_id| {
-                                self_finalizer.finalize_state[@intFromEnum(child_id)] = .active;
+                                self_finalizer.finalize_state[@backingInt(child_id)] = .active;
                                 try frames.append(allocator, .{ .node_id = child_id });
                             },
                         }
@@ -2359,7 +2359,7 @@ pub const Store = struct {
                         .tag_union => try self_finalizer.store.putTagUnion(children),
                     };
 
-                    const index = @intFromEnum(node_id);
+                    const index = @backingInt(node_id);
                     if (self_finalizer.raw_used[index]) {
                         self_finalizer.store.updateLayout(
                             self_finalizer.raw_layouts[index],
@@ -2390,8 +2390,8 @@ pub const Store = struct {
         };
 
         for (graph.nodes.items, 0..) |_, i| {
-            const finalized = try finalizer.finalizeNode(@enumFromInt(i));
-            if (comptime builtin.mode == .Debug) {
+            const finalized = try finalizer.finalizeNode(@fromBackingInt(@intCast(i)));
+            if (comptime builtin.mode == .debug) {
                 std.debug.assert(finalized == value_layouts[i]);
             } else if (finalized != value_layouts[i]) {
                 unreachable;
@@ -2413,7 +2413,7 @@ pub const Store = struct {
 
         const root_idx = switch (root) {
             .canonical => |layout_idx| layout_idx,
-            .local => |node_id| value_layouts[@intFromEnum(node_id)],
+            .local => |node_id| value_layouts[@backingInt(node_id)],
         };
 
         return .{
@@ -2454,7 +2454,7 @@ pub const Store = struct {
     }
 
     pub fn getLayout(self: *const Self, idx: Idx) Layout {
-        return self.layouts.get(@enumFromInt(@intFromEnum(idx))).*;
+        return self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx)))).*;
     }
 
     pub fn layoutCount(self: *const Self) usize {
@@ -2462,11 +2462,11 @@ pub const Store = struct {
     }
 
     pub fn getStructData(self: *const Self, idx: StructIdx) *const StructData {
-        return self.struct_data.get(@enumFromInt(idx.int_idx));
+        return self.struct_data.get(@fromBackingInt(@intCast(idx.int_idx)));
     }
 
     pub fn getTagUnionData(self: *const Self, idx: TagUnionIdx) *const TagUnionData {
-        return self.tag_union_data.get(@enumFromInt(idx.int_idx));
+        return self.tag_union_data.get(@fromBackingInt(@intCast(idx.int_idx)));
     }
 
     pub fn getTagUnionVariants(self: *const Self, data: *const TagUnionData) TagUnionVariant.SafeMultiList.Slice {
@@ -2638,8 +2638,8 @@ pub const Store = struct {
             inline for (.{ target.TargetUsize.u32, target.TargetUsize.u64 }) |target_usize| {
                 const size_align = self.layoutSizeAlignAt(field_layout, target_usize);
                 const offset: u32 = @intCast(std.mem.alignForward(u32, offsets.get(target_usize), structFieldAlignmentBytes(field, size_align)));
-                field_offsets.per_target[@intFromEnum(target_usize)] = offset;
-                offsets.per_target[@intFromEnum(target_usize)] = offset + size_align.size;
+                field_offsets.per_target[@backingInt(target_usize)] = offset;
+                offsets.per_target[@backingInt(target_usize)] = offset + size_align.size;
             }
             _ = try self.struct_field_offsets.append(self.allocator, field_offsets);
         }
@@ -2657,7 +2657,7 @@ pub const Store = struct {
     pub inline fn getStructField(self: *const Self, struct_idx: StructIdx, field_index_in_sorted_fields: u32) StructField {
         const fields = self.getStructData(struct_idx).getFields();
         std.debug.assert(field_index_in_sorted_fields < fields.count);
-        const absolute_index: StructField.SafeMultiList.Idx = @enumFromInt(@intFromEnum(fields.start) + field_index_in_sorted_fields);
+        const absolute_index: StructField.SafeMultiList.Idx = @fromBackingInt(@intCast(@backingInt(fields.start) + field_index_in_sorted_fields));
         return .{
             .index = self.struct_fields.fieldItem(.index, absolute_index),
             .layout = self.struct_fields.fieldItem(.layout, absolute_index),
@@ -2673,7 +2673,7 @@ pub const Store = struct {
     ) u32 {
         const fields = self.getStructData(struct_idx).getFields();
         std.debug.assert(field_index_in_sorted_fields < fields.count);
-        const absolute_index: u32 = @intFromEnum(fields.start) + field_index_in_sorted_fields;
+        const absolute_index: u32 = @backingInt(fields.start) + field_index_in_sorted_fields;
         return self.struct_field_offsets.items.items[absolute_index].get(target_usize);
     }
 
@@ -2711,7 +2711,7 @@ pub const Store = struct {
         // The struct's positions ordered by original index, searched by
         // binary search.
         const fields = self.getStructData(struct_idx).getFields();
-        const start: usize = @intFromEnum(fields.start);
+        const start: usize = @backingInt(fields.start);
         const order = self.struct_field_original_order.items.items[start .. start + fields.count];
         var low: usize = 0;
         var high: usize = order.len;
@@ -2788,7 +2788,7 @@ pub const Store = struct {
         // Check if we already have a ZST layout
         const len: u32 = @intCast(self.layouts.len());
         for (0..len) |i| {
-            const idx: Idx = @enumFromInt(i);
+            const idx: Idx = @fromBackingInt(@intCast(i));
             const layout = self.getLayout(idx);
             if (layout.tag == .zst) {
                 return idx;
@@ -3026,10 +3026,10 @@ pub const Store = struct {
     /// Update an existing layout at the given index.
     /// Used for recursive types where we reserve a slot first and fill it in later.
     pub fn updateLayout(self: *Self, idx: Idx, layout: Layout) void {
-        const ptr = self.layouts.get(@enumFromInt(@intFromEnum(idx)));
+        const ptr = self.layouts.get(@fromBackingInt(@intCast(@backingInt(idx))));
         ptr.* = layout;
         self.digest_cache.invalidate();
-        self.resolved_list_layouts.items[@intFromEnum(idx)] = self.computeResolvedListLayoutIdx(idx);
+        self.resolved_list_layouts.items[@backingInt(idx)] = self.computeResolvedListLayoutIdx(idx);
     }
 
     fn computeResolvedListLayoutIdx(self: *const Self, start: Idx) ?Idx {
@@ -3046,12 +3046,12 @@ pub const Store = struct {
         }
         base.invariant(
             "layout.Store invariant violated: list-layout resolution encountered a cycle starting at layout {d}",
-            .{@intFromEnum(start)},
+            .{@backingInt(start)},
         );
     }
 
     pub fn resolvedListLayoutIdx(self: *const Self, layout_idx: Idx) ?Idx {
-        return self.resolved_list_layouts.items[@intFromEnum(layout_idx)];
+        return self.resolved_list_layouts.items[@backingInt(layout_idx)];
     }
 };
 
@@ -3602,7 +3602,7 @@ test "commitGraph identifies recursive nodes by reduced position, not by unrolli
     defer unrolled_commit.deinit(testing.allocator);
 
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.root_idx);
-    try testing.expectEqual(tied_commit.root_idx, unrolled_commit.value_layouts[@intFromEnum(union_two)]);
+    try testing.expectEqual(tied_commit.root_idx, unrolled_commit.value_layouts[@backingInt(union_two)]);
 }
 
 test "commitGraph gives an unrolled recursive record the same boxed slots" {
@@ -3618,7 +3618,7 @@ test "commitGraph gives an unrolled recursive record the same boxed slots" {
     graph.setNode(inner, .{ .struct_ = fields });
     var commit = try store.commitGraph(&graph, .{ .local = outer });
     defer commit.deinit(allocator);
-    try std.testing.expectEqual(commit.value_layouts[@intFromEnum(inner)], commit.root_idx);
+    try std.testing.expectEqual(commit.value_layouts[@backingInt(inner)], commit.root_idx);
 }
 
 test "commitGraph keeps distinct-field recursive struct payloads apart" {
@@ -3650,12 +3650,12 @@ test "commitGraph keeps distinct-field recursive struct payloads apart" {
     var seen_keys = std.AutoHashMap(Store.RecursiveGraphAnalysis.RecursiveKey, void).init(testing.allocator);
     defer seen_keys.deinit();
     for (variants) |variant| {
-        const key = analysis.keys[@intFromEnum(variant.local)] orelse return error.MissingRecursiveKey;
+        const key = analysis.keys[@backingInt(variant.local)] orelse return error.MissingRecursiveKey;
         try testing.expect(!seen_keys.contains(key));
         try seen_keys.put(key, {});
     }
-    try testing.expect(analysis.keys[@intFromEnum(union_node)] != null);
-    try testing.expect(analysis.keys[@intFromEnum(list_node)] != null);
+    try testing.expect(analysis.keys[@backingInt(union_node)] != null);
+    try testing.expect(analysis.keys[@backingInt(list_node)] != null);
 
     var commit = try store.commitGraph(&graph, .{ .local = union_node });
     defer commit.deinit(testing.allocator);
@@ -3697,9 +3697,9 @@ test "commitGraph interns a recursive layout identically regardless of how its c
     defer pair_commit.deinit(testing.allocator);
 
     try testing.expectEqual(loop_commit.root_idx, pair_commit.root_idx);
-    try testing.expectEqual(loop_commit.root_idx, pair_commit.value_layouts[@intFromEnum(first_union)]);
-    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(first_box)]);
-    try testing.expectEqual(loop_commit.value_layouts[@intFromEnum(loop_box)], pair_commit.value_layouts[@intFromEnum(second_box)]);
+    try testing.expectEqual(loop_commit.root_idx, pair_commit.value_layouts[@backingInt(first_union)]);
+    try testing.expectEqual(loop_commit.value_layouts[@backingInt(loop_box)], pair_commit.value_layouts[@backingInt(first_box)]);
+    try testing.expectEqual(loop_commit.value_layouts[@backingInt(loop_box)], pair_commit.value_layouts[@backingInt(second_box)]);
 }
 
 test "commitGraph keeps distinguishable nodes of one cycle distinct" {
@@ -3723,7 +3723,7 @@ test "commitGraph keeps distinguishable nodes of one cycle distinct" {
     var commit = try store.commitGraph(&graph, .{ .local = a });
     defer commit.deinit(testing.allocator);
 
-    try testing.expect(commit.value_layouts[@intFromEnum(a)] != commit.value_layouts[@intFromEnum(b)]);
+    try testing.expect(commit.value_layouts[@backingInt(a)] != commit.value_layouts[@backingInt(b)]);
 
     // Entering the same cycle at `b` reuses both interned layouts.
     var from_b = LayoutGraph{};
@@ -3741,8 +3741,8 @@ test "commitGraph keeps distinguishable nodes of one cycle distinct" {
     var commit_b = try store.commitGraph(&from_b, .{ .local = b2 });
     defer commit_b.deinit(testing.allocator);
 
-    try testing.expectEqual(commit.value_layouts[@intFromEnum(b)], commit_b.root_idx);
-    try testing.expectEqual(commit.value_layouts[@intFromEnum(a)], commit_b.value_layouts[@intFromEnum(a2)]);
+    try testing.expectEqual(commit.value_layouts[@backingInt(b)], commit_b.root_idx);
+    try testing.expectEqual(commit.value_layouts[@backingInt(a)], commit_b.value_layouts[@backingInt(a2)]);
 }
 
 test "commitGraph collapses interchangeable copies of a recursive closure layout (issue #11072)" {
@@ -3784,8 +3784,8 @@ test "commitGraph collapses interchangeable copies of a recursive closure layout
     defer commit.deinit(testing.allocator);
 
     for (1..copies) |i| {
-        try testing.expectEqual(commit.root_idx, commit.value_layouts[@intFromEnum(unions[i])]);
-        try testing.expectEqual(commit.value_layouts[@intFromEnum(boxes[0])], commit.value_layouts[@intFromEnum(boxes[i])]);
+        try testing.expectEqual(commit.root_idx, commit.value_layouts[@backingInt(unions[i])]);
+        try testing.expectEqual(commit.value_layouts[@backingInt(boxes[0])], commit.value_layouts[@backingInt(boxes[i])]);
     }
     const root = store.getLayout(commit.root_idx);
     try testing.expectEqual(LayoutTag.tag_union, root.tag);
@@ -3795,7 +3795,7 @@ test "commitGraph collapses interchangeable copies of a recursive closure layout
     for (2..copies + 1) |variant| {
         try testing.expectEqual(capture_layout, info.variants.get(variant).payload_layout);
     }
-    try testing.expectEqual(capture_layout, commit.value_layouts[@intFromEnum(first_capture.?)]);
+    try testing.expectEqual(capture_layout, commit.value_layouts[@backingInt(first_capture.?)]);
 
     // The store remembers one union, one box and one capture record, not
     // one of each per copy.
@@ -4020,20 +4020,20 @@ test "commitGraph resolves an unrolled copy against a committed leaf to the recu
     tied.setNode(tied_union, .{ .tag_union = try tied.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = tied_box } }) });
     var tied_commit = try store.commitGraph(&tied, .{ .local = tied_union });
     defer tied_commit.deinit(testing.allocator);
-    const box_digest = tied_commit.digests[@intFromEnum(tied_box)] orelse return error.MissingDigest;
+    const box_digest = tied_commit.digests[@backingInt(tied_box)] orelse return error.MissingDigest;
 
     // A later graph unrolls one step, `U = [Z, Box(T)]`, reusing the committed
     // `Box(T)` as a digest-carrying leaf instead of re-expanding it.
     var unrolled = LayoutGraph{};
     defer unrolled.deinit(testing.allocator);
-    const leaf = try unrolled.addCommitted(testing.allocator, tied_commit.value_layouts[@intFromEnum(tied_box)], box_digest);
+    const leaf = try unrolled.addCommitted(testing.allocator, tied_commit.value_layouts[@backingInt(tied_box)], box_digest);
     const outer = try unrolled.reserveNode(testing.allocator);
     unrolled.setNode(outer, .{ .tag_union = try unrolled.appendRefs(testing.allocator, &[_]GraphRef{ .{ .canonical = .zst }, .{ .local = leaf } }) });
     var unrolled_commit = try store.commitGraph(&unrolled, .{ .local = outer });
     defer unrolled_commit.deinit(testing.allocator);
 
     try testing.expectEqual(tied_commit.root_idx, unrolled_commit.root_idx);
-    try testing.expectEqualSlices(u8, &tied_commit.digests[@intFromEnum(tied_union)].?, &unrolled_commit.digests[@intFromEnum(outer)].?);
+    try testing.expectEqualSlices(u8, &tied_commit.digests[@backingInt(tied_union)].?, &unrolled_commit.digests[@backingInt(outer)].?);
 }
 
 fn testDoublingStruct(store: *Store, leaf: Idx, doublings: usize) std.mem.Allocator.Error!Idx {

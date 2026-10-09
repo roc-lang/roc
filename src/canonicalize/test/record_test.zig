@@ -32,7 +32,7 @@ test "record literals canonicalize to record expressions" {
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
@@ -58,7 +58,7 @@ test "record literals canonicalize to record expressions" {
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
@@ -84,7 +84,7 @@ test "record literals canonicalize to record expressions" {
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
@@ -123,7 +123,7 @@ test "record with unset fields collects them into the unsets span" {
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
@@ -154,7 +154,7 @@ test "record with unset fields collects them into the unsets span" {
         var can = try Can.initModule(roc_ctx, &env, ast, builtin_ctx.canInitContext());
         defer can.deinit();
 
-        const expr_idx: parse.AST.Expr.Idx = @enumFromInt(ast.root_node_idx);
+        const expr_idx: parse.AST.Expr.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
         const canonical_expr_idx = try can.canonicalizeExpr(expr_idx);
 
         const canonical_expr = env.store.getExpr(canonical_expr_idx.idx);
@@ -189,7 +189,7 @@ test "record pattern destructuring" {
     // Enter a function scope so we can have local bindings
     try can.scopeEnter(gpa, true);
 
-    const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt_idx: parse.AST.Statement.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
     const stmt = ast.store.getStatement(stmt_idx);
 
     // The statement should be a declaration
@@ -254,7 +254,7 @@ test "record pattern with sub-patterns" {
     // Enter a function scope so we can have local bindings
     try can.scopeEnter(gpa, true);
 
-    const stmt_idx: parse.AST.Statement.Idx = @enumFromInt(ast.root_node_idx);
+    const stmt_idx: parse.AST.Statement.Idx = @fromBackingInt(@intCast(ast.root_node_idx));
     const stmt = ast.store.getStatement(stmt_idx);
 
     // The statement should be a declaration

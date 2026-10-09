@@ -2131,6 +2131,20 @@ use recursive grammar functions, and it does not keep source substrings as an
 implicit parsing cursor. Source text may be consulted only through token
 metadata, for diagnostics, literal decoding, and identifier interning.
 
+### Redundant explicit returns
+
+Parsing records which explicit returns occupy function result positions. Each
+lambda body starts such a position; a block propagates it to its last expression
+or return, grouping parentheses preserve it, and an `if` with an `else` or
+a `match` propagates it to its branch bodies. A return's operand also occupies
+that position. Bindings, operands of other expressions, conditions, guards,
+loops and `if` without `else` do not propagate it. Nested lambdas start their own independent result positions.
+Canonicalization consumes this inventory to warn on redundant returns, and
+formatting consumes the same inventory to remove their keywords while preserving
+comments and adding parentheses where a bare identifier would otherwise parse
+as a punned record. Explicit early returns retain their control-flow meaning in
+CIR.
+
 ### Bidirectional source controls
 
 Literal Unicode Bidi_Control characters (U+061C, U+200E–U+200F,
@@ -4051,6 +4065,41 @@ another lambda's constraints, by construction. Rank bookkeeping is therefore
 strictly stack-shaped: unification only ever runs while the frame owning its
 vars is active, and `addVarToRank`'s debug guard is a regression tripwire
 rather than a reachable condition.
+
+### Predeclared Scheme Uses
+
+A use that instantiates a predeclared scheme is typed before the binding's
+own scheme is final, and the two need not agree: the body may solve a slot
+of its own copy of the annotation that the predeclared scheme leaves free.
+Rigids cannot be solved, but an implicitly opened output row (Polarity) is
+an ordinary bounded extension, so a body that returns a value from a closed
+source closes it, and one that forwards another row joins it with that row.
+A recursive call to `f : [A] -> [A]` whose body returns its parameter is
+typed against `[A] -> [A, ..r]` and may widen its result to `[A, B]`, while
+the final scheme of `f` is the closed `[A] -> [A]` that rejects the same
+widening from every other caller. Accepting it would hand Monotype a
+recursive request that the in-progress specialization cannot join.
+
+Every such use is therefore related to its binding's final scheme.
+The relation runs in the boundary that outputs the scheme (a group or
+RHS generalization boundary, after its final dispatch and replay round and
+before it generalizes) for uses made while the body was in flight, and at
+once for a use made after scheme output. The two generations of the
+annotation enumerate the same identity slots (`PredeclaredSlots`), so the
+relation is slot-wise and needs no structural matching: each body slot the
+scheme will quantify stands for the use's copy of the first slot that
+reaches it, a slot the scheme will not quantify is shared, and a slot the
+body closed must be closed in the use's copy too. Each copy is unified
+with that image. A relation can pin a receiver, so the boundary runs
+another round after relating any use.
+
+A rejected relation is a Type Mismatch at the use, naming the use's type
+and the definition's final one; the use becomes a runtime error and the
+definition keeps its scheme, as for any other rejected use. A body slot
+solved to anything other than a variable, a closed row, or a row's
+extension is an invariant violation, since the annotation's rigids and
+bounded rows admit nothing else, and a use still unrelated when the module
+finishes checking is one too.
 
 ### Value Bindings Generalize By Expression
 
@@ -11304,7 +11353,17 @@ Other solved-graph mutations:
   Static Dispatch At The Checked Boundary ("Evidence params"). The duplicate
   callable is unified with the retained one through an ordinary committed
   probe before the receiver's constraint list is rewritten without it; a probe
-  that cannot establish the pair rolls back and keeps both.
+  that cannot establish the pair rolls back and keeps both. Deciding whether a
+  scheme has anything to deduplicate is mechanism: the walk skips classes the
+  type store records as settled (`TypeStore.markSettled`), which hold no
+  identity with more than one constraint and no row, and when nothing can merge
+  it settles the row-free classes it visited. Every class reachable from a
+  settled class is settled, and any change to a settled class's content, any
+  merge that changes what a settled class's variables observe, and any rollback
+  empties the set, so the answer, and the rows normalized on the way, are those
+  of the full walk. A scheme with candidates is deduplicated over its whole
+  type exactly as before. Each nested lambda's generalization thus walks only
+  the part of its type its enclosed lambdas have not already settled.
 
 Stamped-plan restamps on CIR nodes (discharge time): the restamp rule—
 only the node's own constraint may restamp a node that already carries a
@@ -12853,27 +12912,58 @@ strings, deriving names, inspecting layouts, or using incidental expression
 shape. It must also not attach a contextual monotype to a checked expression id
 as if that checked expression were a reusable runtime value.
 
-Nested procedure sites carry a compact checked inventory of the quantified type
-bindings their bodies consume, including use-site substitutions whose hidden
-receivers are absent from captured value types. Each binding names its checked
-type, lexical dispatch scope, and substitution slot. The existing nested-site
-walk produces this inventory from checked expression, pattern, and dispatch
-interfaces; it does not add a second body scan. Type visitation is cycle-safe,
-and nested sites propagate their required bindings to their lexical parents.
-The same walk records each site's runtime captures: the binders of enclosing
-frames whose values the site needs, which are its source captures plus the
-runtime captures of every local procedure its body selects (a lookup resolved
-to a local procedure; methods never capture, so a dispatch adds none), less the
-binders the site itself binds. A site's needs propagate to its lexical parent
-the same way, and the walk records which site binds each binder so the
+A nested body's instantiation answers each quantified variable of an enclosing
+scope when the instantiation first reaches it: the innermost frame of its
+lexical evidence chain whose scheme quantifies the variable supplies the
+substitution slot, found through that scheme's variable index, which is built
+once per compilation. A variable no frame quantifies, or whose slot is a checked
+error, stays fresh. Locally quantified variables consume that nested
+specialization's own substitution; they never share another request's cells.
+Construction of a new generalized scope keeps the scope's own quantified
+variables fresh until the construction request determines them, and answers
+only variables its enclosing scopes quantify. Work at each specialization is
+proportional to the variables its instantiation actually reaches, not to the
+size of the enclosing scheme, its type-node map, or the types of the bodies
+nested inside it; no per-site inventory is recorded, so a site's checked data
+does not grow with the depth of the lambdas nested inside it.
+
+An instance of a checked type is pure under a context's evidence when every
+variable it reaches is the substitution that evidence gives the variable, and
+every other part is a function, tuple, empty row, or primitive. A pure instance
+has no cell of its own that a later relation could refine: its variables are the
+evidence's shared cells, and no representation evidence can attach to the rest.
+Two pure instances of one checked type under one evidence chain are therefore
+the same type wherever they occur. Each specialization graph indexes the first
+pure instance of each checked type under each evidence chain (named by its head
+frame's substitution and parent). When a nested function's request already
+belongs to the class of that function's pure instance under the nested evidence,
+and the request carries no generated-private evidence, the nested body uses the
+request as its instance of the checked function instead of instantiating it
+afresh and relating the copy to the request, which would add nothing to the
+request's class. Likewise an indirect call's callee is a value of the caller, so
+when its checked function type admits no representation evidence (it is built
+only from functions, tuples, empty rows, primitives, and variables), no explicit
+result is requested, and the caller's instance carries no generated-private
+evidence, every relation the call makes is plain unification and a fresh instance
+would join the caller's entirely; the call uses the caller's instance directly.
+A curried chain of nested lambdas therefore costs each level work proportional to
+its own arguments, not to the remaining depth of its function type.
+
+A body relates the binders of its environment to their locals once, in a base
+context shared by every nested context it creates. Each nested context forks
+those relations and joins every variable node the base instantiated with its
+own evidence's answer for that variable, which places it in exactly the class
+that relating the binders in the nested context would have; the relations
+themselves are not rebuilt per nested context.
+
+The nested-site walk records each site's runtime captures: the binders of
+enclosing frames whose values the site needs, which are its source captures
+plus the runtime captures of every local procedure its body selects (a lookup
+resolved to a local procedure; methods never capture, so a dispatch adds none),
+less the binders the site itself binds. A site's needs propagate to its lexical
+parent the same way, and the walk records which site binds each binder so the
 subtraction is exact. Recursive selections make this a least fixpoint, solved
 after the walk over the recorded selections.
-Before instantiating a nested body, Monotype installs these exact bindings from
-its selected lexical evidence frames. Locally quantified variables consume that
-nested specialization's own substitution; they never share another request's
-cells. Construction of a new generalized scope imports only bindings owned by
-its enclosing scopes. Work at each specialization is proportional to the
-recorded bindings, not to the size of the enclosing scheme or its type-node map.
 Stored function evidence remains graph-free across root and cache boundaries.
 Entering a restored nested body recreates its lexical substitutions in that
 body's instantiation context, consuming saved callable/capture interfaces and
@@ -14193,6 +14283,23 @@ lands inside the checked module data's evidence tables. In debug builds—
 where the boundary verifiers run—a missing or corrupt record is a compiler
 bug reported at the boundary, not a lowering panic.
 
+**Target substitutions.** A direct evidence node either carries the checked
+substitution of its target's scheme or says the substitution derives from its
+callable (`derived_from_callable`). A dispatch edge that checking discharged by
+selecting a target records that instantiation, so its node carries the full
+substitution; such an edge with a polymorphic target and no record is a
+compiler bug reported when checking outputs the module. Checking instantiates nothing for these
+targets, so their nodes derive the substitution from the callable:
+- a target reached through an exact procedure alias, whose edge instantiated
+  the alias's scheme;
+- the numeric default owner checking selects for a dispatcher no edge pins;
+- the target checking resolves for a literal conversion that it left
+  to each specialization;
+- a literal conversion on a builtin number or `Str`, which checking discharges
+  as a primitive with no callable.
+
+Monotype instantiates such a target's scheme at the dispatch's callable.
+
 **Evidence params.** Every type scheme with dispatch requirements has one
 deterministic ordered list of (dispatcher var, constraint) pairs—
 its evidence params—enumerated purely from the scheme's type structure
@@ -14206,7 +14313,15 @@ scheme. Repeated declarative constraints share one callable type, while
 independently inferred dot-method calls retain separate callable relations so a
 rank-1 method scheme can be instantiated independently at each use. Operators
 and literal conversions retain one numeric/defaulting relation per method
-identity. Same-name relations must agree on fixed outer function properties:
+identity. A relation folded into a retained one selects no target of its own,
+yet its dispatch site still outputs a plan. The unifier journals each fold as
+an exact (dropped, retained) pair of raw constraint function vars, and checking
+outputs `ModuleEnv.dispatch_relation_merges`, mapping every folded relation
+to the relation on its merge chain whose target was selected. Checked
+module output keys the folded dispatch's evidence to that relation's
+dispatch-target record. It never matches records by union-find root, because
+unrelated dispatches whose callables later unify would then share a record.
+Same-name relations must agree on fixed outer function properties:
 rank-1 instantiation can vary types but cannot vary a declaration's argument
 count or known effect mode. Once a scheme's public type is fixed, equivalent
 requirements whose only differences are private generalized variables collapse;
@@ -14829,6 +14944,23 @@ on one explicit work stack. A backing relation isolates an interned structural
 operand once, schedules that working variable against the backing, and defers
 its link action. Nested backing relations reuse the isolated variable instead
 of recursively entering the unifier or cloning it again at each nominal layer.
+
+Monotype Lifted types enter the solved store as lazy leaves that materialize one
+level when unification or a shape read touches them. A leaf that has never
+expanded stands for a fresh clone of its Monotype whose callable slots nothing
+else references when its expansion would be unobservable: the leaf has no clone
+context yet, or it is the only unexpanded leaf of a clone context whose every
+expansion registered at most one callable-bearing child, so every other entry
+of that context lies on its ancestor chain and no other expansion can reach the
+context again. Unifying such a leaf with a class already instantiated from the
+same Monotype only joins the clone's fresh callable slots to the class's, so the
+leaf joins the class without materializing. A Monotype that reaches a cycle, or
+that is uninhabited, keeps the ordinary relation. Leaves that survive solving
+were never unified: their callable slots all close empty and their
+forced-dynamic marks depend only on their Monotype, so finalization gives every
+untouched leaf of one Monotype one shared clone. Solving a chain of nested
+lambdas therefore relates each lambda's function type to its body's in constant
+work, however deep the chain is.
 
 Unification never splits a class. A pair's deferred link runs after the pair's
 children are unified, and in a cyclic type those children can bring either
@@ -19017,7 +19149,13 @@ reached again through a loop back edge likewise starts the next iteration's
 fresh value with every field intact: the previous value is dead past its
 redefinition, so a take that the back edge reaches again is not a second take
 of the same unit. Without that, a record rebuilt on every iteration (the
-result a per-position helper returns) would poison all of its fields. A later write first checks its value operand against
+result a per-position helper returns) would poison all of its fields.
+A borrowed tag-payload view supplies no ownership unit: both future-field
+observation and take-state flow use the union root's value-producing definition
+as their fresh-value boundary. Recreating the view inside a loop preserves the
+root's consumed-field state, so a union defined outside that loop retains each
+owned field read; rebuilding the union inside the loop supplies fresh units.
+A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.

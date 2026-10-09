@@ -172,6 +172,10 @@ fn getTempRoot(allocator: Allocator) (Allocator.Error || error{TempDirUnavailabl
         }
     }
 
+    // Zig 0.17's build configurer cannot export a temp directory to Run steps,
+    // and CI runners do not always set one, so fall back to the POSIX default.
+    if (comptime @import("builtin").os.tag != .windows) return allocator.dupe(u8, "/tmp");
+
     return error.TempDirUnavailable;
 }
 
@@ -799,25 +803,39 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
     }
 
-    // Delete existing .md files
+    // Delete existing .md files that no .roc file regenerates. The others are
+    // rewritten below only if their contents change (see `writeSnapshotMarkdown`).
     if (!config.disable_updates) {
         iterator = dir.iterate();
-        var files_to_delete = std.array_list.Managed([]u8).init(allocator);
+        var md_files = std.array_list.Managed([]u8).init(allocator);
         defer {
-            for (files_to_delete.items) |file_path| {
+            for (md_files.items) |file_path| {
                 allocator.free(file_path);
             }
-            files_to_delete.deinit();
+            md_files.deinit();
+        }
+        var roc_base_names = std.StringHashMap(void).init(allocator);
+        defer {
+            var iter = roc_base_names.keyIterator();
+            while (iter.next()) |key| allocator.free(key.*);
+            roc_base_names.deinit();
         }
 
         while (try iterator.next(app_io)) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            if (entry.kind != .file) continue;
+            if (std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
-                try files_to_delete.append(file_path);
+                errdefer allocator.free(file_path);
+                try md_files.append(file_path);
+            } else if (std.mem.endsWith(u8, entry.name, ".roc")) {
+                const base_name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - ".roc".len]);
+                errdefer allocator.free(base_name);
+                try roc_base_names.put(base_name, {});
             }
         }
 
-        for (files_to_delete.items) |file_name| {
+        for (md_files.items) |file_name| {
+            if (roc_base_names.contains(file_name[0 .. file_name.len - ".md".len])) continue;
             dir.deleteFile(app_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
@@ -843,6 +861,13 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             // Read the .roc file content
             const roc_content = std.Io.Dir.cwd().readFileAlloc(app_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
                 warn("Failed to read {s}: {}", .{ roc_file_path, err });
+                // Nothing regenerates this snapshot, so it must not outlive the run.
+                if (!config.disable_updates) {
+                    dir.deleteFile(app_io, snapshot_file_name) catch |delete_err| switch (delete_err) {
+                        error.FileNotFound => {},
+                        else => warn("Failed to delete {s}: {}", .{ snapshot_file_name, delete_err }),
+                    };
+                }
                 continue;
             };
             defer allocator.free(roc_content);
@@ -1011,11 +1036,11 @@ fn processSnapshotContent(
 
             switch (content.meta.node_type) {
                 .expr => {
-                    const expr_idx: AST.Expr.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const expr_idx: AST.Expr.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     maybe_expr_idx = try czer.canonicalizeExpr(expr_idx);
                 },
                 .statement => {
-                    const ast_stmt_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+                    const ast_stmt_idx: AST.Statement.Idx = @fromBackingInt(@intCast(parse_ast.root_node_idx));
                     try czer.canonicalizeStatementForSnapshot(ast_stmt_idx);
                 },
                 .file,
@@ -1320,22 +1345,12 @@ fn processSnapshotContent(
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
         if (content.meta.source_escapes) {
-            var remaining = snapshot_md;
-            while (std.mem.findScalar(u8, remaining, '\r')) |index| {
-                try md_file.writeStreamingAll(app_io, remaining[0..index]);
-                try md_file.writeStreamingAll(app_io, "\\r");
-                remaining = remaining[index + 1 ..];
-            }
-            try md_file.writeStreamingAll(app_io, remaining);
+            const escaped_md = try std.mem.replaceOwned(u8, allocator, snapshot_md, "\r", "\\r");
+            defer allocator.free(escaped_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, escaped_md)) return false;
         } else {
-            try md_file.writeStreamingAll(app_io, snapshot_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
         }
 
         if (html_buffer_unmanaged) |*buf| {
@@ -2363,11 +2378,11 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .header => {
-            const header = parse_ast.store.getHeader(@enumFromInt(parse_ast.root_node_idx));
+            const header = parse_ast.store.getHeader(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try header.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .expr => {
-            const expr = parse_ast.store.getExpr(@enumFromInt(parse_ast.root_node_idx));
+            const expr = parse_ast.store.getExpr(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try expr.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .mono => {
@@ -2375,7 +2390,7 @@ fn generateParseSection(output: *DualOutput, content: *const Content, parse_ast:
             try file.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .statement => {
-            const stmt = parse_ast.store.getStatement(@enumFromInt(parse_ast.root_node_idx));
+            const stmt = parse_ast.store.getStatement(@fromBackingInt(@intCast(parse_ast.root_node_idx)));
             try stmt.pushToSExprTree(output.gpa, env, parse_ast, &tree);
         },
         .package, .platform, .app => {
@@ -3175,6 +3190,33 @@ fn generateHtmlClosing(output: *DualOutput) error{WriteFailed}!void {
 }
 
 /// Write HTML buffer to file
+/// Writes a snapshot's markdown, leaving a file that already holds exactly
+/// these bytes untouched. The build cache treats a rewritten input as changed
+/// even when its contents are identical, so re-stamping unchanged snapshots
+/// would rebuild everything derived from `test/` after each regeneration.
+/// Returns false, after logging, when the file cannot be created.
+fn writeSnapshotMarkdown(gpa: Allocator, output_path: []const u8, snapshot_md: []const u8) SnapshotError!bool {
+    // One byte past the new length is enough to tell a longer file apart.
+    const existing: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(app_io, output_path, gpa, .limited(snapshot_md.len + 1)) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        // Missing, longer, or unreadable: not known to match, so write it.
+        else => null,
+    };
+    if (existing) |bytes| {
+        defer gpa.free(bytes);
+        if (std.mem.eql(u8, bytes, snapshot_md)) return true;
+    }
+
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close(app_io);
+
+    try md_file.writeStreamingAll(app_io, snapshot_md);
+    return true;
+}
+
 fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) (Allocator.Error || error{WriteFailed})!void {
     // Convert .md path to .html path
     const html_path = blk: {
@@ -3627,13 +3669,7 @@ fn processDocsSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -3753,7 +3789,7 @@ fn snapshotRootRequestByOrder(
     for (root_artifact.root_requests.requests) |request| {
         if (request.order == order) return request;
     }
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic("snapshot invariant violated: missing root request order {d}", .{order});
     }
     unreachable;
@@ -3766,14 +3802,14 @@ fn snapshotProvidedEntrypointName(
     const def_idx = switch (root.source) {
         .def => |def| def,
         .expr, .statement, .required_binding, .hoisted => {
-            if (@import("builtin").mode == .Debug) {
+            if (@import("builtin").mode == .debug) {
                 std.debug.panic("snapshot invariant violated: exported platform root is not a definition", .{});
             }
             unreachable;
         },
     };
     const top_level = root_artifact.top_level_values.lookupByDef(def_idx) orelse {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic("snapshot invariant violated: exported platform root has no published top-level value", .{});
         }
         unreachable;
@@ -3785,7 +3821,7 @@ fn snapshotProvidedEntrypointName(
         }
     }
 
-    if (@import("builtin").mode == .Debug) {
+    if (@import("builtin").mode == .debug) {
         std.debug.panic(
             "snapshot invariant violated: exported platform root has no published FFI symbol",
             .{},
@@ -3802,7 +3838,7 @@ fn snapshotNativeEntrypoints(
     const root_procs = lowered.lir_result.root_procs.items;
     const root_metadata = lowered.lir_result.root_metadata.items;
     if (root_procs.len != root_metadata.len) {
-        if (@import("builtin").mode == .Debug) {
+        if (@import("builtin").mode == .debug) {
             std.debug.panic(
                 "snapshot invariant violated: root metadata mismatch roots={d} metadata={d}",
                 .{ root_procs.len, root_metadata.len },
@@ -3974,14 +4010,14 @@ fn processDevObjectSnapshot(
 
     const RocTarget = roc_target.RocTarget;
     const Blake3 = std.crypto.hash.Blake3;
-    const roc_target_fields = @typeInfo(RocTarget).@"enum".fields;
+    const roc_target_info = @typeInfo(RocTarget).@"enum";
 
-    var hash_results: [roc_target_fields.len]TargetHashResult = undefined;
+    var hash_results: [roc_target_info.field_names.len]TargetHashResult = undefined;
     var object_compiler = backend.ObjectFileCompiler.init(allocator);
 
-    inline for (roc_target_fields, 0..) |field, i| {
-        const target: RocTarget = @enumFromInt(field.value);
-        hash_results[i].target_name = field.name;
+    inline for (roc_target_info.field_names, roc_target_info.field_values, 0..) |field_name, field_value, i| {
+        const target: RocTarget = @fromBackingInt(@intCast(field_value));
+        hash_results[i].target_name = field_name;
 
         target_snapshot: {
             const arch = target.toCpuArch();
@@ -4030,7 +4066,7 @@ fn processDevObjectSnapshot(
                 target,
                 .{ .include_provided_exports = true },
             ) catch |err| {
-                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field.name, err });
+                std.log.err("Failed to materialize static data exports for {s}: {}", .{ field_name, err });
                 hash_results[i].hash_hex = undefined;
                 hash_results[i].supported = false;
                 break :target_snapshot;
@@ -4165,13 +4201,7 @@ fn processDevObjectSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -4330,7 +4360,7 @@ fn parseSnapshotReplLineAsStatement(allocator: Allocator, line: []const u8) Allo
     defer ast.deinit();
     if (ast.hasErrors()) return null;
 
-    return ast.store.getStatement(@enumFromInt(ast.root_node_idx));
+    return ast.store.getStatement(@fromBackingInt(@intCast(ast.root_node_idx)));
 }
 
 fn resolveSnapshotReplInputKind(allocator: Allocator, line: []const u8) Allocator.Error!?SnapshotReplInputKind {
@@ -4651,6 +4681,7 @@ fn isTypeCheckError(err: SnapshotError) bool {
         error.ParseFailed,
         error.ParsingFailed,
         error.PathAlreadyExists,
+        error.PathExceedsLimit,
         error.PathOutsideWorkspace,
         error.PermissionDenied,
         error.PipeBusy,
@@ -4744,7 +4775,7 @@ fn renderSnapshotReplTypeProblems(
 
     const repl_expr = switch (source_kind) {
         .expr => blk: {
-            const statement_idx: AST.Statement.Idx = @enumFromInt(parse_ast.root_node_idx);
+            const statement_idx: AST.Statement.Idx = @fromBackingInt(parse_ast.root_node_idx);
             const statement = parse_ast.store.getStatement(statement_idx);
             const expr_idx = switch (statement) {
                 .expr => |expr_stmt| expr_stmt.expr,
@@ -5045,13 +5076,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
-        try md_file.writeStreamingAll(app_io, snapshot_md);
+        if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
@@ -5365,7 +5390,7 @@ test "no Builtin module leaks in snapshots" {
     var snapshots_dir = try std.Io.Dir.cwd().openDir(std.testing.io, "test/snapshots", .{ .iterate = true });
     defer snapshots_dir.close(std.testing.io);
 
-    var files_with_builtin: std.array_list.Managed([]const u8) = .{ .allocator = allocator, .items = &.{}, .capacity = 0 };
+    var files_with_builtin = std.array_list.Managed([]const u8).init(allocator);
     defer {
         for (files_with_builtin.items) |path| {
             allocator.free(path);

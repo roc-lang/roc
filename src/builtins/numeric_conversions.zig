@@ -77,7 +77,7 @@ pub fn floatToIntTry(comptime Float: type, comptime Int: type, value: Float) ?In
     }
 
     const bits = floatToIntWrapBits(Float, truncated, int_info.bits);
-    const Unsigned = std.meta.Int(.unsigned, int_info.bits);
+    const Unsigned = @Int(.unsigned, int_info.bits);
     return @bitCast(@as(Unsigned, @truncate(bits)));
 }
 
@@ -163,7 +163,7 @@ pub fn floatToIntWrapBits(comptime Float: type, value: Float, target_bits: u32) 
 pub fn floatToIntWrap(comptime Float: type, comptime Int: type, value: Float) Int {
     const int_info = @typeInfo(Int).int;
     const bits = floatToIntWrapBits(Float, value, int_info.bits);
-    const U = std.meta.Int(.unsigned, int_info.bits);
+    const U = @Int(.unsigned, int_info.bits);
     return @bitCast(@as(U, @truncate(bits)));
 }
 

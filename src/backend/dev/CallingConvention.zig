@@ -724,15 +724,15 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn stabilizeDeferredMemorySources(self: *Self) Allocator.Error!void {
             if (self.reg_arg_count == 0) return;
 
-            var has_dst_reg = [_]bool{false} ** 32;
+            var has_dst_reg = @as([32]bool, @splat(false));
             for (self.reg_args[0..self.reg_arg_count]) |ra| {
-                has_dst_reg[@intFromEnum(CC_EMIT.PARAM_REGS[ra.dst_index])] = true;
+                has_dst_reg[@backingInt(CC_EMIT.PARAM_REGS[ra.dst_index])] = true;
             }
 
             for (self.reg_args[0..self.reg_arg_count]) |*ra| {
                 switch (ra.src) {
                     .from_mem => |mem| {
-                        if (!has_dst_reg[@intFromEnum(mem.base)]) continue;
+                        if (!has_dst_reg[@backingInt(mem.base)]) continue;
 
                         const save_offset = self.allocCallerTempSlot();
                         if (comptime is_aarch64) {
@@ -751,7 +751,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         } };
                     },
                     .from_lea => |lea| {
-                        if (!has_dst_reg[@intFromEnum(lea.base)]) continue;
+                        if (!has_dst_reg[@backingInt(lea.base)]) continue;
 
                         const save_offset = self.allocCallerTempSlot();
                         if (comptime is_aarch64) {
@@ -795,7 +795,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
         fn emitDeferredRegArgs(self: *Self) Allocator.Error!void {
             if (self.reg_arg_count == 0) return;
 
-            var statuses = [_]MoveStatus{.to_move} ** CC_EMIT.PARAM_REGS.len;
+            var statuses = @as([CC_EMIT.PARAM_REGS.len]MoveStatus, @splat(.to_move));
             // Mutable copy of sources—cycle breaking redirects sources to SCRATCH_REG
             var sources: [CC_EMIT.PARAM_REGS.len]ArgSource = undefined;
             for (self.reg_args[0..self.reg_arg_count], 0..) |arg, i| {

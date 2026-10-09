@@ -97,11 +97,11 @@ const Suite = enum(u8) {
     }
 };
 
-const suite_count = @typeInfo(Suite).@"enum".fields.len;
+const suite_count = @typeInfo(Suite).@"enum".field_names.len;
 const all_suites = [_]Suite{ .platforms, .subcommands, .echo, .glue, .snapshot_programs };
 
 const SuiteSelection = struct {
-    enabled: [suite_count]bool = [_]bool{false} ** suite_count,
+    enabled: [suite_count]bool = @as([suite_count]bool, @splat(false)),
 
     fn all() SuiteSelection {
         var result = SuiteSelection{};
@@ -110,7 +110,7 @@ const SuiteSelection = struct {
     }
 
     fn add(self: *SuiteSelection, suite: Suite) void {
-        self.enabled[@intFromEnum(suite)] = true;
+        self.enabled[@backingInt(suite)] = true;
     }
 
     fn addAll(self: *SuiteSelection) void {
@@ -118,7 +118,7 @@ const SuiteSelection = struct {
     }
 
     fn includes(self: SuiteSelection, suite: Suite) bool {
-        return self.enabled[@intFromEnum(suite)];
+        return self.enabled[@backingInt(suite)];
     }
 
     fn isEmpty(self: SuiteSelection) bool {
@@ -130,7 +130,7 @@ const SuiteSelection = struct {
 
     fn includesOnly(self: SuiteSelection, selected: Suite) bool {
         for (self.enabled, 0..) |enabled, index| {
-            if (enabled != (index == @intFromEnum(selected))) return false;
+            if (enabled != (index == @backingInt(selected))) return false;
         }
         return true;
     }
@@ -3144,16 +3144,16 @@ const subcommand_cases = [_]CliCase{
     // and the (unwrapped) local code snippet.
     .{ .id = 0, .suite = .subcommands, .name = "comptime crash provenance distinguishes same-named modules across packages", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/same_name_module_default_crash/app/Main.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time crash" }, .{ .stream = .stderr, .text = "happened in the module" }, .{ .stream = .stderr, .text = "remote_cfg = Remote.Cfg.{}" }, .{ .stream = .stderr, .text = "Integer addition overflowed" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "comptime expect failure inside an inlined foreign default names the declaring module", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/multi_module_default_expect/Main.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "compile time expect failed" }, .{ .stream = .stderr, .text = "failed in the module" }, .{ .stream = .stderr, .text = "Cfg (line 5, column" }, .{ .stream = .stderr, .text = "cfg = Cfg.Cfg.{}" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check reports large default Dec scientific literal without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/large_scientific_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" }, .{ .stream = .stderr, .text = "large_scientific_default_dec.roc:1:" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic:" }, .{ .stream = .stderr, .text = ".zig-cache/tmp" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reports large default Dec scientific literal without panicking", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/large_scientific_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" }, .{ .stream = .stderr, .text = "large_scientific_default_dec.roc:1:" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     // The 30s bounds below are the 9760 perf regression guards: a healthy
     // check is <2s, and the 9567 text-reconstruction regression took 42s.
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports huge integral scientific literal without slow conversion", .timeout_ms = 30_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/huge_scientific_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports reopened huge integral scientific literal without slow conversion", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/huge_reopened_scientific_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects materializing huge scientific literal for custom from_numeral", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/huge_scientific_custom_from_numeral.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Big" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic:" }, .{ .stream = .stderr, .text = ".zig-cache/tmp" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check rejects materializing huge scientific literal for custom from_numeral", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/huge_scientific_custom_from_numeral.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Big" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check reports unpinned integer literal beyond Dec range", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/dec_default_int_overflow.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check preserves numeric literal constraints before reporting large default Dec scientific literal", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/large_scientific_list_default_dec.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "Dec" } }, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9565: resolved open numeral literal cannot overflow I8", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9565_i8_overflow.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "I8" } }, .not_contains = &.{.{ .stream = .stderr, .text = "No errors found" }} } } },
-    .{ .id = 0, .suite = .subcommands, .name = "issue 9565: default platform Exit I8 validates loop bound", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9565_default_platform_exit_overflow.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "I8" }, .{ .stream = .stderr, .text = "issue_9565_default_platform_exit_overflow.roc:4:" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "No errors found" }, .{ .stream = .stderr, .text = ".zig-cache/tmp" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "issue 9565: default platform Exit I8 validates loop bound", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9565_default_platform_exit_overflow.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "I8" }, .{ .stream = .stderr, .text = "issue_9565_default_platform_exit_overflow.roc:4:" } }, .not_contains = &.{.{ .stream = .stderr, .text = "No errors found" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9565: default platform Exit I8 validates match pattern literal", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_9565_i8_overflow_pattern.roc", .exit = .failure, .contains = &.{ .{ .stream = .stderr, .text = "invalid number" }, .{ .stream = .stderr, .text = "I8" } }, .not_contains = &.{.{ .stream = .stderr, .text = "No errors found" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 9565: out-of-range match pattern literal lowers without panicking", .body = .{ .command = .{ .args = &.{"--no-cache"}, .roc_file = "test/cli/issue_9565_i8_overflow_pattern.roc", .exit = .not_panic, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc check treats integral scientific notation as integer syntax sugar", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/scientific_integer_u8.roc", .contains_any = &.{.{ .needles = &no_errors_needles }}, .not_contains = &.{.{ .stream = .stderr, .text = "panic:" }} } } },
@@ -3570,8 +3570,8 @@ fn serializeResult(fd: posix.fd_t, result: TestResult) void {
     const message_out = cappedCapture(result.message);
 
     const header = WireHeader{
-        .status = @intFromEnum(result.status),
-        .phase = @intFromEnum(result.phase),
+        .status = @backingInt(result.status),
+        .phase = @backingInt(result.phase),
         .duration_ns = result.duration_ns,
         .build_ns = result.build_ns,
         .run_ns = result.run_ns,
@@ -3609,8 +3609,8 @@ fn deserializeResult(buf: []const u8, gpa: Allocator) ?TestResult {
     const message = harness.readStr(buf, &offset, header.message_len, gpa);
 
     return .{
-        .status = @enumFromInt(header.status),
-        .phase = @enumFromInt(header.phase),
+        .status = @fromBackingInt(@intCast(header.status)),
+        .phase = @fromBackingInt(@intCast(header.phase)),
         .duration_ns = header.duration_ns,
         .build_ns = header.build_ns,
         .run_ns = header.run_ns,
@@ -4241,7 +4241,7 @@ fn addPreservedWorkDirMessage(allocator: Allocator, result: TestResult, work_dir
 fn exitCode(term: std.process.Child.Term) u32 {
     return switch (term) {
         .exited => |code| @intCast(code),
-        .signal => |sig| @as(u32, @intFromEnum(sig)) | 0x80000000,
+        .signal => |sig| @as(u32, @backingInt(sig)) | 0x80000000,
         .stopped, .unknown => 0xFFFFFFFF,
     };
 }
@@ -5012,7 +5012,7 @@ const watch_refresh_dep_initial_source =
 
 const watch_refresh_wrapper_source =
     \\#!/usr/bin/env bash
-    \\real="./zig-out/bin/roc"
+    \\real="$ROC_WATCH_REAL_COMPILER"
     \\is_child=0
     \\for arg in "$@"; do
     \\    case "$arg" in
@@ -5049,6 +5049,15 @@ fn customWatchCompletedRunRefreshReruns(
     timer: *harness.Timer,
     timeout_ms: u64,
 ) ?TestResult {
+    var watch_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone watch wrapper environment: {}", .{err}),
+    };
+    defer watch_env.env_map.deinit();
+    watch_env.env_map.put("ROC_WATCH_REAL_COMPILER", roc_binary_path) catch |err|
+        return customInfraFailure(allocator, timer, "failed to declare watch compiler artifact: {}", .{err});
+
     const app_path = std.fs.path.join(allocator, &.{ env.dirs.work_dir, "watch_refresh.roc" }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate watch refresh app path: {}", .{err});
     defer allocator.free(app_path);
@@ -5080,7 +5089,7 @@ fn customWatchCompletedRunRefreshReruns(
     const result = runRawInEnv(
         io,
         allocator,
-        env,
+        &watch_env,
         &.{ wrapper_path, "check", "--watch", "--no-cache", app_path },
         project_root_path,
         null,
@@ -5193,6 +5202,12 @@ fn nativeGlueTarget() ?GlueNativeTarget {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -7020,6 +7035,12 @@ const DefaultPlatformTarget = enum {
             .watchos,
             .uefi,
             .@"3ds",
+            .wiiu,
+            .@"switch",
+            .gba,
+            .psx,
+            .tios,
+            .ashetos,
             .ps3,
             .ps4,
             .ps5,
@@ -12150,7 +12171,7 @@ fn oversizedUrlBundle(allocator: Allocator) (std.Io.Writer.Error || std.fmt.BufP
     defer bytes.deinit();
     // Zstandard magic, no content-size/checksum, 1 MiB window.
     try bytes.writer.writeAll(&.{ 0x28, 0xb5, 0x2f, 0xfd, 0, 0x50 });
-    var header = [_]u8{0} ** 512;
+    var header = @as([512]u8, @splat(0));
     @memcpy(header[0..11], "payload.bin");
     _ = try std.fmt.bufPrint(header[124..135], "{o:0>11}", .{base.max_bundle_expanded_bytes + 512});
     @memset(header[148..156], ' ');
@@ -12539,6 +12560,22 @@ fn runGlueRuntimeCase(
         .wasm32 => null,
     };
 
+    // Zig 0.17 rejects `@Vector` fields in `extern struct`/`extern union`
+    // (compiler commit 6d2c8349c5), so ZigGlue cannot declare the vector
+    // aggregates layout-probe exchanges with its host on any target. Roc's
+    // host ABI contract is unchanged and CGlue and RustGlue still exercise
+    // it. Aligned-array and f128 stand-ins change the C calling convention,
+    // so no substitute is generated.
+    // Unsupported pending a future design for Zig vector aggregates.
+    if (zigGlueUnsupportedVectorAggregates(runtime.language, runtime.platform.name)) {
+        return .{
+            .status = .skip,
+            .phase = .setup,
+            .duration_ns = timer.read(),
+            .message = "ZigGlue does not support SIMD vectors inside extern aggregates with Zig 0.17",
+        };
+    }
+
     // Zig 0.16.0 and 0.17.0-dev.1464 mislower two natural C ABI aggregate
     // signatures exercised by layout-probe. On x64mac, Zig splits a two-f64
     // aggregate after FP-register exhaustion instead of rolling the whole
@@ -12693,6 +12730,10 @@ fn runGlueRuntimeCase(
     util.cleanupTestWorkDir(io, env.dirs.work_dir);
     const elapsed = timer.read();
     return .{ .status = .pass, .phase = .run, .duration_ns = elapsed, .run_ns = elapsed };
+}
+
+fn zigGlueUnsupportedVectorAggregates(language: GlueLanguage, platform_name: []const u8) bool {
+    return language == .zig and std.mem.eql(u8, platform_name, "layout-probe");
 }
 
 fn zigCompilerMislowersLayoutProbeAbi(roc_target_name: []const u8) bool {
@@ -13142,6 +13183,12 @@ fn hostObjectExtension() []const u8 {
         .watchos,
         .uefi,
         .@"3ds",
+        .wiiu,
+        .@"switch",
+        .gba,
+        .psx,
+        .tios,
+        .ashetos,
         .ps3,
         .ps4,
         .ps5,
@@ -14843,28 +14890,28 @@ fn printResults(
     const status_count = 7;
     const opt_count = 4;
     const all_opts = [_]OptMode{ .interpreter, .dev, .size, .speed };
-    var status_counts = [_]usize{0} ** status_count;
-    var opt_counts = [_]usize{0} ** opt_count;
-    var opt_failures = [_]usize{0} ** opt_count;
-    var suite_counts = [_]usize{0} ** suite_count;
-    var suite_failures = [_]usize{0} ** suite_count;
-    var suite_skips = [_]usize{0} ** suite_count;
+    var status_counts = @as([status_count]usize, @splat(0));
+    var opt_counts = @as([opt_count]usize, @splat(0));
+    var opt_failures = @as([opt_count]usize, @splat(0));
+    var suite_counts = @as([suite_count]usize, @splat(0));
+    var suite_failures = @as([suite_count]usize, @splat(0));
+    var suite_skips = @as([suite_count]usize, @splat(0));
 
     for (tests, 0..) |tc, i| {
         const r = results[i];
         const ms = harness.nsToMs(r.duration_ns);
-        status_counts[@intFromEnum(r.status)] += 1;
-        suite_counts[@intFromEnum(tc.suite)] += 1;
+        status_counts[@backingInt(r.status)] += 1;
+        suite_counts[@backingInt(tc.suite)] += 1;
         if (r.status != .pass and r.status != .skip) {
-            suite_failures[@intFromEnum(tc.suite)] += 1;
+            suite_failures[@backingInt(tc.suite)] += 1;
         }
         if (r.status == .skip) {
-            suite_skips[@intFromEnum(tc.suite)] += 1;
+            suite_skips[@backingInt(tc.suite)] += 1;
         }
         if (tc.backend) |backend| {
-            opt_counts[@intFromEnum(backend)] += 1;
+            opt_counts[@backingInt(backend)] += 1;
             if (r.status != .pass and r.status != .skip) {
-                opt_failures[@intFromEnum(backend)] += 1;
+                opt_failures[@backingInt(backend)] += 1;
             }
         }
 
@@ -14880,18 +14927,18 @@ fn printResults(
     }
 
     const wall_ms = harness.nsToMs(wall_ns);
-    std.debug.print("\n{d} passed", .{status_counts[@intFromEnum(TestStatus.pass)]});
-    if (status_counts[@intFromEnum(TestStatus.build_failed)] > 0) std.debug.print(", {d} build failed", .{status_counts[@intFromEnum(TestStatus.build_failed)]});
-    if (status_counts[@intFromEnum(TestStatus.run_failed)] > 0) std.debug.print(", {d} run failed", .{status_counts[@intFromEnum(TestStatus.run_failed)]});
-    if (status_counts[@intFromEnum(TestStatus.crash)] > 0) std.debug.print(", {d} crashed", .{status_counts[@intFromEnum(TestStatus.crash)]});
-    if (status_counts[@intFromEnum(TestStatus.timeout)] > 0) std.debug.print(", {d} timed out", .{status_counts[@intFromEnum(TestStatus.timeout)]});
-    if (status_counts[@intFromEnum(TestStatus.infra_error)] > 0) std.debug.print(", {d} infra errors", .{status_counts[@intFromEnum(TestStatus.infra_error)]});
-    if (status_counts[@intFromEnum(TestStatus.skip)] > 0) std.debug.print(", {d} skipped", .{status_counts[@intFromEnum(TestStatus.skip)]});
+    std.debug.print("\n{d} passed", .{status_counts[@backingInt(TestStatus.pass)]});
+    if (status_counts[@backingInt(TestStatus.build_failed)] > 0) std.debug.print(", {d} build failed", .{status_counts[@backingInt(TestStatus.build_failed)]});
+    if (status_counts[@backingInt(TestStatus.run_failed)] > 0) std.debug.print(", {d} run failed", .{status_counts[@backingInt(TestStatus.run_failed)]});
+    if (status_counts[@backingInt(TestStatus.crash)] > 0) std.debug.print(", {d} crashed", .{status_counts[@backingInt(TestStatus.crash)]});
+    if (status_counts[@backingInt(TestStatus.timeout)] > 0) std.debug.print(", {d} timed out", .{status_counts[@backingInt(TestStatus.timeout)]});
+    if (status_counts[@backingInt(TestStatus.infra_error)] > 0) std.debug.print(", {d} infra errors", .{status_counts[@backingInt(TestStatus.infra_error)]});
+    if (status_counts[@backingInt(TestStatus.skip)] > 0) std.debug.print(", {d} skipped", .{status_counts[@backingInt(TestStatus.skip)]});
     std.debug.print(" ({d} total) in {d:.0}ms using {d} worker(s)\n", .{ tests.len, wall_ms, max_children });
 
     std.debug.print("\n=== Suite Summary ===\n", .{});
     for (all_suites) |suite| {
-        const suite_idx = @intFromEnum(suite);
+        const suite_idx = @backingInt(suite);
         if (suite_counts[suite_idx] == 0) continue;
         std.debug.print("  {s:<12} {d:>4} run, {d:>4} failed, {d:>4} skipped\n", .{
             suite.displayName(),
@@ -14903,7 +14950,7 @@ fn printResults(
 
     std.debug.print("\n=== Backend Matrix ===\n", .{});
     for (all_opts) |opt| {
-        const opt_idx = @intFromEnum(opt);
+        const opt_idx = @backingInt(opt);
         if (opt_counts[opt_idx] == 0) continue;
         std.debug.print("  {s:<11} {d:>4} run, {d:>4} failed\n", .{ opt.cliName(), opt_counts[opt_idx], opt_failures[opt_idx] });
     }
@@ -14913,7 +14960,7 @@ fn printResults(
     var build_durations: std.ArrayListUnmanaged(u64) = .empty;
     var run_durations: std.ArrayListUnmanaged(u64) = .empty;
     var opt_durations = [_]std.ArrayListUnmanaged(u64){ .empty, .empty, .empty, .empty };
-    var suite_durations = [_]std.ArrayListUnmanaged(u64){.empty} ** suite_count;
+    var suite_durations = @as([suite_count]std.ArrayListUnmanaged(u64), @splat(.empty));
     defer durations.deinit(gpa);
     defer build_durations.deinit(gpa);
     defer run_durations.deinit(gpa);
@@ -14930,9 +14977,9 @@ fn printResults(
     }
     for (tests, results) |tc, r| {
         if (r.duration_ns > 0) {
-            suite_durations[@intFromEnum(tc.suite)].append(gpa, r.duration_ns) catch {};
+            suite_durations[@backingInt(tc.suite)].append(gpa, r.duration_ns) catch {};
             if (tc.backend) |backend| {
-                opt_durations[@intFromEnum(backend)].append(gpa, r.duration_ns) catch {};
+                opt_durations[@backingInt(backend)].append(gpa, r.duration_ns) catch {};
             }
         }
     }
@@ -14943,10 +14990,10 @@ fn printResults(
         harness.printStatsRow("build", harness.computeTimingStats(build_durations.items));
         harness.printStatsRow("run", harness.computeTimingStats(run_durations.items));
         for (all_suites) |suite| {
-            harness.printStatsRow(suite.cliName(), harness.computeTimingStats(suite_durations[@intFromEnum(suite)].items));
+            harness.printStatsRow(suite.cliName(), harness.computeTimingStats(suite_durations[@backingInt(suite)].items));
         }
         for (all_opts) |opt| {
-            harness.printStatsRow(opt.cliName(), harness.computeTimingStats(opt_durations[@intFromEnum(opt)].items));
+            harness.printStatsRow(opt.cliName(), harness.computeTimingStats(opt_durations[@backingInt(opt)].items));
         }
     }
 
@@ -15169,6 +15216,7 @@ fn printUsage() void {
         \\Options:
         \\  --suite <name>      Run suite: platforms, subcommands, echo, glue, or all (repeatable)
         \\  --filter <pattern>   Run tests matching pattern (repeatable)
+        \\  --test-filter        Alias for --filter; accepts a value or =value.
         \\  --threads <N>        Max concurrent workers (default: CPU count)
         \\  --timeout <ms>       Per-test timeout in ms (default: 120000, 240000 with glue)
         \\  --include-llvm       Include size and speed LLVM backend jobs
@@ -15396,6 +15444,14 @@ test "effectiveTimeoutMs extends default for glue suite only" {
     default_args.timeout_provided = true;
     default_args.timeout_ms = 15_000;
     try std.testing.expectEqual(@as(u64, 15_000), effectiveTimeoutMs(default_args, suites));
+}
+
+test "Zig vector aggregate exclusion is limited to the Zig layout-probe host" {
+    try std.testing.expect(zigGlueUnsupportedVectorAggregates(.zig, "layout-probe"));
+
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.c, "layout-probe"));
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.rust, "layout-probe"));
+    try std.testing.expect(!zigGlueUnsupportedVectorAggregates(.zig, "fx"));
 }
 
 test "Zig layout-probe ABI skip is limited to affected native targets" {

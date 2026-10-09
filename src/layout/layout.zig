@@ -107,15 +107,15 @@ pub const Scalar = packed struct {
     _pad: u21 = 0,
 
     pub fn getInt(self: Scalar) types.Int.Precision {
-        return @enumFromInt(self.data);
+        return @fromBackingInt(@intCast(self.data));
     }
 
     pub fn getFrac(self: Scalar) types.Frac.Precision {
-        return @enumFromInt(@as(u3, @truncate(self.data)));
+        return @fromBackingInt(@intCast(@as(u3, @truncate(self.data))));
     }
 
     pub fn getVector(self: Scalar) Vector {
-        return @enumFromInt(@as(u3, @truncate(self.data)));
+        return @fromBackingInt(@intCast(@as(u3, @truncate(self.data))));
     }
 
     pub fn initStr() Scalar {
@@ -123,20 +123,20 @@ pub const Scalar = packed struct {
     }
 
     pub fn initInt(precision: types.Int.Precision) Scalar {
-        return .{ .data = @intFromEnum(precision), .tag = .int };
+        return .{ .data = @backingInt(precision), .tag = .int };
     }
 
     pub fn initFrac(precision: types.Frac.Precision) Scalar {
-        return .{ .data = @intFromEnum(precision), .tag = .frac };
+        return .{ .data = @backingInt(precision), .tag = .frac };
     }
 
     pub fn initVector(vector: Vector) Scalar {
-        return .{ .data = @intFromEnum(vector), .tag = .vector };
+        return .{ .data = @backingInt(vector), .tag = .vector };
     }
 };
 
 /// Index into a Layout Store
-pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
+pub const Idx = enum(@Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag))) {
     // Sentinel values for scalar builtin layouts. When we init the layout store, it automatically
     // adds entries for each of these at an index equal to the enum's value. That way, if you
     // look up one of these in the store, it's always returns the correct layout, and we can have
@@ -187,7 +187,7 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
 
     /// Sentinel value representing "not present" / "no layout".
     /// Used by ArrayListMap as the empty slot marker.
-    pub const none: Idx = @enumFromInt(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type));
+    pub const none: Idx = @fromBackingInt(@intCast(std.math.maxInt(@typeInfo(Idx).@"enum".tag_type)));
 
     /// Returns true if this layout represents a signed integer type.
     /// Used for determining signed vs unsigned operations (sdiv vs udiv, etc.)
@@ -204,7 +204,7 @@ pub const Idx = enum(std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(Layout
     /// of the fixed scalar layouts above. Every aggregate, list, box, closure
     /// and pointer layout is interned.
     pub fn isInterned(self: Idx) bool {
-        return self != Idx.none and @intFromEnum(self) > @intFromEnum(Idx.i64x2);
+        return self != Idx.none and @backingInt(self) > @backingInt(Idx.i64x2);
     }
 };
 
@@ -224,7 +224,7 @@ pub const Closure = struct {
 /// Raw backing type for the Layout data (28 bits).
 /// In Zig 0.16, packed unions require uniform field widths, so we use
 /// a raw integer with typed accessors on the Layout struct instead.
-pub const LayoutData = std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
+pub const LayoutData = @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag));
 
 /// Unified struct field layout—used for both records and tuples at the layout level.
 /// At the shared LIR/layout commit, records and tuples become contiguous fields that are
@@ -275,7 +275,7 @@ pub const TupleLayout = StructLayout;
 
 /// Index into the Store's struct data
 pub const StructIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Backwards-compat alias for `StructIdx`.
@@ -286,7 +286,7 @@ pub const TupleIdx = StructIdx;
 /// A byte value precomputed for both pointer widths, keeping the layout store
 /// target-independent: both targets' values are stored and the right one is a
 /// direct array read once the target is known (no per-read computation). Indexed
-/// by `@intFromEnum(TargetUsize)`—`[0]` is the 32-bit target, `[1]` the 64-bit.
+/// by `@backingInt(TargetUsize)`—`[0]` is the 32-bit target, `[1]` the 64-bit.
 /// Computing both directly (rather than a pointer count) accounts for the
 /// pointer-width-dependent alignment padding exactly.
 pub fn WidthValues(comptime T: type) type {
@@ -294,7 +294,7 @@ pub fn WidthValues(comptime T: type) type {
         per_target: [2]T,
 
         pub fn get(self: @This(), target_usize: target.TargetUsize) T {
-            return self.per_target[@intFromEnum(target_usize)];
+            return self.per_target[@backingInt(target_usize)];
         }
 
         pub fn both(value_for_u32: T, value_for_u64: T) @This() {
@@ -346,7 +346,7 @@ pub const TagUnionLayout = packed struct {
 
 /// Index into the Store's tag union data
 pub const TagUnionIdx = packed struct {
-    int_idx: std.meta.Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
+    int_idx: @Int(.unsigned, layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(SortKey)),
 };
 
 /// Tag union data stored in the layout Store
@@ -472,12 +472,12 @@ pub const RocAlignment = enum(u3) {
     _,
 
     pub fn toByteUnits(a: RocAlignment) usize {
-        return @as(usize, 1) << @intFromEnum(a);
+        return @as(usize, 1) << @backingInt(a);
     }
 
     pub fn fromByteUnits(n: u16) RocAlignment {
         std.debug.assert(std.math.isPowerOfTwo(n));
-        return @enumFromInt(@ctz(n));
+        return @fromBackingInt(@intCast(@ctz(n)));
     }
 };
 
@@ -527,12 +527,12 @@ pub const SortKey = enum(u3) {
 
     /// The greater of two sort keys (used to fold an aggregate's children).
     pub fn max(a: SortKey, b: SortKey) SortKey {
-        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+        return if (@backingInt(a) >= @backingInt(b)) a else b;
     }
 
     /// Whether `a` sorts before `b` in the field order (higher key first).
     pub fn sortsBefore(a: SortKey, b: SortKey) bool {
-        return @intFromEnum(a) > @intFromEnum(b);
+        return @backingInt(a) > @backingInt(b);
     }
 };
 
@@ -689,29 +689,29 @@ pub const Layout = packed struct {
     // -- Typed accessors for unpacking the raw data field --
 
     pub fn getScalar(self: Layout) Scalar {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(Scalar)), @truncate(self.data)));
     }
 
     pub fn getIdx(self: Layout) Idx {
-        return @enumFromInt(self.data);
+        return @fromBackingInt(@intCast(self.data));
     }
 
     pub fn getStruct(self: Layout) StructLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(StructLayout)), @truncate(self.data)));
     }
 
     pub fn getClosure(self: Layout) ClosureLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(ClosureLayout)), @truncate(self.data)));
     }
 
     pub fn getTagUnion(self: Layout) TagUnionLayout {
-        return @bitCast(@as(std.meta.Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
+        return @bitCast(@as(@Int(.unsigned, @bitSizeOf(TagUnionLayout)), @truncate(self.data)));
     }
 
     fn packData(val: anytype) LayoutData {
         const T = @TypeOf(val);
         const bits = @bitSizeOf(T);
-        return @intCast(@as(std.meta.Int(.unsigned, bits), @bitCast(val)));
+        return @intCast(@as(@Int(.unsigned, bits), @bitCast(val)));
     }
 
     /// This layout's alignment, given a particular target usize.
@@ -791,7 +791,7 @@ pub const Layout = packed struct {
 
     /// box layout with the given element layout
     pub fn box(elem_idx: Idx) Layout {
-        return .{ .data = @intFromEnum(elem_idx), .tag = .box };
+        return .{ .data = @backingInt(elem_idx), .tag = .box };
     }
 
     /// box of zero-sized type layout (e.g. Box({}))
@@ -806,12 +806,12 @@ pub const Layout = packed struct {
 
     /// compiler-internal pointer layout with the given element layout
     pub fn ptr(elem_idx: Idx) Layout {
-        return .{ .data = @intFromEnum(elem_idx), .tag = .ptr };
+        return .{ .data = @backingInt(elem_idx), .tag = .ptr };
     }
 
     /// list layout with the given element layout
     pub fn list(elem_idx: Idx) Layout {
-        return .{ .data = @intFromEnum(elem_idx), .tag = .list };
+        return .{ .data = @backingInt(elem_idx), .tag = .list };
     }
 
     /// list of zero-sized type layout (e.g. List({}))
@@ -948,8 +948,8 @@ test "StructData.getFields()" {
     };
 
     const fields_range = struct_data.getFields();
-    try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
-    try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.start) + fields_range.count);
+    try testing.expectEqual(@as(u32, 10), @backingInt(fields_range.start));
+    try testing.expectEqual(@as(u32, 15), @backingInt(fields_range.start) + fields_range.count);
 }
 
 test "Layout scalar data access" {
@@ -983,14 +983,14 @@ test "Non-scalar layout variants - fallback to indexed approach" {
     const testing = std.testing;
 
     // Test non-scalar box (should use .box tag with index)
-    const box_non_scalar = Layout.box(@as(Idx, @enumFromInt(42)));
+    const box_non_scalar = Layout.box(@as(Idx, @fromBackingInt(@intCast(42))));
     try testing.expectEqual(LayoutTag.box, box_non_scalar.tag);
-    try testing.expectEqual(@as(u28, 42), @intFromEnum(box_non_scalar.getIdx()));
+    try testing.expectEqual(@as(u28, 42), @backingInt(box_non_scalar.getIdx()));
 
     // Test non-scalar list (should use .list tag with index)
-    const list_non_scalar = Layout.list(@as(Idx, @enumFromInt(123)));
+    const list_non_scalar = Layout.list(@as(Idx, @fromBackingInt(@intCast(123))));
     try testing.expectEqual(LayoutTag.list, list_non_scalar.tag);
-    try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.getIdx()));
+    try testing.expectEqual(@as(u28, 123), @backingInt(list_non_scalar.getIdx()));
 
     // Test struct layout (definitely non-scalar)
     const struct_layout = Layout.struct_(.align_8, StructIdx{ .int_idx = 456 });

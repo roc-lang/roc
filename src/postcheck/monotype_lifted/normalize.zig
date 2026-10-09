@@ -39,7 +39,7 @@ pub fn run(program: *Ast.Program) Allocator.Error!void {
         program.current_inline_scope = old_inline;
     }
     for (0..program.fnCount()) |index| {
-        const id: Ast.FnId = @enumFromInt(index);
+        const id: Ast.FnId = @fromBackingInt(@intCast(index));
         var function = program.getFn(id);
         if (function.body != .roc) continue;
         const outer_shapes = program.beginFnShapes(id);

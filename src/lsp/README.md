@@ -164,7 +164,7 @@ pub fn buildCapabilities() ServerCapabilities {
     return .{
         .textDocumentSync = .{
             .openClose = true,
-            .change = @intFromEnum(ServerCapabilities.TextDocumentSyncKind.incremental),
+            .change = @backingInt(ServerCapabilities.TextDocumentSyncKind.incremental),
         },
     };
 }
