@@ -13,3 +13,9 @@ must agree with uncached execution after the helper has been cached.
 Run the focused check workflow directly with the compiler under test and an
 isolated `ROC_CACHE_DIR`. Cache-hit instrumentation must establish actual helper
 reuse; successful checks or cache-file creation alone are not that evidence.
+
+`check_reuse.py` verifies named helper reuse and exact failure diagnostics.
+`check_mixing.py` uses the existing callable and rejected-literal fixtures to
+check that native consumers preserve evaluated captures and that cached code
+does not suppress literal errors. The latter requires the native `test/fx`
+platform host to be available; it does not build unrelated platform hosts.
