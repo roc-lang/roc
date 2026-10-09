@@ -9,9 +9,9 @@
 //! them without changing what any annotation means.
 //!
 //! The walk mirrors `Check.generateAnnoTypeInPlace`: the root of an annotation
-//! is an output, each function establishes input arguments and an output
-//! return, and other positions inherit their surroundings; a type application's argument is generated at
-//! the application's polarity composed with the positions of the declaration
+//! is an output, function arguments flip the surrounding polarity, and every
+//! other position keeps it; a type application's argument is generated at the
+//! application's polarity composed with the positions of the declaration
 //! formal it is substituted for; a where-method signature opens only the rows
 //! the result-row widening adapter can re-tag. Which annotations qualify at all
 //! mirrors `Check.bindingRhsGeneralizes` together with
@@ -52,6 +52,13 @@ const try_type_name = "Try";
 const Polarity = enum {
     pos,
     neg,
+
+    fn flip(self: Polarity) Polarity {
+        return switch (self) {
+            .pos => .neg,
+            .neg => .pos,
+        };
+    }
 };
 
 /// `Check.GenTypeAnnoCtx.AnnotationGenCtx.OpeningBehavior`.
@@ -472,10 +479,10 @@ pub const OpenRows = struct {
             .parens => |parens| try pending.append(self.gpa, .{ .anno = parens.anno, .ctx = ctx, .polarity = polarity }),
             .@"fn" => |func| {
                 for (self.ast.store.typeAnnoSlice(func.args)) |arg| {
-                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = .neg });
+                    try pending.append(self.gpa, .{ .anno = arg, .ctx = ctx.withReach(.nested), .polarity = polarity.flip() });
                 }
                 const ret_reach = base.annotation_positions.functionReturnReach(ctx.reach);
-                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = .pos });
+                try pending.append(self.gpa, .{ .anno = func.ret, .ctx = ctx.withReach(ret_reach), .polarity = polarity });
             },
             .tag_union => |tag_union| {
                 const tags = self.ast.store.typeAnnoSlice(tag_union.tags);
@@ -521,7 +528,8 @@ pub const OpenRows = struct {
 
                 for (args, 0..) |arg, arg_index| {
                     const reach: Reach = if (reaches) |known| known[arg_index] else .nested;
-                    const arg_ctx = if (positions != null) ctx.withReach(reach) else ctx.withReach(reach).withOpening(.as_written);
+                    const as_written = if (positions) |known| known[arg_index].isInvariant() else true;
+                    const arg_ctx = if (as_written) ctx.withReach(reach).withOpening(.as_written) else ctx.withReach(reach);
                     const arg_polarity = if (positions) |known| known[arg_index].polarity(polarity) else polarity;
                     try pending.append(self.gpa, .{ .anno = arg, .ctx = arg_ctx, .polarity = arg_polarity });
                 }
@@ -800,10 +808,10 @@ const PositionAdapter = struct {
     allocator: Allocator,
     children: std.ArrayList(Annotation) = .empty,
 
-    pub fn declaration(_: *PositionAdapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize, nominal: bool } {
+    pub fn declaration(_: *PositionAdapter, key: Key) Allocator.Error!?struct { body: Annotation, formal_count: usize } {
         const decl = key.owner.ast.store.getStatement(key.statement).type_decl;
         const header = key.owner.ast.store.getTypeHeader(decl.header) catch return null;
-        return .{ .body = decl.anno, .formal_count = key.owner.ast.store.typeAnnoSlice(header.args).len, .nominal = decl.kind != .alias };
+        return .{ .body = decl.anno, .formal_count = key.owner.ast.store.typeAnnoSlice(header.args).len };
     }
 
     fn reference(owner: *OpenRows, head: Annotation) Allocator.Error!PositionAnalysis.Reference {

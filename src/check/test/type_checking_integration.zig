@@ -9328,8 +9328,9 @@ test "check type - polarity - annotated input union stays closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - nested function arguments stay closed" {
-    // Each function establishes its own input position.
+test "check type - polarity - a callback's argument is an output of the function receiving it" {
+    // `use` produces the `[A]` it passes to the callback, so a callback that
+    // accepts more tags is still a valid argument.
     const source =
         \\use : ([A] -> Str) -> Str
         \\use = |callback| callback(A)
@@ -9339,11 +9340,21 @@ test "check type - polarity - nested function arguments stay closed" {
         \\
         \\result = use(accepts_more)
     ;
+    try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+}
+
+test "check type - polarity - a callback's opened argument still bounds the body" {
+    const source =
+        \\use : ([A] -> Str) -> Str
+        \\use = |callback| callback(B)
+    ;
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - callback return position is output" {
-    // Ignore the callback so body exhaustiveness cannot close its result row.
+test "check type - polarity - a callback's result is an input of the function receiving it" {
+    // `run` consumes the callback's result, so a callback producing a tag
+    // the annotation does not list is rejected even though the body ignores
+    // the callback.
     const source =
         \\run : (Str -> [Done]) -> Str
         \\run = |_callback| "done"
@@ -9353,12 +9364,51 @@ test "check type - polarity - callback return position is output" {
         \\
         \\result = run(produces_more)
     ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a callback's callback result is an output again" {
+    // Two function argument positions down, `[Done]` is produced by `drive`
+    // itself (it is the result of the callback `drive` hands to `step`), so a
+    // `step` that accepts a callback producing more tags is accepted.
+    const source =
+        \\drive : ((Str -> [Done]) -> Str) -> Str
+        \\drive = |step| step(|_| Done)
+        \\
+        \\step_more : (Str -> [Done, Extra]) -> Str
+        \\step_more = |_| "ok"
+        \\
+        \\result = drive(step_more)
+    ;
     try checkTypesModule(source, .{ .pass = .{ .def = "result" } }, "Str");
+}
+
+test "check type - polarity - a forwarded callback result stays closed for callers" {
+    // https://github.com/roc-lang/roc/issues/12132
+    // The callback's result is consumed by `f`, so the caller's callback may
+    // not return a tag the annotation does not list, even though `f` forwards
+    // that result to its own (open) output.
+    const source =
+        \\f : (U64 -> [Before, After]) -> [Before, After]
+        \\f = |g| g(1)
+        \\
+        \\result = f(|_| Oops)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
+}
+
+test "check type - polarity - a builtin's callback result stays closed for callers" {
+    // https://github.com/roc-lang/roc/issues/12132
+    // `List.sort_with` consumes its comparator's `[Before, Same, After]`.
+    const source =
+        \\sorted = [3, 1, 2].sort_with(|a, b| if a < b LT else if a == b EQ else GT)
+    ;
+    try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
 // These fixtures ignore the annotated parameter. No body operation unifies any
 // row or leaf beneath it, so the graph records annotation generation itself.
-test "check type - polarity - alias and direct annotation graphs use function local positions" {
+test "check type - polarity - alias and direct annotation graphs agree at both use positions" {
     const declarations =
         \\Consumer : [E] -> Str
         \\Producer(a) : Str -> a
@@ -9378,50 +9428,60 @@ test "check type - polarity - alias and direct annotation graphs use function lo
         \\N(a) := { produce : Str -> a }
         \\NominalAlias : N([E])
         \\Many(a,b,c,d,e,f,g,h,i) : (a,b,c,d,e,f,g,h,(i -> Str))
+        \\Twice : ([E] -> Str) -> Str
     ;
-    const Case = struct { alias: []const u8, direct: []const u8, open: []const bool };
+    // Whether each written row opens when the type is an argument of the
+    // annotated function. Every row here has one polarity, so the same type
+    // as the function's result opens exactly the other rows.
+    const Case = struct { alias: []const u8, direct: []const u8, open_as_input: []const bool };
     const cases = [_]Case{
-        .{ .alias = "Consumer", .direct = "([E] -> Str)", .open = &.{false} },
-        .{ .alias = "Producer([E])", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "Identity([E])", .direct = "[E]", .open = &.{false} },
-        .{ .alias = "Nested([E])", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open = &.{ true, true } },
-        .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open = &.{ false, true } },
-        .{ .alias = "LiteralProducer", .direct = "(Str -> [E])", .open = &.{true} },
-        .{ .alias = "LiteralConsumer", .direct = "([E] -> Str)", .open = &.{false} },
-        .{ .alias = "MyResult(Str)", .direct = "Try(Str, [MyError])", .open = &.{false} },
-        .{ .alias = "Many({},{},{},{},{},{},{},{},[E])", .direct = "({},{},{},{},{},{},{},{},([E] -> Str))", .open = &.{false} },
-        .{ .alias = "(NominalAlias,[F])", .direct = "(N([E]),[F])", .open = &.{ true, false } },
-        .{ .alias = "NominalAlias", .direct = "N([E])", .open = &.{true} },
-        .{ .alias = "ResultFn", .direct = "(Str -> Try(Str, [MyError]))", .open = &.{true} },
-        .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open = &.{ true, false } },
-        .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open = &.{ false, true } },
-        .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open = &.{ true, false } },
-        .{ .alias = "ReversedFields", .direct = "{ before : [F], callback : Str -> [E] }", .open = &.{ false, true } },
-        .{ .alias = "Shared(a)", .direct = "((a -> [E(a)]), (Str -> [F(a)]))", .open = &.{ true, true } },
+        .{ .alias = "Consumer", .direct = "([E] -> Str)", .open_as_input = &.{true} },
+        .{ .alias = "Producer([E])", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "Identity([E])", .direct = "[E]", .open_as_input = &.{false} },
+        .{ .alias = "Nested([E])", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "Identity(Producer([E]))", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "(Producer([E]), Producer([E]))", .direct = "((Str -> [E]), (Str -> [E]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Wrapped", .direct = "[Wrap(Str -> [E])]", .open_as_input = &.{ false, false } },
+        .{ .alias = "LiteralProducer", .direct = "(Str -> [E])", .open_as_input = &.{false} },
+        .{ .alias = "LiteralConsumer", .direct = "([E] -> Str)", .open_as_input = &.{true} },
+        .{ .alias = "MyResult(Str)", .direct = "Try(Str, [MyError])", .open_as_input = &.{false} },
+        .{ .alias = "Many({},{},{},{},{},{},{},{},[E])", .direct = "({},{},{},{},{},{},{},{},([E] -> Str))", .open_as_input = &.{true} },
+        .{ .alias = "(NominalAlias,[F])", .direct = "(N([E]),[F])", .open_as_input = &.{ false, false } },
+        .{ .alias = "NominalAlias", .direct = "N([E])", .open_as_input = &.{false} },
+        .{ .alias = "ResultFn", .direct = "(Str -> Try(Str, [MyError]))", .open_as_input = &.{false} },
+        .{ .alias = "Pair", .direct = "((Str -> [E]), [F])", .open_as_input = &.{ false, false } },
+        .{ .alias = "ReversedPair", .direct = "([F], (Str -> [E]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Fields", .direct = "{ callback : Str -> [E], tag : [F] }", .open_as_input = &.{ false, false } },
+        .{ .alias = "ReversedFields", .direct = "{ before : [F], callback : Str -> [E] }", .open_as_input = &.{ false, false } },
+        .{ .alias = "Shared(a)", .direct = "((a -> [E(a)]), (Str -> [F(a)]))", .open_as_input = &.{ false, false } },
+        .{ .alias = "Twice", .direct = "(([E] -> Str) -> Str)", .open_as_input = &.{false} },
+        .{ .alias = "Handler(Producer([E]))", .direct = "((Str -> [E]) -> Str)", .open_as_input = &.{true} },
     };
     for (cases) |case| {
-        const source = try std.fmt.allocPrint(
-            testing.allocator,
-            "{s}\ndirect : {s} -> Str\ndirect = |_| \"ok\"\naliased : {s} -> Str\naliased = |_| \"ok\"\n",
-            .{ declarations, case.direct, case.alias },
-        );
-        defer testing.allocator.free(source);
-        var env = try TestEnv.init("FunctionLocalPolarity", source);
-        defer env.deinit();
-        try env.assertNoErrors();
-        var direct: PolarityTestGraph = .{};
-        defer direct.deinit();
-        var aliased: PolarityTestGraph = .{};
-        defer aliased.deinit();
-        try direct.collectDef(&env, "direct");
-        try aliased.collectDef(&env, "aliased");
-        try testing.expectEqualSlices(bool, case.open, direct.open.items);
-        try testing.expectEqualSlices(bool, case.open, aliased.open.items);
-        // Compare actual structure, extension content, and repeated-variable
-        // sharing, with only transparent alias wrappers and fresh IDs erased.
-        try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        inline for ([_]bool{ true, false }) |as_input| {
+            const template = comptime if (as_input)
+                "{s}\ndirect : {s} -> Str\ndirect = |_| crash \"unused\"\naliased : {s} -> Str\naliased = |_| crash \"unused\"\n"
+            else
+                "{s}\ndirect : Str -> {s}\ndirect = |_| crash \"unused\"\naliased : Str -> {s}\naliased = |_| crash \"unused\"\n";
+            const source = try std.fmt.allocPrint(testing.allocator, template, .{ declarations, case.direct, case.alias });
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("FunctionPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var expected: [4]bool = undefined;
+            for (case.open_as_input, 0..) |open, index| expected[index] = open == as_input;
+            var direct: PolarityTestGraph = .{};
+            defer direct.deinit();
+            var aliased: PolarityTestGraph = .{};
+            defer aliased.deinit();
+            try direct.collectDef(&env, "direct");
+            try aliased.collectDef(&env, "aliased");
+            try testing.expectEqualSlices(bool, expected[0..case.open_as_input.len], direct.open.items);
+            try testing.expectEqualSlices(bool, expected[0..case.open_as_input.len], aliased.open.items);
+            // Compare actual structure, extension content, and repeated-variable
+            // sharing, with only transparent alias wrappers and fresh IDs erased.
+            try testing.expectEqualSlices(u64, direct.nodes.items, aliased.nodes.items);
+        }
     }
 }
 
@@ -9619,8 +9679,10 @@ test "check type - polarity - the same row written directly is closed" {
     try checkTypesModule(source, .fail, "Type Mismatch");
 }
 
-test "check type - polarity - alias reference preserves the function local input position" {
-    // An enclosing argument does not turn the callback's input into an output.
+test "check type - polarity - alias reference flips a callback's input position" {
+    // `Handler([A, B])` in an argument position is a callback `run` passes
+    // `[A, B]` to, so the row is an output of `run`, exactly as the direct
+    // spelling `([A, B] -> Str) -> Str` is.
     const source =
         \\Handler(e) : e -> Str
         \\
@@ -9632,7 +9694,7 @@ test "check type - polarity - alias reference preserves the function local input
         \\
         \\out = run(wide)
     ;
-    try checkTypesModule(source, .fail, "Type Mismatch");
+    try checkTypesModule(source, .{ .pass = .{ .def = "out" } }, "Str");
 }
 
 test "check type - polarity - alias reference still opens a row the declaration puts in an output position" {
@@ -14111,10 +14173,51 @@ test "check type - polarity - phantom alias actual retains source argument polic
     try checkTypesModule(source, .{ .pass = .last_def }, "Wrapped -> Str");
 }
 
-test "check type - polarity - retained phantom arguments preserve function positions" {
+test "check type - polarity - an invariant formal's argument is closed at every depth" {
+    // `e` stands on both sides of `Both` and `N`, so the `[A]` nested in the
+    // argument does too, even one function argument position further in,
+    // whether the row is written at the reference or deferred through an
+    // alias body.
+    const cases = [_]struct { annotation: []const u8, rows: usize }{
+        .{ .annotation = "Both([A] -> Str)", .rows = 2 },
+        .{ .annotation = "N([A] -> Str)", .rows = 1 },
+        .{ .annotation = "ViaNominal", .rows = 1 },
+        .{ .annotation = "ViaAlias", .rows = 2 },
+    };
+    for (cases) |case| {
+        for ([_]bool{ false, true }) |output| {
+            const signature = if (output)
+                try std.fmt.allocPrint(testing.allocator, "Str -> {s}", .{case.annotation})
+            else
+                try std.fmt.allocPrint(testing.allocator, "{s} -> Str", .{case.annotation});
+            defer testing.allocator.free(signature);
+            const source = try std.fmt.allocPrint(testing.allocator,
+                \\Both(e) : e -> e
+                \\N(e) := {{ f : e -> e }}
+                \\ViaNominal : N([A] -> Str)
+                \\ViaAlias : Both([A] -> Str)
+                \\value : {s}
+                \\value = |_| crash "unused"
+            , .{signature});
+            defer testing.allocator.free(source);
+            var env = try TestEnv.init("InvariantPolarity", source);
+            defer env.deinit();
+            try env.assertNoErrors();
+            var graph: PolarityTestGraph = .{};
+            defer graph.deinit();
+            try graph.collectDef(&env, "value");
+            const closed = [_]bool{ false, false };
+            try testing.expectEqualSlices(bool, closed[0..case.rows], graph.open.items);
+        }
+    }
+}
+
+test "check type - polarity - retained phantom arguments flip through function positions" {
+    // `Chain([E])` is an argument of the annotated function, so `[E]` opens
+    // exactly where the retained backing puts it in a function argument.
     const cases = [_]struct { backing: []const u8, output: bool }{
-        .{ .backing = "Str -> a", .output = true },
-        .{ .backing = "a -> Str", .output = false },
+        .{ .backing = "Str -> a", .output = false },
+        .{ .backing = "a -> Str", .output = true },
         .{ .backing = "a", .output = false },
     };
     for (cases) |case| {
@@ -14147,38 +14250,60 @@ test "check type - polarity - retained phantom arguments preserve function posit
     }
 }
 
-test "check type - polarity - retained phantom callback output accepts wider rows" {
-    for ([_][]const u8{ "Outer([E])", "Phantom(Str -> [E])", "Chain([E])" }) |annotation| {
+test "check type - polarity - retained phantom callback result is generated closed for consumers" {
+    // `use` consumes the retained callback's result, so every spelling
+    // generates `[E]` closed, exactly as a direct `(Str -> [E]) -> Str` does.
+    // Aliases are transparent, so acceptance alone cannot observe a phantom
+    // row; the generated graph can.
+    const cases = [_]struct { annotation: []const u8, rows: usize }{
+        .{ .annotation = "Outer([E])", .rows = 2 },
+        .{ .annotation = "Phantom(Str -> [E])", .rows = 1 },
+        .{ .annotation = "Chain([E])", .rows = 3 },
+    };
+    for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,
             \\Phantom(a) : {{}}
             \\Outer(a) : Phantom(Str -> a)
             \\Chain(a) : Outer(a)
             \\use : {s} -> Str
             \\use = |_| "ok"
-            \\source : Str -> Outer([E, F])
-            \\source = |_| {{}}
-            \\result = use(source(""))
-        , .{annotation});
+        , .{case.annotation});
         defer testing.allocator.free(source);
         var env = try TestEnv.init("PhantomCallback", source);
         defer env.deinit();
         try env.assertNoErrors();
+        var graph: PolarityTestGraph = .{ .include_alias_arguments = true };
+        defer graph.deinit();
+        try graph.collectDef(&env, "use");
+        const closed = [_]bool{ false, false, false };
+        try testing.expectEqualSlices(bool, closed[0..case.rows], graph.open.items);
     }
 }
 
 test "check type - polarity - recursive retained formals preserve exact position transfers" {
+    // `Loop(...)` is an argument of the annotated function. A formal carried
+    // only through its own recursion never occurs, so like an unused formal
+    // its argument keeps the reference's (input) position; an occurrence
+    // composes through every recursive reference on the way to it.
     const Case = struct { recursive: []const u8, extra: []const u8 = "", argument: []const u8 = "a", direct_argument: []const u8 = "[E]", open: bool };
     const cases = [_]Case{
         .{ .recursive = "[Next(Loop(a))]", .open = false },
-        .{ .recursive = "[Next(Loop(a))]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = true },
-        .{ .recursive = "[Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Loop(a))]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = false },
+        .{ .recursive = "[Next(Str -> Loop(a))]", .open = false },
         .{ .recursive = "[Next(Loop(a) -> Str)]", .open = false },
         .{ .recursive = "[Next((Loop(a), (Str -> Loop(a))))]", .open = false },
-        .{ .recursive = "[Next(Producer(Loop(a)))]", .open = true },
-        .{ .recursive = "[Next(Other(a))]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = true },
+        .{ .recursive = "[Next(Producer(Loop(a)))]", .open = false },
+        .{ .recursive = "[Next(Other(a))]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = false },
         .{ .recursive = "[Next(Other(a) -> Str)]", .extra = "Other(a) := [Next(Str -> Loop(a))]", .open = false },
-        .{ .recursive = "[Next(Input(Out(a)))]", .extra = "Out(a) : Str -> Loop(a)", .open = true },
-        .{ .recursive = "[Next(Str -> Pass(a))]", .extra = "Pass(a) : Loop(a)", .open = true },
+        .{ .recursive = "[Next(Input(Out(a)))]", .extra = "Out(a) : Str -> Loop(a)", .open = false },
+        .{ .recursive = "[Next(Str -> Pass(a))]", .extra = "Pass(a) : Loop(a)", .open = false },
+        .{ .recursive = "[Next(Loop(a)), Leaf(a -> Str)]", .open = true },
+        .{ .recursive = "[Next(Loop(a)), Leaf(a -> Str)]", .argument = "Str -> a", .direct_argument = "Str -> [E]", .open = true },
+        .{ .recursive = "[Next(Str -> Loop(a)), Leaf(a -> Str)]", .open = true },
+        .{ .recursive = "[Next(Loop(a) -> Str), Leaf(a)]", .open = false },
+        .{ .recursive = "[Next(Loop(a) -> Str), Leaf(a -> Str)]", .open = false },
+        .{ .recursive = "[Next(Input(Out(a))), Leaf(Input(a))]", .extra = "Out(a) : Str -> Loop(a)", .open = false },
+        .{ .recursive = "[Next(Other(a)), Leaf(a)]", .extra = "Other(a) := [Next(Loop(a) -> Str)]", .open = false },
     };
     for (cases) |case| {
         const source = try std.fmt.allocPrint(testing.allocator,

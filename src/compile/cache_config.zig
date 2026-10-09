@@ -294,7 +294,9 @@ pub const Constants = struct {
     ///      crashes as a valueless binding.
     /// 135: Canonicalization warns on redundant returns recorded by parsing.
     /// 136: Folded dispatch relations carry explicit target substitutions.
-    pub const CACHE_VERSION = 136;
+    /// 137: Annotation polarity flips through function argument positions, so a
+    ///      callback's result row is generated closed and its argument row open.
+    pub const CACHE_VERSION = 137;
 };
 
 /// Configuration for the Roc cache system.
