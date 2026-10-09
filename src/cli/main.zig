@@ -475,7 +475,9 @@ const CompileTimeObjectCache = struct {
         const identity = lir.ProcIdentity{ .bytes = hit.identity };
         const original = self.runtime_packs.artifacts.get(identity) orelse return null;
         const chosen = self.chosen.get(identity) orelse return null;
-        if (self.canonicalIndex(original) == null or !sameSignature(chosen.hit, hit)) return null;
+        // LoadedPacks certifies the runtime serving closure for that consumer.
+        // Only the selected CTFE variant needs CTFE canonical admission.
+        if (!sameSignature(chosen.hit, hit)) return null;
         const image = self.canonical.?;
         if (chosen.artifact.set != &self.canonical.?.set or
             !image.requirements[chosen.artifact.index].complete or
@@ -1193,7 +1195,14 @@ test "CTFE preparation cannot remove complete runtime offers" {
     const identity = lir.ProcIdentity.forTest(29);
     const callee_identity = lir.ProcIdentity.forTest(30);
     const key = [_]u8{31} ** 32;
-    for ([_]bool{ false, true }) |compatible| {
+    for ([_]struct { compatible: bool, runtime_only: bool }{
+        .{ .compatible = false, .runtime_only = false },
+        .{ .compatible = true, .runtime_only = false },
+        .{ .compatible = false, .runtime_only = true },
+        .{ .compatible = true, .runtime_only = true },
+    }) |case| {
+        const compatible = case.compatible;
+        const runtime_only = case.runtime_only;
         // Each caller keeps its own callee variant, including distinct ARC
         // contracts. Neither independent serving closure removes the other.
         const artifact = backend.dev.ProcArtifact.Artifact{
@@ -1224,6 +1233,11 @@ test "CTFE preparation cannot remove complete runtime offers" {
         runtime_artifacts[0].code = "\xe8\x00\x00\x00\x00\xc3";
         runtime_artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
         runtime_artifacts[1].kind = .{ .proc = callee_identity };
+        runtime_artifacts[1].requires_ctfe_observations = runtime_only;
+        if (runtime_only) runtime_artifacts[1].context_dependencies = .{
+            .static_data = true,
+            .static_data_access = .readonly_symbols,
+        };
         var runtime_set = backend.dev.ProcArtifact.Set{
             .arena = std.heap.ArenaAllocator.init(allocator),
             .artifacts = &runtime_artifacts,
@@ -1239,6 +1253,9 @@ test "CTFE preparation cannot remove complete runtime offers" {
         ctfe_artifacts[0].code = runtime_artifacts[0].code;
         ctfe_artifacts[0].refs = runtime_artifacts[0].refs;
         ctfe_artifacts[1].kind = .{ .proc = callee_identity };
+        ctfe_artifacts[1].requires_ctfe_observations = runtime_only;
+        if (runtime_only) ctfe_artifacts[1].context_dependencies.?.static_data = true;
+        if (runtime_only) ctfe_artifacts[1].context_dependencies.?.static_data_access = .current_context;
         if (!compatible) ctfe_artifacts[1].callable_contract = [_]u8{2} ** 32;
         var ctfe_set = backend.dev.ProcArtifact.Set{
             .arena = std.heap.ArenaAllocator.init(allocator),
@@ -1290,12 +1307,22 @@ test "CTFE preparation cannot remove complete runtime offers" {
         const callee = canonical_set.artifacts[root.index].refs[0].target;
         try std.testing.expectEqualSlices(u8, &callee_identity.bytes, &canonical_set.artifacts[callee].kind.proc.bytes);
         try std.testing.expectEqualSlices(u8, &ctfe_artifacts[1].callable_contract.?, &canonical_set.artifacts[callee].callable_contract.?);
-        const runtime_root = cache.canonicalIndex(.{ .set = &runtime_set, .index = 0 }).?;
-        const runtime_callee = cache.canonicalIndex(.{ .set = &runtime_set, .index = 1 }).?;
-        try std.testing.expect(root.index != runtime_root);
-        try std.testing.expect(callee != runtime_callee);
-        try std.testing.expectEqual(runtime_callee, canonical_set.artifacts[runtime_root].refs[0].target);
-        try std.testing.expectEqualDeep(runtime_artifacts[1], canonical_set.artifacts[runtime_callee]);
+        if (runtime_only) {
+            // The readonly runtime helper requires diagnostic provenance that
+            // only its hooked CTFE sibling supplies. It must not execute in
+            // checking, but its independent runtime certificate permits joint
+            // source retirement without crossing these physical graphs.
+            try std.testing.expect(!cache.policyAdmitted(runtime_artifacts[1]));
+            try std.testing.expect(cache.canonicalIndex(.{ .set = &runtime_set, .index = 0 }) == null);
+            try std.testing.expect(cache.canonicalIndex(.{ .set = &runtime_set, .index = 1 }) == null);
+        } else {
+            const runtime_root = cache.canonicalIndex(.{ .set = &runtime_set, .index = 0 }).?;
+            const runtime_callee = cache.canonicalIndex(.{ .set = &runtime_set, .index = 1 }).?;
+            try std.testing.expect(root.index != runtime_root);
+            try std.testing.expect(callee != runtime_callee);
+            try std.testing.expectEqual(runtime_callee, canonical_set.artifacts[runtime_root].refs[0].target);
+            try std.testing.expectEqualDeep(runtime_artifacts[1], canonical_set.artifacts[runtime_callee]);
+        }
     }
 }
 
@@ -1333,8 +1360,9 @@ test "shared CTFE intersection leaves complete runtime offers immutable" {
     defer cache.runtime_packs.deinit();
     defer cache.chosen.deinit(allocator);
     defer cache.canonical_sources.deinit(allocator);
-    // Explicit canonical admission outcomes: rejected closure, compatible
-    // replacement, and a replacement with a different ownership signature.
+    // Runtime certification and CTFE canonical admission are independent.
+    // A runtime-only closure may be absent from the CTFE image while the
+    // selected CTFE replacement has a complete serving closure.
     var mapping = [_]?u32{null};
     var requirements = [_]backend.dev.ArtifactClosure.ContextRequirements{.{}};
     cache.canonical = .{
@@ -1371,8 +1399,13 @@ test "shared CTFE intersection leaves complete runtime offers immutable" {
     try std.testing.expect(shared.lookup(key, null) == null);
     try std.testing.expect(cache.runtime_packs.specCacheLookup().lookup(key, null) != null);
     cache.prepared = true;
-    try std.testing.expect(shared.lookup(key, null) == null);
+    try std.testing.expectEqualDeep(hit, shared.lookup(key, null).?);
     try std.testing.expect(cache.runtime_packs.specCacheLookup().lookup(key, null) != null);
+    cache.runtime_packs.state = .unavailable;
+    cache.runtime_packs.failure = error.PackDirectoryUnreadable;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    cache.runtime_packs.state = .ready;
+    cache.runtime_packs.failure = null;
     mapping[0] = 0;
     try std.testing.expectEqualDeep(hit, shared.lookup(key, null).?);
     requirements[0].complete = false;

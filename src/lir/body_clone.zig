@@ -1175,6 +1175,7 @@ pub fn cloneCallVariant(
     const variant = try store.addProcSpec(.{
         .name = store.freshSyntheticSymbol(),
         .identity = callVariantIdentity(source_spec.identity, spec),
+        .source_observations = source_spec.source_observations,
         .args = try store.addLocalSpan(variant_args.items),
         .erased_reuse_arg = erased_reuse_arg,
         .frame_locals = try store.addLocalSpan(frame_locals.items[0..unique_len]),
@@ -2415,6 +2416,39 @@ test "rewritableProcBody refuses procs whose body is not the compiler's to clone
         .abi = .erased_callable,
     }, .none);
     try std.testing.expect(rewritableProcBody(&store, erased) == null);
+}
+
+test "call variants preserve producer observations even after expect omission" {
+    const Rewriter = struct {
+        fn cloneRet(_: *@This(), cloner: anytype, value: LocalId, origin: LIR.StmtOrigin) Allocator.Error!CFStmtId {
+            return cloner.store.addCFStmt(.{ .ret = .{ .value = value } }, origin);
+        }
+    };
+    const Observations = @import("lir_core").Program.ProducerObservations;
+    var store = LirStore.init(std.testing.allocator);
+    defer store.deinit();
+
+    for (std.enums.values(Observations), 0..) |observations, index| {
+        // The body deliberately contains no expect. Its producer fact, not
+        // the surviving statements, is authority for omitted observations.
+        const value = try store.addLocal(.{ .layout_idx = .zst });
+        const body = try store.addCFStmt(.{ .ret = .{ .value = value } }, .test_fixture);
+        const source = try store.addProcSpec(.{
+            .name = store.freshSyntheticSymbol(),
+            .identity = LIR.ProcIdentity.forTest(@intCast(index + 1)),
+            .source_observations = observations,
+            .args = .empty(),
+            .frame_locals = try store.addLocalSpan(&.{value}),
+            .body = body,
+            .ret_layout = .zst,
+        }, .none);
+        const variant = try cloneCallVariant(Rewriter, &store, source, .{}, .{
+            .leading_args = &.{},
+            .ret_layout = .zst,
+        });
+        try std.testing.expectEqual(observations, store.getProcSpec(variant).source_observations);
+        try std.testing.expectEqual(observations, store.getProcSpec(source).source_observations);
+    }
 }
 
 test "call-result fusion machinery has one definition" {

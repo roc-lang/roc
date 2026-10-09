@@ -769,8 +769,10 @@ runtime provision and the original runtime declaration remain immutable. Joint
 hits also retain the compile-time closure's checked-root metadata demands.
 
 Expect preservation is stamped before omission, propagated through actual
-inlining, and retained on every procedure and cached offer. Emitter-owned
-diagnostic, debug, and exhaustiveness obligations are recorded before choosing
+inlining, and retained on every procedure and cached offer. Body-derived call
+and ownership variants inherit the source producer's fact unchanged, including
+omission and unknown provenance; a cloned body cannot establish absence.
+Emitter-owned diagnostic, debug, and exhaustiveness obligations are recorded before choosing
 hook-enabled emission. These facts propagate upstream over the same recursive
 components as context requirements. Missing facts, omitted expects, or a runtime
 fragment lacking required compile-time provenance decline only the affected
