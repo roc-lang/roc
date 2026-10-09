@@ -443,11 +443,10 @@ jobs:
 
   # Each shard runs the MiniCI jobs that src/build/minici.zig assigns to its
   # `minici_shard`. The three OS shard jobs share one step list
-  # (`&minici_shard_steps`); per-shard extras are matrix flags:
+  # (`&minici_shard_steps`). Every check and test a shard runs is a MiniCI job,
+  # so MiniCI measures what each one compiled; the one per-shard extra is a
+  # matrix flag:
   #   valgrind         - install Valgrind (for run-check-str-eq-same-allocation)
-  #   shim_archive     - the ReleaseSafe machine-code shim archive check
-  #   llvm_float_bits  - the focused LLVM exact-float-bits eval check (on the
-  #                      shard that runs run-test-eval)
   minici-linux:
     needs: [check-changes, minici-build-linux]
     if: needs.check-changes.outputs.heavy == 'true'
@@ -468,24 +467,12 @@ jobs:
         include:
           - minici_shard: linux-core
             valgrind: true
-            shim_archive: true
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: linux-eval
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: linux-simd
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: true
           - minici_shard: linux-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: &minici_shard_steps
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # ratchet:actions/checkout@v6.0.2
@@ -552,36 +539,6 @@ jobs:
 
       - name: Run MiniCI
         run: zig build minici -- --minici-skip-build --minici-shard ${{ matrix.minici_shard }}
-
-      # Compiles its own ReleaseSafe shim rather than shipping ReleaseSafe
-      # outputs in the build artifact, which is otherwise all Debug.
-      - name: Check ReleaseSafe machine-code shim support ownership
-        if: matrix.shim_archive
-        run: zig build run-check-machine-code-shim-archive -Doptimize=ReleaseSafe
-
-      # LLVM evaluation is deliberately excluded from the general MiniCI eval
-      # suite for speed. Keep the exact-bit float contract PR-gated with a
-      # focused invocation so backend drift cannot wait for the nightly suite.
-      - name: Check exact float bits with LLVM
-        if: matrix.llvm_float_bits
-        run: zig build run-test-eval -- --llvm --threads 1 --filter "exact bits agree across backends"
-
-      # The REPL and echo WebAssembly modules are built by `build-ci` (its web
-      # step), so these reuse the artifact instead of compiling cold. Used to
-      # run only nightly.
-      - name: Run dedicated REPL WebAssembly tests
-        if: matrix.web_wasm
-        run: zig build run-test-repl-wasm
-
-      - name: Run echo.wasm integration test
-        if: matrix.web_wasm
-        run: zig build run-test-echo-wasm
-
-      # www.roc-lang.org refuses an echo.wasm over Cloudflare's 25 MiB asset
-      # limit; catch growth here rather than in the website's nightly bump.
-      - name: Check echo.wasm size
-        if: matrix.web_wasm
-        run: zig build check-echo-wasm-size
 
       # `.zig-cache` doubles as Zig's global cache, its local cache, and the
       # build temp dir. It is restored from the MiniCI build artifact, so the
@@ -702,19 +659,10 @@ jobs:
         include:
           - minici_shard: macos-core
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: macos-eval
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: false
           - minici_shard: macos-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: *minici_shard_steps
 
   minici-windows:
@@ -731,29 +679,14 @@ jobs:
         include:
           - minici_shard: windows-core
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-zig
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-eval
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: true
-            web_wasm: false
           - minici_shard: windows-simd
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
           - minici_shard: windows-harness
             valgrind: false
-            shim_archive: false
-            llvm_float_bits: false
-            web_wasm: false
     steps: *minici_shard_steps
 
   # No arm64 Linux lane: hosted arm64 runners lose network mid-`build-ci` at

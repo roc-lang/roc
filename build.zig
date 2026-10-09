@@ -1595,6 +1595,7 @@ pub fn build(b: *std.Build) void {
     const build_test_lsp_integration_runner_step = b.step("build-test-lsp-integration-runner", "Build LSP integration test harness");
     const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
+    const run_test_eval_llvm_float_bits_step = b.step("run-test-eval-llvm-float-bits", "Check that float results agree bit for bit across backends, LLVM included");
     const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -1631,7 +1632,7 @@ pub fn build(b: *std.Build) void {
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
     const build_test_echo_wasm_runner_step = b.step("build-test-echo-wasm-runner", "Build the echo.wasm integration test runner");
-    const check_echo_wasm_size_step = b.step("check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
+    const check_echo_wasm_size_step = b.step("run-check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -2924,6 +2925,21 @@ pub fn build(b: *std.Build) void {
         run_test_eval_step,
         eval_run_args,
     );
+
+    // `run-test-eval` leaves LLVM evaluation out for speed. This focused run
+    // keeps the exact-bit float contract gated on every pull request, so
+    // backend drift does not wait for the nightly suite.
+    const run_llvm_float_bits_eval = b.addRunArtifact(eval_test_exe);
+    run_llvm_float_bits_eval.addArgs(&.{
+        "--llvm",
+        "--threads",
+        "1",
+        "--filter",
+        "exact bits agree across backends",
+    });
+    run_llvm_float_bits_eval.addPassthruArgs();
+    run_llvm_float_bits_eval.step.dependOn(build_test_eval_runner_step);
+    run_test_eval_llvm_float_bits_step.dependOn(&run_llvm_float_bits_eval.step);
 
     const run_simd_eval = b.addRunArtifact(eval_test_exe);
     run_simd_eval.addArgs(&.{
