@@ -560,12 +560,15 @@ pub const StaticDataValue = struct {
     accessor: ?LIR.LirProcSpecId = null,
     /// Successful construction replacement is performed only once per accessor.
     accessor_rebuilt: bool = false,
+    /// Explicit storage demand of a cached serving closure whose body is absent.
+    cached_demand: bool = false,
     /// An evaluated root owns this slot. Its initializer is representation
     /// evidence; materialization must consume the completed root value.
     compile_time_root: ?struct {
         module: checked.ModuleId,
         root: LIR.ComptimeProducer,
         const_locator: ?checked.ConstLocator,
+        completion: ComptimeRootCompletion = .pending,
         role: union(enum) {
             value: struct { failure_slot: LIR.StaticDataId, plan: ConstPlanId },
             failure_message: struct {
@@ -576,6 +579,12 @@ pub const StaticDataValue = struct {
             },
         },
     } = null,
+};
+
+pub const ComptimeRootCompletion = union(enum) {
+    pending,
+    value,
+    failure: checked.CompileTimeRootFailure,
 };
 
 /// The `failed` byte of a compile-time root's failure record.
@@ -627,6 +636,12 @@ pub fn staticDataNodeSymbolName(allocator: Allocator, owner: u32, index: u32) Al
 pub const SpecProc = struct {
     key: [32]u8,
     proc: LIR.LirProcSpecId,
+    /// Checked template owner, stamped by specialization rather than recovered
+    /// from diagnostic names or the app that happened to demand this code.
+    owner: ?checked.ModuleId = null,
+    /// Producer-established app filling on which this procedure depends;
+    /// absent for code reusable independently of any platform requirement.
+    platform_requirement_relation: ?[32]u8 = null,
 };
 
 /// Everything one lowering produced: the procedure store, its layouts, the

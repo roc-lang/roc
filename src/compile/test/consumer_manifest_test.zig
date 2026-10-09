@@ -3,6 +3,7 @@
 //! producer's root metadata.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base");
 const build_options = @import("build_options");
 const eval = @import("eval");
@@ -43,6 +44,139 @@ const echo_platform = [_]struct { path: []const u8, source: []const u8 }{
 fn writeEchoPlatform(dir: std.Io.Dir, io: std.Io) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
     try dir.createDirPath(io, ".roc_echo_platform");
     for (echo_platform) |file| try dir.writeFile(io, .{ .sub_path = file.path, .data = file.source });
+}
+
+test "source-only queued specializations retain native cache root demand without body substitution" {
+    if (comptime is_freestanding) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(io, .{ .sub_path = "platform.roc", .data =
+        \\platform ""
+        \\    requires {} { main : {} -> I64 }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_main": main_for_host }
+        \\main_for_host : {} -> I64
+        \\main_for_host = |_args| main({})
+    });
+    try temporary.dir.writeFile(io, .{ .sub_path = "main.roc", .data =
+        \\app [main] { pf: platform "./platform.roc" }
+        \\values : List(I64)
+        \\values = [7.I64, 11, 17, 23]
+        \\read : U64 -> I64
+        \\read = |index| {
+        \\    var $offset = 0.U64
+        \\    var $sum = index.to_i64_wrap()
+        \\    while $offset < 8 {
+        \\        slot = (index + $offset) % values.len()
+        \\        $sum = $sum + (values.get(slot) ?? 0.I64)
+        \\        $offset = $offset + 1
+        \\    }
+        \\    $sum
+        \\}
+        \\answer : I64
+        \\answer = read(0) + read(1)
+        \\main = |_args| answer
+    });
+    const path = try temporary.dir.realPathFileAlloc(io, "main.roc", allocator);
+    defer allocator.free(path);
+    const Common = @import("postcheck").Common;
+    const Cache = struct {
+        root: *const CheckedArtifact.CheckedModuleArtifact = undefined,
+        use: [1]Common.CheckedRootUse = undefined,
+        selected: bool = false,
+        lookups: usize = 0,
+        read_key: ?[32]u8 = null,
+        hits: usize = 0,
+        retained: bool = false,
+
+        fn select(raw: *anyopaque, _: lir.CheckedPipeline.SolvedPolicy, _: lir.CheckedPipeline.CheckedModuleSet, _: bool) Allocator.Error!eval.CompileTimeFinalization.CompileTimeObjectCache {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.use[0] = .{ .module = self.root.key.bytes, .root = @intFromEnum(self.root.compile_time_roots.roots[0].id) };
+            self.selected = true;
+            return self.view();
+        }
+
+        fn find(raw: *anyopaque, key: [32]u8, _: ?[32]u8) ?Common.SpecCacheHit {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            std.debug.assert(self.selected);
+            self.lookups += 1;
+            const expected = self.read_key orelse return null;
+            if (!std.meta.eql(expected, key)) return null;
+            self.hits += 1;
+            return .{
+                .identity = lir.ProcIdentity.forTest(233).bytes,
+                .checked_root_uses = &self.use,
+                .rc_borrowed_params = 0,
+                .rc_ret_borrowed = false,
+                .rc_ret_lenders = 0,
+                .rc_read_only_params = 0,
+                .rc_ret_unique = false,
+                .rc_ret_unique_fields = 0,
+                .rc_ret_conditions = &.{},
+            };
+        }
+
+        fn noArtifact(_: *anyopaque, _: lir.ProcIdentity) ?@import("backend").dev.LocatedArtifact {
+            return null;
+        }
+
+        fn retain(raw: *anyopaque, _: *const CheckedArtifact.CheckedModuleArtifact, lowered: *const lir.CheckedPipeline.LoweredProgram, _: *const @import("backend").dev.NativeProcCompiler.Retained, _: []const @import("backend").dev.LocatedArtifact) Allocator.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            for (lowered.lir_result.static_data_values.items) |slot| self.retained = self.retained or slot.cached_demand;
+            for (lowered.lir_result.store.getProcSpecs()) |proc| std.debug.assert(!proc.external);
+            if (self.read_key == null) {
+                // This fixture has exactly one app-owned U64 -> I64 function.
+                // Use its producer-emitted specialization key, not a name or
+                // assumptions about lookup order (builtins also get queried).
+                var matches: usize = 0;
+                for (lowered.lir_result.spec_procs.items) |spec| {
+                    const owner = spec.owner orelse continue;
+                    if (!owner.eql(.{ .bytes = self.root.key.bytes })) continue;
+                    const proc = lowered.lir_result.store.getProcSpec(spec.proc);
+                    if (proc.ret_layout != .i64 or proc.args.len != 1) continue;
+                    const argument = @import("collections").GuardedList.at(lowered.lir_result.store.getLocalSpan(proc.args), 0);
+                    if (lowered.lir_result.store.getLocal(argument).layout_idx != .u64) continue;
+                    self.read_key = spec.key;
+                    matches += 1;
+                }
+                std.debug.assert(matches == 1);
+            }
+        }
+
+        fn view(self: *@This()) eval.CompileTimeFinalization.CompileTimeObjectCache {
+            return .{
+                .spec_cache = .{ .context = self, .find = find },
+                .splice_source = .{ .context = self, .find = noArtifact },
+                .provision = .source_bodies,
+                .select_policy = .{ .context = self, .select = select },
+                .capture = .{ .context = self, .retain = retain },
+            };
+        }
+    };
+    var cache = Cache{};
+    for (0..2) |_| {
+        cache.selected = false;
+        var builtin_modules = try eval.BuiltinModules.init(allocator);
+        defer builtin_modules.deinit();
+        var coord = try Coordinator.init(allocator, .single_threaded, 1, roc_target.RocTarget.detectNative(), &builtin_modules, build_options.compiler_version, null, CoreCtx.os(allocator, allocator, io));
+        defer coord.deinit();
+        coord.compile_time_object_cache = cache.view();
+        var arena = base.SingleThreadArena.init(allocator);
+        defer arena.deinit();
+        try coord.start();
+        try coord.discoverAppFromPath(arena.allocator(), .{ .entry_path = path });
+        try coord.coordinatorLoop();
+        try std.testing.expect(!coord.hasUserErrors());
+        cache.root = coord.appRootCheckedArtifact();
+        try coord.finishCheckedProgram(.executable_artifacts);
+        try std.testing.expect(!coord.hasUserErrors());
+    }
+    try std.testing.expect(cache.lookups != 0);
+    try std.testing.expect(cache.hits != 0);
+    try std.testing.expect(cache.retained);
 }
 
 fn materializedRootCount(program: *const lir.CheckedPipeline.LoweredProgram) usize {

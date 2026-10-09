@@ -103,6 +103,8 @@ pub const RootRequests = struct {
     layout_requests: []const checked.CheckedTypeId = &.{},
     static_data_requests: []const StaticDataRequest = &.{},
     test_plan_metadata: []const RootTestPlanMetadata = &.{},
+    /// Type-only declaration projection for cache admission, never source bodies.
+    cached_root_declarations: []const CheckedRootUse = &.{},
 };
 
 /// Checked const data that must produce a runtime layout and callable entries.
@@ -122,6 +124,7 @@ pub const ComptimeValueRoot = struct {
     module: checked.ModuleId,
     root: ComptimeProducer,
     const_locator: ?checked.ConstLocator,
+    completion: @import("lir_core").Program.ComptimeRootCompletion = .pending,
 };
 
 /// Producer-owned storage requirements; only target lowering applies string ABI size.
@@ -352,8 +355,19 @@ test "test metadata uses explicit union request positions across equal root orde
 /// content identity of its compiled procedure and the ownership signature
 /// and uniqueness facts ARC solved for it, which the program that links the
 /// entry adopts as fixed.
+pub const CheckedRootUse = struct {
+    module: [32]u8,
+    root: u32,
+};
+
 pub const SpecCacheHit = struct {
     identity: [32]u8,
+    /// Complete serving-closure demand, borrowed from the immutable provider.
+    /// Consumers declare these checked roots before retiring a source body.
+    checked_root_uses: []const CheckedRootUse = &.{},
+    /// Producer-owned reachability summary: null means independent of app
+    /// filling; otherwise the code requires this exact platform/app relation.
+    platform_requirement_relation: ?[32]u8 = null,
     rc_borrowed_params: u64,
     rc_ret_borrowed: bool,
     rc_ret_lenders: u64,
@@ -369,9 +383,15 @@ pub const SpecCacheHit = struct {
 /// owns the cache supplies the context and the lookup.
 pub const SpecCacheLookup = struct {
     context: *anyopaque,
-    find: *const fn (context: *anyopaque, key: [32]u8) ?SpecCacheHit,
+    find: *const fn (context: *anyopaque, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit,
 
-    pub fn lookup(self: SpecCacheLookup, key: [32]u8) ?SpecCacheHit {
-        return self.find(self.context, key);
+    /// Session capability identity, not a persistent cache key. Equal providers
+    /// expose the same immutable offer and artifact collection to both readers.
+    pub fn sameProvider(self: SpecCacheLookup, other: SpecCacheLookup) bool {
+        return self.context == other.context and self.find == other.find;
+    }
+
+    pub fn lookup(self: SpecCacheLookup, key: [32]u8, current_relation: ?[32]u8) ?SpecCacheHit {
+        return self.find(self.context, key, current_relation);
     }
 };

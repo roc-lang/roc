@@ -17,6 +17,79 @@ pub fn transcodeRoot(allocator: Allocator, source_program: *const Program.Result
     return transcodePlans(allocator, source_program, .{ .plan = source_root.plan, .layout_idx = source_root.ret_layout }, source_exports, source_symbol, target_program, .{ .plan = target_root.plan, .layout_idx = target_root.ret_layout }, target_slot);
 }
 
+test "reserved empty-list frozen metadata transcodes capacity backing alignment and overflow" {
+    const allocator = std.testing.allocator;
+    const Width = @import("base").target.TargetUsize;
+    for ([_]Width{ .u32, .u64 }) |source_width| for ([_]Width{ .u32, .u64 }) |target_width| {
+        for ([_]layout.Idx{ .u8, .u16, .str, .zst }) |element| {
+            var source = try Program.Result.init(allocator, source_width);
+            defer source.deinit();
+            var target = try Program.Result.init(allocator, target_width);
+            defer target.deinit();
+            const module = @import("check").CheckedModule.ModuleId{ .bytes = [_]u8{71} ** 32 };
+            const source_list = try source.layouts.insertList(element);
+            const target_list = try target.layouts.insertList(element);
+            const plan: Program.ConstPlan = if (element == .zst) .zst else if (element == .str) .str else .scalar;
+            try source.const_plans.append(allocator, plan);
+            try source.const_plans.append(allocator, .{ .list = @enumFromInt(0) });
+            try target.const_plans.append(allocator, plan);
+            try target.const_plans.append(allocator, .{ .list = @enumFromInt(0) });
+            const slot = Program.StaticDataValue{
+                .initializer = null,
+                .layout_idx = source_list,
+                .compile_time_root = .{
+                    .module = module,
+                    .root = .{ .checked = @enumFromInt(0) },
+                    .const_locator = null,
+                    .completion = .value,
+                    .role = .{ .value = .{ .failure_slot = @enumFromInt(0), .plan = @enumFromInt(1) } },
+                },
+            };
+            var destination = slot;
+            destination.layout_idx = target_list;
+            try target.static_data_values.append(allocator, destination);
+            var descriptor = [_]u8{0} ** 24;
+            var capacity = [_]static_data.EmptyListCapacity{.{ .offset = 0, .capacity = 17 }};
+            const exported = [_]static_data.StaticDataExport{.{
+                .symbol_name = "empty",
+                .bytes = descriptor[0 .. 3 * source_width.size()],
+                .alignment = @intCast(source_width.size()),
+                .empty_list_capacities = &capacity,
+            }};
+            const converted = try transcodeValueSlot(allocator, &source, slot, &exported, @enumFromInt(0), &target, @enumFromInt(0));
+            defer static_data.deinitStaticData(allocator, converted);
+            try std.testing.expectEqual(@as(u64, 17), converted[0].empty_list_capacities[0].capacity);
+            const offset = 2 * target_width.size();
+            const actual = if (target_width == .u32) std.mem.readInt(u32, converted[0].bytes[offset..][0..4], .little) else std.mem.readInt(u64, converted[0].bytes[offset..][0..8], .little);
+            try std.testing.expectEqual(builtins.list.RocList.encodeCapacityForWidth(17), actual);
+            if (element == .zst) {
+                try std.testing.expectEqual(@as(usize, 1), converted.len);
+                try std.testing.expectEqual(@as(usize, 0), converted[0].relocations.len);
+            } else {
+                try std.testing.expectEqual(@as(usize, 2), converted.len);
+                const relocation = converted[0].relocations[0];
+                const backing = converted[@intFromEnum(relocation.target.data_symbol)];
+                const alignment = target.layouts.getLayout(element).alignment(target_width).toByteUnits();
+                try std.testing.expectEqual(@as(i64, 0), @mod(relocation.addend, @as(i64, @intCast(alignment))));
+                try std.testing.expectEqual(@as(usize, target.layouts.layoutSize(target.layouts.getLayout(element))) * 17, backing.bytes.len - @as(usize, @intCast(relocation.addend)));
+                if (element == .str) {
+                    const count_offset = @as(usize, @intCast(relocation.addend)) - 2 * target_width.size();
+                    const live = if (target_width == .u32) std.mem.readInt(u32, backing.bytes[count_offset..][0..4], .little) else std.mem.readInt(u64, backing.bytes[count_offset..][0..8], .little);
+                    try std.testing.expectEqual(@as(u64, 0), live);
+                }
+            }
+            capacity[0].capacity = std.math.maxInt(u64);
+            try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, @enumFromInt(0), &target, @enumFromInt(0)));
+            if (target_width == .u64 and element == .u16) {
+                // Encoding and multiplication fit; only the header addition
+                // overflows. Decline before allocating a wrapped-size block.
+                capacity[0].capacity = std.math.maxInt(u64) >> 1;
+                try std.testing.expectError(error.OutOfMemory, transcodeValueSlot(allocator, &source, slot, &exported, @enumFromInt(0), &target, @enumFromInt(0)));
+            }
+        }
+    };
+}
+
 /// Re-encode the same checked root value for the destination slot representation.
 pub fn transcodeValueSlot(allocator: Allocator, source_program: *const Program.Result, source_slot: Program.StaticDataValue, source_exports: []const static_data.StaticDataExport, source_symbol: SymbolId, target_program: *const Program.Result, target_slot: lir.LIR.StaticDataId) Allocator.Error![]static_data.StaticDataExport {
     const target = target_program.static_data_values.items[@intFromEnum(target_slot)];
@@ -62,7 +135,13 @@ const Destination = struct {
     }
 };
 const Job = struct { source_plan: Program.ConstPlanId, source_layout: layout.Idx, plan: Program.ConstPlanId, layout_idx: layout.Idx, source: Destination, dest: Destination, source_storage: Program.CaptureSlotStorage, storage: Program.CaptureSlotStorage };
-const Node = struct { name: []const u8, bytes: []u8, alignment: u32, relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty };
+const Node = struct {
+    name: []const u8,
+    bytes: []u8,
+    alignment: u32,
+    relocations: std.ArrayList(static_data.StaticDataRelocation) = .empty,
+    empty_list_capacities: std.ArrayList(static_data.EmptyListCapacity) = .empty,
+};
 const AllocationKey = struct { source: Destination, plan: ?Program.ConstPlanId, layout_idx: layout.Idx, count: usize, kind: enum { value, list, string, erased } };
 const Builder = struct {
     allocator: Allocator,
@@ -140,7 +219,8 @@ const Builder = struct {
         if (self.allocations.get(key)) |dest| return .{ .dest = dest, .fresh = false };
         const offset = std.mem.alignForward(usize, (if (rc) @as(usize, 2) else 1) * self.word(), alignment_);
         const name = try Program.staticDataNodeSymbolName(self.allocator, @intFromEnum(self.slot), @intCast(self.nodes.items.len));
-        const symbol = try self.addNode(name, offset + byte_count, @intCast(@max(alignment_, self.word())));
+        const allocation_size = std.math.add(usize, offset, byte_count) catch return error.OutOfMemory;
+        const symbol = try self.addNode(name, allocation_size, @intCast(@max(alignment_, self.word())));
         const dest = Destination{ .symbol = symbol, .offset = offset };
         if (rc) self.writeWord(.{ .symbol = symbol, .offset = offset - 2 * self.word() }, count orelse 0);
         try self.allocations.put(self.allocator, key, dest);
@@ -262,6 +342,29 @@ const Builder = struct {
     fn list(self: *Builder, job: Job, sp: Program.ConstPlanId, tp: Program.ConstPlanId) Allocator.Error!void {
         const count = self.readWord(job.source.offsetBy(self.sourceWord()));
         self.writeWord(job.dest.offsetBy(self.word()), count);
+        if (count == 0) {
+            // Native root export separates reserved empty capacity from its
+            // canonical zero descriptor. Symbolic constructors encode capacity
+            // directly; both are explicit producer-owned representations.
+            var capacity: u64 = builtins.list.RocList.decodeCapacity(self.readWord(job.source.offsetBy(2 * self.sourceWord())));
+            for (self.source_exports[@intFromEnum(job.source.symbol)].empty_list_capacities) |stored| {
+                if (stored.offset == job.source.offset) capacity = stored.capacity;
+            }
+            const max_word: u64 = if (self.word() == 4) std.math.maxInt(u32) else std.math.maxInt(u64);
+            if (capacity > max_word >> 1) return error.OutOfMemory;
+            self.writeWord(job.dest.offsetBy(2 * self.word()), builtins.list.RocList.encodeCapacityForWidth(capacity));
+            if (capacity == 0) return;
+            try self.node(job.dest).empty_list_capacities.append(self.allocator, .{ .offset = job.dest.offset, .capacity = capacity });
+            const physical = self.program.layouts.getLayout(job.layout_idx);
+            if (physical.tag == .list_of_zst) return;
+            const element = physical.getIdx();
+            if (self.size(element) == 0) return;
+            const reserved = std.math.cast(usize, capacity) orelse return error.OutOfMemory;
+            const byte_count = std.math.mul(usize, reserved, self.size(element)) catch return error.OutOfMemory;
+            const allocation = try self.reserveAllocation(.{ .source = job.source, .plan = tp, .layout_idx = element, .count = reserved, .kind = .list }, byte_count, self.alignment(element), self.program.layouts.layoutContainsRefcounted(self.program.layouts.getLayout(element)), 0);
+            try self.relocate(job.dest, allocation.dest);
+            return;
+        }
         self.writeWord(job.dest.offsetBy(2 * self.word()), builtins.list.RocList.encodeCapacityForWidth(count));
         const physical = self.program.layouts.getLayout(job.layout_idx);
         if (count == 0 or physical.tag == .list_of_zst) return;
@@ -405,6 +508,7 @@ const Builder = struct {
                     if (relocation.owns_target_symbol_name) allocator.free(relocation.target_symbol_name);
                 }
                 allocator.free(export_.relocations);
+                allocator.free(export_.empty_list_capacities);
             }
             allocator.free(exports);
         }
@@ -413,6 +517,8 @@ const Builder = struct {
             errdefer allocator.free(name);
             const owned_bytes = try allocator.dupe(u8, source.bytes);
             errdefer allocator.free(owned_bytes);
+            const capacities = try allocator.dupe(static_data.EmptyListCapacity, source.empty_list_capacities.items);
+            errdefer allocator.free(capacities);
             const relocations = try allocator.dupe(static_data.StaticDataRelocation, source.relocations.items);
             // All names are assigned in a separate pass once every symbol exists.
             for (relocations) |*relocation| relocation.owns_target_symbol_name = false;
@@ -424,6 +530,7 @@ const Builder = struct {
                 .is_global = false,
                 .is_exported = false,
                 .relocations = relocations,
+                .empty_list_capacities = capacities,
             };
             done += 1;
         }

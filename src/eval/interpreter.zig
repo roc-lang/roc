@@ -1013,6 +1013,7 @@ pub const Interpreter = struct {
             .name = self.store.sourceFileName(self.failed_stmt_loc.file),
             .qualified_name = self.store.sourceFileQualifiedName(self.failed_stmt_loc.file),
             .module_identity = self.store.sourceFileModuleIdentity(self.failed_stmt_loc.file),
+            .checked_module_key = self.store.sourceFileCheckedModule(self.failed_stmt_loc.file),
         };
     }
 

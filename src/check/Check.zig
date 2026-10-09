@@ -9372,26 +9372,8 @@ fn instantiateVarOrphanFlexed(
     return self.instantiateOrphanCopy(var_to_instantiate, &instantiate_ctx, env, region_behavior);
 }
 
-/// Instantiate a variable, substituting any encountered rigids with
-/// user-provided variables.
-///
-/// Based on the provided map, the caller can specifically set specified rigids
-/// to be a specific var. This is used when evaluating type annotation.
-///
-/// If a rigid is is encountered that's not in the provided map, a debug assertion
-/// will fail. In production mode, that rigid var will be set as an `.err`
-fn instantiateVarWithSubs(
-    self: *Self,
-    var_to_instantiate: Var,
-    subs: *std.AutoHashMapUnmanaged(Ident.Idx, Var),
-    env: *Env,
-    region_behavior: InstantiateRegionBehavior,
-) std.mem.Allocator.Error!Var {
-    return self.instantiateVarWithSubsPolarized(var_to_instantiate, subs, env, region_behavior, .close, .pos, .nested);
-}
-
-/// `instantiateVarWithSubs` with explicit polarity var handling; see
-/// `instantiateVarPolarized`.
+/// Instantiate with caller-provided rigid substitutions and explicit polarity.
+/// See `instantiateVarPolarized`.
 fn instantiateVarWithSubsPolarized(
     self: *Self,
     var_to_instantiate: Var,
@@ -31576,7 +31558,7 @@ test "constructor projection retains nominal identity and sparse owned children"
             const backing = switch (pattern) {
                 .nominal => |nominal| nominal.backing_pattern,
                 .nominal_external => |nominal| nominal.backing_pattern,
-                else => continue,
+                .assign, .var_assign, .as, .applied_tag, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => continue,
             };
             const content = test_env.checker.types.resolveVar(ModuleEnv.varFrom(backing)).desc.content;
             try std.testing.expect(content == .structure and content.structure == .tag_union);
@@ -31620,9 +31602,9 @@ fn relateOwnedTagToExpectedNominal(
             .alias => |alias| current = self.types.getAliasBackingVar(alias),
             .structure => |flat| switch (flat) {
                 .nominal_type => |application| break :found application,
-                else => return false,
+                .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .tag_union, .empty_tag_union => return false,
             },
-            else => return false,
+            .flex, .rigid, .field_presence, .err => return false,
         }
     } else return false;
     if (!nominal.canLiftInner(self.cir.selfModuleIdentity())) return false;
@@ -31645,7 +31627,7 @@ fn ownedExprConstructorTag(self: *Self, expr_idx: CIR.Expr.Idx) ?ConstructorTag 
     return switch (self.cir.store.getExpr(expr_idx)) {
         .e_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.sliceExpr(tag.args).len },
         .e_zero_argument_tag => |tag| .{ .name = tag.name, .arity = 0 },
-        else => null,
+        .e_num, .e_frac_f32, .e_frac_f64, .e_dec, .e_dec_small, .e_num_from_numeral, .e_typed_int, .e_typed_frac, .e_typed_num_from_numeral, .e_str_segment, .e_str, .e_bytes_literal, .e_lookup_local, .e_lookup_external, .e_deferred_import_ref, .e_lookup_associated_local, .e_lookup_associated, .e_lookup_associated_resolved, .e_lookup_required, .e_list, .e_empty_list, .e_tuple, .e_match, .e_if, .e_call, .e_record, .e_empty_record, .e_block, .e_nominal, .e_nominal_external, .e_closure, .e_lambda, .e_binop, .e_unary_minus, .e_field_access, .e_method_call, .e_dispatch_call, .e_interpolation, .e_structural_eq, .e_structural_hash, .e_method_eq, .e_type_method_call, .e_type_dispatch_call, .e_tuple_access, .e_runtime_error, .e_crash, .e_dbg, .e_expect_err, .e_expect, .e_ellipsis, .e_anno_only, .e_derived_method, .e_return, .e_break, .e_for, .e_hosted_lambda, .e_run_low_level => null,
     };
 }
 
@@ -31653,7 +31635,7 @@ fn ownedPatternConstructorTag(self: *Self, pattern_idx: CIR.Pattern.Idx, ctx: Pa
     if (ctx.row_openness != .open) return null;
     return switch (self.cir.store.getPattern(pattern_idx)) {
         .applied_tag => |tag| .{ .name = tag.name, .arity = self.cir.store.slicePatterns(tag.args).len },
-        else => null,
+        .assign, .var_assign, .as, .nominal, .nominal_external, .deferred_import_ref, .record_destructure, .list, .tuple, .num_literal, .small_dec_literal, .dec_literal, .frac_f32_literal, .frac_f64_literal, .num_from_numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => null,
     };
 }
 
@@ -31695,9 +31677,9 @@ fn selectedConstructorTemplate(
                     self.setRegionAt(template, region);
                     return template;
                 },
-                else => return null,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return null,
             },
-            else => return null,
+            .flex, .rigid, .field_presence, .err => return null,
         }
     }
     return null;

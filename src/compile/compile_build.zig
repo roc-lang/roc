@@ -849,6 +849,9 @@ pub const BuildEnv = struct {
         /// Gives the cache this build environment, whose module set decides
         /// which packs it loads, before compile-time evaluation reads it.
         bind: *const fn (*anyopaque, *BuildEnv) void,
+        /// Commit staged native offers only after all checking diagnostics and
+        /// target configuration constants have been accepted; otherwise discard.
+        finish: ?*const fn (*anyopaque, bool) void = null,
         deinit: *const fn (*anyopaque) void,
     };
 
@@ -1198,6 +1201,10 @@ pub const BuildEnv = struct {
 
     pub fn finishCheckedProgram(self: *BuildEnv) CompileDiscoveredError!void {
         const coord = self.coordinator orelse unreachable;
+        var native_offers_accepted = false;
+        defer if (self.compile_time_object_cache_owner) |owner| {
+            if (owner.finish) |finish| finish(owner.context, native_offers_accepted);
+        };
         if (self.compile_time_object_cache_owner) |owner| owner.bind(owner.context, self);
         const test_modules = try self.collectProgramTestModules(self.gpa);
         defer self.gpa.free(test_modules);
@@ -1211,10 +1218,13 @@ pub const BuildEnv = struct {
 
         try self.resolvePlatformTargetConfigConstants();
 
+        const checking_accepted = !coord.hasUserErrors();
+
         try self.emitCoordinatorReports();
 
         // Deterministic emission
         try self.emitDeterministic();
+        native_offers_accepted = checking_accepted;
 
         if (comptime trace_build) {
             std.debug.print("[BUILD] compileDiscovered complete\n", .{});
@@ -3461,6 +3471,16 @@ pub const BuildEnv = struct {
     ) ?*const check.CheckedArtifact.CheckedModuleArtifact {
         const coord = self.coordinator orelse return null;
         return coord.checkedArtifactByKey(key);
+    }
+
+    /// Exact active checked provenance for a native observation binding plan.
+    /// Retired artifacts are lifetime owners, not current serving capabilities.
+    pub fn activeArtifactByIdentity(self: *const BuildEnv, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        const coord = self.coordinator orelse return null;
+        const builtin_artifact = &coord.builtin_modules.checked_artifact;
+        if (std.mem.eql(u8, &builtin_artifact.key.bytes, &identity)) return builtin_artifact;
+        if (!coord.checked_artifact_index.contains(identity)) return null;
+        return coord.checkedArtifactByKey(.{ .bytes = identity });
     }
 
     /// Drain reports and render them to a writer. Returns error/warning counts.

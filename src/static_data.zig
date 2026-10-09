@@ -128,6 +128,45 @@ const SymbolicValue = struct {
     relocations: std.ArrayList(SymbolicRelocation),
 };
 
+test "stored reserved empty-list constructor preserves target capacity and symbolic backing" {
+    const allocator = std.testing.allocator;
+    const TargetUsize = @import("base").target.TargetUsize;
+    for ([_]TargetUsize{ .u32, .u64 }) |width| {
+        for ([_]layout.Idx{ .u8, .str, .zst }) |element| {
+            var lowered = lir.CheckedPipeline.LoweredProgram{
+                .lir_result = try lir.Program.Result.init(allocator, width),
+                .main_proc = null,
+                .target_usize = width,
+                .runtime_value_schemas = lir.CheckedPipeline.RuntimeValueSchemaStore.init(allocator),
+            };
+            defer lowered.deinit();
+            const list_layout = try lowered.lir_result.layouts.insertList(element);
+            const capacity_local = try lowered.lir_result.store.addLocal(.{ .layout_idx = .u64 });
+            const arguments = try lowered.lir_result.store.addLocalSpan(&.{capacity_local});
+            var machine = try StaticInitializerMachine.init(allocator, &lowered, width);
+            defer machine.deinit();
+            const requested = try machine.newValue(.u64);
+            std.mem.writeInt(u64, requested.bytes[0..8], 17, .little);
+            const value = try machine.evalLowLevel(&.{requested}, .list_with_capacity, arguments, list_layout);
+            const word = width.size();
+            const length = if (width == .u32) std.mem.readInt(u32, value.bytes[word..][0..4], .little) else std.mem.readInt(u64, value.bytes[word..][0..8], .little);
+            const capacity = if (width == .u32) std.mem.readInt(u32, value.bytes[2 * word ..][0..4], .little) else std.mem.readInt(u64, value.bytes[2 * word ..][0..8], .little);
+            try std.testing.expectEqual(@as(u64, 0), length);
+            try std.testing.expectEqual(builtins.list.RocList.encodeCapacityForWidth(17), capacity);
+            if (element == .zst) {
+                try std.testing.expectEqual(@as(usize, 0), value.relocations.items.len);
+            } else {
+                try std.testing.expectEqual(@as(usize, 1), value.relocations.items.len);
+                try std.testing.expectEqual(@as(u32, 0), value.relocations.items[0].offset);
+                try std.testing.expectEqual(@as(usize, 1), machine.allocations.items.len);
+                const allocation = machine.allocations.items[0];
+                try std.testing.expectEqual(@as(usize, lowered.lir_result.layouts.layoutSize(lowered.lir_result.layouts.getLayout(element))) * 17, allocation.payload.bytes.len);
+                if (element == .str) try std.testing.expectEqual(@as(?usize, 0), allocation.list_element_count);
+            }
+        }
+    }
+}
+
 const SymbolicAllocation = struct {
     payload: SymbolicValue,
     alignment: u32,
@@ -299,7 +338,9 @@ const StaticInitializerMachine = struct {
             return root;
         }
         if (self.static_active[raw]) staticDataInvariant("static initializer data dependency graph contained a cycle");
-        if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null) {
+        if (self.lowered.lir_result.static_data_values.items[raw].compile_time_root != null and
+            self.lowered.lir_result.static_data_values.items[raw].initializer == null)
+        {
             staticDataInvariant("compile-time value slot requires its completed evaluation payload");
         }
         return null;
@@ -948,6 +989,32 @@ const StaticInitializerMachine = struct {
         target_layout: layout.Idx,
     ) MaterializationError!*SymbolicValue {
         const args = self.store().getLocalSpan(args_span);
+        if (op == .list_with_capacity) {
+            // ConstStore explicitly preserves reserved capacity on empty
+            // lists. Restoring it is an allocation constructor, not execution
+            // of a computed runtime operation.
+            if (args.len != 1) staticDataInvariant("static initializer list_with_capacity arity differed from one");
+            const requested = local(locals, GuardedList.at(args, 0));
+            if (requested.layout_idx != .u64) staticDataInvariant("stored empty-list capacity was not U64");
+            const capacity = std.mem.readInt(u64, requested.bytes[0..8], .little);
+            const max_word: u64 = if (self.word_size == 4) std.math.maxInt(u32) else std.math.maxInt(u64);
+            if (capacity > max_word >> 1) return error.OutOfMemory;
+            const result = try self.newValue(target_layout);
+            self.writeTargetWord(result.bytes, self.word_size * 2, builtins.list.RocList.encodeCapacityForWidth(capacity));
+            const abi = self.layouts().builtinListAbi(target_layout);
+            if (capacity == 0 or abi.elem_size == 0) return result;
+            const count = std.math.cast(usize, capacity) orelse return error.OutOfMemory;
+            const bytes = std.math.mul(usize, abi.elem_size, count) catch return error.OutOfMemory;
+            const allocation = try self.addAllocation(
+                abi.elem_layout_idx orelse staticDataInvariant("reserved list had no element layout"),
+                bytes,
+                abi.elem_alignment,
+                abi.contains_refcounted,
+                if (abi.contains_refcounted) 0 else null,
+            );
+            try result.relocations.append(self.allocator(), .{ .offset = 0, .target = .{ .allocation = allocation.id } });
+            return result;
+        }
         if (op != .box_box) {
             staticDataInvariant("non-construction low-level operation reached static initializer materialization");
         }
@@ -1479,7 +1546,7 @@ const StaticDataBuilder = struct {
             errdefer self.allocator.free(symbol_name);
 
             const entry = self.lowered.lir_result.static_data_values.items[index];
-            if (entry.compile_time_root != null and self.prepare_compile_time_slots) {
+            if (entry.compile_time_root != null and self.prepare_compile_time_slots and entry.initializer == null) {
                 const value_layout = entry.layout_idx;
                 const size_align = self.lowered.lir_result.layouts.layoutSizeAlign(self.layoutValue(value_layout));
                 const bytes = try self.allocator.alloc(u8, size_align.size);

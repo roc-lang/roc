@@ -41,4 +41,7 @@ pub const SourceFileEntry = struct {
     name: []const u8,
     qualified_name: []const u8,
     module_identity: [32]u8,
+    /// Exact checked owner, carried by checking-aware producers. Source content
+    /// identity alone does not identify a module's platform/app checking context.
+    checked_module_key: ?[32]u8,
 };

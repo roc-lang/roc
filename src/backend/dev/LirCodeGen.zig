@@ -84,6 +84,8 @@ const strFromUtf8Lossy = builtins.str.fromUtf8Lossy;
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const collections = @import("collections");
 const SymbolTable = @import("SymbolTable.zig");
+const CtfeContext = @import("CtfeContext.zig");
+const ContextImmediate = @import("ContextImmediate.zig");
 const StackPlan = @import("StackPlan.zig");
 const coff = @import("object/coff.zig");
 
@@ -299,7 +301,7 @@ pub const GenerationMode = enum {
 
 /// Compiler-internal callbacks emitted only for native compile-time evaluation.
 pub const ComptimeHooks = struct {
-    ensure_static_value: *const fn (u32) callconv(.c) void,
+    ensure_static_value: *const fn (u32) callconv(.c) usize,
     branch_taken: *const fn (u32, u32) callconv(.c) void,
     exhaustiveness_failed: *const fn (u32) callconv(.c) void,
     /// (region start, region end, source file, line, column, statement): the
@@ -333,9 +335,23 @@ pub const ComptimeHook = enum {
 pub const FragmentContextDependencies = struct {
     comptime_hooks: bool = false,
     static_data: bool = false,
+    /// Positive emission proof for every static read in this definition.
+    static_data_access: enum(u8) { none, current_context, readonly_symbols, producer_addresses, mixed } = .none,
     boxy_runtime_entry: bool = false,
     boxy_runtime: bool = false,
     dict_seed: bool = false,
+
+    pub fn merge(self: *FragmentContextDependencies, other: FragmentContextDependencies) void {
+        inline for (@typeInfo(FragmentContextDependencies).@"struct".fields) |field| {
+            if (field.type == bool) @field(self, field.name) = @field(self, field.name) or @field(other, field.name);
+        }
+        if (other.static_data_access != .none) {
+            self.static_data_access = if (self.static_data_access == .none or self.static_data_access == other.static_data_access)
+                other.static_data_access
+            else
+                .mixed;
+        }
+    }
 };
 
 /// Non-LIR inputs to fragment emission. Reuse additionally requires producer
@@ -1208,6 +1224,14 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fragment_mode: bool = false,
         fragment_source_mode: GenerationMode = .native_execution,
         fragment_context: FragmentContextDependencies = .{},
+        /// Facts for the currently emitted definition, independent of siblings.
+        region_context: FragmentContextDependencies = .{},
+        region_context_complete: bool = true,
+        context_catalog: CtfeContext.Catalog = .{},
+        context_bindings: std.ArrayList(CtfeContext.Binding) = .empty,
+        context_relocations: std.ArrayList(ContextImmediate.Relocation) = .empty,
+        context_import_arena: ?std.heap.ArenaAllocator = null,
+        context_complete: bool = true,
         borrowed_static_data_symbols: ?*const Self = null,
         assembled_symbolic_refs: std.ArrayList(SymbolicReference) = .empty,
         assembled_thunks: std.AutoHashMapUnmanaged(lir.ProcIdentity, usize) = .{},
@@ -1376,7 +1400,24 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             /// Offset from `start` that references to this region resolve to.
             entry: usize,
             kind: CodeRegionKind,
+            context_dependencies: ?FragmentContextDependencies = null,
+            context_complete: ?bool = null,
+            artifact_callable_contract: ?[32]u8 = null,
+            artifact_context_contract: ?FragmentContract = null,
+            artifact_domain: ?CtfeContext.Domain = null,
         };
+
+        /// Assembly preserves the original producer's proof, not the receiving
+        /// code generator's options or its body-less procedure declarations.
+        pub fn recordAssembledArtifact(self: *Self, start: usize, artifact: @import("ProcArtifact.zig").Artifact) void {
+            const region = &self.code_regions.items[self.code_regions.items.len - 1];
+            std.debug.assert(region.start == start);
+            region.context_dependencies = artifact.context_dependencies;
+            region.context_complete = artifact.context_complete;
+            region.artifact_callable_contract = artifact.callable_contract;
+            region.artifact_context_contract = artifact.context_contract;
+            region.artifact_domain = artifact.domain;
+        }
 
         /// Frame metadata carried with an assembled region so its unwind
         /// record can be re-recorded where it lands.
@@ -1683,6 +1724,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
         /// Clean up resources
         pub fn deinit(self: *Self) void {
+            self.context_bindings.deinit(self.allocator);
+            self.context_relocations.deinit(self.allocator);
+            if (self.context_import_arena) |*arena| arena.deinit();
             self.codegen.deinit();
             self.clearSymbolCaches();
             self.static_data_symbols.deinit();
@@ -1759,6 +1803,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.fragment_mode = false;
             self.fragment_source_mode = .native_execution;
             self.fragment_context = .{};
+            self.context_bindings.clearRetainingCapacity();
+            self.context_relocations.clearRetainingCapacity();
+            if (self.context_import_arena) |*arena| arena.deinit();
+            self.context_import_arena = null;
+            self.context_complete = true;
             self.assembled_symbolic_refs.clearRetainingCapacity();
             self.assembled_thunks.clearRetainingCapacity();
             self.binding_data_cells.clearRetainingCapacity();
@@ -8383,6 +8432,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .dict_pseudo_seed => {
                     if (args.len != 0) unreachable;
                     self.fragment_context.dict_seed = true;
+                    self.region_context.dict_seed = true;
                     if (self.dict_seed_mode == .comptime_zero) return .{ .immediate_i64 = 0 };
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
                     defer builder.deinit();
@@ -9727,6 +9777,28 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         }
 
         fn generateStaticDataLiteral(self: *Self, id: lir.LIR.StaticDataId, target_layout: layout.Idx) Allocator.Error!ValueLocation {
+            const mode = if (self.fragment_mode) self.fragment_source_mode else self.generation_mode;
+            const current_context = self.comptime_hooks != null and mode != .object_file;
+            const access: @FieldType(FragmentContextDependencies, "static_data_access") = if (current_context)
+                .current_context
+            else if (mode == .object_file)
+                .readonly_symbols
+            else
+                .producer_addresses;
+            inline for (.{ &self.fragment_context, &self.region_context }) |context| {
+                context.static_data_access = if (context.static_data_access == .none or context.static_data_access == access)
+                    access
+                else
+                    .mixed;
+            }
+            if (self.comptime_hooks) |hooks| {
+                try self.spillAllVectorLocals();
+                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
+                defer builder.deinit();
+                const descriptor = self.context_catalog.root(@intFromEnum(id));
+                try self.addContextArg(&builder, @intFromEnum(id), if (descriptor) |d| .{ .static_root = d } else null, "static_root", @intFromEnum(id));
+                try self.callComptimeHook(&builder, hooks, .ensure_static_value);
+            }
             const runtime_layout = self.runtimeRepresentationLayoutIdx(target_layout);
             const size = self.getLayoutSize(runtime_layout);
             if (size == 0) return .{ .immediate_i64 = 0 };
@@ -9734,7 +9806,11 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const slot = self.codegen.allocStackSlot(size);
             const src_reg = try self.allocTempGeneral();
             defer self.codegen.freeGeneral(src_reg);
-            switch (self.generation_mode) {
+            if (current_context) {
+                // Independent fragments emit symbolic hooks but obey the same
+                // address-return ABI as the live native execution lane.
+                try self.codegen.emit.movRegReg(.w64, src_reg, if (comptime target.toCpuArch() == .aarch64) .X0 else .RAX);
+            } else switch (self.generation_mode) {
                 .native_execution => {
                     const address = self.nativeStaticDataAddress(id);
                     try self.codegen.emitLoadImm(src_reg, @bitCast(@as(u64, address)));
@@ -14673,6 +14749,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             for (self.line_entries.items[firstEntryAtOrAfter(@TypeOf(self.line_entries.items[0]), self.line_entries.items, "offset", body_start)..]) |*line| {
                 if (line.offset >= body_start and line.offset < body_end) line.offset += @intCast(prologue_size);
             }
+            for (self.context_relocations.items[firstEntryAtOrAfter(ContextImmediate.Relocation, self.context_relocations.items, "offset", body_start)..]) |*relocation| {
+                if (relocation.offset >= body_start and relocation.offset < body_end) relocation.offset += @intCast(prologue_size);
+            }
             for (self.internal_call_patches.items[firstEntryAtOrAfter(@TypeOf(self.internal_call_patches.items[0]), self.internal_call_patches.items, "call_offset", body_start)..]) |*patch| {
                 // Only adjust patches that were within the shifted body range
                 if (patch.call_offset >= body_start and patch.call_offset < body_end) {
@@ -15555,6 +15634,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             capture_layout: layout.Idx,
             desc_field_offset: u32,
         ) Allocator.Error!usize {
+            const saved_region_context = self.beginRegionContext();
+            defer self.restoreRegionContext(saved_region_context);
             const cache_key = boxyCaptureDropKey(capture_layout, desc_field_offset);
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
@@ -15734,11 +15815,15 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .end = self.codegen.currentOffset(),
                 .entry = final_offset - helper_region_start,
                 .kind = .{ .rc_helper = cache_key },
+                .context_dependencies = self.region_context,
+                .context_complete = self.region_context_complete,
             });
             return final_offset;
         }
 
         fn compileSingleRcHelper(self: *Self, helper: RcHelperVariant) Allocator.Error!usize {
+            const saved_region_context = self.beginRegionContext();
+            defer self.restoreRegionContext(saved_region_context);
             const cache_key = helper.encode();
             if (self.compiled_rc_helpers.get(cache_key)) |code_offset| {
                 return code_offset;
@@ -15938,6 +16023,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .end = self.codegen.currentOffset(),
                 .entry = final_offset - helper_region_start,
                 .kind = .{ .rc_helper = cache_key },
+                .context_dependencies = self.region_context,
+                .context_complete = self.region_context_complete,
             });
             return final_offset;
         }
@@ -17988,6 +18075,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// only reachable through the machine-code shim's symbol resolution.
         fn callBoxyBuiltin(self: *Self, builder: *Builder, boxy_fn: BoxyBuiltinFn) Allocator.Error!void {
             self.boxy_runtime_used = true;
+            self.region_context.boxy_runtime = true;
             if (boxy_fn.paramAbiSizes()) |sizes| {
                 builder.packStackArgsForCAbi(sizes);
             } else if (builtin.mode == .Debug and Builder.packs_stack_args and builder.stack_args.items.len > 0) {
@@ -18017,6 +18105,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// `roc_boxy_runtime` object provides the symbol.
         fn emitBoxyRuntimeInit(self: *Self) Allocator.Error!void {
             self.boxy_runtime_used = true;
+            self.region_context.boxy_runtime = true;
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
             try builder.addImmArg(0);
@@ -20955,6 +21044,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Uses deferred prologue pattern: generates body first to determine which
         /// callee-saved registers are used, then prepends prologue and adjusts relocations.
         fn compileProcSpec(self: *Self, proc_id: lir.LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+            const saved_region_context = self.beginRegionContext();
+            defer self.restoreRegionContext(saved_region_context);
             const saved_alloca_slots = self.stack_alloca_slots;
             self.stack_alloca_slots = collections.DenseMap(LocalId, i32).init(self.allocator);
             defer {
@@ -21116,6 +21207,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 try self.bindErasedCallableAdapterParams(proc, proc.erased_call_args orelse unreachable);
                 if (proc.boxy_runtime_entry) {
                     self.fragment_context.boxy_runtime_entry = true;
+                    self.region_context.boxy_runtime_entry = true;
                     if (self.generation_mode == .object_file or (self.fragment_mode and self.fragment_source_mode == .object_file)) try self.emitBoxyRuntimeInit();
                 }
                 hot_reload_code_ref_slot = try self.emitHotReloadEnterForHostCallable();
@@ -21227,6 +21319,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
+                        .context_dependencies = self.region_context,
+                        .context_complete = self.region_context_complete,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -21309,6 +21403,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         .end = entry.code_end,
                         .entry = 0,
                         .kind = .{ .proc = proc_id },
+                        .context_dependencies = self.region_context,
+                        .context_complete = self.region_context_complete,
                     });
                 }
                 try self.recordUnwindFunction(
@@ -22924,13 +23020,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 .null_ptr => .{ .immediate_i64 = 0 },
                                 .static_data => |id| blk: {
                                     self.fragment_context.static_data = true;
-                                    if (self.comptime_hooks) |hooks| {
-                                        try self.spillAllVectorLocals();
-                                        var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                                        defer builder.deinit();
-                                        try builder.addImmArg(@intCast(@intFromEnum(id)));
-                                        try self.callComptimeHook(&builder, hooks, .ensure_static_value);
-                                    }
+                                    self.region_context.static_data = true;
                                     break :blk try self.generateStaticDataLiteral(id, self.localLayout(assign.target));
                                 },
                                 .proc_ref => |proc_id| blk: {
@@ -24404,8 +24494,50 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.emitRocStaticMessageCall(.roc_expect_failed, "expect failed");
         }
 
+        pub fn setContextCatalog(self: *Self, catalog: CtfeContext.Catalog) void {
+            self.context_catalog = catalog;
+        }
+
+        const RegionContext = struct { dependencies: FragmentContextDependencies, complete: bool };
+
+        fn beginRegionContext(self: *Self) RegionContext {
+            const saved = RegionContext{ .dependencies = self.region_context, .complete = self.region_context_complete };
+            self.region_context = .{};
+            self.region_context_complete = true;
+            return saved;
+        }
+
+        fn restoreRegionContext(self: *Self, saved: RegionContext) void {
+            self.region_context = saved.dependencies;
+            self.region_context_complete = saved.complete;
+        }
+
+        fn addContextArg(self: *Self, builder: *Builder, value: u32, binding: ?CtfeContext.Binding, comptime kind: []const u8, producer: u32) Allocator.Error!void {
+            if (binding) |descriptor| {
+                const index: u32 = @intCast(self.context_bindings.items.len);
+                try self.context_bindings.append(self.allocator, descriptor);
+                try builder.addContextArg(value, index, &self.context_relocations);
+            } else {
+                self.context_complete = false;
+                self.region_context_complete = false;
+                if (std.c.getenv("ROC_PACK_TRACE") != null) {
+                    std.debug.print("pack CTFE missing context kind={s} producer={d} immediate={d}\n", .{ kind, producer, value });
+                }
+                try builder.addImmArg(@intCast(value));
+            }
+        }
+
+        fn contextSource(self: *Self, stmt: lir.LIR.CFStmtId) ?CtfeContext.SourceDescriptor {
+            return self.context_catalog.source(@intFromEnum(stmt));
+        }
+
+        fn contextFailure(self: *Self, stmt: lir.LIR.CFStmtId) ?CtfeContext.FailureDescriptor {
+            return self.context_catalog.failure(@intFromEnum(stmt));
+        }
+
         fn callComptimeHook(self: *Self, builder: *Builder, hooks: ComptimeHooks, hook: ComptimeHook) Allocator.Error!void {
             self.fragment_context.comptime_hooks = true;
+            self.region_context.comptime_hooks = true;
             if (self.generation_mode == .native_execution) {
                 const address = switch (hook) {
                     inline .ensure_static_value, .branch_taken, .exhaustiveness_failed, .failure_region, .call_enter, .call_exit => |which| @intFromPtr(@field(hooks, @tagName(which))),
@@ -24425,7 +24557,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            const descriptor = self.context_catalog.site(@intFromEnum(site));
+            try self.addContextArg(&builder, @intFromEnum(site), if (descriptor) |d| .{ .site = d } else null, "site", @intFromEnum(site));
             try builder.addImmArg(@intCast(branch_index));
             try self.callComptimeHook(&builder, hooks, .branch_taken);
         }
@@ -24438,7 +24571,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             try self.spillAllVectorLocals();
             var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
             defer builder.deinit();
-            try builder.addImmArg(@intCast(@intFromEnum(site)));
+            const descriptor = self.context_catalog.site(@intFromEnum(site));
+            try self.addContextArg(&builder, @intFromEnum(site), if (descriptor) |d| .{ .site = d } else null, "site", @intFromEnum(site));
             try self.callComptimeHook(&builder, hooks, .exhaustiveness_failed);
         }
 
@@ -24454,10 +24588,10 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
-            try builder.addImmArg(@intCast(loc.file));
+            try self.addContextArg(&builder, loc.file, if (self.contextSource(stmt_id)) |source| .{ .source_file = source } else null, "source_file", @intFromEnum(stmt_id));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
-            try builder.addImmArg(@intCast(@intFromEnum(stmt_id)));
+            try self.addContextArg(&builder, @intFromEnum(stmt_id), if (self.contextFailure(stmt_id)) |failure| .{ .failure = failure } else null, "failure", @intFromEnum(stmt_id));
             try self.callComptimeHook(&builder, hooks, .failure_region);
         }
 
@@ -24474,7 +24608,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer builder.deinit();
             try builder.addImmArg(@intCast(region.start.offset));
             try builder.addImmArg(@intCast(region.end.offset));
-            try builder.addImmArg(@intCast(loc.file));
+            try self.addContextArg(&builder, loc.file, if (self.contextSource(stmt_id)) |source| .{ .source_file = source } else null, "source_file", @intFromEnum(stmt_id));
             try builder.addImmArg(@intCast(loc.line));
             try builder.addImmArg(@intCast(loc.column));
             try self.callComptimeHook(&builder, hooks, .call_enter);
@@ -24784,6 +24918,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// is prepended and the body's relocations and internal patches are
         /// shifted to their final positions.
         fn generateBoxyDictProcThunk(self: *Self, proc_id: lir.LIR.LirProcSpecId) Allocator.Error!usize {
+            const saved_region_context = self.beginRegionContext();
+            defer self.restoreRegionContext(saved_region_context);
             // A wrapper is an independent function. Register reservations from
             // its enclosing emitter cannot cross this procedure boundary.
             const saved_free_general = self.codegen.free_general;
@@ -24930,6 +25066,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .end = self.codegen.currentOffset(),
                 .entry = 0,
                 .kind = .{ .boxy_thunk = proc_id },
+                .context_dependencies = self.region_context,
+                .context_complete = self.region_context_complete,
             });
             return func_start;
         }
@@ -29017,6 +29155,9 @@ test "independent fragment symbolic hooks record actual context use" {
     if (comptime !host_lir_codegen_available) return error.SkipZigTest;
     const allocator = std.testing.allocator;
     const Hooks = struct {
+        fn address(_: u32) callconv(.c) usize {
+            return 0;
+        }
         fn one(_: u32) callconv(.c) void {}
         fn two(_: u32, _: u32) callconv(.c) void {}
         fn five(_: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}
@@ -29024,7 +29165,7 @@ test "independent fragment symbolic hooks record actual context use" {
         fn zero() callconv(.c) void {}
     };
     const hooks = ComptimeHooks{
-        .ensure_static_value = Hooks.one,
+        .ensure_static_value = Hooks.address,
         .branch_taken = Hooks.two,
         .exhaustiveness_failed = Hooks.one,
         .failure_region = Hooks.six,
@@ -29056,21 +29197,37 @@ test "independent fragment symbolic hooks record actual context use" {
     try cg.emitProcFragment(data_proc);
     try std.testing.expect(cg.getFragmentContextDependencies().comptime_hooks);
     try std.testing.expect(cg.getFragmentContextDependencies().static_data);
+    try std.testing.expect(cg.getFragmentContextDependencies().static_data_access == .current_context);
     try std.testing.expectEqual(@as(usize, 0), source.getSymbolNames().len);
-    try std.testing.expectEqual(@as(usize, 1), cg.bindingDataCells().len);
-    try std.testing.expectEqualStrings("roc__b8", cg.bindingDataCells()[0].name);
-    try std.testing.expectEqualStrings("fragment_static_value", cg.bindingDataCells()[0].target_name);
+    try std.testing.expectEqual(@as(usize, 0), cg.bindingDataCells().len);
     var found_hook = false;
     for (cg.getRelocations()) |reloc| {
         switch (reloc) {
             .linked_function => |function| {
                 if (std.mem.eql(u8, cg.symbolName(function.symbol), ComptimeHook.ensure_static_value.symbolName())) found_hook = true;
             },
-            .local_data => return error.NativePointerInFragment,
-            .linked_data, .jmp_to_return, .retired => {},
+            .local_data, .linked_data => return error.NativePointerInFragment,
+            .jmp_to_return, .retired => {},
         }
     }
     try std.testing.expect(found_hook);
+    try std.testing.expect(!cg.context_complete);
+    cg.reset();
+    var roots = [_]?CtfeContext.RootDescriptor{null} ** 9;
+    roots[8] = .{
+        .module = [_]u8{1} ** 32,
+        .producer = .{ .checked = 12 },
+        .layout_digest = [_]u8{2} ** 32,
+        .role = .value,
+    };
+    cg.setContextCatalog(.{ .roots = &roots });
+    try cg.emitProcFragment(data_proc);
+    try std.testing.expect(cg.context_complete);
+    try std.testing.expectEqual(@as(usize, 1), cg.context_bindings.items.len);
+    try std.testing.expectEqualDeep(roots[8].?, cg.context_bindings.items[0].static_root);
+    try std.testing.expectEqual(@as(usize, 1), cg.context_relocations.items.len);
+    const context_relocation = cg.context_relocations.items[0];
+    try ContextImmediate.validate(cg.getGeneratedCode(), context_relocation);
     try std.testing.checkAllAllocationFailures(allocator, struct {
         fn run(a: Allocator, owner: *const HostLirCodeGen, id: LIR.LirProcSpecId) (Allocator.Error || error{TestExpectedEqual})!void {
             var lane = try HostLirCodeGen.init(a, owner.store, owner.layout_store, .{}, &.{}, .default);
@@ -29115,4 +29272,36 @@ test "branch location checkpoints restore only changed bindings in a wide proced
     try codegen.setLocalLocation(8, .{ .immediate_i64 = 500 });
     codegen.restoreStmtEnv(&outer);
     try std.testing.expectEqual(@as(i64, 8), codegen.local_locations.get(8).?.immediate_i64);
+}
+
+test "definition context scopes isolate nested emission without erasing caller facts" {
+    const allocator = std.testing.allocator;
+    var store = LirStore.init(allocator);
+    defer store.deinit();
+    var test_state = try TestLayoutState.init(allocator);
+    defer test_state.deinit();
+    var codegen = try HostLirCodeGen.init(allocator, &store, &test_state.layout_store, .{}, &.{}, .default);
+    defer codegen.deinit();
+    const outer = codegen.beginRegionContext();
+    codegen.region_context.dict_seed = true;
+    codegen.region_context.comptime_hooks = true;
+    codegen.region_context_complete = false;
+    const caller = codegen.region_context;
+    const nested = codegen.beginRegionContext();
+    try std.testing.expectEqual(FragmentContextDependencies{}, codegen.region_context);
+    try std.testing.expect(codegen.region_context_complete);
+    // A nested helper's own dependency belongs to its definition, not the
+    // enclosing caller. The closure graph carries the transitive relationship.
+    codegen.region_context.boxy_runtime = true;
+    const helper = codegen.region_context;
+    codegen.restoreRegionContext(nested);
+    try std.testing.expectEqual(caller, codegen.region_context);
+    try std.testing.expect(!codegen.region_context_complete);
+    try std.testing.expect(helper.boxy_runtime);
+    try std.testing.expect(!helper.dict_seed and !helper.comptime_hooks);
+    codegen.restoreRegionContext(outer);
+    const independent = codegen.beginRegionContext();
+    try std.testing.expectEqual(FragmentContextDependencies{}, codegen.region_context);
+    try std.testing.expect(codegen.region_context_complete);
+    codegen.restoreRegionContext(independent);
 }

@@ -224,6 +224,9 @@ pub const FnTemplate = struct {
     /// never lowered, and Direct LIR emits an external procedure that the
     /// object writer fills from the cache entry.
     cached: ?Common.SpecCacheHit = null,
+    /// Storage demand is producer data even when a non-native consumer retains
+    /// this body; native late splicing still needs the same root declarations.
+    cached_root_uses: []const Common.CheckedRootUse = &.{},
     /// Set for a closed specialization of a Builtin template whose checked
     /// provided low-level operation is on `LowLevel.procedureKeyedByLayout`'s
     /// allow list. Direct LIR identifies the plain procedure of such a
@@ -1418,6 +1421,8 @@ pub const LayoutRequest = struct {
     ty: Type.TypeId,
     def: ?DefId = null,
     const_locator: ?checked.ConstLocator = null,
+    /// A cached procedure's explicit typed storage demand, not an initializer.
+    comptime_root: ?Common.ComptimeValueRoot = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.
@@ -2140,6 +2145,7 @@ pub const ProgramBuilder = struct {
             .name = owned_name,
             .qualified_name = owned_qualified,
             .module_identity = file.module_identity,
+            .checked_module_key = file.checked_module_key,
         });
         return id;
     }
@@ -3119,7 +3125,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     const expr = try source.addExpr(.{ .ty = ty, .data = .{ .str_lit = literal } });
     const local = try source.addLocal(@enumFromInt(1), ty);
     try source.setLocalName(local, "value");
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0), .checked_module_key = @splat(4) });
     var owner_key = std.mem.zeroes(check.CheckedModule.ModuleId);
     owner_key.bytes[0] = 9;
     const owner = try source.addLoweringModule(owner_key);
@@ -3159,6 +3165,7 @@ test "frozen Monotype forks retain identities and own literal and diagnostic sto
     try std.testing.expectEqualStrings("value", copy.stringLiteralText(literal));
     try std.testing.expectEqualStrings("value", copy.localName(local));
     try std.testing.expectEqualStrings("app/App.roc", copy.view().source_files[file].qualified_name);
+    try std.testing.expectEqualDeep(@as(?[32]u8, @splat(4)), copy.view().source_files[file].checked_module_key);
     try std.testing.expectEqual(@as(usize, 1), copy.comptimeSite(site).branch_regions.len);
     try std.testing.expectEqual(owner, copy.comptimeSite(site).owner);
     try std.testing.expectEqualDeep(owner_key, copy.view().lowering_modules[@intFromEnum(owner)]);

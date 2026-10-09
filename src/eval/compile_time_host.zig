@@ -96,10 +96,17 @@ failed_region: ?base.Region = null,
 failed_loc: ?base.SourceLoc = null,
 /// Published producer origins, indexed by the emitted LIR statement.
 failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+slot_failure_origins: []const ?lir.LIR.ComptimeFailureOrigin = &.{},
+/// Current semantic failure registry, including bound persistent artifacts.
+failure_registry: ?*const @import("native_failure.zig").Registry = null,
+failed_observation: ?@import("native_failure.zig").Observation = null,
+site_observations: ?[]const @import("native_failure.zig").Site = null,
 /// The LIR statement whose failure-region hook ran last: the failing
 /// statement once the run fails.
 failed_stmt: ?lir.LIR.CFStmtId = null,
 slot_demand: ?SlotDemand = null,
+/// Borrowed stable storage owned by the active evaluator's slot environment.
+static_slot_addresses: []const usize = &.{},
 operational_error: ?FinalizeError = null,
 timing_io: ?std.Io = null,
 suspended_ns: u64 = 0,
@@ -147,6 +154,7 @@ pub fn resetForRun(self: *CompileTimeHost) void {
     self.failed_region = null;
     self.failed_loc = null;
     self.failed_stmt = null;
+    self.failed_observation = null;
     self.operational_error = null;
     self.suspended_ns = 0;
     _ = self.arena.reset(.free_all);
@@ -254,23 +262,25 @@ pub fn finishDemandTiming(self: *CompileTimeHost, started: i128) void {
 }
 
 /// A static read demands completion of its explicitly identified producer.
-pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) void {
+pub fn rocComptimeEnsureStaticValue(slot: u32) callconv(.c) usize {
     const roc_ops = enteredOps();
     const self: *CompileTimeHost = @ptrCast(@alignCast(roc_ops.env));
-    const demand = self.slot_demand orelse return;
-    const started = self.startDemandTiming();
-    const result = demand.ensure(demand.context, @enumFromInt(slot));
-    self.finishDemandTiming(started);
-    result catch |err| switch (err) {
-        error.CompileTimeDependencyCycle => {
-            const message = "cyclic compile-time value dependency";
-            rocCrashed(roc_ops, message.ptr, message.len);
-        },
-        else => |operational| {
-            self.operational_error = operational;
-            self.jump(.host_error);
-        },
-    };
+    if (self.slot_demand) |demand| {
+        const started = self.startDemandTiming();
+        const result = demand.ensure(demand.context, @enumFromInt(slot));
+        self.finishDemandTiming(started);
+        result catch |err| switch (err) {
+            error.CompileTimeDependencyCycle => {
+                const message = "cyclic compile-time value dependency";
+                rocCrashed(roc_ops, message.ptr, message.len);
+            },
+            else => |operational| {
+                self.operational_error = operational;
+                self.jump(.host_error);
+            },
+        };
+    }
+    return self.static_slot_addresses[slot];
 }
 
 /// Dev-backend hook called when a compile-time branch marker is reached.
@@ -296,13 +306,33 @@ pub fn rocComptimeExhaustivenessFailed(site_raw: u32) callconv(.c) void {
 /// names the declaring module).
 pub fn rocComptimeFailureRegion(start_offset: u32, end_offset: u32, file: u32, line: u32, column: u32, stmt: u32) callconv(.c) void {
     const self = enteredHost();
-    self.failed_stmt = @enumFromInt(stmt);
-    if (stmt < self.failure_origins.len) {
-        if (self.failure_origins[stmt]) |origin| {
+    if (self.failure_registry) |registry| {
+        self.failed_observation = registry.get(stmt);
+        self.failed_stmt = null;
+    } else {
+        // Standalone callers explicitly use the original LIR statement domain.
+        self.failed_observation = null;
+        self.failed_stmt = @enumFromInt(stmt);
+    }
+    const origin_statement: ?u32 = if (self.failed_observation) |observation|
+        if (observation.origin_statement) |origin| @intFromEnum(origin) else null
+    else
+        stmt;
+    if (self.failed_observation) |observation| {
+        if (observation.origin_slot) |slot| {
+            if (self.slot_failure_origins[@intFromEnum(slot)]) |origin| {
+                self.failed_region = origin.region;
+                self.failed_loc = origin.loc;
+                return;
+            }
+        }
+    }
+    if (origin_statement) |origin_id| {
+        if (origin_id < self.failure_origins.len) if (self.failure_origins[origin_id]) |origin| {
             self.failed_region = origin.region;
             self.failed_loc = origin.loc;
             return;
-        }
+        };
     }
     if (start_offset == end_offset) return;
     self.failed_region = base.Region.from_raw_offsets(start_offset, end_offset);
@@ -452,7 +482,86 @@ fn rocExpectFailed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c
     self.failed_region = null;
     self.failed_loc = null;
     self.failed_stmt = null;
+    self.failed_observation = null;
     self.appendExpectFailedEvent(bytes[0..len], region, loc);
+}
+
+test "static demand hook returns current storage after demand with displaced slot IDs" {
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    var old_value: u64 = 7;
+    var current_value: u64 = 42;
+    var addresses = [_]usize{ 0, 0, 0, @intFromPtr(&old_value) };
+    host.static_slot_addresses = &addresses;
+    const Demand = struct {
+        addresses: *[4]usize,
+        current: *u64,
+        requested: ?lir.LIR.StaticDataId = null,
+
+        fn ensure(raw: *anyopaque, slot: lir.LIR.StaticDataId) SlotDemand.Error!void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.requested = slot;
+            self.addresses[@intFromEnum(slot)] = @intFromPtr(self.current);
+        }
+    };
+    var demand = Demand{ .addresses = &addresses, .current = &current_value };
+    host.slot_demand = .{ .context = &demand, .ensure = Demand.ensure };
+    const entered = builtins.in_process_host.enter(host.ops(), null);
+    defer builtins.in_process_host.leave(entered);
+    const address = rocComptimeEnsureStaticValue(3);
+    try std.testing.expectEqual(@as(?lir.LIR.StaticDataId, @enumFromInt(3)), demand.requested);
+    try std.testing.expectEqual(@intFromPtr(&current_value), address);
+    try std.testing.expectEqual(@as(u64, 42), @as(*const u64, @ptrFromInt(address)).*);
+    host.slot_demand = null;
+    try std.testing.expectEqual(address, rocComptimeEnsureStaticValue(3));
+}
+
+test "cached guard failure uses current slot publication origin and producer" {
+    const Failure = @import("native_failure.zig");
+    var registry = Failure.Registry{ .allocator = std.testing.allocator, .result = undefined, .prefix = 0 };
+    defer registry.bound.deinit(std.testing.allocator);
+    const producer = Failure.GuardProducer{
+        .module = .{ .bytes = [_]u8{17} ** 32 },
+        .root = .{ .checked = @enumFromInt(8) },
+    };
+    const id = try registry.append(.{ .checked_error = false, .guard_producer = producer, .origin_slot = @enumFromInt(2) });
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    const origin: lir.LIR.ComptimeFailureOrigin = .{
+        .region = base.Region.from_raw_offsets(31, 38),
+        .loc = .{ .file = 7, .line = 13, .column = 4 },
+    };
+    host.slot_failure_origins = &.{ null, null, origin };
+    host.failure_registry = &registry;
+    const entered = builtins.in_process_host.enter(host.ops(), null);
+    defer builtins.in_process_host.leave(entered);
+    rocComptimeFailureRegion(1, 2, 0, 1, 1, id);
+    try std.testing.expectEqualDeep(@as(?base.Region, origin.region), host.failed_region);
+    try std.testing.expectEqualDeep(@as(?base.SourceLoc, origin.loc), host.failed_loc);
+    try std.testing.expectEqualDeep(@as(?Failure.GuardProducer, producer), host.failed_observation.?.guard_producer);
+    try std.testing.expect(host.failed_stmt == null);
+}
+
+test "native expect consumes both live and bound pending failure context" {
+    var host = CompileTimeHost.init(std.testing.allocator);
+    defer host.deinit();
+    const region: base.Region = .{ .start = .{ .offset = 1 }, .end = .{ .offset = 4 } };
+    const loc: base.SourceLoc = .{ .file = 3, .line = 2, .column = 5 };
+    host.failed_region = region;
+    host.failed_loc = loc;
+    host.failed_stmt = @as(lir.LIR.CFStmtId, @enumFromInt(8));
+    host.failed_observation = .{ .checked_error = true, .origin_statement = @as(lir.LIR.CFStmtId, @enumFromInt(9)) };
+    const message = "fixture expect failure";
+    rocExpectFailed(host.ops(), message.ptr, message.len);
+    try std.testing.expectEqual(@as(usize, 1), host.events.items.len);
+    const event = host.events.items[0].expect_failed;
+    try std.testing.expectEqualStrings(message, event.message);
+    try std.testing.expectEqualDeep(@as(?base.Region, region), event.region);
+    try std.testing.expectEqualDeep(@as(?base.SourceLoc, loc), event.loc);
+    try std.testing.expect(host.failed_region == null);
+    try std.testing.expect(host.failed_loc == null);
+    try std.testing.expect(host.failed_stmt == null);
+    try std.testing.expect(host.failed_observation == null);
 }
 
 fn rocCrashed(roc_ops: *RocOps, bytes: [*]const u8, len: usize) callconv(.c) void {

@@ -7,6 +7,7 @@ const std = @import("std");
 const types = @import("types");
 const Var = types.Var;
 
+/// Reuse completed root answers only while the analyzed graph is immutable.
 pub const Memo = struct {
     answers: std.HashMapUnmanaged(Key, bool, Context, std.hash_map.default_max_load_percentage) = .empty,
 
@@ -107,7 +108,7 @@ test "inhabitedness memo canonicalizes resolved assumption sets" {
     try std.testing.expectEqual(@as(usize, 2), first.items.len);
 }
 
-fn allocationFailureCase(gpa: std.mem.Allocator) !void {
+fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || error{TestExpectedEqual})!void {
     var memo: Memo = .{};
     defer memo.deinit(gpa);
     var empty = [_]Var{@enumFromInt(2)};

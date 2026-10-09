@@ -175,6 +175,7 @@ fn Job(comptime CG: type) type {
             cg.enable_hot_reload = source.enable_hot_reload;
             cg.enable_default_platform_runtime = source.enable_default_platform_runtime;
             cg.comptime_hooks = source.comptime_hooks;
+            cg.setContextCatalog(source.context_catalog);
             cg.borrowStaticDataSymbolsFrom(source);
             self.fragment = if (self.proc) |id|
                 try Artifact.compileProcFragmentPrepared(CG, worker.allocator, &cg, id, source.store.getProcSpecs(), source.layout_store, self.data)

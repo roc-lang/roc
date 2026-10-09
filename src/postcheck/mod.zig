@@ -4,6 +4,10 @@ const std = @import("std");
 
 /// Shared ids, inputs, and invariants for post-check stages.
 pub const Common = @import("common.zig");
+/// Independent semantic, compile-time execution, and runtime demand closure.
+pub const EvaluationDemand = @import("evaluation_demand.zig");
+/// Producer-proof runtime-root selection before executable Monotype emission.
+pub const SemanticRootDemand = @import("semantic_root_demand.zig");
 /// Closed source-shape IR after checking has removed dispatch syntax.
 pub const Monotype = struct {
     pub const Ast = @import("monotype/ast.zig");
@@ -47,6 +51,8 @@ test "postcheck declarations are referenced" {
     std.testing.refAllDecls(@import("record_fields.zig"));
     std.testing.refAllDecls(@This());
     std.testing.refAllDecls(@import("common.zig"));
+    std.testing.refAllDecls(@import("evaluation_demand.zig"));
+    std.testing.refAllDecls(@import("semantic_root_demand.zig"));
     std.testing.refAllDecls(@import("monotype/ast.zig"));
     std.testing.refAllDecls(@import("monotype/type.zig"));
     std.testing.refAllDecls(@import("monotype/lower.zig"));

@@ -616,6 +616,35 @@ graph-proportional work, not path-count work.
 
 ### Early Compile-Time Object Reuse
 
+Body elision is a shared producer decision, not an evaluator-local cache hit.
+Every declared consumer must have a compatible native code provision before
+Monotype may replace a source body with a cached procedure. LLVM and interpreter
+consumers require the shared body; it is lowered once, while CTFE may still
+splice native code in its own LIR consumer. A target-specific native provision
+does not authorize host-native CTFE body elision.
+
+Matching native domains are not proof of artifact availability. Shared elision
+also requires the same non-null lookup capability (context and callback), whose
+owner supplies both readers the same immutable offers and splice artifacts.
+This is session-local provider identity, never a persistent cache-key input.
+Separate providers retain source bodies and their independent late native hits.
+
+The runtime handoff validates the original declared target and roots, including
+the complete provider capability and policy. Joint producer selection narrows
+only the internal continuation to its paired intersection; it cannot redefine
+the caller's declaration. Without a producer, the complete runtime view remains
+selected. Handoff observation sinks do not change that capability.
+
+An early cache offer carries the full-body producer's platform-requirement
+dependency summary. An independent entry is reusable across app fillings;
+a dependent entry names its exact relation and is admitted only for that
+relation. Cached functions seed the same transitive reachability computation
+as full bodies, so erasing a body cannot erase a code-identity input. Offer
+selection retains distinct relations rather than letting an incompatible
+first entry hide a compatible entry. Final procedure identity validation is
+unchanged. Old contracts use a different format and storage namespace and are
+declined before any body is skipped.
+
 Monotype reservation may consume an offered
 closed object specialization during checking finalization under the same proof
 that permits Direct LIR to splice it: no checked module or relation in the
@@ -632,6 +661,108 @@ root scheduling, literal rejection, debug observations, and cached-data
 relocations retain their existing contracts. A cache-hit counter alone is not
 the performance assertion: a warm test must also demonstrate skipped Monotype
 body work and preserve cold/warm diagnostics.
+
+Native CTFE publication borrows the evaluator's retained fragments before its
+LIR and fragment owners are destroyed. Encoding stages owned bytes; publication
+is deferred until the coordinator has accepted the complete checking result,
+including late evaluation diagnostics and target configuration constants. An
+abandoned or rejected compilation discards its staged offers.
+
+Demanded CTFE code is an additive offer set, never a complete module pack.
+Content-identified partial files do not occupy the immutable complete-pack key:
+otherwise a check could prevent a later build from publishing procedures that
+checking never demanded. Identical subsets deduplicate, and loading remains
+scoped to the visible modules rather than scanning other cache namespaces.
+Offers are filed under their producer-stamped checked template owner, not the
+app that happened to demand them. Builtin instantiations retain the explicitly
+declared requester's placement. Owner partitions share closure/admission facts
+and carry only their serving dependencies.
+
+Native providers are immutable capabilities selected before producer lowering.
+Standalone checking uses the authoritative dev Solved policy, not a separately
+maintained approximation. A different Solved policy owns a distinct CTFE
+provider and publication namespace; identity names explicit decisions, never
+struct padding or session pointers. Runtime-capable complete dev packs remain
+separate from CTFE-only offers. A shared producer uses the runtime-capable
+intersection; its evaluator may additionally splice CTFE-only code at the native
+consumer boundary. LLVM always retains source bodies.
+
+Fragment admission must also preserve the emitter's explicit context contract.
+CTFE hook arguments, mutable static-slot ordinals, and source/site ordinals are
+producer-local data, not persistent identities. Hook-bearing fragments cannot
+become runtime offers by dropping instrumentation or binding hooks to no-ops.
+Persistent CTFE code carries producer-owned checked/source and failure/site
+descriptors with explicit fixed-encoding context relocations. A complete
+semantic binding plan is admitted before body elision; executable construction
+binds its consumer-local IDs in owned bytes. Native failure and site registries
+preserve classification and observations without reconstructing erased LIR
+statements or inventing procedures. Missing provenance declines the whole
+serving closure, not unrelated offers beside it.
+
+Instrumented native static reads obtain storage from the active evaluator after
+producer demand completes. They never embed the emitting process's slot address:
+storage belongs to the evaluator lifetime, whereas a fragment may outlive its
+producer. The private demand hook returns that address under the native C ABI.
+Uninstrumented native and read-only object storage retain their existing
+contracts. Pack version 10 excludes the old hook ABI and requires positive
+emission provenance for current-context static reads, including symbolic native
+fragments; an enabled option alone is not a persistence proof.
+
+Raw packs are decoded, certified, then indexed before producer lookup. The
+producer supplies its checked module capability directly; an unpublished app
+artifact is not a reason to delay loading until after specialization. Exact
+checked-root layout/role certificates come from a type-only projection through
+ordinary lowering rules, never from reversing cached layouts into types or
+preparing source procedures. Unsupported callable-bearing, specialized-literal,
+unrooted, mismatched, or ambiguous storage declines the complete serving offer.
+
+Cached offers carry explicit checked-root demand before body retirement.
+Typed declarations survive to LIR as retained storage demand, independently of
+erased read statements. A root owns one failure-message slot across its value
+representations. Pending declarations demand their producer; completed values
+materialize from the owning ConstStore, and guarded failures retain archived
+message/classification plus semantic source provenance. The checked-cache
+schema fingerprint includes that pointer-free failure record. Bound guards use
+current slot publication origins and the full checked declaration authority,
+not only the batch of modules whose pending roots are being evaluated.
+Completed successes initialize the typed no-failure record, including canonical
+empty Str, before freezing; zero placeholders are not completed values. Reserved
+empty-list capacity is explicit ConstStore/native-export data, preserved through
+symbolic construction and target transcoding without reading process addresses.
+Erased-read storage demand belongs to CTFE consumers, not unrelated runtime
+continuations; runtime ownership adoption releases those retention marks.
+
+The persistent encoding canonicalizes context immediates, not diagnostic
+provenance. CTFE partials omit optional codegen debug-line entries whose file
+ordinals belong to the old program: executable CTFE diagnostics consume complete
+bound hook descriptors instead, and unwind/frame records remain carried.
+Complete runtime packs retain their debug-line contract unchanged.
+
+Admission propagates invalid node facts over the artifact dependency graph once.
+Checked-root demand is shared by recursive components and propagated over their
+condensed dependency graph once, rather than rediscovered at every lookup.
+Binding batches demanded roots by source set and clones only their union closure.
+Immutable callback catalogs export metadata only when emission requests it;
+ordinary native statements retain their existing ID prefix without a duplicated
+full failure record. These boundaries prevent cache hits from replacing
+specialization work with unrelated pack copying or large descriptor tables.
+
+CTFE provider selection covers complete serving closures before any early offer.
+One immutable canonical image owns each callable definition; identities alone
+cannot authorize replacing a runtime callee with an instrumented CTFE callee.
+The actual producer stamps structural callable ABI and final ARC compatibility,
+alongside definition-local emitter dependencies and context completeness.
+Unsupported contracts are explicitly non-interchangeable. Incompatible callee
+substitutions reject their callers before body elision, while complete compatible
+runtime provisions retain the shared early-elision capability. Runtime images
+never consume this CTFE-only canonical image. Source-local symbolic namespaces
+are resolved once, and admission, binding and placement share those edge facts.
+The declared consumer selects a coherent provision before indexing: shared native
+runtime consumers prefer complete runtime definitions, whereas standalone CTFE
+keeps its own definitions, including neutral definitions whose seed/callee
+contracts still belong to that namespace. Merely loading another pack namespace
+must not invalidate an independently valid serving closure. Preference never
+relaxes structural ABI, ARC, static-access, or seed compatibility.
 
 ## Checking Effects And Const Roots
 
@@ -1154,6 +1285,77 @@ replay order are explicit coordinator responsibilities. Successful compile-time
 message bytes. Cache hits replay that output alongside newly evaluated roots,
 sorted by module and root id; they do not rerun cached expressions. Cache
 validation checks the recorded root ids and message ranges before replay.
+
+#### Evaluation Demand And Runtime Continuation
+
+The demand-separated checking experiment has three distinct demands. Semantic
+demand names the program roots whose concrete type-dependent obligations must
+be validated. Evaluation demand names all checked compile-time roots and the
+execution closure required by obligations discovered under semantic demand.
+Optional runtime continuation demand names the procedures and static exports
+the selected runtime consumer needs. Removing runtime continuation must not
+remove semantic demand or change evaluation observations.
+
+The intended producer boundary is one exact instantiation plan per checked
+template, concrete type substitution, lexical evidence topology, and callable
+environment. A plan closes checked relations and publishes obligations before
+an executable body is emitted. Literal conversion, static dispatch and derived
+codec rejection, empirical match/destructure validation, pairing dependencies,
+and selected constant reads retain their checked owner, source location, and
+report destination. Runtime bodies, lambda lifting, lambda solving, and ARC
+are not a prerequisite for discovering these obligations.
+
+Checked per-template/per-scope summaries must explicitly cover callable flow
+through arguments, results, captures, local bindings, and value-producing
+expressions as well as direct procedure edges. A function type alone does not
+identify its callees. Instantiation consumes the existing checked relations and
+stamped dispatch plans; it does not reconstruct a second typing algorithm.
+Scope traversal preserves dispatch resolution order, including a rejected
+inner dispatch's contribution to enclosing divergence. Semantic reachability
+and executable reachability are separate facts, not source-body heuristics.
+
+Interface-constraint summaries are not semantic-completeness proofs. A closed
+procedure interface can contain obligations, and an unchanged interface summary
+can still represent newly required evaluation and diagnostic work. Semantic
+planning therefore owns a separate exact visited domain and obligation output;
+interface-cache hits must not bypass it. Recursive planning reaches a fixed
+point over explicit callable edges and retains all obligation observations.
+
+Only a complete upstream summary authorizes excluding a specialization from
+the executable preparation closure. Until that contract is implemented and
+verified, checking retains the complete program-root preparation; selecting
+only top-level constants would change language behavior.
+
+The initial proof domain is complete data-only runtime-root subtrees. Checking
+publishes a local capability from its scope-stamped typed-site inventory:
+literal bit/conversion production, dispatch, empirical patterns, default-field
+selection, control-flow observations, generalized local scopes, and indirect
+calls explicitly require the existing type/callable solution. Exact published
+procedure bindings connect local capabilities transitively; a recursive
+component is data-only only when every member and every outgoing dependency
+has that proof. Compile-time roots, test observations, pairing-dependent roots,
+and hosted procedures are never excluded by this rule.
+
+This domain authorizes whole-root omission before Monotype preparation; it
+does not authorize removing a data-only callee beneath a root that still needs
+solution. Such a root continues to request complete existing preparation.
+The trace therefore reports this domain as incomplete rather than inventing
+per-template omitted-body counts. Extending it requires the independent exact
+semantic-instantiation producer described above, not non-executable dummy
+bodies or another prepared-program cache.
+
+This whole-root domain is an unpublished experiment, not the completed demand
+split. The controlled ReleaseFast PG trial showed no material checking speedup.
+Its outcome and the unimplemented transfer contracts are recorded in
+`b-experiment-report.md`; the root-only approach is not recommended as the
+production solution.
+
+A build declares runtime continuation before planning. Its continuation uses
+the same producer/session, retained instantiation plans, and completed checked
+values; it does not rediscover the semantic graph through a second whole-program
+preparation. Plans own their graph-qualified types and evidence for that
+session. Persisted summaries use checked source/template and structural
+identities, never session-local dense IDs as semantic identities.
 
 Compile-time evaluation must evaluate every checked top-level expression and
 every selected compile-time root that can be evaluated without effectful calls

@@ -15,7 +15,7 @@
 //!
 //! One list shape gets the same treatment: an empty list lowers to the
 //! `with_capacity` it was evaluated with, so the request survives the freeze
-//! (a frozen descriptor cannot carry capacity) and the first append goes in
+//! (native export separates capacity from its descriptor) and the first append goes in
 //! place. A list with elements keeps its slot however uniform its contents:
 //! lowering it to a construction would allocate at every read, while a
 //! consumer that mutates what it read already receives a fresh unique list
@@ -495,7 +495,8 @@ pub const Decoder = struct {
     fn decodeList(self: *Decoder, data_export: ?*const Program.StaticDataExport, bytes: []const u8, offset: usize, value_layout: layout.Layout) ?Construction {
         if (value_layout.tag != .list) return null;
         if ((self.readWord(bytes, 1) orelse return null) != 0) return null;
-        var capacity: u64 = 0;
+        const encoded = self.readWord(bytes, 2) orelse return null;
+        var capacity: u64 = builtins.list.RocList.decodeCapacity(@intCast(encoded));
         if (data_export) |exported| {
             for (exported.empty_list_capacities) |item| {
                 if (item.offset == offset) capacity = item.capacity;

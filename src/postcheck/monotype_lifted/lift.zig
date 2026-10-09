@@ -513,6 +513,7 @@ const Lifter = struct {
                 .ty = request.ty,
                 .fn_id = fn_id,
                 .const_locator = request.const_locator,
+                .comptime_root = request.comptime_root,
             });
         }
 
@@ -2633,7 +2634,7 @@ test "lift owns transferred tables across every allocation failure" {
         .initializer = initializer,
     } } });
     const stmt = try source.addStmt(.{ .expr = value });
-    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0) });
+    const file = try source.addSourceFile(.{ .name = "App.roc", .qualified_name = "app/App.roc", .module_identity = @splat(0), .checked_module_key = null });
     const name = try source.names.internExportName("entry");
     try source.proc_debug_names.put(@enumFromInt(1), name);
     source.freeze();

@@ -362,6 +362,10 @@ const Lowerer = struct {
 
         try self.program.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.len);
         for (self.solved.layout_requests) |request| {
+            if (request.comptime_root != null) {
+                if (request.fn_id) |fn_id| _ = try self.ensureOwnFnSpec(fn_id, .finite);
+                continue;
+            }
             try self.program.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),

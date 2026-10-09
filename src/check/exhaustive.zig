@@ -1210,7 +1210,7 @@ fn recordRowStep(type_store: *TypeStore, content: types.Content) RecordRowStep {
             .{ .fields = flat.record.fields, .next = flat.record.ext }
         else
             .{},
-        else => .{},
+        .flex, .rigid, .field_presence, .err => .{},
     };
 }
 
@@ -1357,9 +1357,9 @@ const InhabitedGraph = struct {
                         .nominal_type => |nominal| if (try openNominalBacking(self.store, self.idents, nominal)) |backing| {
                             next = .{ .root = backing, .role = .union_shape };
                         },
-                        else => {},
+                        .record, .tuple, .fn_pure, .fn_effectful, .fn_unbound, .empty_record, .empty_tag_union => {},
                     },
-                    else => {},
+                    .flex, .rigid, .field_presence, .err => {},
                 }
             } else {
                 switch (content) {
@@ -4370,7 +4370,7 @@ fn formatPatternNode(
     }
 }
 
-fn resultAllocationFailureCase(gpa: Allocator) !void {
+fn resultAllocationFailureCase(gpa: Allocator) (Allocator.Error || Ident.Error || error{TestExpectedEqual})!void {
     var idents = try Ident.Store.initCapacity(std.testing.allocator, 1);
     defer idents.deinit(std.testing.allocator);
     const name = try idents.insert(std.testing.allocator, try Ident.from_bytes("field"));
@@ -4412,11 +4412,11 @@ test "nominal views result ownership cleans up every allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, resultAllocationFailureCase, .{});
 }
 
-fn inhabitedGraphAllocationCase(gpa: Allocator) !void {
+fn inhabitedGraphAllocationCase(gpa: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     try inhabitedGraphDiamondCase(gpa, 12, false);
 }
 
-fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive_first: bool) !void {
+fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive_first: bool) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
     var store = try types.Store.initCapacity(gpa, 300, 0);
     defer store.deinit();
@@ -4511,7 +4511,7 @@ test "nominal views all inhabitedness modes solve recursive diamonds in graph-li
     try inhabitedGraphDiamondCase(std.testing.allocator, 128, true);
 }
 
-fn inhabitedWitnessCase(graph_allocator: Allocator) !void {
+fn inhabitedWitnessCase(graph_allocator: Allocator) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
     var store = try types.Store.initCapacity(gpa, 32, 0);
     defer store.deinit();
@@ -4758,7 +4758,7 @@ test "nominal views inhabitedness graph cleans up every allocation failure" {
 
 /// Constructed Store regressions, not a claim that source checking preserves
 /// these particular row shapes. Keep reader allocations outside graph failures.
-fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) !void {
+fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     const gpa = std.testing.allocator;
     var store = try types.Store.initCapacity(gpa, 32, 0);
     defer store.deinit();
@@ -4861,7 +4861,7 @@ test "nominal views record rows clean up every graph allocation failure" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, inhabitedRecordRowsCase, .{@as(usize, 2)});
 }
 
-fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) !void {
+fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocator.Error || Ident.Error || error{TestExpectedEqual})!void {
     const gpa = std.testing.allocator;
     var store = try types.Store.initCapacity(gpa, 8, 0);
     defer store.deinit();

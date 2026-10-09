@@ -25,6 +25,7 @@ const StaticDataImage = @import("StaticDataImage.zig").StaticDataImage;
 const relocation_mod = @import("Relocation.zig");
 const ExecutableMemory = @import("ExecutableMemory.zig").ExecutableMemory;
 const SpliceSource = @import("ObjectFileCompiler.zig").SpliceSource;
+const LocatedArtifact = @import("ObjectFileCompiler.zig").LocatedArtifact;
 const spliceExternalProcs = @import("ObjectFileCompiler.zig").spliceExternalProcs;
 
 const Allocator = std.mem.Allocator;
@@ -80,6 +81,11 @@ pub const HostSplice = struct {
         self.comptime_hooks = hooks;
     }
 
+    /// Compiler-private ABI names cannot be runtime artifact provisions.
+    pub fn isComptimeHookSymbol(name: []const u8) bool {
+        return ComptimeHook.fromName(name) != null;
+    }
+
     /// Copy explicit symbol bindings, not data. The image allocation must outlive
     /// the executable, but neither this image struct nor its export names must.
     /// Range-limited code references reach these addresses through carried pointer
@@ -114,15 +120,48 @@ pub const HostSplice = struct {
     /// into the open code generator, before the program's own procedures
     /// compile.
     pub fn spliceExternal(self: *HostSplice, codegen: *HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, source: SpliceSource) Allocator.Error!void {
+        return self.spliceExternalBound(codegen, demand, source, null);
+    }
+
+    pub const ContextBinder = struct {
+        context: *anyopaque,
+        /// One atomic batch: allocate and bind all selected serving closures
+        /// before the object splice can expose any of their bytes.
+        prepare: *const fn (*anyopaque, []const LocatedArtifact) Allocator.Error![]const LocatedArtifact,
+    };
+
+    pub fn spliceExternalBound(self: *HostSplice, codegen: *HostLirCodeGen, demand: []const lir.LIR.LirProcSpecId, source: SpliceSource, context_binder: ?ContextBinder) Allocator.Error!void {
         var external = std.ArrayList(lir.LIR.LirProcSpecId).empty;
         defer external.deinit(self.allocator);
         for (demand) |proc_id| {
             if (codegen.store.getProcSpec(proc_id).external) try external.append(self.allocator, proc_id);
         }
         if (external.items.len == 0) return;
+        const BoundSource = struct {
+            artifacts: std.AutoHashMap(lir.ProcIdentity, LocatedArtifact),
+
+            fn find(context: *anyopaque, identity: lir.ProcIdentity) ?LocatedArtifact {
+                const bound_source: *@This() = @ptrCast(@alignCast(context));
+                return bound_source.artifacts.get(identity);
+            }
+        };
+        var bound = BoundSource{ .artifacts = std.AutoHashMap(lir.ProcIdentity, LocatedArtifact).init(self.allocator) };
+        defer bound.artifacts.deinit();
+        var selected_source = source;
+        if (context_binder) |binder| {
+            const located = try self.allocator.alloc(LocatedArtifact, external.items.len);
+            defer self.allocator.free(located);
+            for (external.items, located) |id, *artifact| {
+                artifact.* = source.find(source.context, codegen.store.getProcSpec(id).identity) orelse unreachable;
+            }
+            const prepared = try binder.prepare(binder.context, located);
+            std.debug.assert(prepared.len == located.len);
+            for (external.items, prepared) |id, artifact| try bound.artifacts.put(codegen.store.getProcSpec(id).identity, artifact);
+            selected_source = .{ .context = &bound, .find = BoundSource.find };
+        }
         var carried = std.ArrayList(ProcArtifact.DataItem).empty;
         defer carried.deinit(self.allocator);
-        try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, source, &carried);
+        try spliceExternalProcs(HostLirCodeGen, self.allocator, codegen, codegen.store.getProcSpecs(), external.items, selected_source, &carried);
         try self.addDataItems(carried.items);
         self.spliced_procs += external.items.len;
     }
@@ -481,7 +520,9 @@ test "a stub jumps to its target" {
 test "comptime hook bindings are explicit for every private ABI symbol" {
     const Hooks = struct {
         var exited: bool = false;
-        fn ensure(_: u32) callconv(.c) void {}
+        fn ensure(_: u32) callconv(.c) usize {
+            return 0;
+        }
         fn branch(_: u32, _: u32) callconv(.c) void {}
         fn exhaustive(_: u32) callconv(.c) void {}
         fn region(_: u32, _: u32, _: u32, _: u32, _: u32, _: u32) callconv(.c) void {}

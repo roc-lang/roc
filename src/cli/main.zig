@@ -255,20 +255,1097 @@ const CompileTimeObjectCache = struct {
     allocator: Allocator,
     io: std.Io,
     store: pack_store.Store,
+    ctfe_store: ?pack_store.Store = null,
     packs: pack_store.LoadedPacks,
+    runtime_packs: pack_store.LoadedPacks,
+    runtime_enabled: bool = true,
+    chosen: std.AutoHashMapUnmanaged(lir.ProcIdentity, Chosen) = .{},
+    canonical: ?backend.dev.ArtifactClosure.Canonical = null,
+    canonical_sources: std.AutoHashMapUnmanaged(*const backend.dev.ProcArtifact.Set, u32) = .{},
+    canonical_runtime_sources: std.AutoHashMapUnmanaged(u32, void) = .{},
+    checked_root_uses: []const []const postcheck.Common.CheckedRootUse = &.{},
+    certified_roots: ?eval.NativeContext.RootIndex = null,
+    eligibility: std.AutoHashMapUnmanaged(*const backend.dev.ProcArtifact.Set, []bool) = .{},
+    prepared: bool = false,
+    build_env: ?*BuildEnv = null,
+    declared_root: ?*const check.CheckedArtifact.CheckedModuleArtifact = null,
+    policy: lir.CheckedPipeline.SolvedPolicy = defaultPolicy(),
+    preference: backend.dev.ArtifactClosure.Preference = .ctfe,
+    alternatives: std.ArrayList(*CompileTimeObjectCache) = .empty,
+    publications: std.ArrayList(Publication) = .empty,
+
+    const Chosen = struct {
+        hit: postcheck.Common.SpecCacheHit,
+        artifact: backend.dev.LocatedArtifact,
+    };
+
+    const Publication = struct {
+        placement: BuildEnv.PackPlacement,
+        key: [32]u8,
+        bytes: []u8,
+    };
+
+    fn defaultPolicy() lir.CheckedPipeline.SolvedPolicy {
+        return lir.CheckedPipeline.SolvedPolicy.dev();
+    }
+
+    fn modeName(allocator: Allocator, policy: lir.CheckedPipeline.SolvedPolicy) Allocator.Error![]u8 {
+        return std.fmt.allocPrint(allocator, "ctfe-v1-{s}-{s}-{d}", .{
+            @tagName(policy.inline_mode),
+            @tagName(policy.spec_constr_clone_inlining),
+            @intFromBool(policy.keep_specialization_procs),
+        });
+    }
+
+    fn view(self: *CompileTimeObjectCache) eval.CompileTimeFinalization.CompileTimeObjectCache {
+        return .{
+            .spec_cache = .{ .context = self, .find = findSpec },
+            .splice_source = .{ .context = self, .find = findArtifact },
+            .provision = .host_ctfe_objects,
+            .runtime_share = if (self.runtime_enabled) .{
+                .complete_runtime = self.runtime_packs.specCacheLookup(),
+                .intersection = self.sharedSpecCacheLookup(),
+            } else null,
+            .select_policy = .{ .context = self, .select = selectPolicy },
+            .capture = .{ .context = self, .retain = capture },
+        };
+    }
 
     fn bind(context: *anyopaque, build_env: *BuildEnv) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
-        self.packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
+        self.build_env = build_env;
+        if (self.ctfe_store) |*store| self.packs.pending = .{ .store = store, .io = self.io, .build_env = build_env };
+        self.runtime_packs.pending = .{ .store = &self.store, .io = self.io, .build_env = build_env };
+    }
+
+    fn selectPolicy(context: *anyopaque, policy: lir.CheckedPipeline.SolvedPolicy, modules: lir.CheckedPipeline.CheckedModuleSet, native_runtime: bool) Allocator.Error!eval.CompileTimeFinalization.CompileTimeObjectCache {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        const preference: backend.dev.ArtifactClosure.Preference = if (native_runtime) .complete_runtime else .ctfe;
+        if (std.meta.eql(self.policy, policy)) {
+            std.debug.assert(!self.prepared or self.preference == preference);
+            self.preference = preference;
+            self.declared_root = modules.root.module;
+            try self.prepare();
+            return self.view();
+        }
+        for (self.alternatives.items) |alternative| {
+            if (std.meta.eql(alternative.policy, policy)) {
+                std.debug.assert(!alternative.prepared or alternative.preference == preference);
+                alternative.preference = preference;
+                alternative.declared_root = modules.root.module;
+                try alternative.prepare();
+                return alternative.view();
+            }
+        }
+        // Only explicitly selected policies are opened. Default host-dev packs
+        // retain their existing namespace and exact shared-provider capability.
+        const mode = try modeName(self.allocator, policy);
+        defer self.allocator.free(mode);
+        const config = CacheConfig{
+            .enabled = true,
+            .verbose = self.store.verbose,
+            .roc_ctx = self.store.roc_ctx,
+        };
+        var transferred = false;
+        var store = pack_store.Store.init(self.allocator, config, RocTarget.detectNative(), mode) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // The parent provider already established the same cache root.
+            error.NoHomeDirectory => unreachable,
+        };
+        errdefer if (!transferred) store.deinit();
+        const alternative = try self.allocator.create(CompileTimeObjectCache);
+        errdefer if (!transferred) self.allocator.destroy(alternative);
+        alternative.* = .{
+            .allocator = self.allocator,
+            .io = self.io,
+            .store = .{
+                .allocator = self.allocator,
+                .roc_ctx = self.store.roc_ctx,
+                .root = try self.allocator.dupe(u8, self.store.root),
+                .verbose = self.store.verbose,
+            },
+            .ctfe_store = store,
+            .packs = pack_store.LoadedPacks.init(self.allocator),
+            .runtime_packs = pack_store.LoadedPacks.init(self.allocator),
+            .runtime_enabled = false,
+            .policy = policy,
+            .preference = preference,
+            .declared_root = modules.root.module,
+        };
+        errdefer if (!transferred) alternative.store.deinit();
+        alternative.packs.admission = .{ .context = alternative, .prepare = prepareAdmission, .accept = admit };
+        bind(alternative, self.build_env.?);
+        try self.alternatives.append(self.allocator, alternative);
+        transferred = true;
+        try alternative.prepare();
+        return alternative.view();
+    }
+
+    fn prepare(self: *CompileTimeObjectCache) Allocator.Error!void {
+        if (self.prepared) return;
+        if (self.declared_root) |root| {
+            self.packs.ensureLoadedFor(root);
+            if (self.runtime_enabled) self.runtime_packs.ensureLoadedFor(root);
+        } else {
+            self.packs.ensureLoaded();
+            if (self.runtime_enabled) self.runtime_packs.ensureLoaded();
+        }
+        if (self.packs.state == .pending or (self.runtime_enabled and self.runtime_packs.state == .pending)) return;
+        self.chosen.clearRetainingCapacity();
+        if (self.runtime_enabled and self.runtime_packs.state == .ready) {
+            var hits = self.runtime_packs.specs.valueIterator();
+            while (hits.next()) |hit| {
+                const identity = lir.ProcIdentity{ .bytes = hit.identity };
+                try self.chosen.put(self.allocator, identity, .{ .hit = hit.*, .artifact = self.runtime_packs.artifacts.get(identity).? });
+            }
+        }
+        if (self.packs.state == .ready) {
+            var hits = self.packs.specs.valueIterator();
+            while (hits.next()) |hit| {
+                const identity = lir.ProcIdentity{ .bytes = hit.identity };
+                try self.chosen.put(self.allocator, identity, .{ .hit = hit.*, .artifact = self.packs.artifacts.get(identity).? });
+            }
+        }
+        var sources = std.ArrayList(*const backend.dev.ProcArtifact.Set).empty;
+        defer sources.deinit(self.allocator);
+        self.canonical_sources.clearRetainingCapacity();
+        self.canonical_runtime_sources.clearRetainingCapacity();
+        var choices = self.chosen.valueIterator();
+        while (choices.next()) |choice| {
+            const entry = try self.canonical_sources.getOrPut(self.allocator, choice.artifact.set);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(sources.items.len);
+                try sources.append(self.allocator, choice.artifact.set);
+            }
+        }
+        // Include runtime siblings even when a CTFE root supersedes their
+        // offer: shared early elision must certify that original caller graph.
+        var runtime_artifacts = self.runtime_packs.artifacts.valueIterator();
+        while (runtime_artifacts.next()) |artifact| {
+            const entry = try self.canonical_sources.getOrPut(self.allocator, artifact.set);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = @intCast(sources.items.len);
+                try sources.append(self.allocator, artifact.set);
+            }
+            try self.canonical_runtime_sources.put(self.allocator, entry.value_ptr.*, {});
+        }
+        if (self.canonical) |*previous| previous.deinit();
+        self.canonical = null;
+        self.canonical = try backend.dev.ArtifactClosure.canonicalizePreferred(self.allocator, sources.items, self, nodeAdmitted, self.preference);
+        for (self.checked_root_uses) |uses| self.allocator.free(uses);
+        self.allocator.free(self.checked_root_uses);
+        self.checked_root_uses = &.{};
+        var graph = try backend.dev.ArtifactClosure.init(self.allocator, &self.canonical.?.set);
+        defer graph.deinit();
+        self.checked_root_uses = try collectCheckedRootUses(self.allocator, &graph);
+        choices = self.chosen.valueIterator();
+        while (choices.next()) |choice| {
+            if (self.canonicalIndex(choice.artifact)) |index| {
+                choice.artifact = .{ .set = &self.canonical.?.set, .index = index };
+                choice.hit.checked_root_uses = self.checked_root_uses[index];
+            }
+        }
+        // An unusable CTFE offer cannot hide the historical full-native
+        // provider. This is selection among already-certified provisions, not
+        // substitution of incompatible callee code.
+        var runtime_hits = self.runtime_packs.specs.valueIterator();
+        while (runtime_hits.next()) |hit| {
+            const identity = lir.ProcIdentity{ .bytes = hit.identity };
+            const choice = self.chosen.getPtr(identity).?;
+            if (choice.artifact.set == &self.canonical.?.set) continue;
+            const original = self.runtime_packs.artifacts.get(identity).?;
+            if (self.canonicalIndex(original)) |index| {
+                choice.* = .{ .hit = hit.*, .artifact = .{ .set = &self.canonical.?.set, .index = index } };
+            }
+        }
+        // Canonical CTFE admission never changes the complete runtime provider.
+        // Shared body elision uses a distinct intersection capability instead.
+        self.prepared = true;
+    }
+
+    fn sharedSpecCacheLookup(self: *CompileTimeObjectCache) postcheck.Common.SpecCacheLookup {
+        return .{ .context = self, .find = findSharedSpec };
+    }
+
+    fn findSharedSpec(context: *anyopaque, key: [32]u8, relation: ?[32]u8) ?postcheck.Common.SpecCacheHit {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (!self.prepared or !self.runtime_enabled) return null;
+        const hit = self.runtime_packs.specCacheLookup().lookup(key, relation) orelse return null;
+        const identity = lir.ProcIdentity{ .bytes = hit.identity };
+        const original = self.runtime_packs.artifacts.get(identity) orelse return null;
+        const chosen = self.chosen.get(identity) orelse return null;
+        if (self.canonicalIndex(original) == null or !sameSignature(chosen.hit, hit)) return null;
+        return hit;
+    }
+
+    fn canonicalIndex(self: *const CompileTimeObjectCache, original: backend.dev.LocatedArtifact) ?u32 {
+        const image = self.canonical orelse return null;
+        const source = self.canonical_sources.get(original.set) orelse return null;
+        return image.old_to_new[image.source_offsets[source] + original.index];
+    }
+
+    fn sameSignature(left: postcheck.Common.SpecCacheHit, right: postcheck.Common.SpecCacheHit) bool {
+        return std.meta.eql(left.platform_requirement_relation, right.platform_requirement_relation) and
+            left.rc_borrowed_params == right.rc_borrowed_params and
+            left.rc_ret_borrowed == right.rc_ret_borrowed and
+            left.rc_ret_lenders == right.rc_ret_lenders and
+            left.rc_read_only_params == right.rc_read_only_params and
+            left.rc_ret_unique == right.rc_ret_unique and
+            left.rc_ret_unique_fields == right.rc_ret_unique_fields and
+            std.mem.eql(u32, left.rc_ret_conditions, right.rc_ret_conditions);
+    }
+
+    fn findSpec(context: *anyopaque, key: [32]u8, relation: ?[32]u8) ?postcheck.Common.SpecCacheHit {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (!self.prepared) return null;
+        if (self.packs.specCacheLookup().lookup(key, relation)) |hit| {
+            const identity = lir.ProcIdentity{ .bytes = hit.identity };
+            const chosen = self.chosen.get(identity).?;
+            if (self.canonicalIndex(self.packs.artifacts.get(identity).?) != null and sameSignature(chosen.hit, hit)) return chosen.hit;
+        }
+        if (self.runtime_enabled) {
+            if (self.runtime_packs.specCacheLookup().lookup(key, relation)) |hit| {
+                const identity = lir.ProcIdentity{ .bytes = hit.identity };
+                const chosen = self.chosen.get(identity).?;
+                if (self.canonicalIndex(self.runtime_packs.artifacts.get(identity).?) != null and sameSignature(chosen.hit, hit)) return chosen.hit;
+            }
+        }
+        return null;
+    }
+
+    fn findArtifact(context: *anyopaque, identity: lir.ProcIdentity) ?backend.dev.LocatedArtifact {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (!self.prepared) return null;
+        const chosen = self.chosen.get(identity) orelse return null;
+        if (chosen.artifact.set != &self.canonical.?.set) return null;
+        // Count actual service from the selected original pack, not admission
+        // attempts or an artifact's runtime-looking semantic domain.
+        const original_source = self.canonical.?.new_to_source[chosen.artifact.index];
+        if (self.canonical_runtime_sources.contains(original_source)) {
+            self.runtime_packs.artifacts_served += 1;
+        } else {
+            self.packs.artifacts_served += 1;
+        }
+        return chosen.artifact;
+    }
+
+    fn declaredArtifact(self: *const CompileTimeObjectCache, identity: [32]u8) ?*const check.CheckedArtifact.CheckedModuleArtifact {
+        if (self.declared_root) |root| if (std.mem.eql(u8, &root.key.bytes, &identity)) return root;
+        return self.build_env.?.activeArtifactByIdentity(identity);
+    }
+
+    fn sourceAdmitted(self: *const CompileTimeObjectCache, source: backend.dev.CtfeContext.SourceDescriptor) bool {
+        if (!source.has_location) return false;
+        const artifact = self.declaredArtifact(source.checked_module) orelse return false;
+        return std.mem.eql(u8, &artifact.key.module_identity_hash, &source.source_identity) and
+            source.region.start.offset <= source.region.end.offset and
+            source.region.end.offset <= artifact.moduleEnvConst().getSourceAll().len;
+    }
+
+    fn literalAdmitted(self: *const CompileTimeObjectCache, literal: backend.dev.CtfeContext.LiteralDescriptor) bool {
+        const artifact = self.declaredArtifact(literal.checked_module) orelse return false;
+        return literal.checked_expr < artifact.checked_bodies.exprCount();
+    }
+
+    fn rootDeclared(self: *const CompileTimeObjectCache, descriptor: backend.dev.CtfeContext.RootDescriptor) bool {
+        const root_id = switch (descriptor.producer) {
+            .checked => |id| id,
+            // No instance-specific literal declaration is carried by an offer.
+            .literal => return false,
+        };
+        const artifact = self.declaredArtifact(descriptor.module) orelse return false;
+        if (root_id >= artifact.compile_time_roots.roots.len) return false;
+        const root = artifact.compile_time_roots.root(@enumFromInt(root_id));
+        if (root.request_eligibility != .eligible) return false;
+        return switch (root.payload) {
+            .pending, .const_node => true,
+            .runtime => root.guarded and root.failure != null,
+            .fn_value, .discarded, .expect => false,
+        };
+    }
+
+    fn rootAdmitted(self: *const CompileTimeObjectCache, descriptor: backend.dev.CtfeContext.RootDescriptor) bool {
+        const index = if (self.certified_roots) |*index| index else return false;
+        const accepted = self.rootDeclared(descriptor) and index.resolve(descriptor) != null;
+        if (!accepted and std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("ctfe root rejected {any}\n", .{descriptor});
+        return accepted;
+    }
+
+    /// Project only producer-declared checked-root types through ordinary layout
+    /// rules before any offer can erase a body. No root procedure is prepared.
+    fn certifyRootDeclarations(self: *CompileTimeObjectCache, sources: []const *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+        const Use = postcheck.Common.CheckedRootUse;
+        var groups = std.AutoHashMap([32]u8, std.AutoHashMap(u32, void)).init(self.allocator);
+        defer {
+            var lists = groups.valueIterator();
+            while (lists.next()) |list| list.deinit();
+            groups.deinit();
+        }
+        for (sources) |source| for (source.artifacts) |artifact| for (artifact.context_bindings) |binding| {
+            const root = switch (binding) {
+                .static_root => |root| root,
+                .failure => |failure| failure.guard_root orelse continue,
+                else => continue,
+            };
+            if (!self.rootDeclared(root)) continue;
+            const group = try groups.getOrPut(root.module);
+            if (!group.found_existing) group.value_ptr.* = std.AutoHashMap(u32, void).init(self.allocator);
+            try group.value_ptr.put(root.producer.checked, {});
+        };
+        var descriptors = std.ArrayList(?backend.dev.CtfeContext.RootDescriptor).empty;
+        defer descriptors.deinit(self.allocator);
+        var entries = groups.iterator();
+        while (entries.next()) |entry| {
+            const artifact = self.declaredArtifact(entry.key_ptr.*).?;
+            const imports = try self.build_env.?.collectImportedArtifactViews(self.allocator, artifact);
+            defer self.allocator.free(imports);
+            const relations = try self.build_env.?.collectRelationArtifactViews(self.allocator, artifact);
+            defer self.allocator.free(relations);
+            var requests = std.ArrayList(Use).empty;
+            defer requests.deinit(self.allocator);
+            var ids = entry.value_ptr.keyIterator();
+            while (ids.next()) |id| try requests.append(self.allocator, .{ .module = entry.key_ptr.*, .root = id.* });
+            var declaration = lir.CheckedPipeline.lowerCheckedModulesToLir(
+                self.allocator,
+                .{ .root = check.CheckedArtifact.loweringViewWithRelations(artifact, relations), .imports = imports },
+                .{ .cached_root_declarations = requests.items },
+                .{ .checked_module_state = .checking_finalization, .comptime_value_reads = true },
+            ) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => unreachable,
+            };
+            defer declaration.deinit();
+            const failures = try eval.NativeContext.FailureRegistry.create(self.allocator, &declaration.lir_result);
+            defer failures.deinit();
+            const catalog = try eval.NativeContext.Catalog.init(self.allocator, &declaration.lir_result, failures);
+            defer catalog.deinit();
+            if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("ctfe root projection module={x} requested={d} slots={d}\n", .{ entry.key_ptr.*, requests.items.len, catalog.roots.len });
+            try descriptors.appendSlice(self.allocator, catalog.roots);
+        }
+        if (self.certified_roots) |*previous| previous.deinit();
+        self.certified_roots = null;
+        self.certified_roots = try eval.NativeContext.RootIndex.init(self.allocator, descriptors.items);
+    }
+
+    fn bindingAdmitted(self: *const CompileTimeObjectCache, binding: backend.dev.CtfeContext.Binding) bool {
+        return switch (binding) {
+            .source_file => |source| self.sourceAdmitted(source),
+            .failure => |failure| self.sourceAdmitted(failure.source) and
+                (failure.guard_root == null or self.rootAdmitted(failure.guard_root.?)) and
+                (failure.literal_rejection == null or self.literalAdmitted(failure.literal_rejection.?)),
+            .site => |site| blk: {
+                const artifact = self.declaredArtifact(site.checked_module) orelse break :blk false;
+                if (site.checked_site) |checked_site| {
+                    if (checked_site >= artifact.exhaustiveness_sites.sites.len) break :blk false;
+                }
+                if (site.region.start.offset > site.region.end.offset or site.region.end.offset > artifact.moduleEnvConst().getSourceAll().len) break :blk false;
+                for (site.branch_regions) |region| {
+                    if (region.start.offset > region.end.offset or region.end.offset > artifact.moduleEnvConst().getSourceAll().len) break :blk false;
+                }
+                break :blk true;
+            },
+            .static_root => |root| self.rootAdmitted(root),
+        };
+    }
+
+    fn policyAdmitted(self: *const CompileTimeObjectCache, artifact: backend.dev.ProcArtifact.Artifact) bool {
+        if (!artifact.context_complete) return false;
+        for (artifact.context_bindings) |binding| {
+            const root = switch (binding) {
+                .static_root => |root| root,
+                .failure => |failure| failure.guard_root orelse continue,
+                else => continue,
+            };
+            if (root.producer != .checked) return false;
+        }
+        const contract = artifact.context_contract orelse return false;
+        const dependencies = artifact.context_dependencies orelse return false;
+        if (contract.target != RocTarget.detectNative().defaultCpuTarget() or contract.hot_reload) return false;
+        // Complete runtime packs retain their existing host provision. Their
+        // immutable data and dynamic seed symbols bind through HostSplice.
+        if (artifact.domain == .runtime and contract.static_data_readonly and !contract.hooks_enabled) {
+            return std.meta.eql(self.policy, defaultPolicy()) and
+                contract.cpu_level == RocTarget.detectNative().cpuLevel() and
+                !dependencies.comptime_hooks and artifact.context_bindings.len == 0;
+        }
+        return contract.cpu_level == roc_target.host_cpu.level() and
+            contract.hooks_enabled and !contract.default_platform_runtime and
+            contract.dict_seed_mode == .comptime_zero and !contract.initialize_boxy_runtime and
+            !contract.static_data_readonly and
+            (!dependencies.static_data or dependencies.static_data_access == .current_context) and
+            !dependencies.boxy_runtime and !dependencies.boxy_runtime_entry and
+            (artifact.domain == .ctfe) == dependencies.comptime_hooks;
+    }
+
+    fn nodeAdmitted(context: *anyopaque, artifact: backend.dev.ProcArtifact.Artifact) bool {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (!self.policyAdmitted(artifact)) return false;
+        for (artifact.context_bindings) |binding| if (!self.bindingAdmitted(binding)) return false;
+        return true;
+    }
+
+    fn prepareAdmission(context: *anyopaque, sources: []const *const backend.dev.ProcArtifact.Set) Allocator.Error!void {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (std.c.getenv("ROC_PACK_TRACE") != null) std.debug.print("ctfe admission raw-packs={d}\n", .{sources.len});
+        try self.certifyRootDeclarations(sources);
+    }
+
+    fn admit(context: *anyopaque, set: *const backend.dev.ProcArtifact.Set, root: u32) Allocator.Error!bool {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        if (self.eligibility.get(set)) |valid| return valid[root];
+        var closure = try backend.dev.ArtifactClosure.init(self.allocator, set);
+        defer closure.deinit();
+        const valid = try closure.admit(self, nodeAdmitted);
+        errdefer self.allocator.free(valid);
+        try self.eligibility.put(self.allocator, set, valid);
+        return valid[root];
+    }
+
+    fn capture(context: *anyopaque, artifact: *const check.CheckedArtifact.CheckedModuleArtifact, lowered: *const lir.CheckedPipeline.LoweredProgram, retained: *const backend.dev.NativeProcCompiler.Retained, cached_roots: []const backend.dev.LocatedArtifact) Allocator.Error!void {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        const build_env = self.build_env.?;
+        var sets = std.ArrayList(*const backend.dev.ProcArtifact.Set).empty;
+        defer sets.deinit(self.allocator);
+        const keyed = try self.allocator.alloc(bool, lowered.lir_result.store.getProcSpecs().len);
+        defer self.allocator.free(keyed);
+        @memset(keyed, false);
+        for (lowered.lir_result.spec_procs.items) |spec| keyed[@intFromEnum(spec.proc)] = true;
+        const generated = try self.allocator.alloc(bool, keyed.len);
+        defer self.allocator.free(generated);
+        @memset(generated, false);
+        var generated_offer = false;
+        for (retained.procedures.items) |*proc| {
+            var eligible = true;
+            for (proc.fragment.set.artifacts) |member| eligible = eligible and self.policyAdmitted(member);
+            if (std.c.getenv("ROC_PACK_TRACE") != null and !eligible) {
+                std.debug.print("ctfe withheld {s} context={any}\n", .{
+                    lowered.lir_result.store.procDebugName(proc.id) orelse "",
+                    proc.fragment.context_dependencies,
+                });
+                for (proc.fragment.set.artifacts) |member| std.debug.print("ctfe contract domain={s} complete={} contract={any} dependencies={any}\n", .{
+                    @tagName(member.domain),
+                    member.context_complete,
+                    member.context_contract,
+                    member.context_dependencies,
+                });
+            }
+            if (eligible) {
+                generated_offer = generated_offer or keyed[@intFromEnum(proc.id)];
+                generated[@intFromEnum(proc.id)] = true;
+                try sets.append(self.allocator, &proc.fragment.set);
+            }
+        }
+        for (retained.helpers.items) |*helper| {
+            var eligible = true;
+            for (helper.fragment.set.artifacts) |member| eligible = eligible and self.policyAdmitted(member);
+            if (eligible) try sets.append(self.allocator, &helper.fragment.set);
+        }
+        if (!generated_offer) return;
+        var dependency_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer dependency_arena.deinit();
+        const a = dependency_arena.allocator();
+        const Group = struct {
+            set: *const backend.dev.ProcArtifact.Set,
+            roots: std.ArrayList(u32) = .empty,
+        };
+        var groups = std.ArrayList(Group).empty;
+        var group_index = std.AutoHashMap(*const backend.dev.ProcArtifact.Set, usize).init(self.allocator);
+        defer group_index.deinit();
+        for (cached_roots) |cached| {
+            const entry = try group_index.getOrPut(cached.set);
+            if (!entry.found_existing) {
+                entry.value_ptr.* = groups.items.len;
+                try groups.append(a, .{ .set = cached.set });
+            }
+            try groups.items[entry.value_ptr.*].roots.append(a, cached.index);
+        }
+        var dependencies = std.ArrayList(backend.dev.ArtifactClosure.Selection).empty;
+        defer {
+            for (dependencies.items) |*dependency| dependency.deinit();
+            dependencies.deinit(self.allocator);
+        }
+        for (groups.items) |group| {
+            var closure = try backend.dev.ArtifactClosure.init(self.allocator, group.set);
+            defer closure.deinit();
+            const placed = try closure.ofMany(group.roots.items);
+            std.debug.assert(closure.complete);
+            const marked = try a.alloc(bool, group.set.artifacts.len);
+            @memset(marked, false);
+            for (placed) |index| marked[index] = true;
+            var selected = try backend.dev.ArtifactClosure.selectMarked(self.allocator, group.set, marked);
+            dependencies.append(self.allocator, selected) catch |err| {
+                selected.deinit();
+                return err;
+            };
+        }
+        // Freeze dependency collection before borrowing pointers into it.
+        for (dependencies.items) |*dependency| try sets.append(self.allocator, &dependency.set);
+        var set = try backend.dev.ProcArtifact.combine(self.allocator, sets.items);
+        defer set.deinit();
+        // CTFE emits no debug-line image. Hook descriptors carry authoritative
+        // diagnostic provenance; raw codegen line ordinals are not persistent.
+        omitCtfeDebugLines(&set);
+        var encoding = try PackEncodingPlan.init(self.allocator, &set, lowered);
+        defer encoding.deinit();
+        const requester = check.CheckedArtifact.ModuleId{ .bytes = artifact.key.bytes };
+        const builtin_owner = check.CheckedArtifact.ModuleId{ .bytes = build_env.builtin_modules.checked_artifact.key.bytes };
+        var owners = std.AutoHashMap(check.CheckedArtifact.ModuleId, void).init(self.allocator);
+        defer owners.deinit();
+        for (lowered.lir_result.spec_procs.items) |spec| {
+            if (!generated[@intFromEnum(spec.proc)]) continue;
+            if (cachePublicationOwner(spec.owner, requester, builtin_owner)) |owner| try owners.put(owner, {});
+        }
+        var owner_keys = owners.keyIterator();
+        while (owner_keys.next()) |owner| {
+            const producer = if (owner.eql(requester)) artifact else self.declaredArtifact(owner.bytes) orelse continue;
+            const placement = build_env.packPlacementForArtifactKey(producer.key) orelse continue;
+            const bytes = try packFileBytesFiltered(self.allocator, &set, lowered, .{
+                .generated_roots = generated,
+                .checked_owner = owner.*,
+                .requester = requester,
+                .builtin_owner = builtin_owner,
+            }, &encoding);
+            errdefer self.allocator.free(bytes);
+            // Stage only offers owned by this immutable checked module. App
+            // edits must not hide an imported helper in the old app namespace.
+            var decoded = backend.dev.PackFile.read(self.allocator, bytes) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.MalformedPack, error.UnsupportedPackVersion => unreachable,
+            };
+            defer decoded.deinit();
+            if (decoded.specs.len == 0) {
+                self.allocator.free(bytes);
+                continue;
+            }
+            try self.publications.append(self.allocator, .{
+                .placement = placement,
+                .key = producer.codeGenerationKey().bytes,
+                .bytes = bytes,
+            });
+        }
+    }
+
+    fn finish(context: *anyopaque, accepted: bool) void {
+        const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        for (self.publications.items) |publication| {
+            if (accepted) {
+                self.ctfe_store.?.writePartial(publication.placement.origin, publication.placement.identity, publication.key, publication.bytes) catch |err| {
+                    std.log.warn("object cache could not store compile-time offers: {}", .{err});
+                };
+            }
+            self.allocator.free(publication.bytes);
+        }
+        self.publications.clearRetainingCapacity();
+        for (self.alternatives.items) |alternative| finish(alternative, accepted);
     }
 
     fn deinit(context: *anyopaque) void {
         const self: *CompileTimeObjectCache = @ptrCast(@alignCast(context));
+        for (self.alternatives.items) |alternative| deinit(alternative);
+        self.alternatives.deinit(self.allocator);
+        for (self.publications.items) |publication| self.allocator.free(publication.bytes);
+        self.publications.deinit(self.allocator);
+        var eligibility = self.eligibility.valueIterator();
+        while (eligibility.next()) |valid| self.allocator.free(valid.*);
+        self.eligibility.deinit(self.allocator);
+        if (self.certified_roots) |*index| index.deinit();
+        for (self.checked_root_uses) |uses| self.allocator.free(uses);
+        self.allocator.free(self.checked_root_uses);
+        if (self.canonical) |*image| image.deinit();
+        self.canonical_sources.deinit(self.allocator);
+        self.canonical_runtime_sources.deinit(self.allocator);
+        self.chosen.deinit(self.allocator);
+        self.runtime_packs.deinit();
         self.packs.deinit();
+        if (self.ctfe_store) |*store| store.deinit();
         self.store.deinit();
         self.allocator.destroy(self);
     }
 };
+
+/// Index exact root demand once over the already-resolved serving graph.
+/// Recursive components share a demand set; the condensed DAG unions each
+/// callee's already-computed set once, never walking the graph per cache lookup.
+fn collectCheckedRootUses(allocator: Allocator, graph: *const backend.dev.ArtifactClosure) Allocator.Error![]const []const postcheck.Common.CheckedRootUse {
+    const Use = postcheck.Common.CheckedRootUse;
+    const count = graph.set.artifacts.len;
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const callers = try a.alloc(std.ArrayList(u32), count);
+    @memset(callers, .empty);
+    const callees = try a.alloc(std.ArrayList(u32), count);
+    @memset(callees, .empty);
+    for (graph.set.artifacts, 0..) |artifact, index| {
+        for (artifact.refs) |ref| {
+            try callers[ref.target].append(a, @intCast(index));
+            try callees[index].append(a, ref.target);
+        }
+        for (graph.symbolicTargets(@intCast(index))) |target| {
+            if (target) |callee| {
+                try callers[callee].append(a, @intCast(index));
+                try callees[index].append(a, callee);
+            }
+        }
+    }
+    const seen = try a.alloc(bool, count);
+    @memset(seen, false);
+    const Frame = struct { node: u32, next: usize = 0 };
+    var frames = std.ArrayList(Frame).empty;
+    var order = std.ArrayList(u32).empty;
+    for (0..count) |start| {
+        if (seen[start]) continue;
+        seen[start] = true;
+        try frames.append(a, .{ .node = @intCast(start) });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next == callees[frame.node].items.len) {
+                try order.append(a, frame.node);
+                _ = frames.pop();
+                continue;
+            }
+            const callee = callees[frame.node].items[frame.next];
+            frame.next += 1;
+            if (seen[callee]) continue;
+            seen[callee] = true;
+            try frames.append(a, .{ .node = callee });
+        }
+    }
+    const components = try a.alloc(u32, count);
+    @memset(components, std.math.maxInt(u32));
+    var component_count: u32 = 0;
+    var pending = std.ArrayList(u32).empty;
+    while (order.pop()) |start| {
+        if (components[start] != std.math.maxInt(u32)) continue;
+        components[start] = component_count;
+        try pending.append(a, start);
+        while (pending.pop()) |node| for (callers[node].items) |caller| {
+            if (components[caller] != std.math.maxInt(u32)) continue;
+            components[caller] = component_count;
+            try pending.append(a, caller);
+        };
+        component_count += 1;
+    }
+    const uses = try a.alloc(std.AutoHashMap(Use, void), component_count);
+    const edges = try a.alloc(std.AutoHashMap(u32, void), component_count);
+    for (uses) |*set| set.* = std.AutoHashMap(Use, void).init(a);
+    for (edges) |*set| set.* = std.AutoHashMap(u32, void).init(a);
+    for (graph.set.artifacts, 0..) |artifact, index| {
+        const component = components[index];
+        for (callees[index].items) |callee| {
+            if (components[callee] != component) try edges[component].put(components[callee], {});
+        }
+        for (artifact.context_bindings) |binding| {
+            const descriptor = switch (binding) {
+                .static_root => |root| root,
+                .failure => |failure| failure.guard_root orelse continue,
+                else => continue,
+            };
+            const root = switch (descriptor.producer) {
+                .checked => |id| id,
+                .literal => continue,
+            };
+            try uses[component].put(.{ .module = descriptor.module, .root = root }, {});
+        }
+    }
+    // Kosaraju numbers source components before their callees.
+    var cursor = component_count;
+    while (cursor != 0) {
+        cursor -= 1;
+        var targets = edges[cursor].keyIterator();
+        while (targets.next()) |callee| {
+            std.debug.assert(callee.* > cursor);
+            var roots = uses[callee.*].keyIterator();
+            while (roots.next()) |root| try uses[cursor].put(root.*, {});
+        }
+    }
+    const output = try allocator.alloc([]const Use, count);
+    @memset(output, &.{});
+    errdefer {
+        for (output) |list| allocator.free(list);
+        allocator.free(output);
+    }
+    for (components, output) |component, *owned| {
+        const list = try allocator.alloc(Use, uses[component].count());
+        owned.* = list;
+        var roots = uses[component].keyIterator();
+        var index: usize = 0;
+        while (roots.next()) |root| : (index += 1) list[index] = root.*;
+        std.mem.sort(Use, list, {}, struct {
+            fn less(_: void, left: Use, right: Use) bool {
+                const module = std.mem.order(u8, &left.module, &right.module);
+                return if (module == .eq) left.root < right.root else module == .lt;
+            }
+        }.less);
+    }
+    return output;
+}
+
+test "CTFE cached root demand shares recursive components and excludes unrelated offers" {
+    const Artifact = backend.dev.ProcArtifact.Artifact;
+    const root: backend.dev.CtfeContext.RootDescriptor = .{
+        .module = [_]u8{1} ** 32,
+        .producer = .{ .checked = 3 },
+        .layout_digest = [_]u8{2} ** 32,
+        .role = .value,
+    };
+    var second = root;
+    second.producer.checked = 4;
+    var artifacts: [5]Artifact = undefined;
+    for (&artifacts, 0..) |*artifact, index| artifact.* = .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(index + 1)) },
+        .code = "",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .lines = &.{},
+    };
+    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+    artifacts[1].refs = &.{
+        .{ .site = 0, .form = .call, .target = 0, .delta = 0 },
+        .{ .site = 0, .form = .call, .target = 2, .delta = 0 },
+    };
+    artifacts[2].context_bindings = &.{.{ .static_root = root }};
+    artifacts[3].refs = &.{.{ .site = 0, .form = .call, .target = 2, .delta = 0 }};
+    artifacts[3].context_bindings = &.{.{ .static_root = second }};
+    const set = backend.dev.ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = &artifacts };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, struct {
+        fn run(allocator: Allocator, source: *const backend.dev.ProcArtifact.Set) (Allocator.Error || error{TestExpectedEqual})!void {
+            var graph = try backend.dev.ArtifactClosure.init(allocator, source);
+            defer graph.deinit();
+            const demands = try collectCheckedRootUses(allocator, &graph);
+            defer {
+                for (demands) |uses| allocator.free(uses);
+                allocator.free(demands);
+            }
+            try std.testing.expectEqual(@as(usize, 1), demands[0].len);
+            try std.testing.expectEqualDeep(demands[0], demands[1]);
+            try std.testing.expectEqualDeep(demands[0], demands[2]);
+            try std.testing.expectEqual(@as(usize, 2), demands[3].len);
+            try std.testing.expectEqual(@as(u32, 3), demands[3][0].root);
+            try std.testing.expectEqual(@as(u32, 4), demands[3][1].root);
+            try std.testing.expectEqual(@as(usize, 0), demands[4].len);
+        }
+    }.run, .{&set});
+}
+
+fn omitCtfeDebugLines(owned: *backend.dev.ProcArtifact.Set) void {
+    for (@constCast(owned.artifacts)) |*artifact| artifact.lines = &.{};
+}
+
+test "CTFE partial line omission deduplicates displaced source ordinals without changing originals" {
+    const allocator = std.testing.allocator;
+    var lines = [_]backend.dev.ProcArtifact.LineEntry{
+        .{ .offset = 0, .loc = .{ .file = 3, .line = 42, .column = 7 } },
+    };
+    const source = backend.dev.ProcArtifact.Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{.{
+            .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+            .code = "\x48\xb8" ++ "\x00" ** 8,
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{},
+            .lines = &lines,
+            .domain = .ctfe,
+            .context_contract = .{
+                .target = .x64musl,
+                .cpu_level = .default,
+                .hot_reload = false,
+                .default_platform_runtime = false,
+                .dict_seed_mode = .comptime_zero,
+                .hooks_enabled = true,
+                .initialize_boxy_runtime = false,
+                .static_data_readonly = false,
+            },
+            .context_dependencies = .{ .comptime_hooks = true },
+            .context_bindings = &.{.{ .source_file = .{
+                .checked_module = @splat(7),
+                .source_identity = @splat(8),
+                .region = .from_raw_offsets(1, 2),
+                .line = 42,
+                .column = 7,
+                .has_location = true,
+            } }},
+            .context_relocations = &.{.{ .offset = 0, .binding = 0, .encoding = .x86_movabs }},
+        }},
+    };
+    var first = try backend.dev.ProcArtifact.combine(allocator, &.{&source});
+    defer first.deinit();
+    omitCtfeDebugLines(&first);
+    try std.testing.expectEqual(@as(u32, 3), source.artifacts[0].lines[0].loc.file);
+    lines[0].loc.file = 997;
+    var second = try backend.dev.ProcArtifact.combine(allocator, &.{&source});
+    defer second.deinit();
+    omitCtfeDebugLines(&second);
+    const first_bytes = try backend.dev.PackFile.write(allocator, &first, &.{});
+    defer allocator.free(first_bytes);
+    const second_bytes = try backend.dev.PackFile.write(allocator, &second, &.{});
+    defer allocator.free(second_bytes);
+    try std.testing.expectEqualSlices(u8, first_bytes, second_bytes);
+    try std.testing.expectEqual(@as(u32, 997), source.artifacts[0].lines[0].loc.file);
+    try std.testing.expectEqualDeep(source.artifacts[0].context_bindings, second.artifacts[0].context_bindings);
+}
+
+test "CTFE policy admission preserves exact emitter contract and mutable exclusions" {
+    const cache = CompileTimeObjectCache{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .store = undefined,
+        .packs = undefined,
+        .runtime_packs = undefined,
+    };
+    var artifact = backend.dev.ProcArtifact.Artifact{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
+        .code = "\xc3",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .domain = .ctfe,
+        .context_contract = .{
+            .target = RocTarget.detectNative().defaultCpuTarget(),
+            .cpu_level = roc_target.host_cpu.level(),
+            .hot_reload = false,
+            .default_platform_runtime = false,
+            .dict_seed_mode = .comptime_zero,
+            .hooks_enabled = true,
+            .initialize_boxy_runtime = false,
+            .static_data_readonly = false,
+        },
+        .context_dependencies = .{ .comptime_hooks = true },
+    };
+    try std.testing.expect(cache.policyAdmitted(artifact));
+    artifact.context_contract.?.dict_seed_mode = .runtime;
+    try std.testing.expect(!cache.policyAdmitted(artifact));
+    artifact.context_contract.?.dict_seed_mode = .comptime_zero;
+    artifact.context_dependencies.?.static_data = true;
+    try std.testing.expect(!cache.policyAdmitted(artifact));
+    artifact.context_dependencies.?.static_data = false;
+    artifact.context_complete = false;
+    try std.testing.expect(!cache.policyAdmitted(artifact));
+    artifact.context_complete = true;
+    artifact.context_contract = null;
+    try std.testing.expect(!cache.policyAdmitted(artifact));
+}
+
+test "CTFE preparation cannot remove complete runtime offers" {
+    const allocator = std.testing.allocator;
+    const identity = lir.ProcIdentity.forTest(29);
+    const callee_identity = lir.ProcIdentity.forTest(30);
+    const key = [_]u8{31} ** 32;
+    for ([_]bool{ false, true }) |compatible| {
+        // A caller's runtime closure is shared only when its preferred CTFE
+        // callee has the exact callable contract. Neither outcome removes offers.
+        const artifact = backend.dev.ProcArtifact.Artifact{
+            .kind = .{ .proc = identity },
+            .code = "\xc3",
+            .entry = 0,
+            .frame = null,
+            .refs = &.{},
+            .relocations = &.{},
+            .data = &.{},
+            .domain = .runtime,
+            .context_contract = .{
+                .target = RocTarget.detectNative().defaultCpuTarget(),
+                .cpu_level = RocTarget.detectNative().cpuLevel(),
+                .hot_reload = false,
+                .default_platform_runtime = false,
+                .dict_seed_mode = .comptime_zero,
+                .hooks_enabled = false,
+                .initialize_boxy_runtime = false,
+                .static_data_readonly = true,
+            },
+            .context_dependencies = .{},
+            .callable_contract = [_]u8{1} ** 32,
+        };
+        var runtime_artifacts = [_]backend.dev.ProcArtifact.Artifact{ artifact, artifact };
+        runtime_artifacts[0].code = "\xe8\x00\x00\x00\x00\xc3";
+        runtime_artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+        runtime_artifacts[1].kind = .{ .proc = callee_identity };
+        var runtime_set = backend.dev.ProcArtifact.Set{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .artifacts = &runtime_artifacts,
+        };
+        defer runtime_set.deinit();
+        var ctfe_artifact = artifact;
+        ctfe_artifact.domain = .ctfe;
+        ctfe_artifact.context_contract.?.cpu_level = roc_target.host_cpu.level();
+        ctfe_artifact.context_contract.?.hooks_enabled = true;
+        ctfe_artifact.context_contract.?.static_data_readonly = false;
+        ctfe_artifact.context_dependencies.?.comptime_hooks = true;
+        var ctfe_artifacts = [_]backend.dev.ProcArtifact.Artifact{ ctfe_artifact, ctfe_artifact };
+        ctfe_artifacts[0].code = runtime_artifacts[0].code;
+        ctfe_artifacts[0].refs = runtime_artifacts[0].refs;
+        ctfe_artifacts[1].kind = .{ .proc = callee_identity };
+        if (!compatible) ctfe_artifacts[1].callable_contract = [_]u8{2} ** 32;
+        var ctfe_set = backend.dev.ProcArtifact.Set{
+            .arena = std.heap.ArenaAllocator.init(allocator),
+            .artifacts = &ctfe_artifacts,
+        };
+        defer ctfe_set.deinit();
+        var cache = CompileTimeObjectCache{
+            .allocator = allocator,
+            .io = std.testing.io,
+            .store = undefined,
+            .packs = pack_store.LoadedPacks.init(allocator),
+            .runtime_packs = pack_store.LoadedPacks.init(allocator),
+        };
+        defer cache.packs.deinit();
+        defer cache.runtime_packs.deinit();
+        defer cache.chosen.deinit(allocator);
+        defer cache.canonical_sources.deinit(allocator);
+        defer cache.canonical_runtime_sources.deinit(allocator);
+        defer if (cache.canonical) |*image| image.deinit();
+        const hit = postcheck.Common.SpecCacheHit{
+            .identity = identity.bytes,
+            .rc_borrowed_params = 0,
+            .rc_ret_borrowed = false,
+            .rc_ret_lenders = 0,
+            .rc_read_only_params = 0,
+            .rc_ret_unique = false,
+            .rc_ret_unique_fields = 0,
+            .rc_ret_conditions = &.{},
+        };
+        for ([_]*pack_store.LoadedPacks{ &cache.runtime_packs, &cache.packs }, [_]*const backend.dev.ProcArtifact.Set{ &runtime_set, &ctfe_set }) |packs, set| {
+            packs.state = .ready;
+            try packs.specs.put(.{ .key = key, .platform_requirement_relation = null }, hit);
+            try packs.artifacts.put(identity, .{ .set = set, .index = 0 });
+        }
+        try cache.prepare();
+        try std.testing.expectEqual(compatible, cache.sharedSpecCacheLookup().lookup(key, null) != null);
+        try std.testing.expectEqualDeep(hit, cache.runtime_packs.specCacheLookup().lookup(key, null).?);
+        try std.testing.expectEqual(@as(u32, 1), cache.runtime_packs.specs.count());
+        try std.testing.expect(cache.runtime_packs.artifacts.get(identity).?.set == &runtime_set);
+        const canonical_set = &cache.canonical.?.set;
+        const root = CompileTimeObjectCache.findArtifact(&cache, identity).?;
+        try std.testing.expect(root.set == canonical_set);
+        try std.testing.expect(canonical_set.artifacts[root.index].domain == .ctfe);
+        const callee = canonical_set.artifacts[root.index].refs[0].target;
+        try std.testing.expectEqualSlices(u8, &callee_identity.bytes, &canonical_set.artifacts[callee].kind.proc.bytes);
+        try std.testing.expectEqualSlices(u8, &ctfe_artifacts[1].callable_contract.?, &canonical_set.artifacts[callee].callable_contract.?);
+        if (compatible) {
+            try std.testing.expectEqual(root.index, cache.canonicalIndex(.{ .set = &runtime_set, .index = 0 }).?);
+            try std.testing.expectEqual(callee, cache.canonicalIndex(.{ .set = &runtime_set, .index = 1 }).?);
+        } else {
+            try std.testing.expect(cache.canonicalIndex(.{ .set = &runtime_set, .index = 0 }) == null);
+        }
+    }
+}
+
+test "shared CTFE intersection leaves complete runtime offers immutable" {
+    const allocator = std.testing.allocator;
+    const identity = lir.ProcIdentity.forTest(17);
+    const key = [_]u8{19} ** 32;
+    var runtime_set = backend.dev.ProcArtifact.Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{},
+    };
+    defer runtime_set.deinit();
+    var cache = CompileTimeObjectCache{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .store = undefined,
+        .packs = pack_store.LoadedPacks.init(allocator),
+        .runtime_packs = pack_store.LoadedPacks.init(allocator),
+        .prepared = true,
+    };
+    defer cache.packs.deinit();
+    defer cache.runtime_packs.deinit();
+    defer cache.chosen.deinit(allocator);
+    defer cache.canonical_sources.deinit(allocator);
+    // Explicit canonical admission outcomes: rejected closure, compatible
+    // replacement, and a replacement with a different ownership signature.
+    var mapping = [_]?u32{null};
+    cache.canonical = .{
+        .set = .{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{} },
+        .source_offsets = &.{0},
+        .old_to_new = &mapping,
+        .new_to_source = &.{0},
+    };
+    defer cache.canonical.?.deinit();
+    try cache.canonical_sources.put(allocator, &runtime_set, 0);
+    const hit = postcheck.Common.SpecCacheHit{
+        .identity = identity.bytes,
+        .platform_requirement_relation = null,
+        .rc_borrowed_params = 1,
+        .rc_ret_borrowed = false,
+        .rc_ret_lenders = 0,
+        .rc_read_only_params = 1,
+        .rc_ret_unique = false,
+        .rc_ret_unique_fields = 0,
+        .rc_ret_conditions = &.{},
+    };
+    cache.runtime_packs.state = .ready;
+    try cache.runtime_packs.specs.put(.{ .key = key, .platform_requirement_relation = null }, hit);
+    try cache.runtime_packs.artifacts.put(identity, .{ .set = &runtime_set, .index = 0 });
+    try cache.chosen.put(allocator, identity, .{
+        .hit = hit,
+        .artifact = .{ .set = &cache.canonical.?.set, .index = 0 },
+    });
+    const shared = cache.sharedSpecCacheLookup();
+    cache.prepared = false;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    try std.testing.expect(cache.runtime_packs.specCacheLookup().lookup(key, null) != null);
+    cache.prepared = true;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    try std.testing.expect(cache.runtime_packs.specCacheLookup().lookup(key, null) != null);
+    mapping[0] = 0;
+    try std.testing.expectEqualDeep(hit, shared.lookup(key, null).?);
+    cache.chosen.getPtr(identity).?.hit.platform_requirement_relation = [_]u8{23} ** 32;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    cache.chosen.getPtr(identity).?.hit.platform_requirement_relation = null;
+    cache.chosen.getPtr(identity).?.hit.rc_borrowed_params = 0;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    try std.testing.expectEqualDeep(hit, cache.runtime_packs.specCacheLookup().lookup(key, null).?);
+    try std.testing.expectEqual(@as(u32, 1), cache.runtime_packs.specs.count());
+}
+
+test "checking and native dev use the same complete solved policy" {
+    const runtime = checkedRuntimeLoweringConfig(.linked_output, .dev, .lss, .native, false);
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.SolvedPolicy.dev(), lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime.target));
+    try std.testing.expectEqualDeep(lir.CheckedPipeline.SolvedPolicy.dev(), CompileTimeObjectCache.defaultPolicy());
+}
+
+test "rejected checking discards staged CTFE publication ownership without IO" {
+    const allocator = std.testing.allocator;
+    const root = try allocator.dupe(u8, "unused-cache");
+    const cache = allocator.create(CompileTimeObjectCache) catch |err| {
+        allocator.free(root);
+        return err;
+    };
+    cache.* = .{
+        .allocator = allocator,
+        .io = std.testing.io,
+        .store = .{
+            .allocator = allocator,
+            .roc_ctx = CoreCtx.testing(allocator, allocator),
+            .root = root,
+            .verbose = false,
+        },
+        .packs = pack_store.LoadedPacks.init(allocator),
+        .runtime_packs = pack_store.LoadedPacks.init(allocator),
+    };
+    defer CompileTimeObjectCache.deinit(cache);
+    const bytes = try allocator.dupe(u8, "staged bytes");
+    cache.publications.append(allocator, .{
+        .placement = .{ .origin = .local, .identity = [_]u8{1} ** 32 },
+        .key = [_]u8{2} ** 32,
+        .bytes = bytes,
+    }) catch |err| {
+        allocator.free(bytes);
+        return err;
+    };
+    CompileTimeObjectCache.finish(cache, false);
+    try std.testing.expectEqual(@as(usize, 0), cache.publications.items.len);
+    // Repeated aborts are harmless; CoreCtx.testing would panic on any IO.
+    CompileTimeObjectCache.finish(cache, false);
+}
 
 /// The compile-time object cache, when a build's own runtime packs are the
 /// same store: a dev build for the host.
@@ -280,19 +1357,35 @@ fn sharedCompileTimeObjectCache(build_env: *BuildEnv, target: RocTarget, opt: cl
 
 fn attachCompileTimeObjectCache(ctx: *CliCtx, build_env: *BuildEnv, verbose: bool) Allocator.Error!void {
     const store_config = CacheConfig{ .enabled = true, .verbose = verbose, .roc_ctx = ctx.coreCtx() };
-    const store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
+    var store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), @tagName(cli_args.OptLevel.dev)) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         // Without a cache root there is no cache to read.
         error.NoHomeDirectory => return,
     };
+    errdefer store.deinit();
+    const mode = try CompileTimeObjectCache.modeName(ctx.gpa, CompileTimeObjectCache.defaultPolicy());
+    defer ctx.gpa.free(mode);
+    var ctfe_store = pack_store.Store.init(ctx.gpa, store_config, RocTarget.detectNative(), mode) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoHomeDirectory => unreachable,
+    };
+    errdefer ctfe_store.deinit();
     const cache = try ctx.gpa.create(CompileTimeObjectCache);
-    cache.* = .{ .allocator = ctx.gpa, .io = ctx.io.std_io, .store = store, .packs = pack_store.LoadedPacks.init(ctx.gpa) };
-    build_env.setCompileTimeObjectCache(.{
-        .spec_cache = cache.packs.specCacheLookup(),
-        .splice_source = cache.packs.spliceSource(),
-    }, .{
+    cache.* = .{
+        .allocator = ctx.gpa,
+        .io = ctx.io.std_io,
+        .store = store,
+        .ctfe_store = ctfe_store,
+        .packs = pack_store.LoadedPacks.init(ctx.gpa),
+        .runtime_packs = pack_store.LoadedPacks.init(ctx.gpa),
+    };
+    cache.packs.admission = .{ .context = cache, .prepare = CompileTimeObjectCache.prepareAdmission, .accept = CompileTimeObjectCache.admit };
+    // One heap-owned collection supplies both lookup offers and splice artifacts.
+    // Runtime sharing must retain this exact provider, not merely its host domain.
+    build_env.setCompileTimeObjectCache(cache.view(), .{
         .context = cache,
         .bind = CompileTimeObjectCache.bind,
+        .finish = CompileTimeObjectCache.finish,
         .deinit = CompileTimeObjectCache.deinit,
     });
 }
@@ -6985,6 +8078,7 @@ fn lowerLirWithBuildEnv(
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     errdefer lowered.deinit();
     if (reporter) |r| finishPostCheckLowering(r, &spec_timing, specialization_strategy);
@@ -8851,14 +9945,103 @@ fn packFileBytes(
     set: *const backend.dev.ProcArtifact.Set,
     lowered: *const lir.CheckedPipeline.LoweredProgram,
 ) Allocator.Error![]u8 {
-    var artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator);
-    defer artifact_by_identity.deinit();
-    for (set.artifacts, 0..) |artifact, index| {
-        switch (artifact.kind) {
-            .proc => |identity| try artifact_by_identity.put(identity, @intCast(index)),
-            .rc_helper, .boxy_thunk, .entrypoint, .message_pool_run, .branch_island => {},
+    return packFileBytesFiltered(allocator, set, lowered, .{}, null);
+}
+
+fn cachePublicationOwner(owner: ?check.CheckedArtifact.ModuleId, requester: check.CheckedArtifact.ModuleId, builtin_owner: check.CheckedArtifact.ModuleId) ?check.CheckedArtifact.ModuleId {
+    const declared = owner orelse return null;
+    return if (declared.eql(builtin_owner)) requester else declared;
+}
+
+test "CTFE publication keeps builtin instantiations with the declared requester" {
+    const requester = check.CheckedArtifact.ModuleId{ .bytes = [_]u8{1} ** 32 };
+    const builtin_owner = check.CheckedArtifact.ModuleId{ .bytes = [_]u8{2} ** 32 };
+    const imported_owner = check.CheckedArtifact.ModuleId{ .bytes = [_]u8{3} ** 32 };
+    try std.testing.expectEqualDeep(@as(?check.CheckedArtifact.ModuleId, requester), cachePublicationOwner(builtin_owner, requester, builtin_owner));
+    try std.testing.expectEqualDeep(@as(?check.CheckedArtifact.ModuleId, imported_owner), cachePublicationOwner(imported_owner, requester, builtin_owner));
+    try std.testing.expect(cachePublicationOwner(null, requester, builtin_owner) == null);
+}
+
+const PackOfferFilter = struct {
+    generated_roots: ?[]const bool = null,
+    checked_owner: ?check.CheckedArtifact.ModuleId = null,
+    requester: ?check.CheckedArtifact.ModuleId = null,
+    builtin_owner: ?check.CheckedArtifact.ModuleId = null,
+};
+
+/// Immutable publication facts shared by every owner in one retained image.
+/// Only owner-root selection and serialization repeat, not whole-graph analysis.
+const PackEncodingPlan = struct {
+    allocator: Allocator,
+    artifact_by_identity: std.AutoHashMap(lir.ProcIdentity, u32),
+    literal_converters: std.AutoHashMap(lir.ProcIdentity, void),
+    closure: SpliceClosure,
+    eligible: []bool = &.{},
+
+    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set, lowered: *const lir.CheckedPipeline.LoweredProgram) Allocator.Error!PackEncodingPlan {
+        var self = PackEncodingPlan{
+            .allocator = allocator,
+            .artifact_by_identity = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
+            .literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator),
+            .closure = try SpliceClosure.init(allocator, set),
+        };
+        errdefer self.deinit();
+        for (set.artifacts, 0..) |artifact, index| switch (artifact.kind) {
+            .proc => |identity| try self.artifact_by_identity.put(identity, @intCast(index)),
+            else => {},
+        };
+        const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
+        defer allocator.free(converting);
+        for (lowered.lir_result.store.getProcSpecs(), converting) |proc, converts| {
+            if (converts) try self.literal_converters.put(proc.identity, {});
         }
+        const Admission = struct {
+            converters: *const std.AutoHashMap(lir.ProcIdentity, void),
+
+            fn accepts(context: *anyopaque, artifact: backend.dev.ProcArtifact.Artifact) bool {
+                const facts: *@This() = @ptrCast(@alignCast(context));
+                switch (artifact.kind) {
+                    .proc => |identity| if (facts.converters.contains(identity)) return false,
+                    else => {},
+                }
+                for (artifact.relocations) |relocation| {
+                    if (relocation.scope == .program and !carriesData(artifact, relocation.name)) return false;
+                }
+                for (artifact.data) |item| {
+                    for (item.relocations) |relocation| if (relocation.function) return false;
+                }
+                return true;
+            }
+        };
+        var admission = Admission{ .converters = &self.literal_converters };
+        self.eligible = try self.closure.admit(&admission, Admission.accepts);
+        return self;
     }
+
+    fn deinit(self: *PackEncodingPlan) void {
+        self.allocator.free(self.eligible);
+        self.closure.deinit();
+        self.literal_converters.deinit();
+        self.artifact_by_identity.deinit();
+    }
+};
+
+/// CTFE publishes only newly generated keyed roots; cached dependencies remain
+/// carried code, not unrelated offers rewritten into the new publication.
+fn packFileBytesFiltered(
+    allocator: Allocator,
+    set: *const backend.dev.ProcArtifact.Set,
+    lowered: *const lir.CheckedPipeline.LoweredProgram,
+    filter: PackOfferFilter,
+    shared: ?*PackEncodingPlan,
+) Allocator.Error![]u8 {
+    var owned: ?PackEncodingPlan = null;
+    defer if (owned) |*plan| plan.deinit();
+    const plan = shared orelse blk: {
+        owned = try PackEncodingPlan.init(allocator, set, lowered);
+        break :blk &owned.?;
+    };
+    std.debug.assert(plan.closure.set == set);
     var specs = std.ArrayList(backend.dev.PackFile.SpecEntry).empty;
     defer specs.deinit(allocator);
     var conditions_arena = std.heap.ArenaAllocator.init(allocator);
@@ -8866,18 +10049,22 @@ fn packFileBytes(
     const trace = std.c.getenv("ROC_PACK_TRACE") != null;
     var withheld: usize = 0;
     const procs = lowered.lir_result.store.getProcSpecs();
-    const converting = try lir.PackProgram.literalConvertingProcs(allocator, &lowered.lir_result.store);
-    defer allocator.free(converting);
-    var literal_converters = std.AutoHashMap(lir.ProcIdentity, void).init(allocator);
-    defer literal_converters.deinit();
-    for (procs, converting) |proc, converts| {
-        if (converts) try literal_converters.put(proc.identity, {});
-    }
-    var closure = try SpliceClosure.init(allocator, set);
-    defer closure.deinit();
+    var roots = std.ArrayList(u32).empty;
+    defer roots.deinit(allocator);
+    const selected = try allocator.alloc(bool, set.artifacts.len);
+    defer allocator.free(selected);
+    @memset(selected, false);
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
+        if (filter.checked_owner) |owner| {
+            const declared = if (filter.requester) |requester|
+                cachePublicationOwner(spec_proc.owner, requester, filter.builtin_owner.?) orelse continue
+            else
+                spec_proc.owner orelse continue;
+            if (!owner.eql(declared)) continue;
+        }
+        if (filter.generated_roots) |generated| if (!generated[@intFromEnum(spec_proc.proc)]) continue;
         const proc = procs[@intFromEnum(spec_proc.proc)];
-        const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        const artifact = plan.artifact_by_identity.get(proc.identity) orelse continue;
         // A linking program calls an entry at its base signature and cannot
         // emit the ownership variants its callers would demand from the
         // body, so an entry that admits such demands is not offered.
@@ -8894,11 +10081,11 @@ fn packFileBytes(
         // constant holding a code pointer names code the pack may not carry;
         // an entry that reaches either cannot be linked elsewhere, so it is
         // not offered.
-        const placed = try closure.of(artifact);
-        if (closureNamesProgramLocalSymbols(set, placed) or closureConvertsLiteral(set, &literal_converters, placed)) {
+        if (!plan.eligible[artifact]) {
             withheld += 1;
             continue;
         }
+        try roots.append(allocator, artifact);
         // An entry this program spliced from a pack is offered again with
         // its producer's code; only a body lowered here has a fingerprint.
         if (trace and proc.body != null) {
@@ -8908,6 +10095,7 @@ fn packFileBytes(
         try specs.append(allocator, .{
             .key = spec_proc.key,
             .artifact = artifact,
+            .platform_requirement_relation = spec_proc.platform_requirement_relation,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -8917,10 +10105,24 @@ fn packFileBytes(
             .rc_ret_conditions = try GuardedList.dupe(conditions_arena.allocator(), u32, lowered.lir_result.store.getU32Span(proc.rc_ret_conditions)),
         });
     }
+    for (try plan.closure.ofMany(roots.items)) |index| selected[index] = true;
+    std.debug.assert(plan.closure.complete);
     if (trace) {
         std.debug.print("pack: {d} artifacts, {d} specs offered, {d} withheld\n", .{ set.artifacts.len, specs.items.len, withheld });
     }
-    return try backend.dev.PackFile.write(allocator, set, specs.items);
+    // A pack owns exactly the serving closure, not unrelated evaluator roots.
+    // Their source observations may name an app this independent offer never
+    // reaches, and must not veto its admission after an app edit.
+    var serving = try backend.dev.ArtifactClosure.selectMarked(allocator, set, selected);
+    defer serving.deinit();
+    for (specs.items) |*spec| spec.artifact = serving.old_to_new[spec.artifact].?;
+    return backend.dev.PackFile.write(allocator, &serving.set, specs.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidContextRelocation, error.MissingContextBinding => {
+            std.debug.assert(false); // A validated native producer emitted an invalid context site.
+            unreachable;
+        },
+    };
 }
 
 /// The LIR fingerprint of one procedure of `lowered`, which is the same in
@@ -8935,71 +10137,7 @@ fn procFingerprint(allocator: Allocator, lowered: *const lir.CheckedPipeline.Low
 /// entry, and everything it reaches through set-local references and stable
 /// references to definitions in the same set. The set's definitions are
 /// indexed once; each query reuses the walk's storage.
-const SpliceClosure = struct {
-    allocator: Allocator,
-    set: *const backend.dev.ProcArtifact.Set,
-    procs: std.AutoHashMap(lir.ProcIdentity, u32),
-    thunks: std.AutoHashMap(lir.ProcIdentity, u32),
-    helpers: std.StringHashMap(u32),
-    seen: std.AutoHashMap(u32, void),
-    order: std.ArrayList(u32) = .empty,
-
-    fn init(allocator: Allocator, set: *const backend.dev.ProcArtifact.Set) Allocator.Error!SpliceClosure {
-        var self = SpliceClosure{
-            .allocator = allocator,
-            .set = set,
-            .procs = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .thunks = std.AutoHashMap(lir.ProcIdentity, u32).init(allocator),
-            .helpers = std.StringHashMap(u32).init(allocator),
-            .seen = std.AutoHashMap(u32, void).init(allocator),
-        };
-        errdefer self.deinit();
-        for (set.artifacts, 0..) |artifact, index| {
-            switch (artifact.kind) {
-                .proc => |identity| _ = try self.procs.getOrPutValue(identity, @intCast(index)),
-                .boxy_thunk => |identity| _ = try self.thunks.getOrPutValue(identity, @intCast(index)),
-                .rc_helper => |name| _ = try self.helpers.getOrPutValue(name, @intCast(index)),
-                .entrypoint, .message_pool_run, .branch_island => {},
-            }
-        }
-        return self;
-    }
-
-    fn deinit(self: *SpliceClosure) void {
-        self.order.deinit(self.allocator);
-        self.seen.deinit();
-        self.helpers.deinit();
-        self.thunks.deinit();
-        self.procs.deinit();
-    }
-
-    /// Indices of the artifacts a splice of `root` places, valid until the
-    /// next query.
-    fn of(self: *SpliceClosure, root: u32) Allocator.Error![]const u32 {
-        self.seen.clearRetainingCapacity();
-        self.order.clearRetainingCapacity();
-        try self.visit(root);
-        var cursor: usize = 0;
-        while (cursor < self.order.items.len) : (cursor += 1) {
-            const artifact = self.set.artifacts[self.order.items[cursor]];
-            for (artifact.refs) |ref| try self.visit(ref.target);
-            for (artifact.symbolic_refs) |ref| {
-                const target = switch (ref.target) {
-                    .proc => |identity| self.procs.get(identity),
-                    .boxy_thunk => |identity| self.thunks.get(identity),
-                    .rc_helper => |name| self.helpers.get(name),
-                };
-                if (target) |index| try self.visit(index);
-            }
-        }
-        return self.order.items;
-    }
-
-    fn visit(self: *SpliceClosure, index: u32) Allocator.Error!void {
-        if ((try self.seen.getOrPut(index)).found_existing) return;
-        try self.order.append(self.allocator, index);
-    }
-};
+const SpliceClosure = backend.dev.ArtifactClosure;
 
 /// Whether any procedure a splice places converts a specialized custom
 /// literal when it runs (`PackProgram.procConvertsLiteralAtRuntime`).
@@ -10699,6 +11837,7 @@ fn rocBuildLlvm(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResult
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11050,7 +12189,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (object_cache_enabled) {
         if (sharedCompileTimeObjectCache(&build_env, target, args.opt)) |shared| {
             object_store = &shared.store;
-            loaded_packs = &shared.packs;
+            loaded_packs = &shared.runtime_packs;
         } else {
             const store_config = CacheConfig{ .enabled = true, .verbose = args.verbose, .roc_ctx = ctx.coreCtx() };
             own_store = pack_store.Store.init(ctx.gpa, store_config, target, @tagName(args.opt)) catch |err| {
@@ -11073,6 +12212,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
     if (loaded_packs) |packs| {
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
+    runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -11121,6 +12261,7 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         &spec_timing,
         build_env.runtimeProgramSession(),
         if (loaded_packs) |packs| packs.specCacheLookup() else null,
+        nativeObjectCodeProvision(target, args.opt, loaded_packs != null),
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -11524,6 +12665,7 @@ fn rocBuildEmbedded(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildRe
         &spec_timing,
         build_env.runtimeProgramSession(),
         null,
+        .source_bodies,
     );
     defer lowered.deinit();
     finishPostCheckLowering(&reporter, &spec_timing, specialization_strategy);
@@ -12747,7 +13889,7 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
         .size, .speed => .wrappers,
         // The object cache links dev procedures into other programs, so dev
         // decides inlining from source alone, the same in every program.
-        .dev => .wrappers_and_source_single_use,
+        .dev => lir.CheckedPipeline.SolvedPolicy.dev().inline_mode,
         .interpreter => .none,
     };
 }
@@ -12760,7 +13902,8 @@ fn postCheckInlineModeForOpt(opt: cli_args.OptLevel) lir.CheckedPipeline.InlineM
 fn specConstrCloneInliningForOpt(opt: cli_args.OptLevel) postcheck.MonotypeLifted.SpecConstr.CloneInlining {
     return switch (opt) {
         .size, .speed => .all_calls,
-        .dev, .interpreter => .iterator_fusion,
+        .dev => lir.CheckedPipeline.SolvedPolicy.dev().spec_constr_clone_inlining,
+        .interpreter => .iterator_fusion,
     };
 }
 
@@ -12877,6 +14020,26 @@ fn checkedRuntimeLoweringConfig(
     };
 }
 
+/// Native builds promise object provision only when their emitter has a
+/// splice source. Foreign objects cannot replace CTFE's host-domain bodies.
+fn nativeObjectCodeProvision(target: RocTarget, opt: cli_args.OptLevel, has_splice_source: bool) lir.CheckedPipeline.CodeProvision {
+    if (!has_splice_source or opt != .dev) return .source_bodies;
+    return if (target == RocTarget.detectNative()) .host_dev_objects else .target_dev_objects;
+}
+
+test "native code provision names the emitter target and splice capability" {
+    const native = RocTarget.detectNative();
+    for (std.enums.values(cli_args.OptLevel)) |opt| {
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, nativeObjectCodeProvision(native, opt, false));
+        const expected: lir.CheckedPipeline.CodeProvision = if (opt == .dev) .host_dev_objects else .source_bodies;
+        try std.testing.expectEqual(expected, nativeObjectCodeProvision(native, opt, true));
+    }
+    for (std.enums.values(RocTarget)) |target| {
+        if (target == native) continue;
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.target_dev_objects, nativeObjectCodeProvision(target, .dev, true));
+    }
+}
+
 fn lowerCheckedSourceToLir(
     lir_allocator: Allocator,
     gpa: Allocator,
@@ -12892,6 +14055,7 @@ fn lowerCheckedSourceToLir(
     timing: ?*lir.CheckedPipeline.Timing,
     session: ?*eval.CompileTimeFinalization.ProgramSession,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: lir.CheckedPipeline.CodeProvision,
 ) eval.CompileTimeFinalization.RuntimeMaterializationError!lir.CheckedPipeline.LoweredProgram {
     const selected_roots: []const check.CheckedArtifact.RootRequest = switch (roots) {
         .platform_entrypoints => try lir.CheckedPipeline.selectPlatformEntrypointRoots(gpa, root_artifact.root_requests.runtime_requests),
@@ -12907,6 +14071,7 @@ fn lowerCheckedSourceToLir(
     config.target.post_check_executor = post_check_executor;
     config.target.timing = timing;
     config.target.spec_cache = spec_cache;
+    config.target.code_provision = code_provision;
     const requests: lir.CheckedPipeline.RootRequestSet = .{
         .requests = selected_roots,
         .include_provided_data_exports = config.include_provided_data_exports,

@@ -153,6 +153,7 @@ fn appendSourceFile(
         .name = module.module_env.module_name,
         .qualified_name = qualified_name,
         .module_identity = module.key.module_identity_hash,
+        .checked_module_key = module.key.bytes,
     });
 }
 
@@ -29949,7 +29950,7 @@ const ProcBodyBuilder = struct {
                 .opaque_nominal => null,
             },
             .bool_tag_union => rep_id,
-            else => null,
+            .in_progress, .dynamic, .primitive, .erased_callable, .alias, .record, .tuple, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .tag_union, .empty_tag_union => null,
         };
     }
     fn recordDescriptorPreservingListResult(
@@ -42401,7 +42402,7 @@ const ProcBodyBuilder = struct {
                             }
                             return true;
                         },
-                        else => boxyLowerInvariant("tag match producer representation was not a tag union during miss analysis"),
+                        .in_progress, .primitive, .erased_callable, .alias, .record, .tuple, .nominal, .list, .box, .generated_field, .generated_field_names, .generated_tag_union_spec, .empty_record, .empty_tag_union => boxyLowerInvariant("tag match producer representation was not a tag union during miss analysis"),
                     }
                 },
                 .list,

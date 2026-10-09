@@ -37,6 +37,37 @@ const CheckedArithmetic = lir_core.CheckedArithmetic;
 const const_store = check.ConstStore;
 const GuardedList = collections.GuardedList;
 const Allocator = std.mem.Allocator;
+
+fn checkedSpecOwner(template: Mono.FnTemplate) ?check.CheckedModule.ModuleId {
+    const owner = switch (template.fn_def) {
+        .local_template, .imported_template, .checked_generated => |owner| owner,
+        .local_hosted, .imported_hosted => |hosted| hosted.template,
+        .parser_runtime => |runtime| runtime.owner,
+        .encoder_for_runtime => |runtime| runtime.owner,
+        .nested => |nested| if (nested.default_root == null) nested.owner else return null,
+    };
+    return .{ .bytes = check.CheckedNames.procTemplateModuleDigest(owner).bytes };
+}
+
+test "cached specialization publication uses explicit checked template ownership" {
+    const owner: check.CheckedNames.ProcTemplate = .{
+        .artifact = .{ .bytes = [_]u8{19} ** 32 },
+        .proc_base = @enumFromInt(0),
+        .template = @enumFromInt(0),
+    };
+    var source: Mono.FnTemplate = .{
+        .fn_def = .{ .local_template = owner },
+        .source_fn_ty = @enumFromInt(0),
+        .source_fn_key = .{},
+        .mono_fn_ty = @enumFromInt(0),
+    };
+    try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
+    source.fn_def = .{ .imported_template = owner };
+    try std.testing.expectEqualDeep(@as(?check.CheckedModule.ModuleId, .{ .bytes = owner.artifact.bytes }), checkedSpecOwner(source));
+    source.fn_def = .{ .nested = .{ .owner = owner, .site = @enumFromInt(0), .context_fn_key = .{}, .default_root = .{ .bytes = [_]u8{23} ** 32 } } };
+    try std.testing.expect(checkedSpecOwner(source) == null);
+}
+
 const PatternRefutability = can.PatternRefutability;
 
 /// Runtime field order for a named record field.
@@ -157,6 +188,9 @@ pub const RootManifest = struct {
     /// Whether this consumer materializes the producer's layout and
     /// static-data requests.
     layout_requests: bool = true,
+    /// Instrumented native cache code alone needs erased-read declarations.
+    /// Runtime source/symbol consumers discover their own live storage reads.
+    cached_root_demands: bool = true,
     /// Whether this consumer emits the producer's runtime value schemas.
     runtime_schema_requests: bool = true,
     /// Whether this consumer lowers the producer's literal roots. Only a
@@ -265,6 +299,9 @@ pub fn runBorrowed(
     defer allocator.free(source_digests);
     const layout_keyed_source_digests = try allocator.alloc(?proc_identity.Identity, solved.lifted.fnCount());
     defer allocator.free(layout_keyed_source_digests);
+    if (solved.lifted.fnCount() != 0) {
+        _ = solved.lifted.fnReachesPlatformRequirement(@enumFromInt(0));
+    }
     for (source_digests, layout_keyed_source_digests, 0..) |*digest, *layout_keyed, index| {
         const fn_id: Lifted.FnId = @enumFromInt(@as(u32, @intCast(index)));
         digest.* = solved.lifted.fnSourceDigest(fn_id);
@@ -813,6 +850,7 @@ const Lowerer = struct {
     comptime_read_shares_root: std.AutoHashMapUnmanaged(ComptimeReadTypes, bool) = .empty,
     /// The one slot holding each evaluated root's completed value.
     comptime_root_slots: std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot),
+    comptime_failure_slots: std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId),
     static_initializer_queue: std.ArrayList(StaticInitializerEntry),
     packed_plans: collections.DenseMap(layout.Idx, lir_core.PackedData.Plan),
     /// Each access-path expression's `lowerExprContextTy`, so a chain of
@@ -1086,6 +1124,7 @@ const Lowerer = struct {
             .uniform_constructors = collections.DenseMap(LIR.StaticDataId, LIR.LirProcSpecId).init(allocator),
             .comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(allocator),
             .comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(allocator),
+            .comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(allocator),
             .static_initializer_queue = .empty,
             .packed_plans = collections.DenseMap(layout.Idx, lir_core.PackedData.Plan).init(allocator),
             .expr_context_tys = collections.DenseMap(Lifted.ExprId, Type.TypeId).init(allocator),
@@ -1207,6 +1246,7 @@ const Lowerer = struct {
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
+        self.comptime_failure_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
@@ -1294,6 +1334,7 @@ const Lowerer = struct {
         self.comptime_value_map.deinit();
         self.comptime_read_shares_root.deinit(self.allocator);
         self.comptime_root_slots.deinit();
+        self.comptime_failure_slots.deinit();
         self.layout_owner_types.deinit();
         self.deinitNamedLayoutIndex();
         self.representation_shapes.deinit();
@@ -1347,6 +1388,7 @@ const Lowerer = struct {
         self.comptime_value_map = std.AutoHashMap(ComptimeValueRequest, LIR.StaticDataId).init(self.allocator);
         self.comptime_read_shares_root = .empty;
         self.comptime_root_slots = std.AutoHashMap(ComptimeRootKey, ComptimeRootSlot).init(self.allocator);
+        self.comptime_failure_slots = std.AutoHashMap(ComptimeFailureKey, LIR.StaticDataId).init(self.allocator);
         self.comptime_site_map = &.{};
         self.loop_stack = .empty;
         self.join_stack = .empty;
@@ -1365,6 +1407,21 @@ const Lowerer = struct {
 
     fn lower(self: *Lowerer) Common.LowerError!void {
         try self.indexSourceFns();
+        // Typed producer declarations survive body elision independently of
+        // expression reachability. The usual slot owner creates both roles.
+        for (self.solved.layout_requests.items) |request| {
+            const root = request.comptime_root orelse continue;
+            if (self.root_manifest) |manifest| if (!manifest.cached_root_demands) continue;
+            const ty = try self.lowerType(request.ty);
+            const slot = try self.comptimeValueSlot(root, ty, try self.layoutOfType(ty));
+            self.result.static_data_values.items[@intFromEnum(slot)].cached_demand = true;
+            if (request.fn_id) |fn_id| {
+                const own_fn = try self.ensureOwnFnSpec(fn_id, .finite);
+                const initializer = try self.markReachableFn(own_fn);
+                self.result.store.getProcSpecPtr(initializer).is_static_initializer = true;
+                self.result.static_data_values.items[@intFromEnum(slot)].initializer = initializer;
+            }
+        }
 
         const produced_roots = self.solved.lifted.rootsView();
         if (if (self.root_manifest) |manifest| manifest.roots else null) |selected| {
@@ -1445,6 +1502,7 @@ const Lowerer = struct {
     fn lowerLayoutRequests(self: *Lowerer) Common.LowerError!void {
         try self.layout_requests.ensureTotalCapacity(self.allocator, self.solved.layout_requests.items.len);
         for (self.solved.layout_requests.items) |request| {
+            if (request.comptime_root != null) continue;
             try self.layout_requests.append(self.allocator, .{
                 .checked_type = request.checked_type,
                 .ty = try self.lowerType(request.ty),
@@ -2864,6 +2922,8 @@ const Lowerer = struct {
 
         const identity = try self.procIdentity(spec, entry);
         const plain_spec = spec.abi == .finite and source_fn.spec_constr_pattern == null and self.captureSpan(spec.captures).len == 0 and !spec.return_reuse.enabled();
+        const relation = if (self.solved.lifted.platform_requirement_filling) |filling| filling.relation else null;
+        const dependency_relation = self.solved.lifted.fnPlatformRequirementRelation(spec.source);
         var cached: ?Common.SpecCacheHit = null;
         // Monotype completed a cached template's record without a body. That
         // record is the cached procedure only for its own lifted function:
@@ -2893,7 +2953,7 @@ const Lowerer = struct {
             if (self.spec_cache) |cache| {
                 if (source_fn.source) |template| {
                     if (template.spec_key) |key| {
-                        if (cache.lookup(key.bytes)) |hit| {
+                        if (cache.lookup(key.bytes, relation)) |hit| {
                             if (std.mem.eql(u8, &hit.identity, &identity.bytes)) cached = hit;
                             if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} {s}\n", .{ key.bytes[0..8], if (cached != null) "hit" else "identity-mismatch" });
                         } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup direct-lir key={x} miss\n", .{key.bytes[0..8]});
@@ -2912,7 +2972,12 @@ const Lowerer = struct {
             // The shared procedure is this specialization's procedure too, so
             // the object cache may serve it under this specialization's key.
             if (plain_spec) if (source_fn.source) |template| if (template.spec_key) |key| {
-                try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = existing });
+                try self.result.spec_procs.append(self.allocator, .{
+                    .key = key.bytes,
+                    .proc = existing,
+                    .owner = checkedSpecOwner(template),
+                    .platform_requirement_relation = dependency_relation,
+                });
             };
             entry.proc = existing;
             entry.proc_owner = owner;
@@ -3005,7 +3070,12 @@ const Lowerer = struct {
                 // which a program linking the pack would inline too.
                 const kept = self.keep_specialization_procs and self.inline_plan.kind(spec.source) == .none;
                 if (plain_spec and (kept or !self.keep_specialization_procs)) {
-                    try self.result.spec_procs.append(self.allocator, .{ .key = key.bytes, .proc = proc });
+                    try self.result.spec_procs.append(self.allocator, .{
+                        .key = key.bytes,
+                        .proc = proc,
+                        .owner = checkedSpecOwner(template),
+                        .platform_requirement_relation = dependency_relation,
+                    });
                     if (kept) try self.kept_spec_fns.append(self.allocator, fn_id);
                 }
             }
@@ -5660,6 +5730,7 @@ const Lowerer = struct {
                 .module = value_root.module,
                 .root = value_root.root,
                 .const_locator = value_root.const_locator,
+                .completion = value_root.completion,
                 .role = .{ .value = .{ .failure_slot = failure_slot, .plan = try self.constPlanOfType(ty) } },
             },
         });
@@ -5668,7 +5739,11 @@ const Lowerer = struct {
         return id;
     }
 
+    const ComptimeFailureKey = struct { module: check.CheckedModule.ModuleId, root: Common.ComptimeProducer };
+
     fn createComptimeFailureMessageSlot(self: *Lowerer, root: Common.ComptimeValueRoot) Common.LowerError!LIR.StaticDataId {
+        const key = ComptimeFailureKey{ .module = root.module, .root = root.root };
+        if (self.comptime_failure_slots.get(key)) |slot| return slot;
         const layout_idx = try self.result.layouts.putStructFields(&.{
             .{ .index = 0, .layout = .u8 },
             .{ .index = 1, .layout = .str },
@@ -5683,6 +5758,7 @@ const Lowerer = struct {
                 .module = root.module,
                 .root = root.root,
                 .const_locator = null,
+                .completion = root.completion,
                 .role = .{ .failure_message = .{
                     .failed_field = 0,
                     .message_field = 1,
@@ -5691,6 +5767,7 @@ const Lowerer = struct {
                 } },
             },
         });
+        try self.comptime_failure_slots.put(key, id);
         return id;
     }
 
@@ -14804,6 +14881,7 @@ fn cloneLiftedProgram(allocator: std.mem.Allocator, program: *const Lifted.Progr
             .name = name,
             .qualified_name = qualified_name,
             .module_identity = file.module_identity,
+            .checked_module_key = file.checked_module_key,
         });
     }
 
@@ -15404,7 +15482,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         errdefer allocator.free(name);
         const qualified_name = try allocator.dupe(u8, "Fixture");
         errdefer allocator.free(qualified_name);
-        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0) });
+        try solved.lifted.source_files.append(allocator, .{ .name = name, .qualified_name = qualified_name, .module_identity = @splat(0), .checked_module_key = null });
     }
     // Derive real function and expression types, rather than synthesizing a
     // materialized read after lowering has already finished.

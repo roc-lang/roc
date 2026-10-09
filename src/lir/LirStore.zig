@@ -319,6 +319,7 @@ pub const BodyPrefix = struct {
     source_file_qualified_bytes: u32,
     source_file_qualified_ends: u32,
     source_file_identities: u32,
+    source_file_checked_modules: u32,
 };
 
 /// A body-owned suffix of a private store. The store must outlive this view and
@@ -458,6 +459,7 @@ pub fn captureBodyPrefix(self: *const Self) BodyPrefix {
         .source_file_qualified_bytes = @intCast(self.source_file_qualified_bytes.len()),
         .source_file_qualified_ends = @intCast(self.source_file_qualified_ends.len()),
         .source_file_identities = @intCast(self.source_file_identities.len()),
+        .source_file_checked_modules = @intCast(self.source_file_checked_modules.len()),
     };
 }
 
@@ -485,7 +487,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
             self.source_file_ends.len() != 0 or
             self.source_file_qualified_bytes.len() != 0 or
             self.source_file_qualified_ends.len() != 0 or
-            self.source_file_identities.len() != 0)
+            self.source_file_identities.len() != 0 or
+            self.source_file_checked_modules.len() != 0)
         {
             return error.UnsupportedShardMetadata;
         }
@@ -513,7 +516,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.source_file_ends > self.source_file_ends.len() or
         prefix.source_file_qualified_bytes > self.source_file_qualified_bytes.len() or
         prefix.source_file_qualified_ends > self.source_file_qualified_ends.len() or
-        prefix.source_file_identities > self.source_file_identities.len())
+        prefix.source_file_identities > self.source_file_identities.len() or
+        prefix.source_file_checked_modules > self.source_file_checked_modules.len())
     {
         return error.InvalidBodyPrefix;
     }
@@ -528,7 +532,8 @@ pub fn captureBodyShard(self: *const Self, prefix: BodyPrefix) AppendBodyError!B
         prefix.source_file_ends != self.source_file_ends.len() or
         prefix.source_file_qualified_bytes != self.source_file_qualified_bytes.len() or
         prefix.source_file_qualified_ends != self.source_file_qualified_ends.len() or
-        prefix.source_file_identities != self.source_file_identities.len())
+        prefix.source_file_identities != self.source_file_identities.len() or
+        prefix.source_file_checked_modules != self.source_file_checked_modules.len())
     {
         return error.UnsupportedShardMetadata;
     }
@@ -812,6 +817,8 @@ source_file_qualified_ends: GuardedList.List(u32, "LirStore.source_file_qualifie
 /// comparisons ("does this failed statement belong to the finalized
 /// module?") must use these, never names.
 source_file_identities: GuardedList.List([32]u8, "LirStore.source_file_identities"),
+/// Exact checked provenance for context-bearing native observations.
+source_file_checked_modules: GuardedList.List(CheckedSourceOwner, "LirStore.source_file_checked_modules"),
 /// Source location per statement, parallel to `cf_stmts`. Reference-count
 /// statements always record `SourceLoc.none`; they have no source counterpart.
 cf_stmt_locs: GuardedList.List(base.SourceLoc, "LirStore.cf_stmt_locs"),
@@ -873,6 +880,7 @@ pub fn init(allocator: Allocator) Self {
         .source_file_qualified_bytes = .empty,
         .source_file_qualified_ends = .empty,
         .source_file_identities = .empty,
+        .source_file_checked_modules = .empty,
         .cf_stmt_locs = .empty,
         .cf_stmt_regions = .empty,
         .cf_stmt_inline_scopes = .empty,
@@ -968,6 +976,7 @@ pub fn deinit(self: *Self) void {
     self.source_file_qualified_bytes.deinit(self.allocator);
     self.source_file_qualified_ends.deinit(self.allocator);
     self.source_file_identities.deinit(self.allocator);
+    self.source_file_checked_modules.deinit(self.allocator);
     self.cf_stmt_locs.deinit(self.allocator);
     self.cf_stmt_regions.deinit(self.allocator);
     self.cf_stmt_inline_scopes.deinit(self.allocator);
@@ -1055,6 +1064,10 @@ pub fn setSourceFiles(self: *Self, files: []const base.SourceFileEntry) Allocato
         try self.source_file_qualified_bytes.appendSlice(self.allocator, file.qualified_name);
         try self.source_file_qualified_ends.append(self.allocator, @intCast(self.source_file_qualified_bytes.len()));
         try self.source_file_identities.append(self.allocator, file.module_identity);
+        try self.source_file_checked_modules.append(self.allocator, if (file.checked_module_key) |key|
+            .{ .key = key, .has_key = 1 }
+        else
+            .{ .key = @splat(0), .has_key = 0 });
     }
 }
 
@@ -1086,6 +1099,20 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
     if (self.body_coordinator) |coordinator| return coordinator.sourceFileModuleIdentity(file);
     return self.source_file_identities.get(file);
 }
+
+/// Checked owner supplied by the source-table producer, never inferred from
+/// display names, content identity, or a coincident module-table ordinal.
+pub fn sourceFileCheckedModule(self: *const Self, file: u32) ?[32]u8 {
+    if (self.body_coordinator) |coordinator| return coordinator.sourceFileCheckedModule(file);
+    const owner = self.source_file_checked_modules.get(file);
+    return if (owner.has_key == 1) owner.key else null;
+}
+
+/// Padding-free optional provenance record for persisted LIR source tables.
+pub const CheckedSourceOwner = extern struct {
+    key: [32]u8,
+    has_key: u8,
+};
 
 /// Source location of a statement.
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
@@ -2704,9 +2731,9 @@ test "source file table stores names and module identity per entry" {
     // provenance comparison in compile-time failure reporting matches by
     // module identity, never by name.
     try store.setSourceFiles(&.{
-        .{ .name = "Cfg", .qualified_name = "app.Cfg", .module_identity = @splat(1) },
-        .{ .name = "Cfg", .qualified_name = "pf.Cfg", .module_identity = @splat(2) },
-        .{ .name = "Utils", .qualified_name = "app.Utils", .module_identity = @splat(3) },
+        .{ .name = "Cfg", .qualified_name = "app.Cfg", .module_identity = @splat(1), .checked_module_key = @splat(4) },
+        .{ .name = "Cfg", .qualified_name = "pf.Cfg", .module_identity = @splat(2), .checked_module_key = @splat(5) },
+        .{ .name = "Utils", .qualified_name = "app.Utils", .module_identity = @splat(3), .checked_module_key = null },
     });
 
     try std.testing.expectEqual(@as(u32, 3), store.sourceFileCount());

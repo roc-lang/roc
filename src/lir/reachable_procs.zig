@@ -219,6 +219,9 @@ const Pass = struct {
             try self.markConstPlan(request.plan);
             if (request.initializer) |initializer| try self.markProc(initializer);
         }
+        for (self.result.static_data_values.items, 0..) |value, index| {
+            if (value.cached_demand) try self.markStaticData(@enumFromInt(index));
+        }
         if (self.frozen) |data| {
             for (data.exports, 0..) |item, index| {
                 if (item.is_exported) try self.markFrozenExport(@enumFromInt(index));
@@ -667,7 +670,9 @@ const Pass = struct {
         var kept: usize = 0;
         for (self.result.spec_procs.items) |spec_proc| {
             const new_proc = self.old_to_new[@intFromEnum(spec_proc.proc)] orelse continue;
-            self.result.spec_procs.items[kept] = .{ .key = spec_proc.key, .proc = new_proc };
+            var remapped = spec_proc;
+            remapped.proc = new_proc;
+            self.result.spec_procs.items[kept] = remapped;
             kept += 1;
         }
         self.result.spec_procs.shrinkRetainingCapacity(kept);
@@ -1192,6 +1197,54 @@ test "reachable proc pass compacts proc specs and remaps root ids" {
     const compact_root = result.store.getProcSpec(result.root_procs.items[0]);
     const call = result.store.getCFStmt(compact_root.body.?).assign_call;
     try std.testing.expectEqual(@as(u32, 0), @intFromEnum(call.proc));
+}
+
+test "cached storage demand retains and remaps only its value and failure roles" {
+    const allocator = std.testing.allocator;
+    var result = try LirProgram.Result.init(allocator, base.target.TargetUsize.native);
+    defer result.deinit();
+    const module = @import("check").CheckedModule.ModuleId{ .bytes = [_]u8{43} ** 32 };
+    try result.lowering_modules.append(allocator, module);
+    try result.const_plans.append(allocator, .layout_only);
+    const failure_layout = try result.layouts.putStructFields(&.{
+        .{ .index = 0, .layout = .u8 },
+        .{ .index = 1, .layout = .str },
+    });
+    const structure = result.layouts.getLayout(failure_layout).getStruct().idx;
+    try result.static_data_values.append(allocator, .{ .initializer = null, .layout_idx = .u64 });
+    try result.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = failure_layout,
+        .compile_time_root = .{
+            .module = module,
+            .root = .{ .checked = @enumFromInt(0) },
+            .const_locator = null,
+            .role = .{ .failure_message = .{
+                .failed_field = 0,
+                .message_field = 1,
+                .failed_offset = result.layouts.getStructFieldOffsetByOriginalIndex(structure, 0),
+                .message_offset = result.layouts.getStructFieldOffsetByOriginalIndex(structure, 1),
+            } },
+        },
+    });
+    try result.static_data_values.append(allocator, .{
+        .initializer = null,
+        .layout_idx = .u64,
+        .cached_demand = true,
+        .compile_time_root = .{
+            .module = module,
+            .root = .{ .checked = @enumFromInt(0) },
+            .const_locator = null,
+            .role = .{ .value = .{ .failure_slot = @enumFromInt(1), .plan = @enumFromInt(0) } },
+        },
+    });
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 2), result.static_data_values.items.len);
+    try std.testing.expect(result.static_data_values.items[0].compile_time_root.?.role == .failure_message);
+    try std.testing.expect(result.static_data_values.items[1].cached_demand);
+    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(result.static_data_values.items[1].compile_time_root.?.role.value.failure_slot));
+    try run(&result);
+    try std.testing.expectEqual(@as(usize, 2), result.static_data_values.items.len);
 }
 
 test "reachable proc pass follows static initializer proc refs" {

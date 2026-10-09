@@ -18426,6 +18426,173 @@ pub const SpecializationInterfaceRelation = struct {
     };
 };
 
+/// Typed source-site inventory for semantic-demand planning. The referenced
+/// checked nodes retain value-flow structure, checked types, stamped plans,
+/// source regions, and binder identities; this is not executable procedure IR.
+/// Scope is explicit because the same template contains independently
+/// instantiated generalized local callables.
+pub const CheckedSemanticSite = struct {
+    scope: DispatchScope,
+    node: union(enum) {
+        expr: CheckedExprId,
+        pattern: CheckedPatternId,
+        statement: CheckedStatementId,
+    },
+};
+
+/// Explicit semantic-preparation capability. Data-only templates need no
+/// specialization-dependent validation locally; all referenced procedures
+/// must independently carry the same proof before a root can be omitted.
+pub const SemanticPreparation = enum(u8) {
+    complete_data_only,
+    type_callable_solution_required,
+};
+
+fn semanticExprPreparation(data: CheckedExprData) SemanticPreparation {
+    return switch (data) {
+        .str_segment,
+        .str,
+        .bytes_literal,
+        .list,
+        .empty_list,
+        .tuple,
+        .empty_record,
+        .block,
+        .tag,
+        .zero_argument_tag,
+        .lambda,
+        => .complete_data_only,
+        .lookup_local => |lookup| if (lookup.resolved != null) .complete_data_only else .type_callable_solution_required,
+        .lookup_external, .lookup_required => |ref| if (ref != null) .complete_data_only else .type_callable_solution_required,
+        .call => |call| if (call.direct_target != null) .complete_data_only else .type_callable_solution_required,
+        .pending,
+        .numeral,
+        .str_from_quote,
+        .match_,
+        .if_,
+        .record,
+        .nominal,
+        .closure,
+        .binop,
+        .unary_minus,
+        .unary_not,
+        .field_access,
+        .dispatch_call,
+        .interpolation,
+        .structural_eq,
+        .structural_hash,
+        .method_eq,
+        .type_dispatch_call,
+        .tuple_access,
+        .runtime_error,
+        .crash,
+        .dbg,
+        .expect_err,
+        .expect,
+        .ellipsis,
+        .anno_only,
+        .break_,
+        .return_,
+        .for_,
+        .hosted_lambda,
+        .run_low_level,
+        => .type_callable_solution_required,
+    };
+}
+
+fn semanticPatternPreparation(data: CheckedPatternData) SemanticPreparation {
+    return switch (data) {
+        .assign, .as, .underscore => .complete_data_only,
+        .pending,
+        .applied_tag,
+        .nominal,
+        .record_destructure,
+        .list,
+        .tuple,
+        .numeral_literal,
+        .str_literal,
+        .str_interpolation,
+        .runtime_error,
+        => .type_callable_solution_required,
+    };
+}
+
+fn semanticStatementPreparation(data: CheckedStatementData) SemanticPreparation {
+    return switch (data) {
+        .decl,
+        .expr,
+        .import_,
+        .alias_decl,
+        .where_alias_decl,
+        .nominal_decl,
+        .type_anno,
+        .type_var_alias,
+        => .complete_data_only,
+        .pending,
+        .promoted_proc,
+        .var_,
+        .var_uninitialized,
+        .reassign,
+        .crash,
+        .dbg,
+        .expect,
+        .for_,
+        .while_,
+        .infinite_loop,
+        .breakable_loop,
+        .break_,
+        .return_,
+        .runtime_error,
+        => .type_callable_solution_required,
+    };
+}
+
+fn semanticSitePreparation(bodies: CheckedBodyStoreView, site: CheckedSemanticSite) SemanticPreparation {
+    if (site.scope == .generalized) return .type_callable_solution_required;
+    return switch (site.node) {
+        .expr => |id| if (@intFromEnum(id) < bodies.exprCount())
+            semanticExprPreparation(bodies.expr(id).data)
+        else
+            .type_callable_solution_required,
+        .pattern => |id| if (@intFromEnum(id) < bodies.patternCount())
+            semanticPatternPreparation(bodies.pattern(id).data)
+        else
+            .type_callable_solution_required,
+        .statement => |id| if (@intFromEnum(id) < bodies.statementCount())
+            semanticStatementPreparation(bodies.statement(id).data)
+        else
+            .type_callable_solution_required,
+    };
+}
+
+test "semantic demand producer proves data nodes but requires literal and unknown callable solution" {
+    try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(.empty_record));
+    try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(.{
+        .lambda = .{ .args = &.{}, .body = @enumFromInt(0) },
+    }));
+    try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(.{
+        .str_from_quote = .{ .plan = @enumFromInt(0), .literal = @enumFromInt(0) },
+    }));
+    const call: CheckedExprData = .{ .call = .{
+        .func = @enumFromInt(0),
+        .args = &.{},
+        .called_via = .apply,
+        .source_fn_ty_payload = @enumFromInt(0),
+        .direct_target = null,
+    } };
+    try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(call));
+    var direct = call;
+    direct.call.direct_target = @enumFromInt(0);
+    try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticExprPreparation(direct));
+    try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticExprPreparation(.{
+        .record = .{ .fields = &.{}, .unsets = &.{}, .ext = null },
+    }));
+    try std.testing.expectEqual(SemanticPreparation.type_callable_solution_required, semanticPatternPreparation(.{
+        .list = .{ .patterns = &.{}, .rest = null },
+    }));
+    try std.testing.expectEqual(SemanticPreparation.complete_data_only, semanticPatternPreparation(.underscore));
+}
+
 const CollectedSchemeUseSite = struct {
     record_idx: u32,
     checked_expr: CheckedExprId,
@@ -18607,6 +18774,8 @@ fn sealCheckedProcedureTemplateRefs(
     errdefer specialization_relation_pool.deinit(allocator);
     var specialization_type_pool = std.ArrayList(CheckedTypeId).empty;
     errdefer specialization_type_pool.deinit(allocator);
+    var semantic_site_pool = std.ArrayList(CheckedSemanticSite).empty;
+    errdefer semantic_site_pool.deinit(allocator);
     const iterator_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.items.len);
     errdefer allocator.free(iterator_spans);
     const scheme_use_spans = try allocator.alloc(artifact_serialize.Span, templates.templates.items.len);
@@ -18716,6 +18885,17 @@ fn sealCheckedProcedureTemplateRefs(
             .start = specialization_relation_start,
             .len = @intCast(collector.specialization_relations.items.len),
         };
+        template.semantic_sites = try artifact_serialize.appendSpan(
+            artifact_serialize.Span,
+            CheckedSemanticSite,
+            &semantic_site_pool,
+            allocator,
+            collector.semantic_sites.items,
+        );
+        template.semantic_preparation = switch (template.body) {
+            .checked_body, .entry_wrapper => collector.semanticPreparation(),
+            .intrinsic_wrapper, .unimplemented => .type_callable_solution_required,
+        };
         for (collector.dispatch_refs.items) |plan_id| {
             const plan = static_dispatch_plans.plans[@intFromEnum(plan_id)];
             var kind: DispatchRelationKind = .callable_result;
@@ -18779,6 +18959,7 @@ fn sealCheckedProcedureTemplateRefs(
     templates.dispatch_scopes = try allocator.dupe(DispatchRefScope, collector.scopes.items);
     templates.specialization_interface_relations = try specialization_relation_pool.toOwnedSlice(allocator);
     templates.specialization_interface_types = try specialization_type_pool.toOwnedSlice(allocator);
+    templates.semantic_sites = try semantic_site_pool.toOwnedSlice(allocator);
     publishLocalProcedureDispatchScopes(resolved_value_refs, &collector.scope_by_checked_expr);
     publishLocalMethodDispatchScopes(method_registry, &collector.scope_by_checked_expr);
     template_iterator_refs.* = .{
@@ -21789,6 +21970,7 @@ const CheckedTemplateRefCollector = struct {
     scope_sites: std.ArrayList(CollectedScopeConstructionSite),
     specialization_relations: std.ArrayList(SpecializationInterfaceRelation),
     specialization_types: std.ArrayList(CheckedTypeId),
+    semantic_sites: std.ArrayList(CheckedSemanticSite),
     template_root_expr: ?CheckedExprId = null,
     /// Pooled across templates (ids are global); the stack resets per template.
     scopes: std.ArrayList(DispatchRefScope),
@@ -21827,6 +22009,7 @@ const CheckedTemplateRefCollector = struct {
             .scope_sites = .empty,
             .specialization_relations = .empty,
             .specialization_types = .empty,
+            .semantic_sites = .empty,
             .scopes = .empty,
             .scope_by_checked_expr = collections.DenseMap(CheckedExprId, DispatchScopeId).init(allocator),
             .scope_stack = .empty,
@@ -21852,6 +22035,7 @@ const CheckedTemplateRefCollector = struct {
         self.scope_sites.deinit(self.allocator);
         self.specialization_relations.deinit(self.allocator);
         self.specialization_types.deinit(self.allocator);
+        self.semantic_sites.deinit(self.allocator);
         self.scopes.deinit(self.allocator);
         self.scope_by_checked_expr.deinit();
         self.scope_stack.deinit(self.allocator);
@@ -21869,6 +22053,7 @@ const CheckedTemplateRefCollector = struct {
         self.scope_sites.clearRetainingCapacity();
         self.specialization_relations.clearRetainingCapacity();
         self.specialization_types.clearRetainingCapacity();
+        self.semantic_sites.clearRetainingCapacity();
         self.template_root_expr = null;
         // `scopes` pools across templates; only the stack resets.
         self.scope_stack.clearRetainingCapacity();
@@ -21884,6 +22069,23 @@ const CheckedTemplateRefCollector = struct {
 
     fn currentScope(self: *const CheckedTemplateRefCollector) DispatchScope {
         return if (self.currentScopeId()) |id| .{ .generalized = id } else .root;
+    }
+
+    /// Certify the data-only fragment, not a guess about whether code will run.
+    /// Any site needing concrete numeric bits, dispatch, empirical validation,
+    /// default-field selection, or callable invocation through a value requests
+    /// the existing exact type/callable solution explicitly.
+    fn semanticPreparation(self: *const CheckedTemplateRefCollector) SemanticPreparation {
+        if (self.dispatch_refs.items.len != 0 or self.iterator_refs.items.len != 0) {
+            return .type_callable_solution_required;
+        }
+        const body_view = self.checked_bodies.view();
+        for (self.semantic_sites.items) |site| {
+            if (semanticSitePreparation(body_view, site) == .type_callable_solution_required) {
+                return .type_callable_solution_required;
+            }
+        }
+        return .complete_data_only;
     }
 
     fn appendValueRef(self: *CheckedTemplateRefCollector, ref_id: ResolvedValueRefId) Allocator.Error!void {
@@ -22048,6 +22250,10 @@ const CheckedTemplateRefCollector = struct {
         // The scope stays pushed until every child has been collected.
         if (local_scheme != null) try self.work.append(self.allocator, .pop_scope);
 
+        try self.semantic_sites.append(self.allocator, .{
+            .scope = self.currentScope(),
+            .node = .{ .expr = expr_id },
+        });
         const expr = self.checked_bodies.expr(expr_id);
         // An erroneous callable publishes no procedure relation, and its type
         // need not be a function.
@@ -22295,6 +22501,10 @@ const CheckedTemplateRefCollector = struct {
         const entry = try self.visited_patterns.getOrPut(pattern_id);
         if (entry.found_existing) return;
 
+        try self.semantic_sites.append(self.allocator, .{
+            .scope = self.currentScope(),
+            .node = .{ .pattern = pattern_id },
+        });
         const pattern = self.checked_bodies.pattern(pattern_id);
         const children = self.beginChildren();
         switch (pattern.data) {
@@ -22339,6 +22549,10 @@ const CheckedTemplateRefCollector = struct {
         const entry = try self.visited_statements.getOrPut(statement_id);
         if (entry.found_existing) return;
 
+        try self.semantic_sites.append(self.allocator, .{
+            .scope = self.currentScope(),
+            .node = .{ .statement = statement_id },
+        });
         const statement = self.checked_bodies.statement(statement_id);
         const children = self.beginChildren();
         switch (statement.data) {
@@ -22620,6 +22834,10 @@ pub const CheckedProcedureTemplate = struct {
     /// Range into
     /// `CheckedProcedureTemplateTable.specialization_interface_relations`.
     specialization_interface_relations: artifact_serialize.Span = .{},
+    /// Scope-stamped typed nodes for complete semantic/value-flow planning.
+    /// This inventory alone is not proof of a closed callable environment.
+    semantic_sites: artifact_serialize.Span = .{},
+    semantic_preparation: SemanticPreparation = .type_callable_solution_required,
     resolved_value_refs: ResolvedValueRefTableRef,
     top_level_value_uses: TopLevelUseSummaryRef,
     nested_proc_sites: NestedProcSiteTableRef,
@@ -22919,6 +23137,8 @@ pub const CheckedProcedureTemplateTable = struct {
     specialization_interface_relations: []SpecializationInterfaceRelation = &.{},
     /// Checked argument types backing call-relation spans.
     specialization_interface_types: []CheckedTypeId = &.{},
+    /// Typed source nodes backing each template's semantic-site inventory.
+    semantic_sites: []CheckedSemanticSite = &.{},
     /// Templates no other module can call and whose module's source calls
     /// them at exactly one site and never uses them as a value, in ascending
     /// id order. Every program that specializes such a template finds its
@@ -22939,6 +23159,7 @@ pub const CheckedProcedureTemplateTable = struct {
         dispatch_scopes: SerializedSlice(DispatchRefScope) = .{},
         specialization_interface_relations: SerializedSlice(SpecializationInterfaceRelation) = .{},
         specialization_interface_types: SerializedSlice(CheckedTypeId) = .{},
+        semantic_sites: SerializedSlice(CheckedSemanticSite) = .{},
         single_source_call_templates: SerializedSlice(canonical.CheckedProcedureTemplateId) = .{},
         const Serde = artifact_serialize.SliceStoreSerde(CheckedProcedureTemplateTable, @This());
         pub const serialize = Serde.serialize;
@@ -23254,6 +23475,7 @@ pub const CheckedProcedureTemplateTable = struct {
         allocator.free(self.dispatch_scopes);
         allocator.free(self.specialization_interface_relations);
         allocator.free(self.specialization_interface_types);
+        allocator.free(self.semantic_sites);
         allocator.free(self.single_source_call_templates);
         self.* = .{};
     }
@@ -23300,6 +23522,11 @@ pub const CheckedProcedureTemplateTable = struct {
 
     pub fn specializationRelationTypes(self: *const CheckedProcedureTemplateTable, span: artifact_serialize.Span) []const CheckedTypeId {
         return self.specialization_interface_types[span.start .. span.start + span.len];
+    }
+
+    pub fn semanticSites(self: *const CheckedProcedureTemplateTable, template: *const CheckedProcedureTemplate) []const CheckedSemanticSite {
+        const span = template.semantic_sites;
+        return self.semantic_sites[span.start .. span.start + span.len];
     }
 };
 
@@ -26095,6 +26322,8 @@ fn publishLiteralConversionRoots(
     templates.dispatch_relation_kinds = try allocator.realloc(templates.dispatch_relation_kinds, first_ref + added.len);
     const first_relation = templates.specialization_interface_relations.len;
     templates.specialization_interface_relations = try allocator.realloc(templates.specialization_interface_relations, first_relation + added.len);
+    const first_semantic_site = templates.semantic_sites.len;
+    templates.semantic_sites = try allocator.realloc(templates.semantic_sites, first_semantic_site + added.len);
     const root_evidence = try allocator.realloc(@constCast(plans.template_root_evidence), templates.templates.items.len);
     plans.template_root_evidence = root_evidence;
     for (added, templates.templates.items[first_template..], 0..) |root, *template, i| {
@@ -26161,6 +26390,11 @@ fn publishLiteralConversionRoots(
             } },
         };
         template.specialization_interface_relations = .{ .start = @intCast(first_relation + i), .len = 1 };
+        templates.semantic_sites[first_semantic_site + i] = .{
+            .scope = .root,
+            .node = .{ .expr = root.expr },
+        };
+        template.semantic_sites = .{ .start = @intCast(first_semantic_site + i), .len = 1 };
         root_evidence[first_template + i] = .{};
     }
 }
@@ -28338,6 +28572,12 @@ pub const CompileTimeRootRequestEligibility = enum(u8) {
 };
 
 /// Public `CompileTimeRoot` declaration.
+pub const CompileTimeRootFailure = struct {
+    message: ConstNodeId,
+    region: ?base.Region,
+    location: ?struct { module: ModuleId, line: u32, column: u32 },
+};
+
 pub const CompileTimeRoot = struct {
     id: ComptimeRootId,
     module_idx: u32,
@@ -28354,6 +28594,9 @@ pub const CompileTimeRoot = struct {
     /// expect body. Its evaluation failure is not a diagnostic; finalization
     /// records the `runtime` payload instead.
     guarded: bool = false,
+    /// Producer-owned failure payload for a completed guarded root. Runtime
+    /// fallback policy must not discard CTFE storage or diagnostic provenance.
+    failure: ?CompileTimeRootFailure = null,
 
     pub fn literalConversionKind(self: CompileTimeRoot) ?CompileTimeLiteralConversionKind {
         return switch (self.kind) {
@@ -28363,6 +28606,51 @@ pub const CompileTimeRoot = struct {
         };
     }
 };
+
+test "guarded root failure metadata survives checked-cache relocation and changes its schema" {
+    artifact_serialize.assertRelocatablePod(CompileTimeRootFailure);
+    artifact_serialize.assertPortableSerialized(CompileTimeRootFailure);
+    var roots = [_]CompileTimeRoot{.{
+        .id = @enumFromInt(0),
+        .module_idx = 2,
+        .kind = .hoisted_constant,
+        .source = .{ .expr = @enumFromInt(5) },
+        .pattern = null,
+        .expr = @enumFromInt(7),
+        .checked_type = @enumFromInt(11),
+        .request_eligibility = .eligible,
+        .payload = .runtime,
+        .guarded = true,
+        .failure = .{
+            .message = @enumFromInt(13),
+            .region = base.Region.from_raw_offsets(23, 29),
+            .location = .{ .module = .{ .bytes = [_]u8{31} ** 32 }, .line = 37, .column = 41 },
+        },
+    }};
+    const table = CompileTimeRootTable{ .roots = &roots };
+    const round_trip = try artifact_serialize.roundTripForTest(std.testing.allocator, CompileTimeRootTable, &table);
+    defer std.testing.allocator.free(round_trip.buffer);
+    try std.testing.expectEqualDeep(roots[0], round_trip.loaded.roots[0]);
+
+    const LegacyRoot = struct {
+        id: ComptimeRootId,
+        module_idx: u32,
+        kind: CompileTimeRootKind,
+        source: RootSource,
+        source_pattern: ?CIR.Pattern.Idx = null,
+        hoisted_body: ?hoist_roots.Body = null,
+        pattern: ?CheckedPatternId,
+        expr: CheckedExprId,
+        checked_type: CheckedTypeId,
+        request_eligibility: CompileTimeRootRequestEligibility,
+        payload: CompileTimeRootPayload,
+        guarded: bool = false,
+    };
+    const LegacySerialized = extern struct { roots: SerializedSlice(LegacyRoot) = .{} };
+    const previous = comptime artifact_serialize.layoutVersionHash(LegacySerialized, 0);
+    const current = comptime artifact_serialize.layoutVersionHash(CompileTimeRootTable.Serialized, 0);
+    try std.testing.expect(!std.meta.eql(previous, current));
+}
 
 /// Public `CompileTimeRootTable` declaration.
 ///
@@ -33465,6 +33753,10 @@ pub const DispatchEvidenceFailure = struct {
         template_dispatch_partition_mismatch,
         template_relation_metadata_length_mismatch,
         template_specialization_relations_out_of_bounds,
+        template_semantic_sites_out_of_bounds,
+        semantic_site_scope_out_of_bounds,
+        semantic_site_node_out_of_bounds,
+        semantic_preparation_proof_invalid,
         template_evidence_params_out_of_bounds,
         specialization_scope_parent_invalid,
         specialization_scope_scheme_root_out_of_bounds,
@@ -33773,7 +34065,7 @@ pub const CheckedModuleArtifact = struct {
             // plans add one. Promoted local procedure templates and callable
             // contract types add one each, and the single-source-call template
             // list one more.
-            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 232);
+            std.debug.assert(artifact_serialize.relocatablePointerCount(Serialized) == 233);
         }
 
         /// Append every sub-store's bytes to `writer` in field order, recording
@@ -34046,7 +34338,7 @@ pub const CheckedModuleArtifact = struct {
     // Version 107 keys each context-free checked type subtree by its own key,
     // records which checked type roots are composable, and encodes keys with
     // one-byte tags and varint integers.
-    const serialized_layout_version: u32 = 107;
+    const serialized_layout_version: u32 = 108;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -34911,6 +35203,7 @@ pub const CheckedModuleArtifact = struct {
         }
 
         const templates = &self.checked_procedure_templates;
+        const semantic_body_view = self.checked_bodies.view();
         if (templates.dispatch_ref_scopes.len != table.dispatch_relation_refs.len or
             templates.dispatch_relation_kinds.len != table.dispatch_relation_refs.len)
         {
@@ -34928,6 +35221,23 @@ pub const CheckedModuleArtifact = struct {
             }
             if (@as(u64, template.specialization_interface_relations.start) + template.specialization_interface_relations.len > templates.specialization_interface_relations.len) {
                 return .{ .kind = .template_specialization_relations_out_of_bounds, .index = @intCast(i) };
+            }
+            if (@as(u64, template.semantic_sites.start) + template.semantic_sites.len > templates.semantic_sites.len) {
+                return .{ .kind = .template_semantic_sites_out_of_bounds, .index = @intCast(i) };
+            }
+            if (template.semantic_preparation == .complete_data_only) {
+                if (template.static_dispatch_plans.len != 0 or template.semantic_sites.len == 0) {
+                    return .{ .kind = .semantic_preparation_proof_invalid, .index = @intCast(i) };
+                }
+                switch (template.body) {
+                    .checked_body, .entry_wrapper => {},
+                    .intrinsic_wrapper, .unimplemented => return .{ .kind = .semantic_preparation_proof_invalid, .index = @intCast(i) },
+                }
+                for (templates.semanticSites(&template)) |site| {
+                    if (semanticSitePreparation(semantic_body_view, site) != .complete_data_only) {
+                        return .{ .kind = .semantic_preparation_proof_invalid, .index = @intCast(i) };
+                    }
+                }
             }
             if (template.direct_dispatch_plans.len + template.dispatch_relations.len != template.static_dispatch_plans.len) {
                 return .{ .kind = .template_dispatch_partition_mismatch, .index = @intCast(i) };
@@ -34989,6 +35299,20 @@ pub const CheckedModuleArtifact = struct {
             if (@as(u64, scope.evidence_params.start) + scope.evidence_params.len > templates.evidence_params_pool.len) {
                 return .{ .kind = .specialization_scope_evidence_params_out_of_bounds, .index = @intCast(i) };
             }
+        }
+        for (templates.semantic_sites, 0..) |site, i| {
+            switch (site.scope) {
+                .root => {},
+                .generalized => |scope| if (@intFromEnum(scope) >= templates.dispatch_scopes.len) {
+                    return .{ .kind = .semantic_site_scope_out_of_bounds, .index = @intCast(i) };
+                },
+            }
+            const valid_node = switch (site.node) {
+                .expr => |id| @intFromEnum(id) < self.checked_bodies.exprCount(),
+                .pattern => |id| @intFromEnum(id) < self.checked_bodies.patternCount(),
+                .statement => |id| @intFromEnum(id) < self.checked_bodies.statementCount(),
+            };
+            if (!valid_node) return .{ .kind = .semantic_site_node_out_of_bounds, .index = @intCast(i) };
         }
         for (templates.specialization_interface_relations, 0..) |relation, i| {
             switch (relation.scope) {

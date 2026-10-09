@@ -38,6 +38,7 @@ pub const CompileTimeFinalization = @import("compile_time_finalization.zig");
 pub const CompilerHost = @import("compiler_host.zig");
 /// Dev-backend RocOps environment for native compile-time evaluation
 pub const CompileTimeHost = @import("compile_time_host.zig");
+pub const NativeContext = @import("native_context.zig");
 /// Stores compile-time interpreter results in ConstStore
 pub const ConstStoreWriter = @import("const_store_writer.zig");
 pub const NativeRootExport = @import("native_root_export.zig");

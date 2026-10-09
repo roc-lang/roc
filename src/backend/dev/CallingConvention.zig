@@ -28,6 +28,7 @@ const aarch64 = @import("aarch64/mod.zig");
 
 const Relocation = @import("Relocation.zig").IndexedRelocation;
 const SymbolTable = @import("SymbolTable.zig");
+const ContextImmediate = @import("ContextImmediate.zig");
 
 /// Calling convention configuration for a specific target
 pub const CallingConvention = struct {
@@ -244,12 +245,19 @@ pub fn CallBuilder(comptime EmitType: type) type {
     // each one a full eightbyte slot.
     const target_packs_stack_args = is_aarch64 and roc_target.isMacOS();
 
+    const ContextArg = struct {
+        value: u64,
+        binding: u32,
+        relocations: *std.ArrayList(ContextImmediate.Relocation),
+    };
+
     // Represents a deferred argument source (used for both stack and register args)
     const ArgSource = union(enum) {
         // Store from a register: mov [RSP+offset], reg
         from_reg: GeneralReg,
         // Store an immediate value: mov [RSP+offset], imm
         from_imm: i64,
+        from_context: ContextArg,
         // Store LEA result: lea scratch, [base+offset]; mov [RSP+stack_offset], scratch
         from_lea: struct { base: GeneralReg, offset: i32 },
         // Store memory value: mov scratch, [base+offset]; mov [RSP+stack_offset], scratch
@@ -530,6 +538,16 @@ pub fn CallBuilder(comptime EmitType: type) type {
             }
         }
 
+        /// Preserve an explicit context binding through deferred ABI placement.
+        pub fn addContextArg(self: *Self, value: u64, binding: u32, relocations: *std.ArrayList(ContextImmediate.Relocation)) Allocator.Error!void {
+            const src: ArgSource = .{ .from_context = .{ .value = value, .binding = binding, .relocations = relocations } };
+            if (self.int_arg_index < CC_EMIT.PARAM_REGS.len) {
+                self.addDeferredRegArg(self.int_arg_index, src);
+            } else {
+                try self.addImplicitStackArg(src);
+            }
+        }
+
         /// Add a struct argument, handling pass-by-pointer per platform ABI.
         /// Windows x64: Only 1, 2, 4, 8 byte structs pass by value; all others by pointer.
         /// System V: Structs up to 16 bytes can be passed in registers.
@@ -717,6 +735,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                     }
                 },
                 .from_mem => |mem| try self.emitLoadPromoted(dst, mem.base, mem.offset, mem.promote),
+                .from_context => |arg| try self.emitContextArg(dst, arg),
                 .from_imm => |value| {
                     if (comptime is_aarch64)
                         try self.emit.movRegImm64(dst, @bitCast(value))
@@ -724,6 +743,20 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         try self.emit.movRegImm64(dst, value);
                 },
             }
+        }
+
+        fn emitContextArg(self: *Self, dst: GeneralReg, arg: ContextArg) Allocator.Error!void {
+            const offset: u32 = @intCast(self.emit.buf.items.len);
+            if (comptime is_aarch64) {
+                try self.emit.movRegContextImm64(dst, arg.value);
+            } else {
+                try self.emit.movRegImm64(dst, @bitCast(arg.value));
+            }
+            try arg.relocations.append(self.emit.allocator, .{
+                .offset = offset,
+                .binding = arg.binding,
+                .encoding = if (is_aarch64) .arm_movwide else .x86_movabs,
+            });
         }
 
         /// Load a value into `dst`, applying the C promotion it owes. An
@@ -792,6 +825,10 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 .from_reg => |reg| {
                     try storeNarrowedAarch64(self, reg, arg.size, stack_offset);
                 },
+                .from_context => |context| {
+                    try self.emitContextArg(CC_EMIT.SCRATCH_REG, context);
+                    try storeNarrowedAarch64(self, CC_EMIT.SCRATCH_REG, arg.size, stack_offset);
+                },
                 .from_imm => |value| {
                     try self.emit.movRegImm64(CC_EMIT.SCRATCH_REG, @bitCast(value));
                     try storeNarrowedAarch64(self, CC_EMIT.SCRATCH_REG, arg.size, stack_offset);
@@ -852,6 +889,11 @@ pub fn CallBuilder(comptime EmitType: type) type {
                 .from_reg => |reg| {
                     std.debug.assert(arg.size == 8);
                     try self.emit.movMemReg(width, CC_EMIT.STACK_PTR, stack_offset, reg);
+                },
+                .from_context => |context| {
+                    std.debug.assert(arg.size == 8);
+                    try self.emitContextArg(CC_EMIT.SCRATCH_REG, context);
+                    try self.emit.movMemReg(width, CC_EMIT.STACK_PTR, stack_offset, CC_EMIT.SCRATCH_REG);
                 },
                 .from_imm => |value| {
                     std.debug.assert(arg.size == 8);
@@ -960,7 +1002,7 @@ pub fn CallBuilder(comptime EmitType: type) type {
                         }
                         ra.src = .{ .from_mem = .{ .base = CC_EMIT.BASE_PTR, .offset = save_offset } };
                     },
-                    .from_reg, .from_imm => {},
+                    .from_reg, .from_imm, .from_context => {},
                 }
             }
         }
@@ -1526,6 +1568,39 @@ test "CallBuilder with automatic R12 save/restore on Windows x64" {
     try std.testing.expect(emit.buf.items.len > 0);
     try std.testing.expectEqual(@as(i32, -32), stack_offset); // 16 bytes allocated
     try std.testing.expectEqual(@as(?i32, -32), builder.r12_save_offset);
+}
+
+test "CallBuilder context args record fixed register and overflow encodings" {
+    inline for (.{ x86_64.Emit(.x64win), x86_64.Emit(.x64glibc), aarch64.Emit(.arm64mac) }) |Emit| {
+        var emit = Emit.init(std.testing.allocator);
+        defer emit.deinit();
+        var stack_offset: i32 = -16;
+        var builder = try CallBuilder(Emit).init(&emit, &stack_offset);
+        defer builder.deinit();
+        var relocations = std.ArrayList(ContextImmediate.Relocation).empty;
+        defer relocations.deinit(std.testing.allocator);
+        for (0..10) |index| try builder.addContextArg(1, @intCast(index), &relocations);
+        try builder.call(0x12345678);
+        try std.testing.expectEqual(@as(usize, 10), relocations.items.len);
+        var values: [10]u64 = undefined;
+        for (&values, 0..) |*value, index| value.* = 0xfedcba9876543210 + index;
+        // Call scheduling emits overflow arguments before register arguments.
+        // Artifact extraction owns bindings in emission order, not argument order.
+        var emitted_values: [10]u64 = undefined;
+        const original_relocations = try std.testing.allocator.dupe(ContextImmediate.Relocation, relocations.items);
+        defer std.testing.allocator.free(original_relocations);
+        for (relocations.items, 0..) |*relocation, index| {
+            emitted_values[index] = values[relocation.binding];
+            relocation.binding = @intCast(index);
+        }
+        try ContextImmediate.bind(emit.buf.items, relocations.items, &emitted_values);
+        for (relocations.items) |relocation| try ContextImmediate.validate(emit.buf.items, relocation);
+        const bound_code = try std.testing.allocator.dupe(u8, emit.buf.items);
+        defer std.testing.allocator.free(bound_code);
+        for (original_relocations) |relocation|
+            try ContextImmediate.patch(emit.buf.items, relocation, values[relocation.binding]);
+        try std.testing.expectEqualSlices(u8, bound_code, emit.buf.items);
+    }
 }
 
 test "CallBuilder with automatic R12 save/restore on Linux x64" {

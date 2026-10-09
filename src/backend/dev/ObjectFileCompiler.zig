@@ -745,11 +745,17 @@ pub fn spliceExternalProcs(
         try procs_by_identity.put(proc.identity, @enumFromInt(@as(u32, @intCast(index))));
     }
 
-    const PackState = struct { placed: std.AutoHashMap(u32, usize) };
+    const PackState = struct {
+        placed: std.AutoHashMap(u32, usize),
+        graph: @import("ArtifactClosure.zig"),
+    };
     var packs = std.AutoHashMap(*const ProcArtifact.Set, PackState).init(allocator);
     defer {
         var states = packs.valueIterator();
-        while (states.next()) |state| state.placed.deinit();
+        while (states.next()) |state| {
+            state.graph.deinit();
+            state.placed.deinit();
+        }
         packs.deinit();
     }
 
@@ -762,9 +768,18 @@ pub fn spliceExternalProcs(
             }
             unreachable;
         };
-        const gop = try packs.getOrPut(located.set);
-        if (!gop.found_existing) gop.value_ptr.* = .{ .placed = std.AutoHashMap(u32, usize).init(allocator) };
-        try ProcArtifact.splice(CodeGen, allocator, codegen, located.set, &.{located.index}, &procs_by_identity, &gop.value_ptr.placed, data_out);
+        // Construct before insertion so allocation failure never leaves an
+        // uninitialized state for the deferred cleanup to consume.
+        if (!packs.contains(located.set)) {
+            var graph = try @import("ArtifactClosure.zig").init(allocator, located.set);
+            errdefer graph.deinit();
+            try packs.putNoClobber(located.set, .{
+                .placed = std.AutoHashMap(u32, usize).init(allocator),
+                .graph = graph,
+            });
+        }
+        const state = packs.getPtr(located.set).?;
+        try ProcArtifact.spliceIndexed(CodeGen, allocator, codegen, &state.graph, &.{located.index}, &procs_by_identity, &state.placed, data_out);
     }
 }
 

@@ -61,7 +61,8 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v39: `crash` statements record whether checking rejected the code they stand for.
 /// v40: source file table entries carry their module's content identity.
 /// v41: wide-UTF decoding ops renumber later LowLevel ops, alongside v39 and v40.
-pub const FORMAT_VERSION: u32 = 41;
+/// v42: source files carry exact checked-module provenance for native CTFE binding.
+pub const FORMAT_VERSION: u32 = 42;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -172,6 +173,7 @@ pub const LirStoreImage = extern struct {
     source_file_qualified_bytes: ArrayRef,
     source_file_qualified_ends: ArrayRef,
     source_file_identities: ArrayRef,
+    source_file_checked_modules: ArrayRef,
     cf_stmt_locs: ArrayRef,
     cf_stmt_regions: ArrayRef,
     cf_stmt_inline_scopes: ArrayRef,
@@ -204,6 +206,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try arrayRef(base_ptr, image_size, store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try arrayRef(base_ptr, image_size, store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try arrayRef(base_ptr, image_size, store.source_file_identities.unsafeRawItemsForView()),
+            .source_file_checked_modules = try arrayRef(base_ptr, image_size, store.source_file_checked_modules.unsafeRawItemsForView()),
             .cf_stmt_locs = try arrayRef(base_ptr, image_size, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try arrayRef(base_ptr, image_size, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try arrayRef(base_ptr, image_size, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -243,6 +246,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_qualified_bytes.unsafeRawItemsForView()),
             .source_file_qualified_ends = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_qualified_ends.unsafeRawItemsForView()),
             .source_file_identities = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_identities.unsafeRawItemsForView()),
+            .source_file_checked_modules = try copyArrayRef(allocator, base_ptr, image_capacity, store.source_file_checked_modules.unsafeRawItemsForView()),
             .cf_stmt_locs = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_locs.unsafeRawItemsForView()),
             .cf_stmt_regions = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_regions.unsafeRawItemsForView()),
             .cf_stmt_inline_scopes = try copyArrayRef(allocator, base_ptr, image_capacity, store.cf_stmt_inline_scopes.unsafeRawItemsForView()),
@@ -280,6 +284,7 @@ pub const LirStoreImage = extern struct {
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
             .source_file_qualified_ends = try guardedListFromRef(u32, "LirStore.source_file_qualified_ends", base_ptr, image_size, self.source_file_qualified_ends),
             .source_file_identities = try guardedListFromRef([32]u8, "LirStore.source_file_identities", base_ptr, image_size, self.source_file_identities),
+            .source_file_checked_modules = try guardedListFromRef(LirStore.CheckedSourceOwner, "LirStore.source_file_checked_modules", base_ptr, image_size, self.source_file_checked_modules),
             .cf_stmt_locs = try guardedListFromRef(base.SourceLoc, "LirStore.cf_stmt_locs", base_ptr, image_size, self.cf_stmt_locs),
             .cf_stmt_regions = try guardedListFromRef(base.Region, "LirStore.cf_stmt_regions", base_ptr, image_size, self.cf_stmt_regions),
             .cf_stmt_inline_scopes = try guardedListFromRef(LIR.InlineScopeId, "LirStore.cf_stmt_inline_scopes", base_ptr, image_size, self.cf_stmt_inline_scopes),
@@ -927,7 +932,7 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 37);
+    std.debug.assert(@typeInfo(LirStore).@"struct".fields.len == 38);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".fields.len == 16);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".fields.len == 1);
 }
@@ -1485,6 +1490,7 @@ const serialized_guarded_fields = [_][]const u8{
     "source_file_qualified_bytes",
     "source_file_qualified_ends",
     "source_file_identities",
+    "source_file_checked_modules",
     "cf_stmt_locs",
     "cf_stmt_regions",
     "cf_stmt_inline_scopes",

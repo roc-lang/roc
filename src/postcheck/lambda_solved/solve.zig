@@ -436,6 +436,7 @@ const Solver = struct {
                 .ty = ty,
                 .fn_id = request.fn_id,
                 .const_locator = request.const_locator,
+                .comptime_root = request.comptime_root,
             });
         }
 

@@ -229,6 +229,14 @@ pub fn Emit(comptime target: RocTarget) type {
             }
         }
 
+        /// Fixed representation for a context value rebound in another program.
+        pub fn movRegContextImm64(self: *Self, dst: GeneralReg, imm: u64) Allocator.Error!void {
+            try self.movz(.w64, dst, @truncate(imm), 0);
+            try self.movk(.w64, dst, @truncate(imm >> 16), 16);
+            try self.movk(.w64, dst, @truncate(imm >> 32), 32);
+            try self.movk(.w64, dst, @truncate(imm >> 48), 48);
+        }
+
         /// Load a 32-bit (or smaller) signed immediate into a register
         /// Uses MOVZ + MOVK sequence, treating the value as a bit pattern
         pub fn movRegImm32(self: *Self, width: RegisterWidth, dst: GeneralReg, imm: i32) Allocator.Error!void {

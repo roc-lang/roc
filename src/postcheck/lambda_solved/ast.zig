@@ -29,6 +29,7 @@ pub const LayoutRequest = struct {
     ty: Type.TypeVarId,
     fn_id: ?Lifted.FnId = null,
     const_locator: ?@import("check").CheckedModule.ConstLocator = null,
+    comptime_root: ?Common.ComptimeValueRoot = null,
 };
 
 /// Runtime schema requested for a named runtime value shape.

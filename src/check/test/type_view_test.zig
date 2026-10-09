@@ -13,7 +13,7 @@ const Fixture = struct {
     store: types.Store,
     idents: base.Ident.Store,
 
-    fn init() !Fixture {
+    fn init() std.mem.Allocator.Error!Fixture {
         var store = try types.Store.initCapacity(testing.allocator, 32, 0);
         errdefer store.deinit();
         return .{ .store = store, .idents = try base.Ident.Store.initCapacity(testing.allocator, 8) };
@@ -22,16 +22,16 @@ const Fixture = struct {
         self.store.deinit();
         self.idents.deinit(testing.allocator);
     }
-    fn ident(self: *Fixture, text: []const u8) !base.Ident.Idx {
+    fn ident(self: *Fixture, text: []const u8) (std.mem.Allocator.Error || base.Ident.Error)!base.Ident.Idx {
         return self.idents.insert(testing.allocator, try base.Ident.from_bytes(text));
     }
-    fn rigid(self: *Fixture, text: []const u8) !Var {
+    fn rigid(self: *Fixture, text: []const u8) (std.mem.Allocator.Error || base.Ident.Error)!Var {
         return self.store.freshFromContent(.{ .rigid = types.Rigid.init(try self.ident(text)) });
     }
-    fn tuple(self: *Fixture, vars: []const Var) !Var {
+    fn tuple(self: *Fixture, vars: []const Var) std.mem.Allocator.Error!Var {
         return self.store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try self.store.appendVars(vars) } } });
     }
-    fn declaration(self: *Fixture, text: []const u8, formals: []const Var, backing: Var) !types.NominalType {
+    fn declaration(self: *Fixture, text: []const u8, formals: []const Var, backing: Var) (std.mem.Allocator.Error || base.Ident.Error)!types.NominalType {
         const name: types.TypeIdent = .{ .ident_idx = try self.ident(text) };
         const source = try types.NominalType.Source.initChecked(
             try types.SourceDecl.fromStatementChecked(@intCast(self.store.nominalDeclCount())),
@@ -49,19 +49,19 @@ const Fixture = struct {
         });
         return .{ .ident = name, .origin_module = @enumFromInt(0), .source = source, .args = args };
     }
-    fn application(self: *Fixture, nominal: types.NominalType, args: []const Var) !types.NominalType {
+    fn application(self: *Fixture, nominal: types.NominalType, args: []const Var) std.mem.Allocator.Error!types.NominalType {
         var result = nominal;
         result.args = try self.store.appendVars(args);
         return result;
     }
 };
 
-fn tupleChildren(reader: *Reader, root: Var) ![]const Var {
+fn tupleChildren(reader: *Reader, root: Var) std.mem.Allocator.Error![]const Var {
     const resolved = try reader.resolveVar(root);
     return reader.sliceVars(resolved.desc.content.structure.tuple.elems);
 }
 
-fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) !exhaustive.BuiltinIdents {
+fn builtinIdents(f: *Fixture, cache: *exhaustive.NominalOpenCache) (std.mem.Allocator.Error || base.Ident.Error)!exhaustive.BuiltinIdents {
     const sentinel = try f.ident("NotNumeric");
     var result: exhaustive.BuiltinIdents = undefined;
     inline for (std.meta.fields(exhaustive.BuiltinIdents)) |field| {
@@ -326,7 +326,7 @@ test "nominal views recursion keys distinguish permutations and converge after c
     try testing.expectEqual(before, f.store.len());
 }
 
-fn allocationFailureCase(gpa: std.mem.Allocator) !void {
+fn allocationFailureCase(gpa: std.mem.Allocator) (std.mem.Allocator.Error || base.Ident.Error || error{ TestExpectedEqual, TestUnexpectedResult })!void {
     var f = try Fixture.init();
     defer f.deinit();
     const a = try f.rigid("a");

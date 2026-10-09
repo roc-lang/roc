@@ -285,6 +285,7 @@ pub const Options = struct {
     proc_debug_names: bool = false,
     /// The object cache to ask for closed specializations at reservation.
     spec_cache: ?Common.SpecCacheLookup = null,
+    root_use_cache: ?Common.SpecCacheLookup = null,
     /// Optional deterministic counters for specialization-shape tests.
     specialization_counters: ?*SpecializationCounters = null,
     /// Optional deterministic workload diagnostics. The checked pipeline
@@ -693,7 +694,7 @@ pub fn run(
     roots: Common.RootRequests,
     options: Options,
 ) Common.LowerError!Ast.Program {
-    if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0) {
+    if (roots.requests.len == 0 and roots.layout_requests.len == 0 and roots.static_data_requests.len == 0 and roots.cached_root_declarations.len == 0) {
         Common.invariant("Monotype lowering requires explicit roots, layout requests, or static data requests");
     }
 
@@ -705,6 +706,9 @@ pub fn run(
     var builder = Builder.init(allocator, modules, &program, options);
     defer builder.deinit();
     try builder.seedProgramModuleTables();
+    // Cache admission must know the current app filling before any body is
+    // skipped. Checked bindings are immutable throughout this producer.
+    program.platform_requirement_filling = builder.platformRequirementFilling();
     var digest_stats: Type.Store.DigestStats = .{};
     program.types.digest_stats = if (builder.counters != null) &digest_stats else null;
     defer {
@@ -746,6 +750,7 @@ pub fn run(
         for (roots.static_data_requests) |request| {
             try builder.lowerStaticDataRequest(request);
         }
+        try builder.declareCachedRootReads(roots.cached_root_declarations, true);
         try builder.drainPendingSpecJobs();
     }
 
@@ -754,7 +759,6 @@ pub fn run(
         defer finalization_timing_scope.end();
         program.next_symbol = builder.symbols.coordinator.next;
         builder.stampSingleSourceCalls();
-        program.platform_requirement_filling = builder.platformRequirementFilling();
         try program.sealRemainingCaptureIdentities();
         try recordComptimeValueReads(allocator, &program);
         program.freeze();
@@ -801,6 +805,15 @@ fn sortedRecordField(fields: anytype, name_store: *const names.NameStore, name: 
 fn recordComptimeValueReads(allocator: Allocator, program: *Ast.Program) Allocator.Error!void {
     var recorded = std.AutoHashMap(EntryRoot, void).init(allocator);
     defer recorded.deinit();
+    for (program.layoutRequestsView()) |request| {
+        const root = request.comptime_root orelse continue;
+        const checked_root = switch (root.root) {
+            .checked => |id| id,
+            .literal => Common.invariant("cached storage demand named an undeclared literal instance"),
+        };
+        const entry = try recorded.getOrPut(.{ .module = root.module, .root = checked_root });
+        if (!entry.found_existing) try program.addComptimeValueRead(root);
+    }
     for (program.exprsView()) |expr| {
         if (expr.data != .comptime_value) continue;
         const root = program.getComptimeValueRoot(expr.data.comptime_value.root);
@@ -4155,6 +4168,7 @@ const Builder = struct {
     proc_debug_names: bool,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
+    root_use_cache: ?Common.SpecCacheLookup,
     counters: ?*SpecializationCounters,
     diagnostics: ?*Diagnostics,
     /// Result-owned sink while one ordinary specialization shard is lowering or
@@ -4165,6 +4179,7 @@ const Builder = struct {
     comptime_value_reads: bool,
     literal_roots: bool,
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
+    declared_cached_roots: std.AutoHashMap(EntryRoot, void),
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
@@ -4385,6 +4400,7 @@ const Builder = struct {
             .current_region = program.current_region,
             .proc_debug_names = options.proc_debug_names,
             .spec_cache = options.spec_cache,
+            .root_use_cache = options.root_use_cache,
             .counters = counters,
             .diagnostics = options.diagnostics,
             .active_spec_job_diagnostics = null,
@@ -4393,6 +4409,7 @@ const Builder = struct {
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
+            .declared_cached_roots = std.AutoHashMap(EntryRoot, void).init(allocator),
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
@@ -4490,6 +4507,7 @@ const Builder = struct {
                 .name = seed.name,
                 .qualified_name = seed.qualified_name,
                 .module_identity = seed.key.module_identity_hash,
+                .checked_module_key = seed.key.bytes,
             });
             if (id != index) Common.invariant("Monotype program source file id did not match its sorted position");
             self.source_file_ids.getPtr(seed.key.bytes).?.* = id;
@@ -4612,6 +4630,7 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
+        self.declared_cached_roots.deinit();
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
@@ -5345,6 +5364,69 @@ const Builder = struct {
             .ty = ty,
         });
         try self.appendRuntimeSchemaRequestsForType(ty);
+    }
+
+    /// Preserve storage demand that retiring a cached body would otherwise erase.
+    /// The checked root owns its type and payload; no cached layout is converted
+    /// back into a type and no erased source expression is inspected.
+    fn declareCachedRootReads(self: *Builder, uses: []const Common.CheckedRootUse, projection: bool) Allocator.Error!void {
+        if (uses.len == 0) return;
+        const destination = ProgramTypeDestination.begin(self);
+        defer destination.end();
+        const saved_graph = self.active_graph;
+        const saved_draft = self.active_body_draft;
+        self.active_graph = null;
+        self.active_body_draft = null;
+        defer {
+            self.active_graph = saved_graph;
+            self.active_body_draft = saved_draft;
+        }
+        for (uses) |use| {
+            const key = EntryRoot{ .module = .{ .bytes = use.module }, .root = @enumFromInt(use.root) };
+            const entry = try self.declared_cached_roots.getOrPut(key);
+            if (entry.found_existing) continue;
+            errdefer _ = self.declared_cached_roots.remove(key);
+            const view = self.moduleForId(key.module);
+            const root = view.compile_time_roots.root(key.root);
+            const ty = try self.lowerType(view, root.checked_type);
+            // Callable-bearing storage requires instance-owned solution; an
+            // ordinary checked-root offer cannot declare that missing instance.
+            if (self.program.types.get(ty) == .func or try self.monoFnTypeMentionsFunction(ty)) {
+                _ = self.declared_cached_roots.remove(key);
+                continue;
+            }
+            var completion: @FieldType(Common.ComptimeValueRoot, "completion") = .pending;
+            var initializer: ?Ast.DefId = null;
+            if (!projection) {
+                if (root.failure) |failure| {
+                    completion = .{ .failure = failure };
+                } else if (root.payload == .const_node) {
+                    completion = .value;
+                    const body = try self.restoreConstNodeAtType(view, view, root.payload.const_node, ty);
+                    var hasher = TypeDigestHasher.init();
+                    hasher.update("roc-checked-root-storage-initializer-v1");
+                    hasher.update(&key.module.bytes);
+                    hashU32(&hasher, use.root);
+                    const identity = self.program.types.typeDigest(&self.program.names, ty);
+                    hasher.update(&identity.bytes);
+                    const digest = hasher.finalResult();
+                    initializer = try self.program.addDef(.{
+                        .symbol = self.symbols.fresh(),
+                        .fn_def = null,
+                        .root_identity = .{ .bytes = digest },
+                        .args = .empty(),
+                        .body = .{ .roc = body },
+                        .ret = ty,
+                    });
+                }
+            }
+            try self.program.addLayoutRequest(.{
+                .checked_type = root.checked_type,
+                .ty = ty,
+                .def = initializer,
+                .comptime_root = .{ .module = key.module, .root = .{ .checked = key.root }, .const_locator = null, .completion = completion },
+            });
+        }
     }
 
     fn lowerStaticDataRequest(self: *Builder, request: Common.StaticDataRequest) Allocator.Error!void {
@@ -6365,9 +6447,15 @@ const Builder = struct {
                 const name: []const u8 = if (proc_base.export_name) |e| view.names.exportNameText(e) else "?";
                 std.debug.print("CENSUS_KEY\t{s}\t{x}\tev={x}\tcodec={x}\treq={x}\tcallable={s}\n", .{ name, key.bytes[0..8], spec_identity.evidence_digest.bytes[0..6], spec_identity.codec_contract_digest.bytes[0..6], spec_identity.request_fn_ty_digest.bytes[0..6], @tagName(spec_identity.callable) });
             }
+            const relation = if (self.program.platform_requirement_filling) |filling| filling.relation else null;
+            const root_hit = if (self.root_use_cache) |cache| cache.lookup(key.bytes, relation) else null;
+            if (root_hit) |hit| fn_template.cached_root_uses = hit.checked_root_uses;
             if (self.spec_cache) |cache| {
-                if (cache.lookup(key.bytes)) |hit| {
+                const same_lookup = if (self.root_use_cache) |root_cache| root_cache.sameProvider(cache) else false;
+                const body_hit = if (same_lookup) root_hit else cache.lookup(key.bytes, relation);
+                if (body_hit) |hit| {
                     fn_template.cached = hit;
+                    if (root_hit == null) fn_template.cached_root_uses = hit.checked_root_uses;
                     self.count("spec_cache_hits");
                     if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} hit\n", .{key.bytes[0..8]});
                 } else if (pack_trace_available and packTraceEnabled()) std.debug.print("lookup monotype key={x} miss\n", .{key.bytes[0..8]});
@@ -6782,6 +6870,7 @@ const Builder = struct {
         const view = self.moduleForDigest(names.procTemplateModuleDigest(template_ref));
         const template = view.templates.get(template_ref.template);
 
+        try self.declareCachedRootReads(fn_template.cached_root_uses, false);
         if (fn_template.cached != null) {
             // The object cache holds this specialization's compiled
             // procedure. The definition keeps its declared shape and no body,
@@ -7551,6 +7640,10 @@ const Builder = struct {
         shard: *CompletedSpecJobShard,
     ) Allocator.Error!void {
         self.requireNextSpecAcceptance(shard.dispatch_index);
+        // Source jobs commit through shards, not hosted completion. Their
+        // metadata-only native demand must be declared on this coordinator
+        // path too, before Direct LIR can substitute their emitted code.
+        try self.declareCachedRootReads(shard.pending.fn_template.cached_root_uses, false);
         if (shard.diagnostics_committed) {
             Common.compilerBug("Monotype specialization shard diagnostics were committed more than once");
         }
@@ -68112,7 +68205,7 @@ test "body draft store appends draft-local ids spans and type cells" {
         .{ .padding = ty },
     });
     const site = try draft.addComptimeSite(.if_, .first, base.Region.zero(), null, &.{base.Region.zero()});
-    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc", .module_identity = @splat(0) });
+    const source_file = try program.addSourceFile(.{ .name = "module.roc", .qualified_name = "test.module.roc", .module_identity = @splat(0), .checked_module_key = null });
     try draft.setLocalName(local, "value");
     const record_pat = try draft.addPat(.{ .ty = ty, .data = .{ .record = destruct_span } });
     const str_pat = try draft.addPat(.{ .ty = ty, .data = .{ .str_pattern = .{
