@@ -13,6 +13,7 @@ const layout = @import("layout");
 const roc_target = @import("roc_target");
 const Emitter = @import("LirCodeGen.zig");
 const Artifact = @import("ProcArtifact.zig");
+const StackPlan = @import("StackPlan.zig");
 const tasks = base.post_check_task_executor;
 const Allocator = std.mem.Allocator;
 const ProcId = lir.LIR.LirProcSpecId;
@@ -170,7 +171,7 @@ fn Job(comptime CG: type) type {
                 source.cpu_level,
             );
             defer cg.deinit();
-            cg.stack_plan_maps = try laneStackPlanMaps(worker);
+            cg.borrowStackPlanIndexes(try laneStackPlanIndexes(worker));
             cg.generation_mode = source.generation_mode;
             cg.dict_seed_mode = source.dict_seed_mode;
             cg.enable_hot_reload = source.enable_hot_reload;
@@ -185,34 +186,36 @@ fn Job(comptime CG: type) type {
     };
 }
 
-const StackPlanMapsKey = struct {
+const StackPlanIndexesKey = struct {
     var value: u8 = 0;
 };
 
-/// The stack-plan maps this lane keeps across the procedures it compiles.
-fn laneStackPlanMaps(worker: tasks.Worker) Allocator.Error!*Emitter.StackPlanMaps {
-    const key: *const anyopaque = @ptrCast(&StackPlanMapsKey.value);
-    if (worker.lane_state.get(key)) |existing| return @ptrCast(@alignCast(existing));
-    const maps = try worker.allocator.create(Emitter.StackPlanMaps);
-    errdefer worker.allocator.destroy(maps);
-    maps.* = Emitter.StackPlanMaps.init(worker.allocator);
-    errdefer maps.deinit();
-    try worker.lane_state.put(key, maps, struct {
-        fn deinit(opaque_maps: *anyopaque) void {
-            const owned: *Emitter.StackPlanMaps = @ptrCast(@alignCast(opaque_maps));
-            const allocator = owned.nodes.allocator;
-            owned.deinit();
-            allocator.destroy(owned);
-        }
-    }.deinit);
-    return maps;
+/// The stack-plan indexes this lane lends every procedure it generates.
+fn laneStackPlanIndexes(worker: tasks.Worker) Allocator.Error!*StackPlan.Indexes {
+    const key: *const anyopaque = @ptrCast(&StackPlanIndexesKey.value);
+    if (worker.lane_state.get(key)) |opaque_indexes| return @ptrCast(@alignCast(opaque_indexes));
+    const indexes = try worker.allocator.create(StackPlan.Indexes);
+    errdefer worker.allocator.destroy(indexes);
+    indexes.* = StackPlan.Indexes.init(worker.allocator);
+    errdefer indexes.deinit();
+    try worker.lane_state.put(key, indexes, destroyStackPlanIndexes);
+    return indexes;
+}
+
+fn destroyStackPlanIndexes(opaque_indexes: *anyopaque) void {
+    const indexes: *StackPlan.Indexes = @ptrCast(@alignCast(opaque_indexes));
+    const allocator = indexes.allocator;
+    indexes.deinit();
+    allocator.destroy(indexes);
 }
 
 const wave_capacity = 32;
 
 /// Runs the same callback path with or without an executor. Admission stops on
 /// any observed OOM, but all accepted callbacks finish before owners are touched.
-fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, metrics: *Metrics) Allocator.Error!void {
+/// Without an executor, every wave runs on `sequential_lane`, which outlives
+/// the waves so lane state carries from one to the next as on a worker.
+fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executor: ?tasks.Executor, sequential_lane: *tasks.LaneState, metrics: *Metrics) Allocator.Error!void {
     var failed = false;
     if (executor) |exec| {
         var session = exec.begin();
@@ -240,8 +243,6 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
         }
         session.end();
     } else {
-        var lane = tasks.LaneState.init(allocator);
-        defer lane.deinit();
         var scratch = std.heap.ArenaAllocator.init(allocator);
         defer scratch.deinit();
         var accepted: usize = 0;
@@ -251,7 +252,7 @@ fn executeWave(comptime CG: type, allocator: Allocator, jobs: []Job(CG), executo
             metrics.tasks_submitted +|= 1;
             accepted += 1;
             metrics.peak_inflight_fragments = @max(metrics.peak_inflight_fragments, accepted);
-            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = &lane });
+            _ = Job(CG).execute(job, .{ .id = 0, .allocator = allocator, .scratch = scratch.allocator(), .lane_state = sequential_lane });
             if (job.oom) {
                 failed = true;
                 break;
@@ -295,6 +296,8 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
     std.debug.assert(contract.target == options.target.defaultCpuTarget());
     var retained = Retained{ .allocator = allocator, .contract = contract };
     errdefer retained.deinit();
+    var sequential_lane = tasks.LaneState.init(allocator);
+    defer sequential_lane.deinit();
     // Index immutable backing once; workers capture only reached data. Execution
     // callers leave mutable static roots external, never copied placeholder values.
     std.debug.assert(contract.static_data_readonly or options.constant_exports.len == 0);
@@ -355,7 +358,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 }
             }
         }
-        try executeWave(CG, allocator, storage[0..count], options.executor, &metrics);
+        try executeWave(CG, allocator, storage[0..count], options.executor, &sequential_lane, &metrics);
         for (storage[0..count]) |*job| {
             const fragment = &job.fragment.?;
             try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
@@ -380,7 +383,7 @@ pub fn run(comptime CG: type, allocator: Allocator, destination: *CG, demand: []
                 job.reused = true;
             }
         }
-        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &metrics);
+        try executeWave(CG, allocator, @as(*[1]Job(CG), @ptrCast(&job)), options.executor, &sequential_lane, &metrics);
         const fragment = &job.fragment.?;
         try requireHelpers(allocator, fragment, &helper_queue, &helper_seen);
         const name = try Emitter.compiledRcHelperSymbolName(allocator, destination.layout_store, key);

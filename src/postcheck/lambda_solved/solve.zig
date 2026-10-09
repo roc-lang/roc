@@ -149,11 +149,22 @@ const Solver = struct {
     /// reachable from it. The forced-dynamic scan materializes exactly these
     /// leaves so the named nodes it must mark exist in the solved store.
     contains_forced_dynamic: []bool,
+    /// Finalization's clone of each lifted Monotype, shared by every
+    /// untouched leaf of it.
     shared_clones: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
+    /// The lifted Monotype each lazy leaf var was created for. A var keeps
+    /// its entry after it expands or joins another class: a class holding
+    /// such a var is an instance of that Monotype.
+    leaf_origins: collections.DenseMap(Type.TypeVarId, MonoType.TypeId),
     /// One memo map per lazily materialized tree, tying recursive
     /// back-references to their existing vars exactly as an eager clone's
     /// per-call memo did. Allocated on a leaf's first expansion.
     leaf_contexts: std.ArrayList(collections.DenseMap(MonoType.TypeId, Type.TypeVarId)),
+    /// Per clone context, parallel to `leaf_contexts`: what its expansions
+    /// have registered so far.
+    leaf_context_shapes: std.ArrayList(LeafContextShape),
+    /// Per lifted Monotype: whether a cycle is reachable from it.
+    reaches_cycle: []bool,
     /// Pools for the short-lived maps the solver creates per work item (clone
     /// memos, visited sets). Their sparse chunks span the large type ID
     /// domains, so per-item fresh maps would spend most of their time
@@ -308,6 +319,7 @@ const Solver = struct {
         const masks = try computeReachabilityMasks(allocator, lifted.types);
         errdefer allocator.free(masks.contains_callable);
         errdefer allocator.free(masks.contains_forced_dynamic);
+        errdefer allocator.free(masks.reaches_cycle);
 
         return .{
             .allocator = allocator,
@@ -329,7 +341,10 @@ const Solver = struct {
             .contains_callable = masks.contains_callable,
             .contains_forced_dynamic = masks.contains_forced_dynamic,
             .shared_clones = collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(allocator),
+            .leaf_origins = collections.DenseMap(Type.TypeVarId, MonoType.TypeId).init(allocator),
             .leaf_contexts = .empty,
+            .leaf_context_shapes = .empty,
+            .reaches_cycle = masks.reaches_cycle,
             .solved_set_pool = collections.DenseMapPool(Type.TypeVarId, void).init(allocator),
             .solved_position_pool = collections.DenseMapPool(Type.TypeVarId, u32).init(allocator),
             .tag_row_indexes = .empty,
@@ -371,7 +386,10 @@ const Solver = struct {
         self.solved_set_pool.deinit();
         for (self.leaf_contexts.items) |*ctx| ctx.deinit();
         self.leaf_contexts.deinit(self.allocator);
+        self.leaf_context_shapes.deinit(self.allocator);
+        self.allocator.free(self.reaches_cycle);
         self.shared_clones.deinit();
+        self.leaf_origins.deinit();
         self.allocator.free(self.contains_forced_dynamic);
         self.allocator.free(self.contains_callable);
         self.comptime_read_tys.deinit(self.allocator);
@@ -1580,7 +1598,9 @@ const Solver = struct {
     /// materializes one level at a time as unification or shape reads touch
     /// it, and `finalizeMonoLeaves` replaces whatever survives solving.
     fn monoLeaf(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
-        return try self.program.types.add(.{ .mono = .{ .id = ty } });
+        const leaf = try self.program.types.add(.{ .mono = .{ .id = ty } });
+        try self.leaf_origins.put(leaf, ty);
+        return leaf;
     }
 
     fn lowerTypeFresh(self: *Solver, ty: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
@@ -1597,10 +1617,11 @@ const Solver = struct {
     fn expandMonoRoot(self: *Solver, root: Type.TypeVarId, leaf: MonoLeaf) Allocator.Error!Type.Content {
         const ctx: u32 = if (leaf.ctx != Type.no_leaf_context) leaf.ctx else blk: {
             if (self.isCallableFree(leaf.id)) break :blk try self.sharedLeafContext();
-            const index: u32 = @intCast(self.leaf_contexts.items.len);
-            try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
-            break :blk index;
+            break :blk try self.newLeafContext();
         };
+        // Expanding or joining a registered leaf retires it from its
+        // context's unexpanded leaves.
+        self.retireContextLeaf(leaf);
         if (self.leaf_contexts.items[ctx].get(leaf.id)) |existing| {
             const existing_root = self.program.types.rootCompressed(existing);
             if (existing_root != root) {
@@ -1650,10 +1671,25 @@ const Solver = struct {
     /// The one clone context every callable-free leaf materializes in.
     fn sharedLeafContext(self: *Solver) Allocator.Error!u32 {
         if (self.shared_leaf_context) |shared| return shared;
-        const index: u32 = @intCast(self.leaf_contexts.items.len);
-        try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+        const index = try self.newLeafContext();
         self.shared_leaf_context = index;
         return index;
+    }
+
+    fn newLeafContext(self: *Solver) Allocator.Error!u32 {
+        const index: u32 = @intCast(self.leaf_contexts.items.len);
+        try self.leaf_context_shapes.ensureUnusedCapacity(self.allocator, 1);
+        try self.leaf_contexts.append(self.allocator, collections.DenseMap(MonoType.TypeId, Type.TypeVarId).init(self.allocator));
+        self.leaf_context_shapes.appendAssumeCapacity(.{});
+        return index;
+    }
+
+    /// A leaf registered in a callable-bearing clone context can no longer
+    /// expand there once it expands or joins another class.
+    fn retireContextLeaf(self: *Solver, leaf: MonoLeaf) void {
+        if (leaf.ctx == Type.no_leaf_context) return;
+        if (self.shared_leaf_context == leaf.ctx) return;
+        self.leaf_context_shapes.items[leaf.ctx].unexpanded -= 1;
     }
 
     fn registerNamedBacking(self: *Solver, content: Type.Content) void {
@@ -1673,9 +1709,10 @@ const Solver = struct {
     }
 
     /// Replace every output-reachable lazy leaf with a link to a materialized
-    /// clone so program views never observe one. Untouched leaves of one
-    /// callable-free Monotype share one clone; callable-bearing leaves get a
-    /// private clone whose callable-free subgraphs still share.
+    /// clone so program views never observe one. A leaf that survived solving
+    /// was never unified: its clone's callable slots all close empty, and its
+    /// forced-dynamic marks depend only on its Monotype, so every untouched
+    /// leaf of one Monotype shares one clone, callable-bearing or not.
     fn finalizeMonoLeaves(self: *Solver) Allocator.Error!void {
         var visited = collections.DenseMap(Type.TypeVarId, void).init(self.allocator);
         defer visited.deinit();
@@ -1749,9 +1786,9 @@ const Solver = struct {
         }
     }
 
-    /// Materialized clone for a leaf that survived solving, matching what the
-    /// post-solve eager clone produced: shared for callable-free Monotypes,
-    /// self-marking for forced-dynamic iterator content.
+    /// Materialized clone for a leaf that survived solving, shared with every
+    /// other untouched leaf of the same Monotype and self-marking for
+    /// forced-dynamic iterator content.
     fn finalMonoClone(self: *Solver, id: MonoType.TypeId) Allocator.Error!Type.TypeVarId {
         var cloner = TypeCloner.init(self);
         cloner.share = true;
@@ -2105,9 +2142,12 @@ const Solver = struct {
         const raw_left = self.program.types.get(a);
         const raw_right = self.program.types.get(b);
         if (raw_left == .mono and raw_right == .mono and raw_left.mono.id == raw_right.mono.id) {
+            self.retireContextLeaf(raw_right.mono);
             self.program.types.set(b, .{ .link = a });
             return;
         }
+        if (try self.linkUntouchedLeafToInstance(a, raw_left, rhs, b)) return;
+        if (try self.linkUntouchedLeafToInstance(b, raw_right, lhs, a)) return;
         const left = if (std.meta.activeTag(raw_left) == .mono) try self.expandMonoRoot(a, raw_left.mono) else raw_left;
         const right = if (std.meta.activeTag(raw_right) == .mono) try self.expandMonoRoot(b, raw_right.mono) else raw_right;
         // Expanding a leaf already materialized in its context links the
@@ -2142,6 +2182,49 @@ const Solver = struct {
         const finish_index = stack.items.len;
         try stack.append(self.allocator, .{ .finish = .{ .pair = pair, .action = .none, .structural_isolated = structural_isolated, .lifts_before = self.lift_count } });
         try self.unifyRoots(stack, finish_index, a, b, left, right, structural_isolated);
+    }
+
+    /// An unexpanded leaf whose expansion nothing else can observe stands for
+    /// a fresh clone of its Monotype. Unifying that clone with a class
+    /// already instantiated from the same Monotype only joins the clone's
+    /// fresh callable slots to the class's, so the leaf joins the class
+    /// without materializing.
+    ///
+    /// The expansion is unobservable when the leaf has no clone context (it
+    /// would get a context of its own), or when it is the only unexpanded
+    /// leaf of a context whose every other entry lies on its ancestor chain:
+    /// no other expansion can reach that context again, and an ancestor
+    /// contains the leaf's Monotype, so it is none of its parts unless the
+    /// Monotype reaches a cycle. A cyclic Monotype keeps the ordinary
+    /// relation, which joins the class's distinct cells at the positions the
+    /// clone ties back together; so does an uninhabited one, whose class
+    /// selection differs. Callable-free leaves already share one clone.
+    fn linkUntouchedLeafToInstance(
+        self: *Solver,
+        leaf_root: Type.TypeVarId,
+        leaf_content: Type.Content,
+        other: Type.TypeVarId,
+        other_root: Type.TypeVarId,
+    ) Allocator.Error!bool {
+        if (leaf_content != .mono) return false;
+        const leaf = leaf_content.mono;
+        const id = leaf.id;
+        if (self.isCallableFree(id)) return false;
+        if (leaf.ctx != Type.no_leaf_context) {
+            const shape = self.leaf_context_shapes.items[leaf.ctx];
+            if (!shape.chain or shape.unexpanded != 1) return false;
+        }
+        if (self.reaches_cycle[@backingInt(id)]) return false;
+        if (!self.leafOriginIs(other, id) and !self.leafOriginIs(other_root, id)) return false;
+        if (try self.monoProvenUninhabited(id)) return false;
+        self.retireContextLeaf(leaf);
+        self.program.types.set(leaf_root, .{ .link = other_root });
+        return true;
+    }
+
+    fn leafOriginIs(self: *const Solver, ty: Type.TypeVarId, id: MonoType.TypeId) bool {
+        const origin = self.leaf_origins.get(ty) orelse return false;
+        return origin == id;
     }
 
     fn unifyRoots(
@@ -3397,9 +3480,21 @@ fn writeU32(hasher: *TypeDigestHasher, value: u32) void {
     hasher.update(std.mem.asBytes(&little));
 }
 
+/// What a lazy clone context's expansions have registered.
+const LeafContextShape = struct {
+    /// Callable-bearing leaves registered in the context that have neither
+    /// expanded nor joined another class.
+    unexpanded: u32 = 0,
+    /// Whether every expansion registered at most one callable-bearing child
+    /// and reached none already registered, so the context's entries form
+    /// one path.
+    chain: bool = true,
+};
+
 const ReachabilityMasks = struct {
     contains_callable: []bool,
     contains_forced_dynamic: []bool,
+    reaches_cycle: []bool,
 };
 
 /// Reverse-reachability over the lifted Monotype store: from `func` and
@@ -3513,7 +3608,109 @@ fn computeReachabilityMasks(allocator: Allocator, types: anytype) Allocator.Erro
             try work.append(allocator, parent);
         }
     }
-    return .{ .contains_callable = flags, .contains_forced_dynamic = forced };
+    const cycle = try allocator.alloc(bool, count);
+    errdefer allocator.free(cycle);
+    try markCycleMembers(allocator, parents, parent_starts, cycle);
+    for (cycle, 0..) |on_cycle, index| {
+        if (on_cycle) try work.append(allocator, @intCast(index));
+    }
+    while (work.pop()) |index| {
+        for (parents[parent_starts[index]..parent_starts[index + 1]]) |parent| {
+            if (cycle[parent]) continue;
+            cycle[parent] = true;
+            try work.append(allocator, parent);
+        }
+    }
+    return .{ .contains_callable = flags, .contains_forced_dynamic = forced, .reaches_cycle = cycle };
+}
+
+/// Mark every lifted Monotype that lies on a cycle: a member of a strongly
+/// connected component with more than one type, or a type that is its own
+/// child. Tarjan's algorithm over child edges, on an explicit stack.
+fn markCycleMembers(
+    allocator: Allocator,
+    parents: []const u32,
+    parent_starts: []const u32,
+    cycle: []bool,
+) Allocator.Error!void {
+    const count = cycle.len;
+    @memset(cycle, false);
+    // Child edges are the parent edges reversed.
+    const child_starts = try allocator.alloc(u32, count + 1);
+    defer allocator.free(child_starts);
+    @memset(child_starts, 0);
+    for (0..count) |child| {
+        for (parents[parent_starts[child]..parent_starts[child + 1]]) |parent| child_starts[parent + 1] += 1;
+    }
+    for (0..count) |index| child_starts[index + 1] += child_starts[index];
+    const children = try allocator.alloc(u32, child_starts[count]);
+    defer allocator.free(children);
+    const child_writes = try allocator.dupe(u32, child_starts[0..count]);
+    defer allocator.free(child_writes);
+    for (0..count) |child| {
+        for (parents[parent_starts[child]..parent_starts[child + 1]]) |parent| {
+            children[child_writes[parent]] = @intCast(child);
+            child_writes[parent] += 1;
+        }
+    }
+    const unvisited = std.math.maxInt(u32);
+    const index_of = try allocator.alloc(u32, count);
+    defer allocator.free(index_of);
+    @memset(index_of, unvisited);
+    const low = try allocator.alloc(u32, count);
+    defer allocator.free(low);
+    const on_stack = try allocator.alloc(bool, count);
+    defer allocator.free(on_stack);
+    @memset(on_stack, false);
+    var component = std.ArrayList(u32).empty;
+    defer component.deinit(allocator);
+    const Frame = struct { node: u32, next: u32 };
+    var frames = std.ArrayList(Frame).empty;
+    defer frames.deinit(allocator);
+    var next_index: u32 = 0;
+
+    for (0..count) |start| {
+        if (index_of[start] != unvisited) continue;
+        try frames.append(allocator, .{ .node = @intCast(start), .next = child_starts[start] });
+        index_of[start] = next_index;
+        low[start] = next_index;
+        next_index += 1;
+        try component.append(allocator, @intCast(start));
+        on_stack[start] = true;
+        while (frames.items.len > 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            const node = frame.node;
+            if (frame.next < child_starts[node + 1]) {
+                const child = children[frame.next];
+                frame.next += 1;
+                if (child == node) cycle[node] = true;
+                if (index_of[child] == unvisited) {
+                    index_of[child] = next_index;
+                    low[child] = next_index;
+                    next_index += 1;
+                    try component.append(allocator, child);
+                    on_stack[child] = true;
+                    try frames.append(allocator, .{ .node = child, .next = child_starts[child] });
+                } else if (on_stack[child]) {
+                    low[node] = @min(low[node], index_of[child]);
+                }
+                continue;
+            }
+            frames.items.len -= 1;
+            if (frames.items.len > 0) {
+                const parent = frames.items[frames.items.len - 1].node;
+                low[parent] = @min(low[parent], low[node]);
+            }
+            if (low[node] != index_of[node]) continue;
+            const component_start = std.mem.findScalarLast(u32, component.items, node).?;
+            const members = component.items[component_start..];
+            for (members) |member| on_stack[member] = false;
+            if (members.len > 1) {
+                for (members) |member| cycle[member] = true;
+            }
+            component.items.len = component_start;
+        }
+    }
 }
 
 /// Decides whether a solved type is proven uninhabited. A type on the active
@@ -3669,15 +3866,17 @@ const TypeCloner = struct {
     map: collections.DenseMap(MonoType.TypeId, Type.TypeVarId),
     /// Unification rewrites var contents in place (alias backings, named
     /// absorption, uninhabited links), so clones that can still reach `unify`
-    /// must stay per-use. After solving no var is unified again, and clones of
-    /// callable-free types carry no unbound slots, so those may share one var
-    /// per Monotype during finalization.
+    /// must stay per-use. After solving no var is unified again, and every
+    /// unbound callable slot of a finalization clone closes empty, so
+    /// finalization shares one clone per Monotype.
     share: bool = false,
     /// One-level mode: children lower to lazy leaves instead of eager clones,
     /// callable-free ones in the shared context and the rest in this one,
     /// reusing a context's existing var when the Monotype already occurs in
     /// it. Used by `expandMonoRoot`.
     lazy_ctx: ?u32 = null,
+    /// Callable-bearing children the current lazy expansion has registered.
+    lazy_children: u32 = 0,
 
     fn init(solver: *Solver) TypeCloner {
         return .{
@@ -3752,20 +3951,31 @@ const TypeCloner = struct {
             // occurs, exactly as a callable-free root is: it has no callable
             // slot to solve, so unifying two of its occurrences reaches one
             // var instead of walking two copies of its structure.
-            const ctx = if (self.solver.isCallableFree(ty)) try self.solver.sharedLeafContext() else parent_ctx;
+            const callable_free = self.solver.isCallableFree(ty);
+            const ctx = if (callable_free) try self.solver.sharedLeafContext() else parent_ctx;
             const map = &self.solver.leaf_contexts.items[ctx];
-            if (map.get(ty)) |existing| return existing;
+            const shape = &self.solver.leaf_context_shapes.items[ctx];
+            if (!callable_free) {
+                // A context stays a chain while each expansion registers at
+                // most one callable-bearing child and reaches no registered
+                // one.
+                self.lazy_children += 1;
+                if (self.lazy_children > 1) shape.chain = false;
+            }
+            if (map.get(ty)) |existing| {
+                if (!callable_free) shape.chain = false;
+                return existing;
+            }
             const created = try self.solver.program.types.add(.{ .mono = .{ .id = ty, .ctx = ctx } });
+            try self.solver.leaf_origins.put(created, ty);
             try map.put(ty, created);
+            if (!callable_free) shape.unexpanded += 1;
             return created;
         }
         if (self.map.get(ty)) |cached| return cached;
-        if (self.share and !self.solver.contains_callable[@backingInt(ty)]) {
-            if (self.solver.shared_clones.get(ty)) |shared| {
-                try self.map.put(ty, shared);
-                return shared;
-            }
-        }
+        // A shared clone was marked when it was first cloned, so it stays out
+        // of this clone's memo and its forced-dynamic marking.
+        if (self.share) return self.solver.shared_clones.get(ty);
         return null;
     }
 
@@ -3815,7 +4025,7 @@ const TypeCloner = struct {
         frame.* = .{
             .ty = ty,
             .reserved = undefined,
-            .shareable = self.share and !self.solver.contains_callable[@backingInt(ty)],
+            .shareable = self.share,
             .build = .{ .content = self.solver.lifted.types.get(ty) },
         };
         self.solver.acquireCloneLists(&frame.build);

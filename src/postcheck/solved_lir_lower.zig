@@ -15450,7 +15450,6 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             defer result.deinit();
         }
     };
-    // Heap-layout dependent remaps would vary the allocation count between runs.
     var deterministic = base.DeterministicAllocator.init(allocator);
     try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
