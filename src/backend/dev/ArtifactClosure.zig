@@ -133,6 +133,196 @@ fn visit(self: *Self, index: u32) Allocator.Error!void {
     try self.order.append(self.allocator, index);
 }
 
+/// One immutable condensation of the exact serving graph. Components are
+/// numbered caller-before-callee, so consumers union callee facts once in
+/// reverse order. Recursive procedures share a component, not provisional facts.
+pub const Components = struct {
+    arena: std.heap.ArenaAllocator,
+    nodes: []const u32,
+    callees: []const []const u32,
+
+    pub fn deinit(self: *Components) void {
+        self.arena.deinit();
+    }
+};
+
+pub fn components(self: *const Self) Allocator.Error!Components {
+    var arena = std.heap.ArenaAllocator.init(self.allocator);
+    errdefer arena.deinit();
+    const a = arena.allocator();
+    const count = self.set.artifacts.len;
+    const callers = try a.alloc(std.ArrayList(u32), count);
+    @memset(callers, .empty);
+    const callees = try a.alloc(std.ArrayList(u32), count);
+    @memset(callees, .empty);
+    for (self.set.artifacts, 0..) |artifact, index| {
+        for (artifact.refs) |ref| {
+            try callers[ref.target].append(a, @intCast(index));
+            try callees[index].append(a, ref.target);
+        }
+        for (self.symbolicTargets(@intCast(index))) |target| {
+            if (target) |callee| {
+                try callers[callee].append(a, @intCast(index));
+                try callees[index].append(a, callee);
+            }
+        }
+    }
+    const visited = try a.alloc(bool, count);
+    @memset(visited, false);
+    const Frame = struct { node: u32, next: usize = 0 };
+    var frames = std.ArrayList(Frame).empty;
+    var order = std.ArrayList(u32).empty;
+    for (0..count) |start| {
+        if (visited[start]) continue;
+        visited[start] = true;
+        try frames.append(a, .{ .node = @intCast(start) });
+        while (frames.items.len != 0) {
+            const frame = &frames.items[frames.items.len - 1];
+            if (frame.next == callees[frame.node].items.len) {
+                try order.append(a, frame.node);
+                _ = frames.pop();
+                continue;
+            }
+            const callee = callees[frame.node].items[frame.next];
+            frame.next += 1;
+            if (visited[callee]) continue;
+            visited[callee] = true;
+            try frames.append(a, .{ .node = callee });
+        }
+    }
+    const nodes = try a.alloc(u32, count);
+    @memset(nodes, std.math.maxInt(u32));
+    var component_count: u32 = 0;
+    var pending = std.ArrayList(u32).empty;
+    while (order.pop()) |start| {
+        if (nodes[start] != std.math.maxInt(u32)) continue;
+        nodes[start] = component_count;
+        try pending.append(a, start);
+        while (pending.pop()) |node| for (callers[node].items) |caller| {
+            if (nodes[caller] != std.math.maxInt(u32)) continue;
+            nodes[caller] = component_count;
+            try pending.append(a, caller);
+        };
+        component_count += 1;
+    }
+    const edges = try a.alloc(std.AutoHashMap(u32, void), component_count);
+    for (edges) |*set| set.* = std.AutoHashMap(u32, void).init(a);
+    for (callees, 0..) |targets, node| {
+        for (targets.items) |callee| {
+            if (nodes[callee] != nodes[node]) try edges[nodes[node]].put(nodes[callee], {});
+        }
+    }
+    const output = try a.alloc([]const u32, component_count);
+    for (edges, output, 0..) |*set, *owned, component| {
+        const targets = try a.alloc(u32, set.count());
+        var iterator = set.keyIterator();
+        var index: usize = 0;
+        while (iterator.next()) |callee| : (index += 1) {
+            std.debug.assert(callee.* > component);
+            targets[index] = callee.*;
+        }
+        std.mem.sort(u32, targets, {}, std.sort.asc(u32));
+        owned.* = targets;
+    }
+    return .{ .arena = arena, .nodes = nodes, .callees = output };
+}
+
+pub const ContextRequirements = struct {
+    dependencies: @import("LirCodeGen.zig").FragmentContextDependencies = .{},
+    /// Unknown producer facts or unresolved edges are never a neutral context.
+    complete: bool = true,
+
+    fn merge(self: *ContextRequirements, other: ContextRequirements) void {
+        self.dependencies.merge(other.dependencies);
+        self.complete = self.complete and other.complete;
+    }
+};
+
+/// Producer emission facts flow from callees to callers. Unrelated siblings
+/// cannot add requirements to a serving offer. The returned array is owned by
+/// the graph allocator; it is session data, not a reconstructed pack contract.
+pub fn contextRequirements(self: *const Self, groups: *const Components) Allocator.Error![]ContextRequirements {
+    const a = self.allocator;
+    const summaries = try a.alloc(ContextRequirements, groups.callees.len);
+    defer a.free(summaries);
+    @memset(summaries, .{});
+    for (self.set.artifacts, groups.nodes, 0..) |artifact, component, node| {
+        var direct = ContextRequirements{
+            .dependencies = artifact.context_dependencies orelse .{},
+            .complete = artifact.context_complete and artifact.context_dependencies != null and artifact.context_contract != null,
+        };
+        for (self.symbolicTargets(@intCast(node))) |target| {
+            if (target == null) direct.complete = false;
+        }
+        summaries[component].merge(direct);
+    }
+    var cursor = summaries.len;
+    while (cursor != 0) {
+        cursor -= 1;
+        for (groups.callees[cursor]) |callee| summaries[cursor].merge(summaries[callee]);
+    }
+    const output = try a.alloc(ContextRequirements, groups.nodes.len);
+    for (groups.nodes, output) |component, *summary| summary.* = summaries[component];
+    return output;
+}
+
+test "artifact context requirements combine recursion and flow only to callers" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, testContextRequirements, .{});
+}
+
+fn testContextRequirements(allocator: Allocator) !void {
+    var artifacts: [6]ProcArtifact.Artifact = undefined;
+    for (&artifacts, 0..) |*artifact, index| artifact.* = .{
+        .kind = .{ .proc = lir.ProcIdentity.forTest(@intCast(index)) },
+        .code = "",
+        .entry = 0,
+        .frame = null,
+        .refs = &.{},
+        .relocations = &.{},
+        .data = &.{},
+        .context_contract = .{
+            .target = .x64musl,
+            .cpu_level = .default,
+            .hot_reload = false,
+            .default_platform_runtime = false,
+            .dict_seed_mode = .comptime_zero,
+            .hooks_enabled = true,
+            .initialize_boxy_runtime = false,
+            .static_data_readonly = false,
+        },
+        .context_dependencies = .{},
+    };
+    artifacts[0].refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }};
+    artifacts[0].context_dependencies = .{ .dict_seed = true };
+    artifacts[1].refs = &.{
+        .{ .site = 0, .form = .call, .target = 0, .delta = 0 },
+        .{ .site = 0, .form = .call, .target = 2, .delta = 0 },
+    };
+    artifacts[2].context_dependencies = .{ .comptime_hooks = true };
+    artifacts[3].context_dependencies = .{ .boxy_runtime = true };
+    artifacts[4].context_dependencies = null;
+    artifacts[5].refs = &.{.{ .site = 0, .form = .call, .target = 4, .delta = 0 }};
+    const set = ProcArtifact.Set{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &artifacts };
+    var graph = try Self.init(allocator, &set);
+    defer graph.deinit();
+    var groups = try graph.components();
+    defer groups.deinit();
+    const summaries = try graph.contextRequirements(&groups);
+    defer allocator.free(summaries);
+    try std.testing.expectEqual(groups.nodes[0], groups.nodes[1]);
+    try std.testing.expectEqualDeep(summaries[0], summaries[1]);
+    try std.testing.expect(summaries[0].dependencies.dict_seed);
+    try std.testing.expect(summaries[0].dependencies.comptime_hooks);
+    try std.testing.expect(!summaries[0].dependencies.boxy_runtime);
+    try std.testing.expect(summaries[0].complete);
+    try std.testing.expect(!summaries[2].dependencies.dict_seed);
+    try std.testing.expect(summaries[2].dependencies.comptime_hooks);
+    try std.testing.expect(summaries[3].dependencies.boxy_runtime);
+    try std.testing.expect(!summaries[3].dependencies.comptime_hooks);
+    try std.testing.expect(!summaries[4].complete);
+    try std.testing.expect(!summaries[5].complete);
+}
+
 /// Admit all roots in graph-proportional work. Invalid node facts propagate
 /// backwards through exact dependencies; recursive closed graphs need no
 /// provisional "hit" or repeated transitive walk.
@@ -269,6 +459,8 @@ pub const Canonical = struct {
     old_to_new: []const ?u32,
     /// Physical source-set provenance of each actually selected definition.
     new_to_source: []const u32,
+    /// Transitive producer context facts for each physical serving definition.
+    requirements: []const ContextRequirements,
 
     pub fn deinit(self: *Canonical) void {
         self.set.deinit();
@@ -432,11 +624,18 @@ pub fn canonicalizePreferred(
             if (selected.old_to_new[original]) |index| provenance[index] = @intCast(source);
         }
     }
+    var selected_graph = try Self.init(allocator, &selected.set);
+    defer selected_graph.deinit();
+    var groups = try selected_graph.components();
+    defer groups.deinit();
+    const requirements = try selected_graph.contextRequirements(&groups);
+    defer allocator.free(requirements);
     return .{
         .set = selected.set,
         .source_offsets = owned_offsets,
         .old_to_new = mapping,
         .new_to_source = provenance,
+        .requirements = try owned.dupe(ContextRequirements, requirements),
     };
 }
 

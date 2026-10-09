@@ -741,6 +741,10 @@ Complete runtime packs retain their debug-line contract unchanged.
 Admission propagates invalid node facts over the artifact dependency graph once.
 Checked-root demand is shared by recursive components and propagated over their
 condensed dependency graph once, rather than rediscovered at every lookup.
+Producer context requirements use the same recursive components and flow only
+from callees to callers. Missing producer facts and unresolved dependencies make
+only their serving closures incomplete; they are never evidence of neutrality.
+Context completeness is distinct from preservation of compile-time observations.
 Binding batches demanded roots by source set and clones only their union closure.
 Immutable callback catalogs export metadata only when emission requests it;
 ordinary native statements retain their existing ID prefix without a duplicated

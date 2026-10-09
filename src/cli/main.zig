@@ -475,6 +475,9 @@ const CompileTimeObjectCache = struct {
         const original = self.runtime_packs.artifacts.get(identity) orelse return null;
         const chosen = self.chosen.get(identity) orelse return null;
         if (self.canonicalIndex(original) == null or !sameSignature(chosen.hit, hit)) return null;
+        const image = self.canonical.?;
+        if (chosen.artifact.set != &self.canonical.?.set or
+            !image.requirements[chosen.artifact.index].complete) return null;
         return hit;
     }
 
@@ -872,69 +875,14 @@ fn collectCheckedRootUses(allocator: Allocator, graph: *const backend.dev.Artifa
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
-    const callers = try a.alloc(std.ArrayList(u32), count);
-    @memset(callers, .empty);
-    const callees = try a.alloc(std.ArrayList(u32), count);
-    @memset(callees, .empty);
-    for (graph.set.artifacts, 0..) |artifact, index| {
-        for (artifact.refs) |ref| {
-            try callers[ref.target].append(a, @intCast(index));
-            try callees[index].append(a, ref.target);
-        }
-        for (graph.symbolicTargets(@intCast(index))) |target| {
-            if (target) |callee| {
-                try callers[callee].append(a, @intCast(index));
-                try callees[index].append(a, callee);
-            }
-        }
-    }
-    const seen = try a.alloc(bool, count);
-    @memset(seen, false);
-    const Frame = struct { node: u32, next: usize = 0 };
-    var frames = std.ArrayList(Frame).empty;
-    var order = std.ArrayList(u32).empty;
-    for (0..count) |start| {
-        if (seen[start]) continue;
-        seen[start] = true;
-        try frames.append(a, .{ .node = @intCast(start) });
-        while (frames.items.len != 0) {
-            const frame = &frames.items[frames.items.len - 1];
-            if (frame.next == callees[frame.node].items.len) {
-                try order.append(a, frame.node);
-                _ = frames.pop();
-                continue;
-            }
-            const callee = callees[frame.node].items[frame.next];
-            frame.next += 1;
-            if (seen[callee]) continue;
-            seen[callee] = true;
-            try frames.append(a, .{ .node = callee });
-        }
-    }
-    const components = try a.alloc(u32, count);
-    @memset(components, std.math.maxInt(u32));
-    var component_count: u32 = 0;
-    var pending = std.ArrayList(u32).empty;
-    while (order.pop()) |start| {
-        if (components[start] != std.math.maxInt(u32)) continue;
-        components[start] = component_count;
-        try pending.append(a, start);
-        while (pending.pop()) |node| for (callers[node].items) |caller| {
-            if (components[caller] != std.math.maxInt(u32)) continue;
-            components[caller] = component_count;
-            try pending.append(a, caller);
-        };
-        component_count += 1;
-    }
+    var groups = try graph.components();
+    defer groups.deinit();
+    const components = groups.nodes;
+    const component_count = groups.callees.len;
     const uses = try a.alloc(std.AutoHashMap(Use, void), component_count);
-    const edges = try a.alloc(std.AutoHashMap(u32, void), component_count);
     for (uses) |*set| set.* = std.AutoHashMap(Use, void).init(a);
-    for (edges) |*set| set.* = std.AutoHashMap(u32, void).init(a);
     for (graph.set.artifacts, 0..) |artifact, index| {
         const component = components[index];
-        for (callees[index].items) |callee| {
-            if (components[callee] != component) try edges[component].put(components[callee], {});
-        }
         for (artifact.context_bindings) |binding| {
             const descriptor = switch (binding) {
                 .static_root => |root| root,
@@ -952,10 +900,8 @@ fn collectCheckedRootUses(allocator: Allocator, graph: *const backend.dev.Artifa
     var cursor = component_count;
     while (cursor != 0) {
         cursor -= 1;
-        var targets = edges[cursor].keyIterator();
-        while (targets.next()) |callee| {
-            std.debug.assert(callee.* > cursor);
-            var roots = uses[callee.*].keyIterator();
+        for (groups.callees[cursor]) |callee| {
+            var roots = uses[callee].keyIterator();
             while (roots.next()) |root| try uses[cursor].put(root.*, {});
         }
     }
@@ -1202,6 +1148,10 @@ test "CTFE preparation cannot remove complete runtime offers" {
         defer cache.canonical_sources.deinit(allocator);
         defer cache.canonical_runtime_sources.deinit(allocator);
         defer if (cache.canonical) |*image| image.deinit();
+        defer {
+            for (cache.checked_root_uses) |uses| allocator.free(uses);
+            allocator.free(cache.checked_root_uses);
+        }
         const hit = postcheck.Common.SpecCacheHit{
             .identity = identity.bytes,
             .rc_borrowed_params = 0,
@@ -1262,11 +1212,13 @@ test "shared CTFE intersection leaves complete runtime offers immutable" {
     // Explicit canonical admission outcomes: rejected closure, compatible
     // replacement, and a replacement with a different ownership signature.
     var mapping = [_]?u32{null};
+    var requirements = [_]backend.dev.ArtifactClosure.ContextRequirements{.{}};
     cache.canonical = .{
         .set = .{ .arena = std.heap.ArenaAllocator.init(allocator), .artifacts = &.{} },
         .source_offsets = &.{0},
         .old_to_new = &mapping,
         .new_to_source = &.{0},
+        .requirements = &requirements,
     };
     defer cache.canonical.?.deinit();
     try cache.canonical_sources.put(allocator, &runtime_set, 0);
@@ -1297,6 +1249,10 @@ test "shared CTFE intersection leaves complete runtime offers immutable" {
     try std.testing.expect(cache.runtime_packs.specCacheLookup().lookup(key, null) != null);
     mapping[0] = 0;
     try std.testing.expectEqualDeep(hit, shared.lookup(key, null).?);
+    requirements[0].complete = false;
+    try std.testing.expect(shared.lookup(key, null) == null);
+    try std.testing.expectEqualDeep(hit, cache.runtime_packs.specCacheLookup().lookup(key, null).?);
+    requirements[0].complete = true;
     cache.chosen.getPtr(identity).?.hit.platform_requirement_relation = [_]u8{23} ** 32;
     try std.testing.expect(shared.lookup(key, null) == null);
     cache.chosen.getPtr(identity).?.hit.platform_requirement_relation = null;
