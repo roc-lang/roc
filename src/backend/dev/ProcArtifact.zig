@@ -1500,12 +1500,10 @@ pub fn spliceIndexed(
         const start = placed.get(index) orelse unreachable;
         for (artifact.refs) |ref| {
             const target_start = placed.get(ref.target) orelse unreachable;
-            const target_artifact = set.artifacts[ref.target];
-            const target: CG.CodeRefTarget = switch (target_artifact.kind) {
-                .proc => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .proc = proc_id } else .{ .offset = target_start + ref.delta },
-                .boxy_thunk => |identity| if (procs_by_identity.get(identity)) |proc_id| .{ .boxy_thunk = proc_id } else .{ .offset = target_start + ref.delta },
-                .rc_helper, .entrypoint, .message_pool_run, .branch_island => .{ .offset = target_start + ref.delta },
-            };
+            // Indexed edges already name the compiled definition. A logical
+            // procedure ID is not permission to rebind that edge when another
+            // variant of the same function is assembled later.
+            const target: CG.CodeRefTarget = .{ .offset = target_start + ref.delta };
             try codegen.patchAssembledRef(
                 start + ref.site,
                 switch (ref.form) {
@@ -1518,6 +1516,68 @@ pub fn spliceIndexed(
             );
         }
     }
+}
+
+test "indexed artifact calls retain exact placement despite logical procedure mapping" {
+    const allocator = std.testing.allocator;
+    const CG = LirCodeGenMod.LirCodeGen(.arm64linux);
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try layout.Store.init(allocator, .u64);
+    defer layouts.deinit();
+    const identity = lir.ProcIdentity.forTest(17);
+    const message = try store.insertString("unused source body");
+    const proc = try store.addProcSpec(.{
+        .name = store.freshSyntheticSymbol(),
+        .identity = identity,
+        .args = .empty(),
+        .body = try store.addCFStmt(.{ .crash = .{ .msg = .{ .literal = message } } }, .test_fixture),
+        .ret_layout = .zst,
+    }, .none);
+    var image = try CG.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer image.deinit();
+    const set = Set{
+        .arena = std.heap.ArenaAllocator.init(allocator),
+        .artifacts = &.{
+            .{
+                .kind = .entrypoint,
+                .code = "\x00\x00\x00\x94",
+                .entry = 0,
+                .frame = null,
+                .refs = &.{.{ .site = 0, .form = .call, .target = 1, .delta = 0 }},
+                .relocations = &.{},
+                .data = &.{},
+            },
+            .{
+                .kind = .{ .proc = identity },
+                .code = "\xc0\x03\x5f\xd6",
+                .entry = 0,
+                .frame = .{
+                    .prologue_size = 0,
+                    .stack_alloc = 0,
+                    .frame_size = 0,
+                    .callee_saved_mask = 0,
+                    .epilogue_offset = 0,
+                    .uses_frame_pointer = false,
+                },
+                .refs = &.{},
+                .relocations = &.{},
+                .data = &.{},
+            },
+        },
+    };
+    var graph = try @import("ArtifactClosure.zig").init(allocator, &set);
+    defer graph.deinit();
+    var procs = std.AutoHashMap(lir.ProcIdentity, lir.LIR.LirProcSpecId).init(allocator);
+    defer procs.deinit();
+    try procs.put(identity, proc);
+    var placed = std.AutoHashMap(u32, usize).init(allocator);
+    defer placed.deinit();
+    var data = std.ArrayList(DataItem).empty;
+    defer data.deinit(allocator);
+    try spliceIndexed(CG, allocator, &image, &graph, &.{0}, &procs, &placed, &data);
+    try std.testing.expectEqual(@as(usize, 1), image.code_refs.items.len);
+    try std.testing.expectEqualDeep(CG.CodeRefTarget{ .offset = placed.get(1).? }, image.code_refs.items[0].target);
 }
 
 test "independent message pools preserve their targets across repeated artifact assembly" {
