@@ -1122,6 +1122,26 @@ scratch_scheme_mint_names: std.ArrayListUnmanaged(MethodNameId) = .empty,
 /// `dispatch_derivations`, whose lineage is a dispatch target's own.
 component_derivations: std.ArrayListUnmanaged(DispatchDerivation) = .empty,
 component_derivation_by_child_fn_var: std.AutoHashMapUnmanaged(Var, Var) = .empty,
+/// The constraint callables of the structural comparisons and hashes whose
+/// component obligations have been derived, in derivation order. A relation's
+/// components are derived exactly once, however many queue entries carry it.
+component_derived_relations: std.ArrayListUnmanaged(Var) = .empty,
+component_derived_relation_set: std.AutoHashMapUnmanaged(Var, void) = .empty,
+/// The scheme that created each dispatch relation, keyed by the relation's
+/// constraint callable: the innermost prospective scheme root active where
+/// the relation was minted or copied, or null outside every scheme. Resolving
+/// a relation runs under this owner, whichever later work grounds its
+/// receiver or drains its queue entry. `dispatch_relation_owner_log` lists the
+/// keys in insertion order so a solver probe can rewind them.
+dispatch_relation_owners: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+dispatch_relation_owner_log: std.ArrayListUnmanaged(Var) = .empty,
+/// The scheme root active where each scheme root became active (null at the
+/// top level and in an independently checked group), and the roots whose
+/// boundary has captured their last requirements. A requirement candidate for
+/// a root whose boundary already ran belongs to the innermost enclosing root
+/// still prospective (`prospectiveSchemeOwner`).
+scheme_owner_parents: std.AutoHashMapUnmanaged(Var, ?Var) = .empty,
+captured_scheme_owners: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Whether this module declares a method in a function body. Only such a
 /// method can be a local procedure, so no dispatch selects one otherwise.
 module_declares_local_methods: ?bool = null,
@@ -1522,9 +1542,6 @@ const InstantiationDispatcher = struct {
     /// deferred-queue entry carries this instantiation-time group as its
     /// `owner_group_index`, not the enqueuing frame's group.
     owner_group_index: ?u32 = null,
-    /// The scheme whose checking instantiated this relation, independent of
-    /// the frame that later grounds or derives its receiver.
-    owner_scheme_root: ?Var = null,
 
     const Source = enum {
         /// A constraint copied structurally with a generalized flex var. It is
@@ -2004,6 +2021,64 @@ fn constraintIsLiteralConversion(self: *const Self, constraint: StaticDispatchCo
     return literal_defaulting.constraintLiteralKind(self.literalMethodIdents(), constraint) != null;
 }
 
+/// Record the active scheme as the owner of the dispatch relation `fn_var`,
+/// where the relation is minted or copied (`dispatch_relation_owners`). The
+/// first record is the creator's.
+fn recordDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    // A relation reached again through a shared callable (an instantiation
+    // shares a leaf rather than copying it) keeps its creator.
+    if (entry.found_existing) return;
+    entry.value_ptr.* = self.active_scheme_root;
+    self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+}
+
+/// Record the active scheme as the owner of a `where` clause's relation, whose
+/// callable is its annotation's own variable. Generating an annotation in
+/// place rebuilds that variable for the scheme being checked (a predeclared
+/// scheme is a disjoint copy of an earlier generation), so the latest
+/// generation owns it.
+fn recordAnnotationDispatchRelationOwner(self: *Self, fn_var: Var) Allocator.Error!void {
+    try self.dispatch_relation_owner_log.ensureUnusedCapacity(self.gpa, 1);
+    const entry = try self.dispatch_relation_owners.getOrPut(self.gpa, fn_var);
+    if (!entry.found_existing) {
+        self.dispatch_relation_owner_log.appendAssumeCapacity(fn_var);
+    } else {
+        // A probe rewinds only the keys it inserted.
+        std.debug.assert(self.probe_depth == 0);
+    }
+    entry.value_ptr.* = self.active_scheme_root;
+}
+
+/// The scheme that created the dispatch relation `fn_var`, or null when it
+/// was created outside every scheme.
+fn dispatchRelationOwner(self: *const Self, fn_var: Var) ?Var {
+    return self.dispatch_relation_owners.get(fn_var) orelse
+        base.invariant("a dispatch relation reached resolution without the owner recorded where it was created", .{});
+}
+
+/// Make `owner` the active scheme root, inside the one active here.
+fn activateSchemeOwner(self: *Self, owner: Var) Allocator.Error!void {
+    if (self.active_scheme_root != owner) {
+        try self.scheme_owner_parents.put(self.gpa, owner, self.active_scheme_root);
+    }
+    _ = self.captured_scheme_owners.remove(owner);
+    self.active_scheme_root = owner;
+}
+
+/// The innermost scheme root at or enclosing `owner` whose boundary has not
+/// yet captured its requirements, or null when there is none.
+fn prospectiveSchemeOwner(self: *const Self, owner: ?Var) ?Var {
+    var current = owner;
+    while (current) |root| {
+        if (!self.captured_scheme_owners.contains(root)) return root;
+        current = self.scheme_owner_parents.get(root) orelse
+            base.invariant("a captured scheme root was never activated", .{});
+    }
+    return null;
+}
+
 fn recordSchemeRequirementCandidate(
     self: *Self,
     receiver_var: Var,
@@ -2012,9 +2087,10 @@ fn recordSchemeRequirementCandidate(
     structural_origin: ?StructuralSchemeRequirementOrigin,
     deferred_generated_codec: bool,
 ) Allocator.Error!void {
+    try self.recordDispatchRelationOwner(constraint.fn_var);
     if (self.constraintIsLiteralConversion(constraint)) return;
     std.debug.assert((source == .creation) == (structural_origin == null));
-    const owner_root = self.active_scheme_root orelse return;
+    const owner_root = self.prospectiveSchemeOwner(self.active_scheme_root) orelse return;
     try self.scheme_requirement_candidates.ensureUnusedCapacity(self.gpa, 1);
     const owner_entry = try self.scheme_requirement_candidate_indices_by_owner.getOrPut(self.gpa, owner_root);
     if (!owner_entry.found_existing) owner_entry.value_ptr.* = .empty;
@@ -2216,7 +2292,6 @@ fn registerInstantiatedSchemeRequirement(
         .source = .scheme_requirement,
         .deferred_enqueued = !receiver_is_flex,
         .owner_group_index = self.currentGroupIndex(),
-        .owner_scheme_root = self.active_scheme_root,
     });
     if (receiver_is_flex) {
         try self.pending_scheme_requirement_dispatchers.append(self.gpa, dispatcher_idx);
@@ -2257,7 +2332,6 @@ fn registerInstantiatedAttachedDispatch(
         .constraints = constraints,
         .instantiation_expr = instantiation_expr,
         .owner_group_index = owner_group_index,
-        .owner_scheme_root = self.active_scheme_root,
     });
     try self.recordAmbiguityCandidate(receiver_var, .instantiation, instantiation_expr);
     // An attached constraint copied by instantiation lives on the fresh
@@ -4078,6 +4152,12 @@ pub fn deinit(self: *Self) void {
     self.scratch_scheme_mint_names.deinit(self.gpa);
     self.component_derivations.deinit(self.gpa);
     self.component_derivation_by_child_fn_var.deinit(self.gpa);
+    self.component_derived_relations.deinit(self.gpa);
+    self.component_derived_relation_set.deinit(self.gpa);
+    self.dispatch_relation_owners.deinit(self.gpa);
+    self.dispatch_relation_owner_log.deinit(self.gpa);
+    self.scheme_owner_parents.deinit(self.gpa);
+    self.captured_scheme_owners.deinit(self.gpa);
     self.local_decl_expr_by_pattern.deinit(self.gpa);
     self.local_method_names.deinit(self.gpa);
     self.dispatch_candidate_frames.deinit(self.gpa);
@@ -10137,7 +10217,7 @@ fn enqueueLocalSchemeRequirements(self: *Self, root: Var, env: *Env) Allocator.E
             .var_ = requirement.receiver_var,
             .constraints = range,
             .failure_expr = if (requirement.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-        }, .{ .recorded = .{ .group_index = self.type_schemes.items[scheme_idx].capture_group_index, .scheme_root = self.type_schemes.items[scheme_idx].root_var } });
+        }, .{ .recorded = self.type_schemes.items[scheme_idx].capture_group_index });
     }
 }
 
@@ -10901,6 +10981,7 @@ fn recordOpenLiteralVar(
 ) Allocator.Error!void {
     var has_literal = false;
     for (constraints) |constraint| {
+        try self.recordDispatchRelationOwner(constraint.fn_var);
         if (self.constraintIsLiteralConversion(constraint)) {
             has_literal = true;
         }
@@ -15037,7 +15118,7 @@ fn checkInstantiatedStaticDispatchConstraints(
                     .from(@backingInt(expr_idx))
                 else
                     .none,
-            }, .{ .recorded = .{ .group_index = current.owner_group_index, .scheme_root = current.owner_scheme_root } });
+            }, .{ .recorded = current.owner_group_index });
             appended_deferred = true;
         }
 
@@ -16986,7 +17067,7 @@ fn beginDef(self: *Self, state: *DefActivity, env: *Env) std.mem.Allocator.Error
         ModuleEnv.varFrom(def_expr.e_closure.lambda_idx)
     else
         expr_var;
-    self.active_scheme_root = if (def_is_function or group_prechecked) scheme_owner else state.saved.?.active_scheme_root;
+    if (def_is_function or group_prechecked) try self.activateSchemeOwner(scheme_owner);
     // The annotation bounds the definition's body: a tag it produces beyond
     // an implicitly opened union is an error (design.md "Polarity").
     state.saved.?.bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(def.pattern, def.annotation));
@@ -17293,7 +17374,7 @@ fn predeclareAnnotationSchemeHelp(
     const saved_predeclaring = self.predeclaring_annotation;
     const saved_active_scheme_root = self.active_scheme_root;
     self.predeclaring_annotation = true;
-    self.active_scheme_root = ModuleEnv.varFrom(annotation_idx);
+    try self.activateSchemeOwner(ModuleEnv.varFrom(annotation_idx));
     defer {
         self.predeclaring_annotation = saved_predeclaring;
         self.active_scheme_root = saved_active_scheme_root;
@@ -18797,7 +18878,7 @@ const DeferredDispatchObligationOwner = union(enum) {
     current_group,
     /// The creating group captured when the obligation was first recorded,
     /// replayed here from that record.
-    recorded: struct { group_index: ?u32, scheme_root: ?Var },
+    recorded: ?u32,
 };
 
 /// The single door into the deferred dispatch queue, so an obligation's owning
@@ -18816,11 +18897,7 @@ fn enqueueDeferredDispatchConstraint(
     var owned = deferred;
     owned.owner_group_index = switch (owner) {
         .current_group => self.currentGroupIndex(),
-        .recorded => |recorded| recorded.group_index,
-    };
-    owned.owner_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
+        .recorded => |group_index| group_index,
     };
     // The relation whose checking queued the obligation owns what its
     // resolution reports.
@@ -20672,10 +20749,12 @@ fn declareWhereAliasConstraints(
     // appends to the constraint store, so iterate rather than hold a slice.
     var constraints = self.types.iterStaticDispatchConstraints(receiver_rigid.constraints);
     while (constraints.next()) |constraint| {
+        const instantiated = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env);
+        try self.recordDispatchRelationOwner(instantiated.fn_var);
         try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
             .where_clause = where_idx,
             .var_ = owner_var,
-            .constraint = try self.instantiateWhereAliasConstraint(constraint, &subs, region, env),
+            .constraint = instantiated,
             .state = .completed,
         });
     }
@@ -21773,6 +21852,7 @@ fn stepRigidAnnoGen(self: *Self, frame: *AnnoGenFrame, rigid: std.meta.fieldInfo
                     // The annotation owns the callable variable. Declare its identity
                     // before generating its type so recursive constraints can refer to it.
                     const func_var = ModuleEnv.varFrom(method.anno);
+                    try self.recordAnnotationDispatchRelationOwner(func_var);
 
                     try self.scratch_static_dispatch_constraints.append(ScratchStaticDispatchConstraint{
                         .where_clause = where_idx,
@@ -24816,7 +24896,7 @@ fn beginExprCheckFrame(
 
     frame.should_generalize = !frame.suppress_group_member_generalize and
         self.shouldGeneralize(expr, frame.is_binding_rhs, frame.is_call_arg, frame.is_forwarded_result);
-    if (frame.should_generalize) self.active_scheme_root = expr_var_raw;
+    if (frame.should_generalize) try self.activateSchemeOwner(expr_var_raw);
 
     if (frame.should_generalize) {
         try env.var_pool.pushRank();
@@ -27027,7 +27107,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             if (decl.decl_fn_frame) {
                 std.debug.assert(self.suppress_generalize_expr == null);
                 self.suppress_generalize_expr = decl_stmt.expr;
-                self.active_scheme_root = decl_pattern_var;
+                try self.activateSchemeOwner(decl_pattern_var);
             }
             decl.saved_bounding_annotation = self.beginBoundedAnnotationRows(self.appliedAnnotation(decl_stmt.pattern, decl_stmt.anno));
             return .{ .expr = decl_stmt.expr, .expected = decl.expectation };
@@ -34290,6 +34370,8 @@ const Probe = struct {
     dispatch_target_instantiations_len: usize,
     dispatch_derivations_len: usize,
     component_derivations_len: usize,
+    component_derived_relations_len: usize,
+    dispatch_relation_owner_log_len: usize,
     imported_schemes_len: usize,
     probe_links_len: usize,
     probe_link_copies_len: usize,
@@ -34369,6 +34451,8 @@ const Probe = struct {
         self.check.probe_link_copies.shrinkRetainingCapacity(self.probe_link_copies_len);
         self.check.shrinkDispatchDerivationsTo(self.dispatch_derivations_len);
         self.check.shrinkComponentDerivationsTo(self.component_derivations_len);
+        self.check.shrinkComponentDerivedRelationsTo(self.component_derived_relations_len);
+        self.check.shrinkDispatchRelationOwnersTo(self.dispatch_relation_owner_log_len);
         while (self.check.imported_schemes.items.len > self.imported_schemes_len) {
             const removed = self.check.imported_schemes.pop().?;
             self.check.discardImportedSchemeMetadata(removed.scheme_var);
@@ -34424,6 +34508,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
     const dispatch_target_instantiations_len = self.dispatch_target_instantiations.items.len;
     const dispatch_derivations_len = self.dispatch_derivations.items.len;
     const component_derivations_len = self.component_derivations.items.len;
+    const component_derived_relations_len = self.component_derived_relations.items.len;
+    const dispatch_relation_owner_log_len = self.dispatch_relation_owner_log.items.len;
     const imported_schemes_len = self.imported_schemes.items.len;
     const savepoint = try self.types.createSavepoint();
     self.probe_depth += 1;
@@ -34465,6 +34551,8 @@ fn beginProbe(self: *Self, env: ?*Env) std.mem.Allocator.Error!Probe {
         .dispatch_target_instantiations_len = dispatch_target_instantiations_len,
         .dispatch_derivations_len = dispatch_derivations_len,
         .component_derivations_len = component_derivations_len,
+        .component_derived_relations_len = component_derived_relations_len,
+        .dispatch_relation_owner_log_len = dispatch_relation_owner_log_len,
         .imported_schemes_len = imported_schemes_len,
         .savepoint = savepoint,
     };
@@ -38101,7 +38189,7 @@ fn captureSchemeDispatchRequirements(
                             .dispatcher_var = candidate.receiver_var,
                             .constraint = candidate.constraint,
                             .failure_expr = if (candidate.failure_expr) |expr| .from(@backingInt(expr)) else .none,
-                            .owner = .{ .recorded = .{ .group_index = self.currentGroupIndex(), .scheme_root = candidate.owner_root } },
+                            .owner = .{ .recorded = self.currentGroupIndex() },
                         });
                         // The exact relation has transferred to this boundary;
                         // duplicate candidates cannot schedule it again.
@@ -38176,6 +38264,7 @@ fn captureEscapedSchemeDispatchRequirements(
 ) Allocator.Error!void {
     try self.captureSchemeDispatchRequirements(roots, env, null);
     self.assertSchemeRequirementBoundaryQuiescent(roots);
+    for (roots) |root| try self.captured_scheme_owners.put(self.gpa, root.owner, {});
 }
 
 fn addSchemeDispatchRequirementsToBoundaryReachability(
@@ -38536,7 +38625,7 @@ fn drainGroundedPendingSchemeRequirementDispatchers(
                 .from(@backingInt(expr_idx))
             else
                 .none,
-        }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+        }, .{ .recorded = dispatcher.owner_group_index });
         dispatcher.deferred_enqueued = true;
         appended = true;
     }
@@ -38608,7 +38697,7 @@ fn checkGroundedStoredTypeSchemeRequirementsAtFinalization(
                         .from(@backingInt(expr_idx))
                     else
                         .none,
-                }, .{ .recorded = .{ .group_index = scheme.capture_group_index, .scheme_root = scheme.root_var } });
+                }, .{ .recorded = scheme.capture_group_index });
                 appended = true;
             }
         }
@@ -41106,6 +41195,22 @@ fn shrinkComponentDerivationsTo(self: *Self, new_len: usize) void {
     while (self.component_derivations.items.len > new_len) {
         const derivation = self.component_derivations.pop().?;
         const did_remove = self.component_derivation_by_child_fn_var.remove(derivation.child_fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
+fn shrinkComponentDerivedRelationsTo(self: *Self, new_len: usize) void {
+    while (self.component_derived_relations.items.len > new_len) {
+        const fn_var = self.component_derived_relations.pop().?;
+        const did_remove = self.component_derived_relation_set.remove(fn_var);
+        std.debug.assert(did_remove);
+    }
+}
+
+fn shrinkDispatchRelationOwnersTo(self: *Self, new_len: usize) void {
+    while (self.dispatch_relation_owner_log.items.len > new_len) {
+        const fn_var = self.dispatch_relation_owner_log.pop().?;
+        const did_remove = self.dispatch_relation_owners.remove(fn_var);
         std.debug.assert(did_remove);
     }
 }
@@ -44475,10 +44580,11 @@ fn deferredDispatchRelationWasRetained(
 /// Whether every relation of a queued entry was already consumed by an entry
 /// attributing its failure to the same use, so consuming it again could
 /// neither decide, record, nor report anything new. On a concrete receiver,
-/// consuming a relation that is not a generated codec selects its method
-/// target and records that target's instantiation; a relation consumed
-/// before its target was selected is not settled for this entry, which
-/// selects it.
+/// consuming a relation that is not a generated codec either selects its
+/// method target and records that target's instantiation, or derives a
+/// structural comparison's or hash's component obligations; a relation
+/// consumed before either happened is not settled for this entry, which
+/// does it.
 fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintCheck) bool {
     const constraints = self.types.sliceStaticDispatchConstraints(deferred.constraints);
     if (constraints.len == 0) return false;
@@ -44489,7 +44595,8 @@ fn deferredRelationsAlreadySettled(self: *Self, deferred: DeferredConstraintChec
         const generated_codec = constraint.fn_name.eql(self.cir.idents.parser_for) or
             constraint.fn_name.eql(self.cir.idents.encoder_for);
         if (concrete_receiver and !generated_codec and
-            !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var)) return false;
+            !self.dispatch_target_instantiation_by_fn_var.contains(constraint.fn_var) and
+            !self.component_derived_relation_set.contains(constraint.fn_var)) return false;
     }
     return true;
 }
@@ -44546,7 +44653,7 @@ fn deferGeneratedCodecConstraintToFinalization(
         .dispatcher_var = deferred.var_,
         .constraint = constraint,
         .failure_expr = deferred.failure_expr,
-        .owner = .{ .recorded = .{ .group_index = deferred.owner_group_index, .scheme_root = deferred.owner_scheme_root } },
+        .owner = .{ .recorded = deferred.owner_group_index },
     });
     return true;
 }
@@ -44858,6 +44965,13 @@ inline fn processDeferredDispatchEntry(
     }
     try self.claimRecordedProblems();
     self.relation_owner = deferred_constraint.relation_owner;
+    // Each relation resolves under the scheme that created it, never under
+    // the boundary whose checking runs the drain or the one whose unification
+    // grounded its receiver: the requirements its method target's
+    // instantiation and its component obligations leave behind are that
+    // scheme's. One entry can carry relations several schemes created.
+    const active_scheme_root_before = self.active_scheme_root;
+    defer self.active_scheme_root = active_scheme_root_before;
     const retained_top = self.scratch_deferred_static_dispatch_constraints.top();
     const scheme_owned_codecs_top = self.scratch_scheme_owned_codec_fns.items.len;
     defer self.scratch_scheme_owned_codec_fns.shrinkRetainingCapacity(scheme_owned_codecs_top);
@@ -44903,6 +45017,7 @@ inline fn processDeferredDispatchEntry(
             // even if the unify below appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (constraint.origin == .from_literal) {
                     if (self.cir.idents.numKindFromTypeIdent(rigid.name)) |num_kind| {
                         if (try self.reportInvalidBuiltinFromNumeralLiteral(
@@ -45050,6 +45165,7 @@ inline fn processDeferredDispatchEntry(
                 // Re-fetch by index each iteration because nested unification can append
                 // constraints and reallocate the backing array.
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -45124,7 +45240,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45146,7 +45262,7 @@ inline fn processDeferredDispatchEntry(
                             );
                             continue;
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45454,6 +45570,7 @@ inline fn processDeferredDispatchEntry(
             var constraint_i: usize = 0;
             while (constraint_i < constraints_len) : (constraint_i += 1) {
                 const constraint = self.types.static_dispatch_constraints.items.items[constraints_start + constraint_i];
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 if (self.staticDispatchConstraintIsInactive(constraint)) continue;
                 const constraint_fn_resolved = self.types.resolveVar(constraint.fn_var).desc.content;
                 if (constraint_fn_resolved == .err) {
@@ -45485,7 +45602,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsIsEq(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedIsEqConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -45515,7 +45632,7 @@ inline fn processDeferredDispatchEntry(
                     if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
                         const backing_var = self.types.getAliasBackingVar(alias);
                         if (try self.varSupportsToHash(backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                             try self.satisfyDerivedToHashConstraint(
                                 deferred_constraint.var_,
                                 constraint,
@@ -45778,11 +45895,12 @@ inline fn processDeferredDispatchEntry(
             // satisfyDerivedIsEqConstraint appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
+                self.active_scheme_root = self.dispatchRelationOwner(constraint.fn_var);
                 // Check if this is a call to is_eq (anonymous types have derived is_eq)
                 if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
                     // Check if all components of this anonymous type support is_eq
                     if (try self.typeSupportsIsEq(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedIsEqConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -45804,7 +45922,7 @@ inline fn processDeferredDispatchEntry(
                     // Anonymous structural types have derived to_hash if all their
                     // components also support to_hash.
                     if (try self.typeSupportsToHash(dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
+                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = deferred_constraint.owner_group_index });
                         try self.satisfyDerivedToHashConstraint(
                             deferred_constraint.var_,
                             constraint,
@@ -46866,11 +46984,15 @@ fn deriveStructuralEqHashComponentObligations(
     env: *Env,
     owner: DeferredDispatchObligationOwner,
 ) Allocator.Error!void {
+    // The components belong to the relation, not to the queue entry carrying
+    // it: a relation queued both by the unification that grounded its
+    // receiver and by its instantiation dispatcher derives them once.
+    try self.component_derived_relations.ensureUnusedCapacity(self.gpa, 1);
+    const derived = try self.component_derived_relation_set.getOrPut(self.gpa, parent_constraint.fn_var);
+    if (derived.found_existing) return;
+    self.component_derived_relations.appendAssumeCapacity(parent_constraint.fn_var);
     const saved_scheme_root = self.active_scheme_root;
-    self.active_scheme_root = switch (owner) {
-        .current_group => self.active_scheme_root,
-        .recorded => |recorded| recorded.scheme_root,
-    };
+    self.active_scheme_root = self.dispatchRelationOwner(parent_constraint.fn_var);
     defer self.active_scheme_root = saved_scheme_root;
     self.var_set.clearRetainingCapacity();
     try self.varDeriveComponentObligations(dispatcher_var, derivation, &self.var_set, env, parent_constraint, false, owner);
@@ -51429,7 +51551,7 @@ fn stepParseSettle(
                     .var_ = dispatcher.dispatcher_var,
                     .constraints = dispatcher.constraints,
                     .failure_expr = failure_expr_idx,
-                }, .{ .recorded = .{ .group_index = dispatcher.owner_group_index, .scheme_root = dispatcher.owner_scheme_root } });
+                }, .{ .recorded = dispatcher.owner_group_index });
                 self.instantiation_dispatchers.items[idx].deferred_enqueued = true;
                 settle.appended = true;
             }
