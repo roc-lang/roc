@@ -21,7 +21,7 @@ fn buildChecksRun(b: *std.Build, command: []const u8) *Step.Run {
             .name = "roc-build-checks",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/build/check_runner.zig"),
-                .target = b.graph.host,
+                .target = hostToolTarget(b, .fast),
                 .optimize = .fast,
             }),
         });
@@ -444,6 +444,25 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
     return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
 }
 
+/// The target for everything that is compiled to run on this machine during
+/// the build: tools, generators and their tests. It is this machine's OS and
+/// ABI at the CPU the default target gets, baseline x86-64 with the Debug
+/// floor of `withSha256Floor`, rather than the CPU `b.graph.host` detected.
+///
+/// Zig keys each compilation on its target CPU, so a tool compiled for the
+/// detected CPU is a cache miss on a machine with a different one, and so is
+/// every step that consumes what the tool generates: `builtin_compiler` bakes
+/// the builtins most test binaries embed. CI compiles on one runner and tests
+/// on others, and x86_64 runners do not all have the same CPU, so those test
+/// jobs recompiled the tools and most test binaries instead of reusing them.
+/// ci/tidy.zig bans compiling for `b.graph.host` for that reason.
+///
+/// Other architectures keep the detected CPU, as the default target does.
+fn hostToolTarget(b: *std.Build, optimize: OptimizeMode) ResolvedTarget {
+    if (builtin.target.cpu.arch != .x86_64) return b.graph.host;
+    return withSha256Floor(b, b.resolveTargetQuery(.{ .cpu_model = .baseline }), optimize);
+}
+
 /// Raise an aarch64 compiler target's CPU floor to include the SHA-256
 /// instructions. Type digests are cryptographic SHA-256 (see
 /// `src/base/TypeDigestHasher.zig` for why) and aarch64 computes them in
@@ -848,7 +867,7 @@ fn createAndRunBuiltinCompiler(
         .name = "builtin_compiler",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host, // this runs at build time on the *host* machine!
+            .target = hostToolTarget(b, .debug), // this runs at build time on the *host* machine!
             // Kept Debug deliberately: this exe publishes + serializes the
             // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
             // it ReleaseFast would optimize the whole check/eval closure (incl. the
@@ -883,7 +902,7 @@ fn createAndRunBuiltinCompiler(
     // is added here as a standalone module rooted at compile_time_finalization.zig.
     const comptime_finalizer_module = b.createModule(.{
         .root_source_file = b.path("src/eval/compile_time_finalization.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
         .link_libc = true,
         .imports = &.{
@@ -1892,7 +1911,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const host_zstd = b.dependency("zstd", .{
-        .target = b.graph.host,
+        .target = hostToolTarget(b, optimize),
         .optimize = optimize,
     });
 
@@ -2025,7 +2044,7 @@ pub fn build(b: *std.Build) void {
         .name = "zig_lints",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/zig_lints.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2033,7 +2052,7 @@ pub fn build(b: *std.Build) void {
         .name = "tidy",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/tidy.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2041,7 +2060,7 @@ pub fn build(b: *std.Build) void {
         .name = "check_test_wiring",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/check_test_wiring.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2064,12 +2083,12 @@ pub fn build(b: *std.Build) void {
 
     const source_bidi_module = b.createModule(.{
         .root_source_file = b.path("src/base/bidi.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
     });
     const source_bidi_root = b.createModule(.{
         .root_source_file = b.path("ci/check_source_bidi.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
     });
     source_bidi_root.addImport("bidi", source_bidi_module);
@@ -2086,7 +2105,7 @@ pub fn build(b: *std.Build) void {
         .name = "minici",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/minici.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2289,7 +2308,7 @@ pub fn build(b: *std.Build) void {
         .name = "strip_macho_exports",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/strip_macho_exports.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .safe),
             .optimize = .safe,
             .imports = &.{
                 .{ .name = "dyld_export_strip", .module = dyld_export_strip_module },
@@ -2419,7 +2438,7 @@ pub fn build(b: *std.Build) void {
             .name = "generate_foreign_abi_lock",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/glue/generate_abi_lock.zig"),
-                .target = b.graph.host,
+                .target = hostToolTarget(b, .safe),
                 .optimize = .safe,
                 .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
             }),
@@ -3026,7 +3045,7 @@ pub fn build(b: *std.Build) void {
         .name = "wasm_archive",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/wasm_archive.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, optimize),
             .optimize = optimize,
         }),
     });
@@ -4739,7 +4758,7 @@ pub fn build(b: *std.Build) void {
         .name = "minici_test",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/minici.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
             .imports = &.{
                 .{ .name = "build_options", .module = roc_modules.build_options },
@@ -6146,7 +6165,7 @@ fn addMainExe(
         .name = "archive_member_names",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/archive_member_names.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .safe),
             .optimize = .safe,
         }),
     });
@@ -6157,7 +6176,7 @@ fn addMainExe(
         .name = "embedded_digests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/embedded_digests.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .fast),
             .optimize = .fast,
         }),
     });
@@ -6253,7 +6272,7 @@ fn addMainExe(
         .name = "machine_code_shim_archive_check",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .safe),
             .optimize = .safe,
         }),
     });
@@ -6355,7 +6374,7 @@ fn addMainExe(
             .name = "machine_code_shim_archive",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-                .target = b.graph.host,
+                .target = hostToolTarget(b, .safe),
                 .optimize = .safe,
                 .imports = &.{.{ .name = "shim_symbols", .module = roc_modules.shim_symbols }},
             }),
@@ -6366,7 +6385,7 @@ fn addMainExe(
             .name = "archive_member_names",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/build/archive_member_names.zig"),
-                .target = b.graph.host,
+                .target = hostToolTarget(b, .safe),
                 .optimize = .safe,
             }),
             .filters = test_filters,
@@ -7475,7 +7494,7 @@ fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?
         .name = "compiler_identity",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/compiler_identity.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .fast),
             .optimize = .fast,
         }),
     });
