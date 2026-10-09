@@ -3972,7 +3972,10 @@ pub const TakeSource = union(enum) {
 const FieldStoreEdge = struct { source: u32, container: u32, field: u32, stmt: u32 };
 const MaskAliasEdge = struct { source: u32, target: u32 };
 const FieldReadEdge = struct { container: u32, target: u32, field: u32, stmt: u32, take: bool };
-const SeedMask = struct { local: u32, mask: u64 };
+/// One definition's statement about a container's fields: the fields in
+/// `mask` are born under no condition, the fields in `vetoed` are unborn,
+/// and the rest are left to the container's other inputs.
+const SeedMask = struct { local: u32, mask: u64, vetoed: u64 = 0 };
 /// One call site's use of a callee's conditional-return row: the part of
 /// the result the row names is born exactly when every argument in
 /// `call_args[args_start..][0..args_len]` is, under their joined conditions.
@@ -4336,6 +4339,11 @@ fn settleUniqueOrigins(
             self.any = true;
         }
 
+        fn veto(self: *@This()) void {
+            self.any = true;
+            self.value = null;
+        }
+
         fn fromSlot(self: *@This(), m: []const u64, fc: *const FieldConds, container: u32, field: u32) void {
             self.any = true;
             const bit = @as(u64, 1) << @as(u6, @intCast(field));
@@ -4371,9 +4379,14 @@ fn settleUniqueOrigins(
                 dead |= dead_masks[source];
             }
             for (seed_inputs.row(container)) |seed_index| {
-                const seed_mask = field_edges.seeds[seed_index].mask;
+                const seed = field_edges.seeds[seed_index];
                 for (0..64) |field| {
-                    if ((seed_mask & (@as(u64, 1) << @as(u6, @intCast(field)))) != 0) meets[field].fromConstant();
+                    const bit = @as(u64, 1) << @as(u6, @intCast(field));
+                    if ((seed.mask & bit) != 0) {
+                        meets[field].fromConstant();
+                    } else if ((seed.vetoed & bit) != 0) {
+                        meets[field].veto();
+                    }
                 }
             }
             for (call_inputs.row(container)) |edge_index| {
@@ -5549,6 +5562,19 @@ fn computeUniquenessDetailed(
     const birth_counts = try allocator.alloc(u32, local_count);
     defer allocator.free(birth_counts);
     @memset(birth_counts, 0);
+    // Definitions per local that state the uniqueness of the value's fields:
+    // a struct or tag construction, a join declaration (whose incoming edges
+    // carry the fields), an aggregate alias, a payload view, or a call (whose
+    // callee signature names its unique fields). A field is born only when
+    // every definition vouches for it, so a local with any other definition
+    // among several has each field vetoed by that definition.
+    const field_def_counts = try allocator.alloc(u32, local_count);
+    defer allocator.free(field_def_counts);
+    @memset(field_def_counts, 0);
+    // Each call definition's vouched fields, seeded once the definition
+    // counts are known.
+    var call_field_defs = std.ArrayList(SeedMask).empty;
+    defer call_field_defs.deinit(allocator);
     // Join statements declaring each local as a parameter; a result cell
     // may be the parameter of several nested joins.
     const join_decl_counts = try allocator.alloc(u32, local_count);
@@ -5783,6 +5809,7 @@ fn computeUniquenessDetailed(
                         marks.destroy(&foreign_def, assign.target);
                         if (marks.indexOf(assign.target)) |target| if (marks.indexOf(op.source)) |source| {
                             try mask_aliases.append(allocator, .{ .source = source, .target = target });
+                            field_def_counts[target] += 1;
                         };
                     },
                 }
@@ -5791,6 +5818,7 @@ fn computeUniquenessDetailed(
                 if (assign.op == .local) {
                     if (marks.indexOf(assign.target)) |target| if (marks.indexOf(assign.op.local)) |source| if (target != source) {
                         try mask_aliases.append(allocator, .{ .source = source, .target = target });
+                        field_def_counts[target] += 1;
                     };
                 }
             },
@@ -5836,10 +5864,9 @@ fn computeUniquenessDetailed(
                 } else if (!whole_conditional) {
                     marks.destroy(&foreign_def, assign.target);
                 }
-                if (callee_sig.ret_unique_fields != 0) {
-                    if (marks.indexOf(assign.target)) |target| try seed_masks.append(allocator, .{ .local = target, .mask = callee_sig.ret_unique_fields });
-                }
                 const args = store.getLocalSpan(assign.args);
+                // The fields of the result a recorded row edge carries.
+                var row_fields: u64 = 0;
                 // Each row is an edge from the arguments it names to the
                 // part of the result it names; an argument outside the
                 // refcounted domain leaves that part unborn.
@@ -5866,7 +5893,20 @@ fn computeUniquenessDetailed(
                         .args_len = @intCast(call_args.items.len - args_start),
                         .stmt = @intCast(stmt_index),
                     });
+                    if (row.field < 64) row_fields |= @as(u64, 1) << @as(u6, @intCast(row.field));
                 };
+                // The call states every field of its result: those its callee
+                // returns unique are born, those a recorded row carries are
+                // born under the row's arguments, and every other field is
+                // unborn, even when the result is born unique as a whole.
+                if (marks.indexOf(assign.target)) |target| {
+                    field_def_counts[target] += 1;
+                    try call_field_defs.append(allocator, .{
+                        .local = target,
+                        .mask = callee_sig.ret_unique_fields,
+                        .vetoed = ~(callee_sig.ret_unique_fields | row_fields),
+                    });
+                }
                 for (0..GuardedList.borrowLen(args)) |position| {
                     const arg = GuardedList.at(args, position);
                     if (callee_sig.paramMode(position) == .owned) {
@@ -6066,6 +6106,7 @@ fn computeUniquenessDetailed(
             .assign_struct => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.noteBirth(&born, assign.target);
+                if (marks.indexOf(assign.target)) |container| field_def_counts[container] += 1;
                 const fields = store.getLocalSpan(assign.fields);
                 for (0..GuardedList.borrowLen(fields)) |index| {
                     const field = GuardedList.at(fields, index);
@@ -6086,6 +6127,7 @@ fn computeUniquenessDetailed(
                 // variant's view never sees this value, so such a return
                 // must not veto the fields the other variants do carry.
                 if (marks.indexOf(assign.target)) |container| {
+                    field_def_counts[container] += 1;
                     const rc_payload = if (assign.payload) |payload| marks.indexOf(payload) != null else false;
                     if (!rc_payload) try seed_masks.append(allocator, .{ .local = container, .mask = std.math.maxInt(u64) });
                 }
@@ -6153,6 +6195,7 @@ fn computeUniquenessDetailed(
                     if (marks.indexOf(param)) |target| {
                         join_targets.set(target);
                         join_decl_counts[target] += 1;
+                        field_def_counts[target] += 1;
                     }
                 }
             },
@@ -6172,6 +6215,33 @@ fn computeUniquenessDetailed(
             .switch_initialized_payload => {},
             .decref_if_initialized => {},
             .decref, .free, .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+        }
+    }
+
+    // A call's unconditionally unique fields feed its result's fields.
+    for (call_field_defs.items) |def| {
+        if (def.mask != 0) try seed_masks.append(allocator, .{ .local = def.local, .mask = def.mask });
+    }
+    // Among several definitions, a field is unique only if whichever
+    // definition ran made it so: a call vetoes the fields it does not state,
+    // and a definition that states no field vetoes them all. A veto matters
+    // only where another definition feeds the fields; without one they stay
+    // unborn regardless.
+    var field_fed = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, local_count);
+    defer field_fed.deinit(allocator);
+    for (field_stores.items) |edge| field_fed.set(edge.container);
+    for (mask_aliases.items) |edge| field_fed.set(edge.target);
+    for (seed_masks.items) |seed| field_fed.set(seed.local);
+    for (call_edges.items) |edge| field_fed.set(edge.target);
+    for (call_field_defs.items) |def| {
+        if (multi_def.isSet(def.local) and field_fed.isSet(def.local)) {
+            try seed_masks.append(allocator, .{ .local = def.local, .mask = 0, .vetoed = def.vetoed });
+        }
+    }
+    var multi_def_iter = multi_def.iterator(.{});
+    while (multi_def_iter.next()) |index| {
+        if (field_fed.isSet(index) and field_def_counts[index] < def_counts[index]) {
+            try seed_masks.append(allocator, .{ .local = @intCast(index), .mask = 0, .vetoed = std.math.maxInt(u64) });
         }
     }
 
@@ -7657,6 +7727,87 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
     try std.testing.expect(!solution.fresh_reads.isSet(@backingInt(idle_read)));
+}
+
+test "uniqueness vetoes a join cell's field that a call definition does not vouch for" {
+    // Repro for https://github.com/roc-lang/roc/issues/12127: a cell is either
+    // a fresh pair or a callee's fresh pair whose first field is an element
+    // still held by the callee's list argument. The callee's result is born
+    // unique as a whole, but only its second field is, so the cell's first
+    // field is unique on neither definition and a take of it is not either.
+    const allocator = std.testing.allocator;
+    var f = try UniquenessTest.init();
+    defer f.deinit();
+    const lists = try f.layouts.insertList(f.list);
+
+    const callee_lists = try f.local(lists);
+    const callee_index = try f.local(.u64);
+    const elem = try f.local(f.list);
+    const fresh = try f.local(f.list);
+    const built = try f.local(f.pair);
+    const make_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = built, .fields = try f.store.addLocalSpan(&.{ elem, fresh }), .next = try f.ret(built) } }, .test_fixture);
+    const make_fresh = try f.store.addCFStmt(.{ .assign_list = .{ .target = fresh, .elems = try f.store.addLocalSpan(&.{}), .next = make_pair } }, .test_fixture);
+    const get = try f.store.addCFStmt(.{ .assign_low_level = .{
+        .target = elem,
+        .op = .list_get_unsafe,
+        .rc_effect = LIR.LowLevel.list_get_unsafe.rcEffect(),
+        .args = try f.store.addLocalSpan(&.{ callee_lists, callee_index }),
+        .next = make_fresh,
+    } }, .test_fixture);
+    const callee = try f.proc(&.{ callee_lists, callee_index }, get, f.pair);
+
+    const caller_lists = try f.local(lists);
+    const caller_index = try f.local(.u64);
+    const flag = try f.local(.u8);
+    const cell = try f.local(f.pair);
+    const first = try f.local(f.list);
+    const own_first = try f.local(f.list);
+    const own_second = try f.local(f.list);
+    var join_ids = body_clone.JoinParamIndex.init(allocator);
+    defer join_ids.deinit();
+    const join_id = join_ids.freshJoinPoint();
+    const take = try f.store.addCFStmt(.{ .assign_ref = .{
+        .target = first,
+        .op = .{ .field = .{ .source = cell, .field_idx = 0 } },
+        .take_kind = .take,
+        .next = try f.ret(first),
+    } }, .test_fixture);
+    const jump = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
+    const from_call = try f.call(cell, callee, &.{ caller_lists, caller_index }, jump);
+    const own_pair = try f.store.addCFStmt(.{ .assign_struct = .{ .target = cell, .fields = try f.store.addLocalSpan(&.{ own_first, own_second }), .next = jump } }, .test_fixture);
+    const own_lists = try f.store.addCFStmt(.{ .assign_list = .{
+        .target = own_first,
+        .elems = try f.store.addLocalSpan(&.{}),
+        .next = try f.store.addCFStmt(.{ .assign_list = .{ .target = own_second, .elems = try f.store.addLocalSpan(&.{}), .next = own_pair } }, .test_fixture),
+    } }, .test_fixture);
+    const choose = try f.store.addCFStmt(.{ .switch_stmt = .{
+        .cond = flag,
+        .branches = try f.store.addCFSwitchBranches(&.{.{ .value = 1, .body = own_lists }}),
+        .default_branch = from_call,
+        .continuation = null,
+    } }, .test_fixture);
+    const join = try f.store.addCFStmt(.{ .join = .{
+        .id = join_id,
+        .params = try f.store.addLocalSpan(&.{cell}),
+        .body = take,
+        .remainder = choose,
+    } }, .test_fixture);
+    _ = try f.proc(&.{ caller_lists, caller_index, flag }, join, f.list);
+
+    const rc = try allocator.alloc(bool, f.store.localCount());
+    defer allocator.free(rc);
+    @memset(rc, true);
+    for ([_]LIR.LocalId{ callee_index, caller_index, flag }) |scalar| rc[@backingInt(scalar)] = false;
+    var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
+    defer solution.deinit();
+    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try std.testing.expect(solution.sigOf(callee).ret_unique);
+    try std.testing.expectEqual(@as(u64, 0b10), solution.sigOf(callee).ret_unique_fields);
+    try std.testing.expect(!solution.isUniqueUnder(first, std.math.maxInt(arc_sig.ParamMask)));
+    UniquenessOracleState.resetCapabilities(&solution);
+    var metrics: UniquenessMetrics = .{};
+    try UniquenessOracleState.compare(&f, rc, &solution, .stamped, &metrics);
+    try std.testing.expect(!solution.isUniqueUnder(first, std.math.maxInt(arc_sig.ParamMask)));
 }
 
 test "uniqueness gives a tail loop parameter no field origins from its back edge alone" {
