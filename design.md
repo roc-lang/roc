@@ -616,24 +616,25 @@ graph-proportional work, not path-count work.
 
 ### Early Compile-Time Object Reuse
 
-Body elision is a shared producer decision, not an evaluator-local cache hit.
-Every declared consumer must have a compatible native code provision before
-Monotype may replace a source body with a cached procedure. LLVM and interpreter
-consumers require the shared body; it is lowered once, while CTFE may still
-splice native code in its own LIR consumer. A target-specific native provision
-does not authorize host-native CTFE body elision.
+CTFE and runtime objects have independent stores, lookup capabilities, admission
+and dependency graphs. Neither consumer reads the other's objects, even for a
+native dev build with matching procedure identities. CTFE canonicalization
+includes only its own offers; runtime's complete packs remain runtime-only.
 
-Matching native domains are not proof of artifact availability. Shared elision
-also requires the same non-null lookup capability (context and callback), whose
-owner supplies both readers the same immutable offers and splice artifacts.
-This is session-local provider identity, never a persistent cache-key input.
-Separate providers retain source bodies and their independent late native hits.
+Body retirement belongs to the producer's declared readers. Check-only CTFE may
+elide bodies using its own certified offers. A shared LSS producer must retain
+source bodies because CTFE offers cannot authorize retirement for runtime.
+Each native consumer can still splice its own objects at its LIR boundary.
+This deliberately sacrifices early CTFE body reuse in builds rather than
+weakening the consumer invariant.
 
-The runtime handoff validates the original declared target and roots, including
-the complete provider capability and policy. Joint producer selection narrows
-only the internal continuation to its paired intersection; it cannot redefine
-the caller's declaration. Without a producer, the complete runtime view remains
-selected. Handoff observation sinks do not change that capability.
+Checked modules, evaluated constants and failure diagnostics remain shared.
+Source preparation also remains shared for LSS: generic literal roots and
+frozen callable correspondence use one producer identity domain. Independent
+preparations require an explicit cross-producer identity contract, not equality
+of separately allocated dense IDs. Runtime handoff validates the original
+target, roots and complete provider capability unchanged; observation sinks
+do not change that capability.
 
 An early cache offer carries the full-body producer's platform-requirement
 dependency summary. An independent entry is reusable across app fillings;
@@ -682,10 +683,9 @@ Native providers are immutable capabilities selected before producer lowering.
 Standalone checking uses the authoritative dev Solved policy, not a separately
 maintained approximation. A different Solved policy owns a distinct CTFE
 provider and publication namespace; identity names explicit decisions, never
-struct padding or session pointers. Runtime-capable complete dev packs remain
-separate from CTFE-only offers. A shared producer uses the runtime-capable
-intersection; its evaluator may additionally splice CTFE-only code at the native
-consumer boundary. LLVM always retains source bodies.
+struct padding or session pointers. Runtime-capable complete dev packs are never
+offered to CTFE. A shared producer retains source bodies; each native consumer
+uses only its own object provider. LLVM always retains source bodies.
 
 Fragment admission must also preserve the emitter's explicit context contract.
 CTFE hook arguments, mutable static-slot ordinals, and source/site ordinals are
@@ -753,16 +753,14 @@ cannot authorize replacing a runtime callee with an instrumented CTFE callee.
 The actual producer stamps structural callable ABI and final ARC compatibility,
 alongside definition-local emitter dependencies and context completeness.
 Unsupported contracts are explicitly non-interchangeable. Incompatible callee
-substitutions reject their callers before body elision, while complete compatible
-runtime provisions retain the shared early-elision capability. Runtime images
-never consume this CTFE-only canonical image. Source-local symbolic namespaces
-are resolved once, and admission, binding and placement share those edge facts.
-The declared consumer selects a coherent provision before indexing: shared native
-runtime consumers prefer complete runtime definitions, whereas standalone CTFE
-keeps its own definitions, including neutral definitions whose seed/callee
-contracts still belong to that namespace. Merely loading another pack namespace
-must not invalidate an independently valid serving closure. Preference never
-relaxes structural ABI, ARC, static-access, or seed compatibility.
+substitutions reject their callers before body elision. Runtime images never
+consume this CTFE-only canonical image. Source-local symbolic namespaces are
+resolved once, and admission, binding and placement share those edge facts.
+CTFE keeps its own definitions, including neutral definitions whose seed/callee
+contracts still belong to that namespace. Runtime definitions cannot participate
+in CTFE selection or invalidate an independently valid serving closure.
+Canonicalization never relaxes structural ABI, ARC, static-access, or seed
+compatibility.
 
 ## Checking Effects And Const Roots
 
@@ -1605,8 +1603,9 @@ only what evaluation compiles. `roc check` and `roc build` therefore
 evaluate the same roots to the same values and report the same compile-time
 errors: a build cannot report an error in the program that checking did not,
 and `--opt` never moves a computation between compile time and runtime. A
-dev build for the host reads the same packs for its runtime program and
-shares them with evaluation.
+dev build for the host uses independent runtime and CTFE packs. Shared source
+preparation retains bodies, while both native consumers can reuse their own
+objects through late splicing.
 
 Monotype lowering, lifting, SpecConstr, lambda solving, and inline analysis
 run once for that evaluation over the union of its roots, and the frozen

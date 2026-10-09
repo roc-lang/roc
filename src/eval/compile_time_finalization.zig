@@ -72,30 +72,19 @@ pub const EventCallback = struct {
 pub const SpliceSource = backend.dev.SpliceSource;
 
 /// The object cache compile-time evaluation reads, the same way in every
-/// command: entries compiled for the host under the dev policy, which run
-/// expects. The evaluator's program takes a hit for a procedure it runs, under
+/// command: entries compiled for the host under the declared CTFE policy.
+/// The evaluator's program takes a hit for a procedure it runs, under
 /// `comptime_closure_hits`, only when the entry names that procedure's own
 /// identity, and splices its cached code in place of compiling it.
 pub const CompileTimeObjectCache = struct {
-    /// Explicit provider-role capability for a joint producer. The runtime
-    /// view remains complete and immutable; only the intersection can erase
-    /// bodies that both evaluation and runtime will read.
-    pub const RuntimeShare = struct {
-        complete_runtime: lir.CheckedPipeline.SpecCacheLookup,
-        intersection: lir.CheckedPipeline.SpecCacheLookup,
-    };
-
     spec_cache: lir.CheckedPipeline.SpecCacheLookup,
     splice_source: SpliceSource,
     provision: lir.CheckedPipeline.CodeProvision = .host_dev_objects,
-    /// The evaluator keeps its canonical provider for late splicing. A joint
-    /// producer selects this capability before any source body can be erased.
-    runtime_share: ?RuntimeShare = null,
-    /// Select an immutable provider before the shared producer can erase bodies.
+    /// Select an immutable CTFE provider before its producer can erase bodies.
     /// Providers from different Solved policies are distinct capabilities.
     select_policy: ?struct {
         context: *anyopaque,
-        select: *const fn (*anyopaque, lir.CheckedPipeline.SolvedPolicy, lir.CheckedPipeline.CheckedModuleSet, bool) Allocator.Error!CompileTimeObjectCache,
+        select: *const fn (*anyopaque, lir.CheckedPipeline.SolvedPolicy, lir.CheckedPipeline.CheckedModuleSet) Allocator.Error!CompileTimeObjectCache,
     } = null,
     /// Borrow generated fragments while both their owner and LIR are alive.
     /// The owner stages bytes; only accepted checking may publish them.
@@ -345,9 +334,8 @@ pub const ProgramSession = struct {
     runtime_requests: []const checked.RootRequest,
     runtime_roots: lir.CheckedPipeline.RootRequestSet,
     /// Immutable caller declaration, including the complete provider capability.
-    /// Joint producer selection must not change what authorizes the handoff.
     declared_runtime_target: ?lir.CheckedPipeline.TargetConfig,
-    /// Selected continuation capability; a joint producer uses its paired view.
+    /// Runtime capability, unchanged by CTFE provider selection.
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     /// The compile-time evaluation program, holding every completed value
     /// the runtime consumer reads. Null when this compilation evaluated
@@ -644,105 +632,36 @@ fn compileTimeTarget(options: Options, solved_policy: lir.CheckedPipeline.Solved
     return target;
 }
 
-/// Name every reader before a shared Monotype producer can erase bodies.
-/// Boxy runtime lowering has its own producer and does not read this one.
-fn sharedProducerProvision(
-    host: lir.CheckedPipeline.TargetConfig,
+/// Object providers never authorize body retirement in another consumer.
+/// A shared source producer preserves literal and callable identity correspondence.
+fn compileTimeProducerProvision(
+    host: lir.CheckedPipeline.CodeProvision,
     runtime: ?lir.CheckedPipeline.TargetConfig,
 ) lir.CheckedPipeline.CodeProvision {
-    const consumer = runtime orelse return host.code_provision;
-    if (consumer.specialization_strategy != .lss) return host.code_provision;
-    const host_provider = host.spec_cache orelse return .source_bodies;
-    const runtime_provider = consumer.spec_cache orelse return .source_bodies;
-    if (!host_provider.sameProvider(runtime_provider)) return .source_bodies;
-    return host.code_provision.sharedDomain(consumer.code_provision);
+    if (runtime) |target| {
+        if (target.specialization_strategy == .lss) return .source_bodies;
+    }
+    return host;
 }
 
-/// Select one joint namespace using the complete runtime provider's explicit
-/// identity. A nonmatching capability grants no authority over this consumer.
-/// This is called only for a declared nonempty producer, after policy selection.
-fn selectJointProducerProviders(
-    host: *lir.CheckedPipeline.TargetConfig,
-    runtime: *lir.CheckedPipeline.TargetConfig,
-    share: CompileTimeObjectCache.RuntimeShare,
-) bool {
-    if (runtime.specialization_strategy != .lss) return false;
-    const complete = runtime.spec_cache orelse return false;
-    if (!share.complete_runtime.sameProvider(complete)) return false;
-    host.spec_cache = share.intersection;
-    runtime.spec_cache = share.intersection;
-    // The paired view grants runtime compatibility, not permission to replace
-    // interpreter-required source bodies with native objects.
-    if (host.code_provision.permitsNativeObjects()) host.code_provision = .host_dev_objects;
-    return true;
-}
-
-test "joint producer selects the declared intersection for both consumers" {
-    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const Result = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
-    const Callbacks = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) Result {
-            return null;
+test "independent object consumers retain shared source but check-only may elide" {
+    const Provision = lir.CheckedPipeline.CodeProvision;
+    for (std.enums.values(Provision)) |host| {
+        try std.testing.expectEqual(host, compileTimeProducerProvision(host, null));
+        for (std.enums.values(Provision)) |runtime| {
+            try std.testing.expectEqual(Provision.source_bodies, compileTimeProducerProvision(host, .{
+                .specialization_strategy = .lss,
+                .code_provision = runtime,
+            }));
+            try std.testing.expectEqual(host, compileTimeProducerProvision(host, .{
+                .specialization_strategy = .boxy,
+                .code_provision = runtime,
+            }));
         }
-    };
-    var contexts = [_]u8{ 0, 0, 0 };
-    const canonical_provider: Lookup = .{ .context = &contexts[0], .find = Callbacks.find };
-    const complete: Lookup = .{ .context = &contexts[1], .find = Callbacks.find };
-    const intersection: Lookup = .{ .context = &contexts[2], .find = Callbacks.find };
-    var host: lir.CheckedPipeline.TargetConfig = .{
-        .spec_cache = canonical_provider,
-        .code_provision = .host_ctfe_objects,
-    };
-    var runtime: lir.CheckedPipeline.TargetConfig = .{
-        .spec_cache = complete,
-        .code_provision = .host_dev_objects,
-        .specialization_strategy = .lss,
-    };
-    try std.testing.expect(selectJointProducerProviders(&host, &runtime, .{
-        .complete_runtime = complete,
-        .intersection = intersection,
-    }));
-    try std.testing.expect(host.spec_cache.?.sameProvider(intersection));
-    try std.testing.expect(runtime.spec_cache.?.sameProvider(intersection));
-    try std.testing.expect(!runtime.spec_cache.?.sameProvider(complete));
-    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.host_dev_objects, sharedProducerProvision(host, runtime));
-    host.code_provision = .source_bodies;
-    runtime.spec_cache = complete;
-    try std.testing.expect(selectJointProducerProviders(&host, &runtime, .{
-        .complete_runtime = complete,
-        .intersection = intersection,
-    }));
-    try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, sharedProducerProvision(host, runtime));
+    }
 }
 
-test "joint provider capability cannot change a different runtime consumer" {
-    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const Result = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
-    const Callbacks = struct {
-        fn find(_: *anyopaque, _: [32]u8, _: ?[32]u8) Result {
-            return null;
-        }
-    };
-    var contexts = [_]u8{ 0, 0, 0 };
-    const complete: Lookup = .{ .context = &contexts[0], .find = Callbacks.find };
-    const intersection: Lookup = .{ .context = &contexts[1], .find = Callbacks.find };
-    const other: Lookup = .{ .context = &contexts[2], .find = Callbacks.find };
-    const share = CompileTimeObjectCache.RuntimeShare{ .complete_runtime = complete, .intersection = intersection };
-    var host: lir.CheckedPipeline.TargetConfig = .{ .spec_cache = intersection };
-    var runtime: lir.CheckedPipeline.TargetConfig = .{ .spec_cache = other, .specialization_strategy = .lss };
-    try std.testing.expect(!selectJointProducerProviders(&host, &runtime, share));
-    try std.testing.expect(runtime.spec_cache.?.sameProvider(other));
-    runtime.spec_cache = complete;
-    runtime.specialization_strategy = .boxy;
-    try std.testing.expect(!selectJointProducerProviders(&host, &runtime, share));
-    try std.testing.expect(runtime.spec_cache.?.sameProvider(complete));
-    runtime.specialization_strategy = .lss;
-    runtime.spec_cache = null;
-    try std.testing.expect(!selectJointProducerProviders(&host, &runtime, share));
-    try std.testing.expect(runtime.spec_cache == null);
-}
-
-test "runtime handoff validates the original declaration and continues the selected provider" {
+test "runtime handoff preserves independent CTFE and runtime providers" {
     const allocator = std.testing.allocator;
     const helpers = @import("inspected.zig");
     var builtin_modules = try @import("BuiltinModules.zig").BuiltinModules.init(allocator);
@@ -780,7 +699,7 @@ test "runtime handoff validates the original declaration and continues the selec
     };
     var contexts = [_]u8{ 0, 0, 0 };
     const complete: Lookup = .{ .context = &contexts[0], .find = ColdCache.find };
-    const intersection: Lookup = .{ .context = &contexts[1], .find = ColdCache.find };
+    const other_provider: Lookup = .{ .context = &contexts[1], .find = ColdCache.find };
     const canonical_provider: Lookup = .{ .context = &contexts[2], .find = ColdCache.find };
     const declaration: lir.CheckedPipeline.TargetConfig = .{
         .code_provision = .host_dev_objects,
@@ -789,19 +708,19 @@ test "runtime handoff validates the original declaration and continues the selec
     const options: Options = .{ .object_cache = .{
         .spec_cache = canonical_provider,
         .splice_source = .{ .context = &contexts[2], .find = ColdCache.splice },
-        .runtime_share = .{ .complete_runtime = complete, .intersection = intersection },
     } };
-    // With no producer, selection grants no authority to narrow the full view.
-    // With a nonempty producer, both continuations use the paired cold view.
+    // Neither an empty nor a nonempty CTFE producer changes runtime capability.
     for ([_]bool{ false, true }) |has_producer| {
         const requested_roots: lir.CheckedPipeline.RootRequestSet = if (has_producer) roots else .{};
         var session = try finalizeProgram(allocator, &.{}, modules, requested_roots, requested_roots, declaration, options);
         defer session.deinit();
         try std.testing.expect(session.declared_runtime_target.?.spec_cache.?.sameProvider(complete));
-        try std.testing.expect(session.runtime_target.?.spec_cache.?.sameProvider(if (has_producer) intersection else complete));
+        try std.testing.expect(session.runtime_target.?.spec_cache.?.sameProvider(complete));
         try std.testing.expectEqual(has_producer, session.runtime_prepared != null);
         // An empty declaration has no runtime work to materialize.
         if (!has_producer) continue;
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.source_bodies, session.runtime_prepared.?.target.code_provision);
+        try std.testing.expectEqual(lir.CheckedPipeline.CodeProvision.host_dev_objects, session.runtime_target.?.code_provision);
         var runtime = try session.takeRuntime(allocator, requested_roots, declaration);
         defer runtime.deinit();
         try std.testing.expect(runtime.lir_result.store.proc_specs.len() != 0);
@@ -812,7 +731,7 @@ test "runtime handoff validates the original declaration and continues the selec
     // invalid programs passed into stages that never inspect their fields.
     try std.testing.expect(sameRuntimeTarget(declaration, declaration));
     var wrong = declaration;
-    wrong.spec_cache = intersection;
+    wrong.spec_cache = other_provider;
     try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
     wrong.spec_cache = canonical_provider;
     try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
@@ -829,70 +748,6 @@ test "runtime handoff validates the original declaration and continues the selec
     wrong = declaration;
     wrong.consume_dead_boxes = !declaration.consume_dead_boxes;
     try std.testing.expect(!sameRuntimeTarget(declaration, wrong));
-}
-
-test "shared producer requires the exact non-null provider capability" {
-    const Lookup = lir.CheckedPipeline.SpecCacheLookup;
-    const LookupResult = @typeInfo(@typeInfo(@FieldType(Lookup, "find")).pointer.child).@"fn".return_type.?;
-    const Callbacks = struct {
-        fn first(_: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
-            return null;
-        }
-        fn second(context: *anyopaque, _: [32]u8, _: ?[32]u8) LookupResult {
-            // Distinct behavior keeps optimized builds from merging callbacks.
-            const count: *u8 = @ptrCast(context);
-            count.* += 1;
-            return null;
-        }
-    };
-    var contexts = [_]u8{ 0, 0 };
-    const provider: Lookup = .{ .context = &contexts[0], .find = Callbacks.first };
-    const Provision = lir.CheckedPipeline.CodeProvision;
-    for (std.enums.values(Provision)) |host_domain| {
-        const host: lir.CheckedPipeline.TargetConfig = .{ .code_provision = host_domain, .spec_cache = provider };
-        for (std.enums.values(Provision)) |runtime_domain| {
-            for ([_]?Lookup{
-                provider,
-                .{ .context = &contexts[1], .find = Callbacks.first },
-                .{ .context = &contexts[0], .find = Callbacks.second },
-                null,
-            }, 0..) |lookup, index| {
-                const runtime: lir.CheckedPipeline.TargetConfig = .{
-                    .specialization_strategy = .lss,
-                    .code_provision = runtime_domain,
-                    .spec_cache = lookup,
-                };
-                try std.testing.expectEqual(
-                    if (index == 0) host_domain.sharedDomain(runtime_domain) else Provision.source_bodies,
-                    sharedProducerProvision(host, runtime),
-                );
-                var boxy = runtime;
-                boxy.specialization_strategy = .boxy;
-                try std.testing.expectEqual(host_domain, sharedProducerProvision(host, boxy));
-                var missing_host = host;
-                missing_host.spec_cache = null;
-                try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(missing_host, runtime));
-            }
-        }
-        try std.testing.expectEqual(host_domain, sharedProducerProvision(host, null));
-    }
-}
-
-test "declared consumers choose shared producer provision before discovery" {
-    const Provision = lir.CheckedPipeline.CodeProvision;
-    for (std.enums.values(Provision)) |host| {
-        try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, null));
-        for (std.enums.values(Provision)) |runtime| {
-            try std.testing.expectEqual(Provision.source_bodies, sharedProducerProvision(.{ .code_provision = host }, .{
-                .specialization_strategy = .lss,
-                .code_provision = runtime,
-            }));
-            try std.testing.expectEqual(host, sharedProducerProvision(.{ .code_provision = host }, .{
-                .specialization_strategy = .boxy,
-                .code_provision = runtime,
-            }));
-        }
-    }
 }
 
 /// Complete checked values in the caller's dependency order, using the
@@ -913,10 +768,6 @@ pub fn finalizeProgram(
     runtime_target: ?lir.CheckedPipeline.TargetConfig,
     options: Options,
 ) FinalizeError!ProgramSession {
-    // Preserve the complete runtime provider when no producer requests exist.
-    // Joint selection below is an explicit capability operation, never an
-    // inference from whether a CLI cache happened to prepare its views.
-    var session_runtime_target = runtime_target;
     const total_started_ns = if (options.timing) |timing| timing.start() else 0;
     defer if (options.timing) |timing| timing.finish(total_started_ns, .total);
     var debug_events = DebugEvents{ .allocator = allocator };
@@ -1009,27 +860,20 @@ pub fn finalizeProgram(
                 finalizationInvariant("semantic demand omitted a test observation root");
         }
         union_roots.test_plan_metadata = union_test_metadata;
-        // An LSS runtime consumer continues this specialization, so it is
-        // made under the runtime's Solved policy.
+        // Shared source preparation follows runtime's Solved policy, but its
+        // CTFE object provider and dependency graph remain independent.
         const solved_policy = if (lss_runtime) lir.CheckedPipeline.SolvedPolicy.fromTarget(runtime_target.?) else check_solved_policy;
         var policy_options = options;
         if (options.object_cache) |cache| {
-            const native_runtime = if (runtime_target) |target| target.code_provision.permitsNativeObjects() else false;
-            if (cache.select_policy) |selector| policy_options.object_cache = try selector.select(selector.context, solved_policy, lowering_modules, native_runtime);
+            if (cache.select_policy) |selector| policy_options.object_cache = try selector.select(selector.context, solved_policy, lowering_modules);
         }
         var host_target = compileTimeTarget(policy_options, solved_policy);
         if (policy_options.object_cache) |cache| host_target.root_use_cache = cache.spec_cache;
         var host_lir_policy = lir.CheckedPipeline.LirPolicy.fromTarget(host_target);
-        if (lss_runtime) {
-            if (policy_options.object_cache) |cache| {
-                if (cache.runtime_share) |share| {
-                    _ = selectJointProducerProviders(&host_target, &session_runtime_target.?, share);
-                }
-            }
-        }
-        // All readers of this producer are declared before any cache hit can
-        // erase a source body. CTFE still owns its native late-splice policy.
-        host_target.code_provision = sharedProducerProvision(host_target, session_runtime_target);
+        // The runtime consumer needs this producer's source bodies. Its object
+        // lookup is independent, so no CTFE hit authorizes shared retirement.
+        // The evaluator keeps its own late-splice policy above.
+        host_target.code_provision = compileTimeProducerProvision(host_target.code_provision, runtime_target);
         // Counting work observes the evaluation without shaping it.
         if (runtime_target) |target| host_target.work_metrics = target.work_metrics;
         var monotype = lir.CheckedPipeline.prepareCheckedModulesMonotype(allocator, lowering_modules, union_roots, host_target) catch |err| switch (err) {
@@ -1038,8 +882,9 @@ pub fn finalizeProgram(
         };
         var monotype_owned = true;
         errdefer if (monotype_owned) monotype.deinit();
-        // An LSS runtime consumer continues this Solved program.
-        const shares_solved = lss_runtime;
+        // Values and callable/literal correspondence still belong to this one
+        // source producer; object graphs belong exclusively to their consumers.
+        const retains_values = lss_runtime;
         monotype_owned = false;
         var prepared = try lir.CheckedPipeline.prepareMonotypeToSolved(monotype);
         var prepared_owned = true;
@@ -1057,7 +902,7 @@ pub fn finalizeProgram(
             // compile-time values out of this program's frozen data, so the
             // roots the program records reads of materialize their completed
             // values here.
-            const completed_values = if (shares_solved)
+            const completed_values = if (retains_values)
                 try collectCompletedValueRequests(allocator, modules, &prepared)
             else
                 &[_]lir.CheckedPipeline.CompletedValueRequest{};
@@ -1074,8 +919,8 @@ pub fn finalizeProgram(
                 .observers = lir.CheckedPipeline.Observers.fromTarget(host_target),
                 .lir_policy = host_lir_policy,
             };
-            if (!shares_solved) prepared_owned = false;
-            host = (if (shares_solved)
+            if (!retains_values) prepared_owned = false;
+            host = (if (retains_values)
                 lir.CheckedPipeline.lowerConsumerToLir(&prepared, host_consumer)
             else
                 lir.CheckedPipeline.lowerFinalConsumerToLir(prepared, host_consumer)) catch |err| switch (err) {
@@ -1092,12 +937,12 @@ pub fn finalizeProgram(
                 if (entry.problem_store) |store| try finishPendingExhaustiveness(allocator, entry.module, store);
                 try entry.module.const_store.verifyComplete();
             }
-            if (!shares_solved) {
+            if (!retains_values) {
                 prepared_owned = false;
                 prepared.deinit();
             }
         }
-        if (shares_solved) {
+        if (retains_values) {
             prepared_owned = false;
             runtime_prepared = prepared;
         }
@@ -1118,7 +963,7 @@ pub fn finalizeProgram(
         .runtime_requests = owned_runtime_roots.requests,
         .runtime_roots = owned_runtime_roots,
         .declared_runtime_target = runtime_target,
-        .runtime_target = session_runtime_target,
+        .runtime_target = runtime_target,
         .host = host,
         .runtime_prepared = runtime_prepared,
         .runtime_positions = runtime_positions,
