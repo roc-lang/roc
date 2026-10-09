@@ -803,25 +803,39 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
         }
     }
 
-    // Delete existing .md files
+    // Delete existing .md files that no .roc file regenerates. The others are
+    // rewritten below only if their contents change (see `writeSnapshotMarkdown`).
     if (!config.disable_updates) {
         iterator = dir.iterate();
-        var files_to_delete = std.array_list.Managed([]u8).init(allocator);
+        var md_files = std.array_list.Managed([]u8).init(allocator);
         defer {
-            for (files_to_delete.items) |file_path| {
+            for (md_files.items) |file_path| {
                 allocator.free(file_path);
             }
-            files_to_delete.deinit();
+            md_files.deinit();
+        }
+        var roc_base_names = std.StringHashMap(void).init(allocator);
+        defer {
+            var iter = roc_base_names.keyIterator();
+            while (iter.next()) |key| allocator.free(key.*);
+            roc_base_names.deinit();
         }
 
         while (try iterator.next(app_io)) |entry| {
-            if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".md")) {
+            if (entry.kind != .file) continue;
+            if (std.mem.endsWith(u8, entry.name, ".md")) {
                 const file_path = try allocator.dupe(u8, entry.name);
-                try files_to_delete.append(file_path);
+                errdefer allocator.free(file_path);
+                try md_files.append(file_path);
+            } else if (std.mem.endsWith(u8, entry.name, ".roc")) {
+                const base_name = try allocator.dupe(u8, entry.name[0 .. entry.name.len - ".roc".len]);
+                errdefer allocator.free(base_name);
+                try roc_base_names.put(base_name, {});
             }
         }
 
-        for (files_to_delete.items) |file_name| {
+        for (md_files.items) |file_name| {
+            if (roc_base_names.contains(file_name[0 .. file_name.len - ".md".len])) continue;
             dir.deleteFile(app_io, file_name) catch |err| {
                 warn("Failed to delete {s}: {}", .{ file_name, err });
             };
@@ -847,6 +861,13 @@ fn processMultiFileSnapshot(allocator: Allocator, dir_path: []const u8, config: 
             // Read the .roc file content
             const roc_content = std.Io.Dir.cwd().readFileAlloc(app_io, roc_file_path, allocator, .limited(1024 * 1024)) catch |err| {
                 warn("Failed to read {s}: {}", .{ roc_file_path, err });
+                // Nothing regenerates this snapshot, so it must not outlive the run.
+                if (!config.disable_updates) {
+                    dir.deleteFile(app_io, snapshot_file_name) catch |delete_err| switch (delete_err) {
+                        error.FileNotFound => {},
+                        else => warn("Failed to delete {s}: {}", .{ snapshot_file_name, delete_err }),
+                    };
+                }
                 continue;
             };
             defer allocator.free(roc_content);
@@ -1324,22 +1345,12 @@ fn processSnapshotContent(
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
         if (content.meta.source_escapes) {
-            var remaining = snapshot_md;
-            while (std.mem.findScalar(u8, remaining, '\r')) |index| {
-                try md_file.writeStreamingAll(app_io, remaining[0..index]);
-                try md_file.writeStreamingAll(app_io, "\\r");
-                remaining = remaining[index + 1 ..];
-            }
-            try md_file.writeStreamingAll(app_io, remaining);
+            const escaped_md = try std.mem.replaceOwned(u8, allocator, snapshot_md, "\r", "\\r");
+            defer allocator.free(escaped_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, escaped_md)) return false;
         } else {
-            try md_file.writeStreamingAll(app_io, snapshot_md);
+            if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
         }
 
         if (html_buffer_unmanaged) |*buf| {
@@ -3179,6 +3190,33 @@ fn generateHtmlClosing(output: *DualOutput) error{WriteFailed}!void {
 }
 
 /// Write HTML buffer to file
+/// Writes a snapshot's markdown, leaving a file that already holds exactly
+/// these bytes untouched. The build cache treats a rewritten input as changed
+/// even when its contents are identical, so re-stamping unchanged snapshots
+/// would rebuild everything derived from `test/` after each regeneration.
+/// Returns false, after logging, when the file cannot be created.
+fn writeSnapshotMarkdown(gpa: Allocator, output_path: []const u8, snapshot_md: []const u8) SnapshotError!bool {
+    // One byte past the new length is enough to tell a longer file apart.
+    const existing: ?[]u8 = std.Io.Dir.cwd().readFileAlloc(app_io, output_path, gpa, .limited(snapshot_md.len + 1)) catch |err| switch (err) {
+        error.OutOfMemory => |e| return e,
+        // Missing, longer, or unreadable: not known to match, so write it.
+        else => null,
+    };
+    if (existing) |bytes| {
+        defer gpa.free(bytes);
+        if (std.mem.eql(u8, bytes, snapshot_md)) return true;
+    }
+
+    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
+        std.log.err("Failed to create {s}: {}", .{ output_path, err });
+        return false;
+    };
+    defer md_file.close(app_io);
+
+    try md_file.writeStreamingAll(app_io, snapshot_md);
+    return true;
+}
+
 fn writeHtmlFile(gpa: Allocator, snapshot_path: []const u8, html_buffer: *std.ArrayList(u8)) (Allocator.Error || error{WriteFailed})!void {
     // Convert .md path to .html path
     const html_path = blk: {
@@ -3631,13 +3669,7 @@ fn processDocsSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -4169,13 +4201,7 @@ fn processDevObjectSnapshot(
     defer allocator.free(snapshot_md);
 
     // Write the output file
-    const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-        std.log.err("Failed to create {s}: {}", .{ output_path, err });
-        return false;
-    };
-    defer md_file.close(app_io);
-
-    try md_file.writeStreamingAll(app_io, snapshot_md);
+    if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
     return success;
 }
 
@@ -5050,13 +5076,7 @@ fn processReplSnapshot(allocator: Allocator, content: Content, output_path: []co
 
     if (!config.disable_updates) {
         // Write the markdown file
-        const md_file = std.Io.Dir.cwd().createFile(app_io, output_path, .{}) catch |err| {
-            std.log.err("Failed to create {s}: {}", .{ output_path, err });
-            return false;
-        };
-        defer md_file.close(app_io);
-
-        try md_file.writeStreamingAll(app_io, snapshot_md);
+        if (!try writeSnapshotMarkdown(allocator, output_path, snapshot_md)) return false;
 
         if (html_buffer_unmanaged) |*buf| {
             writeHtmlFile(allocator, output_path, buf) catch |err| {
