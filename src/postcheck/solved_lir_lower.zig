@@ -15459,7 +15459,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
             try lowerer.verifyMaterializedDecisions();
         }
     };
-    try std.testing.checkAllAllocationFailures(allocator, Verify.run, .{&solved});
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Verify.run, .{&solved});
     {
         var lowerer = try Lowerer.init(allocator, .u64, &solved, .{});
         defer lowerer.deinit();

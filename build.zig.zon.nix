@@ -167,12 +167,12 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN.tar.gz";
+    name = "bytebox-0.0.1-SXc2sdymDwDisdVtvnk6RwklNLD8_0tN9QeOk-beQvJB.tar.gz";
     path = fetchZig {
       name = "bytebox";
-      packageHash = "bytebox-0.0.1-SXc2sdymDwDmedpZXCTPSLX8eOQZkr2tGoDalQAEgFnN";
-      url = "https://github.com/lukewilliamboswell/bytebox/archive/23e74bdd01a0b79bbb8937e01ab4a6c4132ffe87.tar.gz";
-      hash = "sha256-KkF4469qIaNj0v0/WlvNOx43782lKpL1RZ0evT4RJEI=";
+      packageHash = "bytebox-0.0.1-SXc2sdymDwDisdVtvnk6RwklNLD8_0tN9QeOk-beQvJB";
+      url = "https://github.com/lukewilliamboswell/bytebox/archive/a47174a91c2b03fe9f7982ca914633a15123b017.tar.gz";
+      hash = "sha256-0tP/w5GLQ69KTI+DIWOB3LwCQ8w1i14AGpjrqdg9J/Y=";
     };
   }
   {
@@ -185,12 +185,12 @@ linkFarm name (map unpackZig (lib.optionals includeFuzzingDependencies [
     };
   }
   {
-    name = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o.tar.gz";
+    name = "stable_array-0.1.0-3ihgvVtnAADGV_7qnu3FIy1wTYraU_qBy17aAAOAREAx.tar.gz";
     path = fetchZig {
       name = "zig-stable-array";
-      packageHash = "stable_array-0.1.0-3ihgvd9eAAA5ozV4aOQZ6GI3d_gTyiR9tS6mwav2w18o";
-      url = "git+https://github.com/lukewilliamboswell/zig-stable-array.git#0931a8619b0e5429e1573caf1a1b34a421e4c76a";
-      hash = "sha256-n/NV3r5ji4+fW+c/I8AzjnLsGU4nUSzmJtdAI6+TcRk=";
+      packageHash = "stable_array-0.1.0-3ihgvVtnAADGV_7qnu3FIy1wTYraU_qBy17aAAOAREAx";
+      url = "git+https://github.com/lukewilliamboswell/zig-stable-array.git#62d68d6c5a4c412e2aa82fad1f90eaed061ea39b";
+      hash = "sha256-SnxsV2B635S8Pxpl6Zcsr6rNLpy0oLxouO1Uwn9+Y2k=";
     };
   }
   {
