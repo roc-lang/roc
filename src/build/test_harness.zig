@@ -839,26 +839,23 @@ test "timestamp helpers read the same clock as each other" {
 }
 
 test "harness clock excludes time the machine spent suspended" {
-    if (builtin.os.tag != .macos) return error.SkipZigTest;
-
-    var uptime: std.c.timespec = undefined;
-    var monotonic: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.UPTIME_RAW, &uptime);
-    _ = std.c.clock_gettime(.MONOTONIC, &monotonic);
-    const uptime_ms: i64 = @as(i64, uptime.sec) * 1000 + @divTrunc(@as(i64, uptime.nsec), 1_000_000);
-    const monotonic_ms: i64 = @as(i64, monotonic.sec) * 1000 + @divTrunc(@as(i64, monotonic.nsec), 1_000_000);
+    // `.awake` is the clock minici measures its steps with; `.boot` keeps
+    // running while the machine is suspended.
+    const awake_ms = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
+    const boot_ms = std.Io.Clock.boot.now(std.testing.io).toMilliseconds();
 
     const now = milliTimestamp();
-    try std.testing.expect(@abs(now - uptime_ms) < 1000);
+    try std.testing.expect(@abs(now - awake_ms) < 1000);
 
-    // On macOS these two clocks differ by however long the machine has been
-    // suspended since boot. Where they have diverged, reading the monotonic
-    // one is the bug this guards: a suspend would be charged to whichever
-    // tests were in flight, and they would wake up already past their timeout
-    // and be killed as hangs. A machine that has never slept cannot tell the
-    // two apart, so there is nothing to assert there.
-    if (monotonic_ms - uptime_ms > 2000) {
-        try std.testing.expect(now < monotonic_ms - 1000);
+    // These two clocks differ by however long the machine has been suspended
+    // since boot. Where they have diverged, reading the boot one is the bug
+    // this guards: a suspend would be charged to whichever tests were in
+    // flight, and they would wake up already past their timeout and be killed
+    // as hangs. A machine that has never slept (or a platform where both are
+    // the same clock) cannot tell the two apart, so there is nothing to assert
+    // there.
+    if (boot_ms - awake_ms > 2000) {
+        try std.testing.expect(now < boot_ms - 1000);
     }
 }
 
