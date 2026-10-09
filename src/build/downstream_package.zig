@@ -3,7 +3,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 /// Register separate preparation and execution steps for the fetched-package test.
-pub fn create(b: *std.Build) *std.Build.Step {
+pub fn create(b: *std.Build, host_tool_target: std.Build.ResolvedTarget) *std.Build.Step {
     const source = b.addWriteFiles();
     inline for (.{ "build.zig", "build.zig.zon", "LICENSE", "legal_details" }) |file| {
         _ = source.addCopyFile(b.path(file), file);
@@ -17,17 +17,16 @@ pub fn create(b: *std.Build) *std.Build.Step {
         .name = "prepare-downstream-package",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/downstream_package.zig"),
-            .target = b.graph.host,
+            .target = host_tool_target,
             .optimize = .Debug,
         }),
     });
     const prepare = b.addRunArtifact(helper);
-    prepare.addArg(b.graph.zig_exe);
-    prepare.addArg(b.graph.global_cache_root.path orelse ".");
+    prepare.addFileArg(.zig_exe);
+    prepare.addDirectoryArg(.{ .relative = .{ .base = .global_cache } });
     prepare.addDirectoryArg(source.getDirectory());
     prepare.addDirectoryArg(fixture.getDirectory().path(b, "consumer"));
     const output = prepare.addOutputDirectoryArg("downstream-package");
-    prepare.addArg(b.fmt("-j{d}", .{b.graph.max_jobs orelse 2}));
     const build_step = b.step("build-test-downstream-package", "Fetch Roc as a Zig package and build a separate compiler driver");
     build_step.dependOn(&prepare.step);
 
@@ -42,15 +41,24 @@ pub fn create(b: *std.Build) *std.Build.Step {
 /// Fetch the source snapshot and build the standalone consumer against its archive.
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
-    const args = try init.minimal.args.toSlice(arena);
-    if (args.len != 7) return error.ExpectedPackageArguments;
-    const zig = args[1];
-    const global_cache = args[2];
-    const source = args[3];
-    const fixture = args[4];
-    const output = args[5];
-    const jobs = args[6];
     const io = init.io;
+    const args = try init.minimal.args.toSlice(arena);
+    if (args.len != 6) return error.ExpectedPackageArguments;
+    // The build runner may pass paths relative to its own working directory
+    // (the global cache included, when ZIG_GLOBAL_CACHE_DIR is relative), while
+    // the consumer's `zig fetch --save-exact` and `zig build` run inside the
+    // consumer directory. Every path handed to a child is therefore made
+    // absolute first.
+    const cwd = try std.process.currentPathAlloc(io, arena);
+    const zig = try std.fs.path.resolve(arena, &.{ cwd, args[1] });
+    const global_cache = try std.fs.path.resolve(arena, &.{ cwd, args[2] });
+    const source = try std.fs.path.resolve(arena, &.{ cwd, args[3] });
+    const fixture = try std.fs.path.resolve(arena, &.{ cwd, args[4] });
+    const output = try std.fs.path.resolve(arena, &.{ cwd, args[5] });
+    // Zig reads the global cache location from the environment. A relative
+    // value would name a different directory inside the consumer, so children
+    // are given the absolute one the build runner is using.
+    try init.environ_map.put("ZIG_GLOBAL_CACHE_DIR", global_cache);
     const consumer = try std.fs.path.join(arena, &.{ output, "consumer" });
     const platform = try std.fs.path.join(arena, &.{ consumer, "platform" });
     try std.Io.Dir.cwd().createDirPath(io, platform);
@@ -58,7 +66,7 @@ pub fn main(init: std.process.Init) !void {
         const contents = try std.Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ fixture, file }), arena, .limited(1024 * 1024));
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = try std.fs.path.join(arena, &.{ consumer, file }), .data = contents });
     }
-    const fetched = try command(init, &.{ zig, "fetch", "--global-cache-dir", global_cache, source }, null);
+    const fetched = try command(init, &.{ zig, "fetch", source }, null);
     const hash = std.mem.trim(u8, fetched, " \r\n\t");
     const archive = try std.fs.path.join(arena, &.{ global_cache, "p", try std.fmt.allocPrint(arena, "{s}.tar.gz", .{hash}) });
     // Fetch the canonical archive again with --save-exact so Zig writes a real
@@ -74,16 +82,17 @@ pub fn main(init: std.process.Init) !void {
         \\}
         \\
     });
-    _ = try command(init, &.{ zig, "fetch", "--global-cache-dir", global_cache, "--save-exact=roc", archive }, consumer);
+    _ = try command(init, &.{ zig, "fetch", "--save-exact=roc", archive }, consumer);
     const prefix = try std.fs.path.join(arena, &.{ output, "prefix" });
     const cache = try std.fs.path.join(arena, &.{ output, "consumer-cache" });
-    _ = try command(init, &.{ zig, "build", "--global-cache-dir", global_cache, "--cache-dir", cache, "--prefix", prefix, jobs }, consumer);
+    _ = try command(init, &.{ zig, "build", "--cache-dir", cache, "--prefix", prefix }, consumer);
 }
 
 fn command(init: std.process.Init, argv: []const []const u8, cwd: ?[]const u8) ![]const u8 {
     const result = try std.process.run(init.arena.allocator(), init.io, .{
         .argv = argv,
         .cwd = if (cwd) |path| .{ .path = path } else .inherit,
+        .environ_map = init.environ_map,
         .stdout_limit = .limited(4 * 1024 * 1024),
         .stderr_limit = .limited(4 * 1024 * 1024),
     });

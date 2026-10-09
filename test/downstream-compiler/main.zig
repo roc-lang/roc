@@ -59,7 +59,7 @@ pub fn main(init: std.process.Init) SmokeError!void {
         1,
         roc_target.RocTarget.detectNative(),
         &builtin_modules,
-        build_options.compiler_version,
+        build_options.compiler_compatibility_id,
         null,
         CoreCtx.default(gpa, arena, init.io),
     );
