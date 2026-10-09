@@ -997,6 +997,10 @@ fn tidyBanned(file: SourceFile, errors: *Errors) void {
 
         // Style:
         .{ "usingnamespace", "explicit imports" },
+
+        // A tool compiled for the detected CPU is a cache miss on every CI
+        // runner with a different one; see `hostToolTarget` in build.zig.
+        .{ ".target = b.graph.host", "hostToolTarget" },
     };
 
     for (ban_list) |ban_item| {

@@ -17,11 +17,15 @@ var build_checks_exe: ?*Step.Compile = null;
 
 fn buildChecksRun(b: *std.Build, command: []const u8) *Step.Run {
     const exe = build_checks_exe orelse blk: {
+        // ReleaseFast on purpose. The source checks read every Zig file under
+        // src/: together they take about 0.3 s this way and 6 s as a Debug
+        // build, which is what Debug would save in compile time on a cold
+        // cache and a loss on every run after that.
         const tool = b.addExecutable(.{
             .name = "roc-build-checks",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/build/check_runner.zig"),
-                .target = b.graph.host,
+                .target = hostToolTarget(b, .fast),
                 .optimize = .fast,
             }),
         });
@@ -444,6 +448,25 @@ fn hostBuildsDebugWithSha(target: ResolvedTarget) bool {
     return builtin.cpu.hasAll(.x86, &.{ .sha, .ssse3 });
 }
 
+/// The target for everything that is compiled to run on this machine during
+/// the build: tools, generators and their tests. It is this machine's OS and
+/// ABI at the CPU the default target gets, baseline x86-64 with the Debug
+/// floor of `withSha256Floor`, rather than the CPU `b.graph.host` detected.
+///
+/// Zig keys each compilation on its target CPU, so a tool compiled for the
+/// detected CPU is a cache miss on a machine with a different one, and so is
+/// every step that consumes what the tool generates: `builtin_compiler` bakes
+/// the builtins most test binaries embed. CI compiles on one runner and tests
+/// on others, and x86_64 runners do not all have the same CPU, so those test
+/// jobs recompiled the tools and most test binaries instead of reusing them.
+/// ci/tidy.zig bans compiling for `b.graph.host` for that reason.
+///
+/// Other architectures keep the detected CPU, as the default target does.
+fn hostToolTarget(b: *std.Build, optimize: OptimizeMode) ResolvedTarget {
+    if (builtin.target.cpu.arch != .x86_64) return b.graph.host;
+    return withSha256Floor(b, b.resolveTargetQuery(.{ .cpu_model = .baseline }), optimize);
+}
+
 /// Raise an aarch64 compiler target's CPU floor to include the SHA-256
 /// instructions. Type digests are cryptographic SHA-256 (see
 /// `src/base/TypeDigestHasher.zig` for why) and aarch64 computes them in
@@ -544,7 +567,8 @@ const TestSuiteSpec = struct {
     /// compiled once no matter which step was asked for.
     compile: *Step.Compile,
     /// Extra edges both runs need: copied host libraries, installed prebuilt
-    /// apps, the `roc` CLI, and so on.
+    /// apps, the `roc` CLI, and so on. These are build work, so `build-test-zig`
+    /// depends on them as well.
     deps: []const *Step = &.{},
     /// Environment variables both runs need.
     env: []const TestSuiteEnv = &.{},
@@ -620,8 +644,11 @@ const TestSuiteRegistry = struct {
 
         self.unit_test_runner.configure(spec.compile);
 
-        // Build-side wiring, uniform for every suite.
+        // Build-side wiring, uniform for every suite. `deps` are built here
+        // too: left to the run steps alone, each MiniCI shard compiled them
+        // (the fx suite's host libraries) instead of reusing `build-ci`.
         self.build_test_zig_step.dependOn(&spec.compile.step);
+        for (spec.deps) |dep| self.build_test_zig_step.dependOn(dep);
         if (spec.default_step) b.default_step.dependOn(&spec.compile.step);
         if (self.wiring_run) |wiring| wiring.addArtifactArg(spec.compile);
 
@@ -848,7 +875,7 @@ fn createAndRunBuiltinCompiler(
         .name = "builtin_compiler",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/builtin_compiler/main.zig"),
-            .target = b.graph.host, // this runs at build time on the *host* machine!
+            .target = hostToolTarget(b, .debug), // this runs at build time on the *host* machine!
             // Kept Debug deliberately: this exe publishes + serializes the
             // builtin CheckedModuleArtifact (a few seconds of Debug run), but building
             // it ReleaseFast would optimize the whole check/eval closure (incl. the
@@ -883,7 +910,7 @@ fn createAndRunBuiltinCompiler(
     // is added here as a standalone module rooted at compile_time_finalization.zig.
     const comptime_finalizer_module = b.createModule(.{
         .root_source_file = b.path("src/eval/compile_time_finalization.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
         .link_libc = true,
         .imports = &.{
@@ -1447,6 +1474,28 @@ fn setupTestPlatforms(
     return .{ .wasm32 = wasm_host_step, .wasm32v1 = wasm_v1_host_step, .hosts = prepared_hosts_step };
 }
 
+/// Makes `roc_cache_dir` the whole environment of a cached `roc build` step.
+///
+/// `Step.Run.setEnvironmentVariable` on its own starts from a copy of this
+/// process's environment, and Zig hashes every variable of that copy into the
+/// step's cache key. The step then reran whenever any variable differed, as
+/// one always does between the CI job that builds and the shards that restore
+/// its cache; its output moved, and each test binary embedding that path was
+/// recompiled.
+///
+/// A cache root is all `roc build` needs from the environment for an app whose
+/// platform is a local path. `ROC_CACHE_DIR` names it, and it holds the module
+/// cache and the scratch directory for objects (`getDefaultCacheDir` in
+/// src/compile/cache_config.zig). The package download directory is looked up
+/// as well, from `XDG_CACHE_HOME`, `LOCALAPPDATA` and `HOME`, but only URL
+/// packages use it (`ensurePackageCacheDir` in src/compile/compile_build.zig).
+/// Linking runs in-process and names every input, and the Windows SDK lookup
+/// passes its own empty environment (src/cli/linker.zig).
+fn setRocBuildEnvironment(run: *Step.Run, roc_cache_dir: []const u8) void {
+    run.clearEnvironment();
+    run.setEnvironmentVariable("ROC_CACHE_DIR", roc_cache_dir);
+}
+
 const WasmStaticLibAppBuild = struct {
     run: *Step.Run,
     wasm: std.Build.LazyPath,
@@ -1511,8 +1560,9 @@ pub fn build(b: *std.Build) void {
     // - MiniCI runs `build-ci` once and then runs leaf `run-*` jobs. Keep
     //   aggregate steps out of MiniCI so each job remains independently
     //   reportable and re-runnable.
-    // MiniCI intentionally does not parse Zig summaries to detect misplaced
-    // build work; this convention is the source of truth.
+    // MiniCI checks this split: after `build-ci`, a run job that runs a compile
+    // step fails the cache-reuse canary unless the job lists that step in its
+    // `expected_compiles` (see `jobs` in src/build/minici.zig).
     const build_ci_step = b.step("build-ci", "Build all binaries used by MiniCI");
     const build_roc_step = b.step("roc", "Build the roc compiler without running it");
     const run_roc_step = b.step("run-roc", "Build and run the roc cli");
@@ -1532,6 +1582,7 @@ pub fn build(b: *std.Build) void {
     const run_check_cli_global_stdio_step = b.step("run-check-cli-global-stdio", "Check forbidden global stdio usage in CLI code");
     const run_check_test_wiring_step = b.step("run-check-test-wiring", "Check test files are wired");
     const run_check_builtin_format_step = b.step("run-check-builtin-format", "Check Builtin.roc formatting");
+    const build_check_glue_abi_step = b.step("build-check-glue-abi", "Build the generated Zig glue ABI lock objects and the foreign ABI lock generator");
     const run_check_glue_abi_step = b.step("run-check-glue-abi", "Check generated Zig glue against the canonical host ABI");
     const run_check_simd_codegen_step = b.step("run-check-simd-codegen", "Check that optimized integer SIMD kernels select native instructions");
     const run_check_match_extension_codegen_step = b.step("run-check-match-extension-codegen", "Check the pinned instruction counts for the match-extension loop");
@@ -1544,6 +1595,7 @@ pub fn build(b: *std.Build) void {
     const build_test_lsp_integration_runner_step = b.step("build-test-lsp-integration-runner", "Build LSP integration test harness");
     const build_test_eval_runner_step = b.step("build-test-eval-runner", "Build eval test runner");
     const run_test_eval_step = b.step("run-test-eval", "Run eval tests in parallel across enabled backends");
+    const run_test_eval_llvm_float_bits_step = b.step("run-test-eval-llvm-float-bits", "Check that float results agree bit for bit across backends, LLVM included");
     const run_test_simd_differential_step = b.step("run-test-simd-differential", "Run the exhaustive integer-SIMD oracle corpus through every compiler consumer");
     const build_test_eval_host_effects_runner_step = b.step("build-test-eval-host-effects-runner", "Build runtime host-effects eval test runner");
     const run_test_eval_host_effects_step = b.step("run-test-eval-host-effects", "Run runtime host-effects eval tests across supported backends");
@@ -1553,6 +1605,7 @@ pub fn build(b: *std.Build) void {
     const build_playground_wasm_archive_step = b.step("build-playground-wasm-archive", "Build playground.wasm and zstd-compress it under zig-out/lib/playground");
     const build_repl_wasm_step = b.step("build-repl-wasm", "Build the dedicated REPL WebAssembly module");
     const build_repl_wasm_archive_step = b.step("build-repl-wasm-archive", "Build repl.wasm and zstd-compress it under zig-out/lib/repl");
+    const build_test_repl_wasm_runner_step = b.step("build-test-repl-wasm-runner", "Build the dedicated REPL WebAssembly protocol test runner");
     const run_test_repl_wasm_step = b.step("run-test-repl-wasm", "Run the dedicated REPL WebAssembly protocol tests");
     const build_web_step = b.step("build-web", "Build the playground, REPL, and echo web artifacts");
     const build_test_playground_runner_step = b.step("build-test-playground-runner", "Build the integration test suite for the WASM playground");
@@ -1566,7 +1619,9 @@ pub fn build(b: *std.Build) void {
     const build_test_wasm_static_lib_runner_step = b.step("build-test-wasm-static-lib-runner", "Build WASM static library test runner");
     const run_test_wasm_static_lib_step = b.step("run-test-wasm-static-lib", "Run WASM static library test runner");
     const repro_issue_11529_step = b.step("repro-issue-11529", "Build and run the wasm32 top-level boxed function regression");
+    const build_test_dylib_step = b.step("build-test-dylib", "Build the shared library loader and its dead-code check");
     const run_test_dylib_step = b.step("run-test-dylib", "Build a Roc shared library and run it through the loader test");
+    const build_test_archive_step = b.step("build-test-archive", "Build the Roc static archive consumer and the archive checks");
     const run_test_archive_step = b.step("run-test-archive", "Build a Roc static archive, link a consumer against it, and run it");
     const run_check_machine_code_shim_archive_step = b.step("run-check-machine-code-shim-archive", "Check that the machine-code shim keeps compiler-private support local");
     const build_coverage_tools_step = b.step("build-coverage-tools", "Build parser coverage tools");
@@ -1576,7 +1631,8 @@ pub fn build(b: *std.Build) void {
     const run_snapshot_tool_step = b.step("run-snapshot-tool", "Run the snapshot tool to update snapshot files");
     const echo_wasm_step = b.step("build-echo-wasm", "Build the echo platform to zig-out/lib/echo/echo.wasm");
     const echo_wasm_archive_step = b.step("build-echo-wasm-archive", "Build echo.wasm and zstd-compress it under zig-out/lib/echo");
-    const check_echo_wasm_size_step = b.step("check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
+    const build_test_echo_wasm_runner_step = b.step("build-test-echo-wasm-runner", "Build the echo.wasm integration test runner");
+    const check_echo_wasm_size_step = b.step("run-check-echo-wasm-size", "Check echo.wasm against the website's asset size limit");
     const build_glue_release_step = b.step("build-glue-release", "Build release-ready glue specs");
 
     const build_test_hosts_step = b.step("build-test-hosts", "Build test platform host libraries");
@@ -1892,7 +1948,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const host_zstd = b.dependency("zstd", .{
-        .target = b.graph.host,
+        .target = hostToolTarget(b, optimize),
         .optimize = optimize,
     });
 
@@ -2025,7 +2081,7 @@ pub fn build(b: *std.Build) void {
         .name = "zig_lints",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/zig_lints.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2033,7 +2089,7 @@ pub fn build(b: *std.Build) void {
         .name = "tidy",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/tidy.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2041,18 +2097,35 @@ pub fn build(b: *std.Build) void {
         .name = "check_test_wiring",
         .root_module = b.createModule(.{
             .root_source_file = b.path("ci/check_test_wiring.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
+    // Each MiniCI shard runs this from the build artifact before any `zig`
+    // command, so it is installed with the other tools. It hashes every file
+    // the cache refers to, which is why it is not a debug build.
+    //
+    // Unlike the other tools it runs on a different machine from the one that
+    // built it, and CI runners do not all have the same CPU: a build for
+    // `b.graph.host` died of SIGILL on a shard. So it targets the baseline CPU.
+    const restamp_zig_cache_exe = b.addExecutable(.{
+        .name = "restamp-zig-cache",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/restamp_zig_cache.zig"),
+            .target = b.resolveTargetQuery(.{ .cpu_model = .baseline }),
+            .optimize = .safe,
+        }),
+    });
+    build_check_tools_step.dependOn(&b.addInstallArtifact(restamp_zig_cache_exe, .{}).step);
+
     const source_bidi_module = b.createModule(.{
         .root_source_file = b.path("src/base/bidi.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
     });
     const source_bidi_root = b.createModule(.{
         .root_source_file = b.path("ci/check_source_bidi.zig"),
-        .target = b.graph.host,
+        .target = hostToolTarget(b, .debug),
         .optimize = .debug,
     });
     source_bidi_root.addImport("bidi", source_bidi_module);
@@ -2062,6 +2135,7 @@ pub fn build(b: *std.Build) void {
     const run_source_bidi = b.addRunArtifact(source_bidi_exe);
     run_source_bidi.step.dependOn(&install_source_bidi.step);
     const source_bidi_tests = b.addTest(.{ .name = "source-bidi-tests", .root_module = source_bidi_root });
+    build_check_tools_step.dependOn(&source_bidi_tests.step);
     run_check_source_bidi_step.dependOn(&b.addRunArtifact(source_bidi_tests).step);
     run_check_source_bidi_step.dependOn(&run_source_bidi.step);
 
@@ -2069,7 +2143,7 @@ pub fn build(b: *std.Build) void {
         .name = "minici",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/minici.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
         }),
     });
@@ -2272,7 +2346,7 @@ pub fn build(b: *std.Build) void {
         .name = "strip_macho_exports",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/strip_macho_exports.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .safe),
             .optimize = .safe,
             .imports = &.{
                 .{ .name = "dyld_export_strip", .module = dyld_export_strip_module },
@@ -2328,6 +2402,10 @@ pub fn build(b: *std.Build) void {
     // the configured native target plus wasm (rustc requires an installed core
     // library for each cross target). Native integration tests execute all
     // three languages in both directions on each CI host OS/architecture.
+    //
+    // The Zig locks and the lock generator are compile steps, so they belong to
+    // `build-check-glue-abi`. The C and Rust locks stay with the run step: they
+    // are commands that need a C library for every target and a Rust toolchain.
     {
         const glue_inputs = b.addWriteFiles();
         _ = glue_inputs.addCopyDirectory(b.path("src/glue"), "src/glue", .{ .include_extensions = &.{".roc"} });
@@ -2335,7 +2413,14 @@ pub fn build(b: *std.Build) void {
         _ = glue_inputs.addCopyDirectory(b.path("test/glue/layout-probe"), "test/glue/layout-probe", .{ .include_extensions = &.{".roc"} });
         _ = glue_inputs.addCopyDirectory(b.path("test/glue/tag-union-layouts"), "test/glue/tag-union-layouts", .{ .include_extensions = &.{".roc"} });
         const glue_root = glue_inputs.getDirectory();
+        // Every `roc glue` run here follows `build_roc_step`, for the reason
+        // given at `addWasmStaticLibAppBuild`: a run hashes `roc` by its
+        // installed path once it is installed. Without the edge the key
+        // depended on whether the requested step installed `roc`, so
+        // `run-check-glue-abi` regenerated the bindings `build-ci` had already
+        // generated and recompiled every lock against the new directory.
         const run_glue_abi = b.addRunArtifact(roc_exe);
+        run_glue_abi.step.dependOn(build_roc_step);
         run_glue_abi.addArgs(&.{ "glue", "--no-cache" });
         run_glue_abi.addFileArg(glue_root.path(b, "src/glue/src/ZigGlue.roc"));
         const glue_abi_dir = run_glue_abi.addOutputDirectoryArg("glue-zig-abi");
@@ -2343,6 +2428,7 @@ pub fn build(b: *std.Build) void {
         // WriteFiles hashes the complete import tree, including membership.
 
         const run_zig_union_layouts = b.addRunArtifact(roc_exe);
+        run_zig_union_layouts.step.dependOn(build_roc_step);
         run_zig_union_layouts.addArgs(&.{ "glue", "--no-cache" });
         run_zig_union_layouts.addFileArg(glue_root.path(b, "src/glue/src/ZigGlue.roc"));
         const zig_union_layouts_dir = run_zig_union_layouts.addOutputDirectoryArg("glue-zig-union-layouts");
@@ -2370,7 +2456,7 @@ pub fn build(b: *std.Build) void {
             lock_obj.root_module.addAnonymousImport("glue_abi", .{
                 .root_source_file = glue_abi_dir.path(b, "roc_platform_abi.zig"),
             });
-            run_check_glue_abi_step.dependOn(&lock_obj.step);
+            build_check_glue_abi_step.dependOn(&lock_obj.step);
 
             const union_lock_obj = b.addObject(.{
                 .name = b.fmt("glue_zig_union_layouts_{s}", .{lock_target.name}),
@@ -2383,30 +2469,36 @@ pub fn build(b: *std.Build) void {
             union_lock_obj.root_module.addAnonymousImport("glue_abi", .{
                 .root_source_file = zig_union_layouts_dir.path(b, "roc_platform_abi.zig"),
             });
-            run_check_glue_abi_step.dependOn(&union_lock_obj.step);
+            build_check_glue_abi_step.dependOn(&union_lock_obj.step);
         }
 
         const run_c_glue_abi = b.addRunArtifact(roc_exe);
+        run_c_glue_abi.step.dependOn(build_roc_step);
         run_c_glue_abi.addArgs(&.{ "glue", "--no-cache" });
         run_c_glue_abi.addFileArg(glue_root.path(b, "src/glue/src/CGlue.roc"));
         const c_glue_abi_dir = run_c_glue_abi.addOutputDirectoryArg("glue-c-abi");
         run_c_glue_abi.addFileArg(glue_root.path(b, "test/glue/layout-probe/main.roc"));
 
         const run_rust_glue_abi = b.addRunArtifact(roc_exe);
+        run_rust_glue_abi.step.dependOn(build_roc_step);
         run_rust_glue_abi.addArgs(&.{ "glue", "--no-cache" });
         run_rust_glue_abi.addFileArg(glue_root.path(b, "src/glue/src/RustGlue.roc"));
         const rust_glue_abi_dir = run_rust_glue_abi.addOutputDirectoryArg("glue-rust-abi");
         run_rust_glue_abi.addFileArg(glue_root.path(b, "test/glue/layout-probe/main.roc"));
 
+        // Debug: the one run takes milliseconds, so an optimized build only
+        // adds compile time.
         const foreign_abi_generator = b.addExecutable(.{
             .name = "generate_foreign_abi_lock",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("test/glue/generate_abi_lock.zig"),
-                .target = b.graph.host,
-                .optimize = .safe,
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
                 .imports = &.{.{ .name = "builtins", .module = roc_modules.builtins }},
             }),
         });
+        build_check_glue_abi_step.dependOn(&foreign_abi_generator.step);
+        run_check_glue_abi_step.dependOn(build_check_glue_abi_step);
         const generate_foreign_lock = b.addRunArtifact(foreign_abi_generator);
         const canonical_header = generate_foreign_lock.addOutputFileArg("canonical_host_abi.h");
         generate_foreign_lock.addFileArg(rust_glue_abi_dir.path(b, "roc_platform_abi.rs"));
@@ -2445,6 +2537,7 @@ pub fn build(b: *std.Build) void {
         }
 
         const run_rust_union_layouts = b.addRunArtifact(roc_exe);
+        run_rust_union_layouts.step.dependOn(build_roc_step);
         run_rust_union_layouts.addArgs(&.{ "glue", "--no-cache" });
         run_rust_union_layouts.addFileArg(glue_root.path(b, "src/glue/src/RustGlue.roc"));
         const rust_union_layouts_dir = run_rust_union_layouts.addOutputDirectoryArg("glue-rust-union-layouts");
@@ -2833,6 +2926,21 @@ pub fn build(b: *std.Build) void {
         eval_run_args,
     );
 
+    // `run-test-eval` leaves LLVM evaluation out for speed. This focused run
+    // keeps the exact-bit float contract gated on every pull request, so
+    // backend drift does not wait for the nightly suite.
+    const run_llvm_float_bits_eval = b.addRunArtifact(eval_test_exe);
+    run_llvm_float_bits_eval.addArgs(&.{
+        "--llvm",
+        "--threads",
+        "1",
+        "--filter",
+        "exact bits agree across backends",
+    });
+    run_llvm_float_bits_eval.addPassthruArgs();
+    run_llvm_float_bits_eval.step.dependOn(build_test_eval_runner_step);
+    run_test_eval_llvm_float_bits_step.dependOn(&run_llvm_float_bits_eval.step);
+
     const run_simd_eval = b.addRunArtifact(eval_test_exe);
     run_simd_eval.addArgs(&.{
         "--filter",
@@ -3009,7 +3117,7 @@ pub fn build(b: *std.Build) void {
         .name = "wasm_archive",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/wasm_archive.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, optimize),
             .optimize = optimize,
         }),
     });
@@ -3144,6 +3252,7 @@ pub fn build(b: *std.Build) void {
     configureBackend(repl_wasm_test, target);
     repl_wasm_test.root_module.addImport("bytebox", bytebox.module("bytebox"));
     repl_wasm_test.root_module.addImport("build_options", roc_modules.build_options);
+    build_test_repl_wasm_runner_step.dependOn(&repl_wasm_test.step);
     const run_repl_wasm_test = b.addRunArtifact(repl_wasm_test);
     run_repl_wasm_test.addFileArg(repl_wasm.getEmittedBin());
     run_repl_wasm_test.step.dependOn(&repl_wasm.step);
@@ -3263,6 +3372,7 @@ pub fn build(b: *std.Build) void {
         configureBackend(echo_wasm_test_exe, target);
         echo_wasm_test_exe.root_module.addImport("bytebox", bytebox.module("bytebox"));
         echo_wasm_test_exe.root_module.addImport("build_options", roc_modules.build_options);
+        build_test_echo_wasm_runner_step.dependOn(&echo_wasm_test_exe.step);
 
         const run_test_echo_wasm_step = b.step("run-test-echo-wasm", "Run echo.wasm tutorial example through bytebox");
         const run_echo_wasm_test = b.addRunArtifact(echo_wasm_test_exe);
@@ -3571,6 +3681,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(wasm_dce_check_exe, target);
+        build_test_wasm_static_lib_runner_step.dependOn(&wasm_dce_check_exe.step);
         const run_wasm_dce_check = b.addRunArtifact(wasm_dce_check_exe);
         run_wasm_dce_check.addFileArg(build_wasm_app.wasm);
         run_wasm_dce_check.addArgs(&.{
@@ -3810,6 +3921,8 @@ pub fn build(b: *std.Build) void {
         configureBackend(dylib_loader_exe, output_target.resolved);
 
         const install_dylib_loader = b.addInstallArtifact(dylib_loader_exe, .{});
+        build_test_dylib_step.dependOn(&install_dylib_loader.step);
+        run_test_dylib_step.dependOn(build_test_dylib_step);
 
         const run_dylib_test = b.addRunArtifact(dylib_loader_exe);
         run_dylib_test.step.dependOn(&install_dylib_loader.step);
@@ -3833,6 +3946,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(dylib_dce_check_exe, target);
+        build_test_dylib_step.dependOn(&dylib_dce_check_exe.step);
         const run_dylib_dce_check = b.addRunArtifact(dylib_dce_check_exe);
         run_dylib_dce_check.addFileArg(dylib_output);
         run_dylib_dce_check.addArgs(&.{
@@ -3853,7 +3967,12 @@ pub fn build(b: *std.Build) void {
         const output_target = nativeSharedArchiveTarget(b, target);
         const archive_ext = if (output_target.resolved.result.os.tag == .windows) ".lib" else ".a";
 
+        // These `roc build` runs follow `build_roc_step` so that `roc` is
+        // hashed by its installed path whichever step was asked for (see
+        // `addWasmStaticLibAppBuild`); `build-ci` links the consumer against
+        // the first one's archive.
         const build_archive_app = b.addRunArtifact(roc_exe);
+        build_archive_app.step.dependOn(build_roc_step);
         build_archive_app.addArgs(&.{
             "build",
             "--opt=dev",
@@ -3881,11 +4000,15 @@ pub fn build(b: *std.Build) void {
         archive_consumer_exe.step.dependOn(&build_archive_app.step);
 
         archive_consumer_exe.link_gc_sections = true;
+        // The consumer links the archive, so building it runs `roc build`.
+        build_test_archive_step.dependOn(&archive_consumer_exe.step);
+        run_test_archive_step.dependOn(build_test_archive_step);
 
         const run_archive_consumer = b.addRunArtifact(archive_consumer_exe);
         run_test_archive_step.dependOn(&run_archive_consumer.step);
 
         const build_wasm_archive_app = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app.step.dependOn(build_roc_step);
         build_wasm_archive_app.addArgs(&.{
             "build",
             "--opt=dev",
@@ -3903,6 +4026,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(archive_check_exe, target);
+        build_test_archive_step.dependOn(&archive_check_exe.step);
 
         const run_native_archive_dce_check = b.addRunArtifact(archive_check_exe);
         run_native_archive_dce_check.addFileArg(archive_consumer_exe.getEmittedBin());
@@ -3926,6 +4050,7 @@ pub fn build(b: *std.Build) void {
         // The same app through the LLVM backend: `llvmObjectUsesPic` decides
         // PIC for that object, so the dev-backend archive above cannot cover it.
         const build_wasm_archive_app_llvm = b.addRunArtifact(roc_exe);
+        build_wasm_archive_app_llvm.step.dependOn(build_roc_step);
         build_wasm_archive_app_llvm.addArgs(&.{
             "build",
             "--opt=speed",
@@ -3946,6 +4071,7 @@ pub fn build(b: *std.Build) void {
             }),
         });
         configureBackend(wasm_pic_check_exe, target);
+        build_test_archive_step.dependOn(&wasm_pic_check_exe.step);
 
         const run_wasm_pic_check_dev = b.addRunArtifact(wasm_pic_check_exe);
         run_wasm_pic_check_dev.addFileArg(wasm_archive_output);
@@ -4341,6 +4467,22 @@ pub fn build(b: *std.Build) void {
         .compile = tidy_unit_test,
     });
 
+    // ci/restamp_zig_cache.zig is an executable root too.
+    const restamp_zig_cache_test = b.addTest(.{
+        .name = "restamp_zig_cache",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("ci/restamp_zig_cache.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .filters = test_filters,
+    });
+    test_suites.register(.{
+        .step_suffix = "restamp-zig-cache",
+        .description = "Run Zig cache re-stamping tool unit tests",
+        .compile = restamp_zig_cache_test,
+    });
+
     // LLVM backend aggregator test: src/backend/llvm/mod.zig is not the root of
     // the llvm_codegen module, so its refAllDecls compile coverage needs its own
     // test compile.
@@ -4706,7 +4848,7 @@ pub fn build(b: *std.Build) void {
         .name = "minici_test",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/minici.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .debug),
             .optimize = .debug,
             .imports = &.{
                 .{ .name = "build_options", .module = roc_modules.build_options },
@@ -4973,18 +5115,25 @@ pub fn build(b: *std.Build) void {
     }
     build_ci_step.dependOn(build_roc_step);
     build_ci_step.dependOn(build_check_tools_step);
+    build_ci_step.dependOn(build_check_glue_abi_step);
     build_ci_step.dependOn(build_snapshot_tool_step);
     build_ci_step.dependOn(build_test_zig_step);
     build_ci_step.dependOn(build_test_lsp_integration_runner_step);
     build_ci_step.dependOn(build_test_eval_runner_step);
     build_ci_step.dependOn(build_test_eval_host_effects_runner_step);
     build_ci_step.dependOn(build_web_step);
+    // CI runs `run-test-repl-wasm` and `run-test-echo-wasm` on a shard after
+    // MiniCI, so their native runners are built here with the modules.
+    build_ci_step.dependOn(build_test_repl_wasm_runner_step);
+    build_ci_step.dependOn(build_test_echo_wasm_runner_step);
     build_ci_step.dependOn(build_test_playground_runner_step);
     build_ci_step.dependOn(build_test_cli_runners_step);
     build_ci_step.dependOn(build_test_hosts_step);
     build_ci_step.dependOn(build_test_serialization_sizes_step);
     build_ci_step.dependOn(build_test_builtin_bake_reproducible_step);
     build_ci_step.dependOn(build_test_wasm_static_lib_runner_step);
+    build_ci_step.dependOn(build_test_dylib_step);
+    build_ci_step.dependOn(build_test_archive_step);
     // `run-test-simd-differential` runs the installed Lambda Mono runner; build
     // it here so MiniCI shards running with `--minici-skip-build` reuse it.
     build_ci_step.dependOn(build_test_lambda_mono_differential_step);
@@ -5196,8 +5345,7 @@ pub fn build(b: *std.Build) void {
                 "--opt=speed",
                 b.fmt("--target={s}", .{target_dir}),
             });
-            build_http_app.setEnvironmentVariable("ROC_CACHE_DIR", http_prebuilt_roc_cache_dir);
-            build_http_app.setEnvironmentVariable("XDG_CACHE_HOME", http_prebuilt_roc_cache_dir);
+            setRocBuildEnvironment(build_http_app, http_prebuilt_roc_cache_dir);
             const http_app_output = build_http_app.addPrefixedOutputFileArg("--output=", http_app_exe_name);
             const http_sources = test_fixtures.cachedRoot(&.{final_http_host_step});
             build_http_app.addFileArg(http_sources.path(b, "test/http-headers/app.roc"));
@@ -5263,8 +5411,7 @@ pub fn build(b: *std.Build) void {
                 "--opt=speed",
                 b.fmt("--target={s}", .{target_dir}),
             });
-            build_json_app.setEnvironmentVariable("ROC_CACHE_DIR", json_prebuilt_roc_cache_dir);
-            build_json_app.setEnvironmentVariable("XDG_CACHE_HOME", json_prebuilt_roc_cache_dir);
+            setRocBuildEnvironment(build_json_app, json_prebuilt_roc_cache_dir);
             const json_app_output = build_json_app.addPrefixedOutputFileArg("--output=", json_app_exe_name);
             const json_sources = test_fixtures.cachedRoot(&.{final_json_host_step});
             build_json_app.addFileArg(json_sources.path(b, "test/json-decoder/app.roc"));
@@ -5279,8 +5426,7 @@ pub fn build(b: *std.Build) void {
                 "--opt=speed",
                 b.fmt("--target={s}", .{target_dir}),
             });
-            build_json_camel_app.setEnvironmentVariable("ROC_CACHE_DIR", json_camel_prebuilt_roc_cache_dir);
-            build_json_camel_app.setEnvironmentVariable("XDG_CACHE_HOME", json_camel_prebuilt_roc_cache_dir);
+            setRocBuildEnvironment(build_json_camel_app, json_camel_prebuilt_roc_cache_dir);
             const json_camel_app_output = build_json_camel_app.addPrefixedOutputFileArg("--output=", json_camel_app_exe_name);
             const json_camel_sources = test_fixtures.cachedRoot(&.{final_json_host_step});
             build_json_camel_app.addFileArg(json_camel_sources.path(b, "test/json-decoder/camel_app.roc"));
@@ -5295,8 +5441,7 @@ pub fn build(b: *std.Build) void {
                 "--opt=speed",
                 b.fmt("--target={s}", .{target_dir}),
             });
-            build_json_camel_direct_app.setEnvironmentVariable("ROC_CACHE_DIR", json_camel_direct_prebuilt_roc_cache_dir);
-            build_json_camel_direct_app.setEnvironmentVariable("XDG_CACHE_HOME", json_camel_direct_prebuilt_roc_cache_dir);
+            setRocBuildEnvironment(build_json_camel_direct_app, json_camel_direct_prebuilt_roc_cache_dir);
             const json_camel_direct_app_output = build_json_camel_direct_app.addPrefixedOutputFileArg("--output=", json_camel_direct_app_exe_name);
             const json_camel_direct_sources = test_fixtures.cachedRoot(&.{final_json_host_step});
             build_json_camel_direct_app.addFileArg(json_camel_direct_sources.path(b, "test/json-decoder/camel_direct_app.roc"));
@@ -6109,23 +6254,31 @@ fn addMainExe(
     // which puts a `.zig-cache` key and the build machine's home directory
     // into the archive; `roc` embeds the archive, so strip the names to bare
     // file names first (see src/build/archive_member_names.zig).
+    //
+    // Debug, like the archive checker below: each run takes about 20 ms in
+    // either mode, so a ReleaseSafe build only added its LLVM compile time to
+    // every cold cache.
     const archive_member_names_tool = b.addExecutable(.{
         .name = "archive_member_names",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/archive_member_names.zig"),
-            .target = b.graph.host,
-            .optimize = .safe,
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
         }),
     });
     configureBackend(archive_member_names_tool, b.graph.host);
     // The link inputs `roc` embeds are digested once here (see
     // src/build/embedded_digests.zig), so `roc run` never rehashes them.
+    //
+    // Debug: hashing those inputs (about 35 MB) takes 0.6 s this way and 0.1 s
+    // as a ReleaseFast build, less than the optimized build added in compile
+    // time.
     const embedded_digests_tool = b.addExecutable(.{
         .name = "embedded_digests",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/embedded_digests.zig"),
-            .target = b.graph.host,
-            .optimize = .fast,
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
         }),
     });
     configureBackend(embedded_digests_tool, b.graph.host);
@@ -6220,8 +6373,8 @@ fn addMainExe(
         .name = "machine_code_shim_archive_check",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-            .target = b.graph.host,
-            .optimize = .safe,
+            .target = hostToolTarget(b, .debug),
+            .optimize = .debug,
         }),
     });
     archive_checker.root_module.addAnonymousImport("shim_symbols", .{
@@ -6318,12 +6471,13 @@ fn addMainExe(
                 checks.dependOn(&run_consumer.step);
             }
         }
+        // Both tools are Debug builds, so their tests are too.
         const checker_tests = b.addTest(.{
             .name = "machine_code_shim_archive",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/machine_code_shim/archive_check.zig"),
-                .target = b.graph.host,
-                .optimize = .safe,
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
                 .imports = &.{.{ .name = "shim_symbols", .module = roc_modules.shim_symbols }},
             }),
             .filters = test_filters,
@@ -6333,8 +6487,8 @@ fn addMainExe(
             .name = "archive_member_names",
             .root_module = b.createModule(.{
                 .root_source_file = b.path("src/build/archive_member_names.zig"),
-                .target = b.graph.host,
-                .optimize = .safe,
+                .target = hostToolTarget(b, .debug),
+                .optimize = .debug,
             }),
             .filters = test_filters,
         });
@@ -7438,11 +7592,15 @@ fn runLlvmConfig(b: *std.Build, program: []const u8, argument: []const u8) []con
 /// Compiler application caches use content identity, including dirty sources.
 /// Compilation never deletes another compiler's application cache.
 fn compilerIdentityModule(b: *std.Build, source: DependencySource, tracy_path: ?[]const u8, semantic_options: []const []const u8) ?*std.Build.Module {
+    // ReleaseFast on purpose. The tool hashes the Zig lib directory and every
+    // compiler source, and the source run repeats on each source edit: the two
+    // runs take about 2 s this way and 11 s as a Debug build, which is more
+    // than Debug saves in compile time even on a cold cache.
     const tool = b.addExecutable(.{
         .name = "compiler_identity",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/build/compiler_identity.zig"),
-            .target = b.graph.host,
+            .target = hostToolTarget(b, .fast),
             .optimize = .fast,
         }),
     });
