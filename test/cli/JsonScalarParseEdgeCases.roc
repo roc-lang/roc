@@ -73,7 +73,7 @@ dec_rejects : Str -> Bool
 dec_rejects = |json| {
 	result : Try(Dec, [InvalidJson(Str)])
 	result = Json.parse(json)
-	result == Err(Json.invalid_json)
+	result == Err(Json.invalid_json({}))
 }
 
 # --- literal spellings must be exact ---
