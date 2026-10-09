@@ -14,6 +14,7 @@ const std = @import("std");
 const base = @import("base");
 const parse = @import("parse");
 const can = @import("can");
+const check = @import("check");
 
 const Allocator = std.mem.Allocator;
 const Report = @import("reporting").Report;
@@ -121,14 +122,7 @@ pub fn stage(
         try env.calcLineStarts(gpa);
         var result: Result = .{ .invalid = .empty };
         errdefer result.deinit(gpa);
-        const reports = &result.invalid;
-        try reports.ensureTotalCapacity(gpa, ast.tokenize_diagnostics.items.len + ast.parse_diagnostics.items.len);
-        for (ast.tokenize_diagnostics.items) |diagnostic| {
-            reports.appendAssumeCapacity(try ast.tokenizeDiagnosticToReport(diagnostic, gpa, source_path));
-        }
-        for (ast.parse_diagnostics.items) |diagnostic| {
-            reports.appendAssumeCapacity(try ast.parseDiagnosticToReport(&env, diagnostic, gpa, source_path));
-        }
+        try check.module_reports.appendSyntax(gpa, &result.invalid, ast, &env, source_path);
         return result;
     }
 

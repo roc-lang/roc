@@ -76,7 +76,7 @@ fn lowLevelStmtWithUnique(store: *LirStore, target: LocalId, op: LowLevel, args:
 /// them from a sequential counter (see arc.zig's next_join_point). Each proc
 /// these tests build owns its own counter, so ids stay unique within a proc.
 fn freshJoinPointId(next: *u32) LIR.JoinPointId {
-    const id: LIR.JoinPointId = @enumFromInt(next.*);
+    const id: LIR.JoinPointId = @fromBackingInt(@intCast(next.*));
     next.* += 1;
     return id;
 }
@@ -507,7 +507,7 @@ fn hasSelfCall(allocator: Allocator, store: *const LirStore, proc_id: LIR.LirPro
                 try work.append(allocator, s.on_match);
                 try work.append(allocator, s.on_miss);
             },
-            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
+            inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict => |s| {
                 try work.append(allocator, s.next);
             },
         }
@@ -581,7 +581,7 @@ test "trmc'd repeat escapes the interpreter call-depth cap" {
 
     // The interpreter's artificial call-depth cap is a Debug-only diagnostic.
     // In Debug, verify the untransformed control case exceeds that cap.
-    if (comptime @import("builtin").mode == .Debug) {
+    if (comptime @import("builtin").mode == .debug) {
         var store = LirStore.init(allocator);
         defer store.deinit();
         var layouts = try layout.Store.init(allocator, base.target.TargetUsize.native);
@@ -1277,7 +1277,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     // A long forwarding join chain is shared by every call and the base case.
     var entry_jumps: [128]CFStmtId = undefined;
     for (&entry_jumps, 0..) |*entry, index| {
-        entry.* = try store.addCFStmt(.{ .jump = .{ .target = @enumFromInt(index) } }, .test_fixture);
+        entry.* = try store.addCFStmt(.{ .jump = .{ .target = @fromBackingInt(@intCast(index)) } }, .test_fixture);
     }
     const shared = entry_jumps[entry_jumps.len - 1];
     const base_case = try store.addCFStmt(.{ .assign_literal = .{
@@ -1304,7 +1304,7 @@ test "tce has no site or forwarding-depth cap and preserves a shared base return
     for (0..entry_jumps.len) |offset| {
         const index = entry_jumps.len - 1 - offset;
         body = try store.addCFStmt(.{ .join = .{
-            .id = @enumFromInt(index),
+            .id = @fromBackingInt(@intCast(index)),
             .params = try store.addLocalSpan(&.{result}),
             .body = if (index == 0) ret else entry_jumps[index - 1],
             .remainder = body,
@@ -1409,7 +1409,7 @@ test "tail-call proof consumes the explicit boxy adapter operation" {
         defer store.tail_call_builder = null;
         var adapters: std.ArrayList(lir.Program.BoxyAdapter) = .empty;
         defer adapters.deinit(allocator);
-        const adapter_id: LIR.BoxyAdapterId = @enumFromInt(adapters.items.len);
+        const adapter_id: LIR.BoxyAdapterId = @fromBackingInt(@intCast(adapters.items.len));
         try adapters.append(allocator, .{
             .kind = .boxy_to_boxy,
             .operation = operation,
@@ -1534,7 +1534,7 @@ test "tce parallel transfers preserve every small source graph" {
             const frame = store.getLocalSpan(frame_after);
             try std.testing.expectEqual(b.locals.items.len + 1, frame.len);
             for (b.locals.items, 0..) |local, index| try std.testing.expectEqual(local, GuardedList.at(frame, index));
-            try std.testing.expectEqual(@as(LocalId, @enumFromInt(locals_before)), GuardedList.at(frame, frame.len - 1));
+            try std.testing.expectEqual(@as(LocalId, @fromBackingInt(@intCast(locals_before))), GuardedList.at(frame, frame.len - 1));
         } else {
             try std.testing.expectEqualDeep(frame_before, frame_after);
         }
@@ -1623,7 +1623,7 @@ test "tce reuses scratch across shrinking and growing procedure frames" {
         const old = store.getLocalSpan(old_frame);
         try std.testing.expectEqual(old.len + @intFromBool(width > 1), frame.len);
         for (0..old.len) |index| try std.testing.expectEqual(GuardedList.at(old, index), GuardedList.at(frame, index));
-        for (1..frame.len) |index| try std.testing.expect(@intFromEnum(GuardedList.at(frame, index - 1)) < @intFromEnum(GuardedList.at(frame, index)));
+        for (1..frame.len) |index| try std.testing.expect(@backingInt(GuardedList.at(frame, index - 1)) < @backingInt(GuardedList.at(frame, index)));
     }
     try lir.Arc.insert(&store, &layouts, .{});
     for (widths, procs) |width, proc| {

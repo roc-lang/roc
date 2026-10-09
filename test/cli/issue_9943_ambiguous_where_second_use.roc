@@ -1,7 +1,7 @@
 # repro for https://github.com/roc-lang/roc/issues/9943
 # The second random_value use is poisoned by the ambiguity machinery
 # (replaceExprWithRuntimeError). Publication must still publish a type root
-# for the runtime-error node so the MISSING METHOD diagnostics are reported
+# for the runtime-error node so the TYPE NOT DETERMINED diagnostics are reported
 # instead of panicking with "checked expr type root was not published".
 RandomState := U64
 

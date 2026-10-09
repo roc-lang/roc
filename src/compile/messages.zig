@@ -65,16 +65,6 @@ pub const DiscoveredExternalImport = struct {
 /// input type: the coordinator builds these once and the drain consumes them.
 pub const CanonicalizeImport = can.ImportResolution.ResolvedImport;
 
-/// Information about detected import cycles
-pub const CycleInfo = struct {
-    /// The module that caused the cycle
-    module_id: ModuleId,
-    /// The module name that was being imported when cycle was detected
-    import_name: []const u8,
-    /// Path of module IDs forming the cycle (if computed)
-    cycle_path: ?[]const ModuleId,
-};
-
 /// Task to parse a module source file
 pub const ParseTask = struct {
     /// Package this module belongs to
@@ -205,27 +195,21 @@ pub const WorkerTask = union(enum) {
 
     pub fn getPackageName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
-            .parse => |t| t.package_name,
-            .canonicalize => |t| t.package_name,
-            .type_check => |t| t.package_name,
+            inline .parse, .canonicalize, .type_check => |t| t.package_name,
             .post_check => null,
         };
     }
 
     pub fn getModuleId(self: WorkerTask) ?ModuleId {
         return switch (self) {
-            .parse => |t| t.module_id,
-            .canonicalize => |t| t.module_id,
-            .type_check => |t| t.module_id,
+            inline .parse, .canonicalize, .type_check => |t| t.module_id,
             .post_check => null,
         };
     }
 
     pub fn getModuleName(self: WorkerTask) ?[]const u8 {
         return switch (self) {
-            .parse => |t| t.module_name,
-            .canonicalize => |t| t.module_name,
-            .type_check => |t| t.module_name,
+            inline .parse, .canonicalize, .type_check => |t| t.module_name,
             .post_check => null,
         };
     }
@@ -270,6 +254,8 @@ pub const ParsedResult = struct {
 /// result followed by a canonicalized result, in that order, because the
 /// coordinator handles it as exactly those two steps back to back.
 pub const CanonicalizedCachedResult = struct {
+    /// Declared, readable header pin; validation version is a build input.
+    has_source_version_pin: bool = false,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier
@@ -296,6 +282,8 @@ pub const CanonicalizedCachedResult = struct {
 
 /// Result of successfully canonicalizing a module
 pub const CanonicalizedResult = struct {
+    /// Declared, readable header pin; validation version is a build input.
+    has_source_version_pin: bool = false,
     /// Package this module belongs to
     package_name: []const u8,
     /// Module identifier
@@ -393,24 +381,6 @@ pub const WorkerOperationFailure = struct {
     source_file_state: ?watch_inputs.State = null,
 };
 
-/// Result when an import cycle is detected during canonicalization
-pub const CycleDetected = struct {
-    /// Package where the cycle was detected
-    package_name: []const u8,
-    /// Module that detected the cycle
-    module_id: ModuleId,
-    /// Module name
-    module_name: []const u8,
-    /// Path to the module file
-    path: []const u8,
-    /// Information about the cycle
-    cycle_info: CycleInfo,
-    /// Error reports for the cycle
-    reports: std.ArrayList(Report),
-    /// Module environment (ownership returned even on cycle)
-    module_env: *ModuleEnv,
-};
-
 /// Result when a worker stage ran out of memory. Carries just enough identity
 /// to report which module was being processed; the coordinator turns this into
 /// `error.OutOfMemory` and aborts the whole compilation rather than letting the
@@ -436,8 +406,6 @@ pub const WorkerResult = union(enum) {
     type_checked: TypeCheckedResult,
     /// A worker could not complete the compilation operation.
     operation_failed: WorkerOperationFailure,
-    /// Import cycle was detected
-    cycle_detected: CycleDetected,
     /// A worker stage ran out of memory
     worker_oom: WorkerOom,
     /// Returned in worker arrival order; `Completion.id` identifies the task.
@@ -450,7 +418,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.package_name,
             .type_checked => |r| r.package_name,
             .operation_failed => |r| r.package_name,
-            .cycle_detected => |r| r.package_name,
             .worker_oom => |r| r.package_name,
             .post_check => "",
         };
@@ -463,7 +430,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.module_id,
             .type_checked => |r| r.module_id,
             .operation_failed => |r| r.module_id,
-            .cycle_detected => |r| r.module_id,
             .worker_oom => |r| r.module_id,
             .post_check => 0,
         };
@@ -476,7 +442,6 @@ pub const WorkerResult = union(enum) {
             .canonicalized_cached => |r| r.module_name,
             .type_checked => |r| r.module_name,
             .operation_failed => |r| r.module_name,
-            .cycle_detected => |r| r.module_name,
             .worker_oom => |r| r.module_name,
             .post_check => "",
         };
@@ -496,7 +461,7 @@ pub const WorkerResult = union(enum) {
                 var storage: CheckedArtifact.ModuleEnvStorage = .{ .checked_source = r.module_env };
                 storage.deinit();
             },
-            .canonicalized, .type_checked, .operation_failed, .cycle_detected, .worker_oom, .post_check => {},
+            .canonicalized, .type_checked, .operation_failed, .worker_oom, .post_check => {},
         }
         self.deinit(gpa);
     }
@@ -505,26 +470,7 @@ pub const WorkerResult = union(enum) {
     pub fn deinit(self: *WorkerResult, gpa: Allocator) void {
         switch (self.*) {
             .post_check => {},
-            .parsed => |*r| {
-                for (r.discovered_local_imports.items) |imp| {
-                    gpa.free(imp.import_name);
-                    switch (imp.target) {
-                        .resolved => |resolved| {
-                            gpa.free(resolved.module_name);
-                            gpa.free(resolved.path);
-                        },
-                        .rejected => {},
-                    }
-                }
-                r.discovered_local_imports.deinit(gpa);
-                for (r.discovered_external_imports.items) |imp| {
-                    gpa.free(imp.import_name);
-                }
-                r.discovered_external_imports.deinit(gpa);
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
-            .canonicalized => |*r| {
+            inline .parsed, .canonicalized => |*r| {
                 for (r.discovered_local_imports.items) |imp| {
                     gpa.free(imp.import_name);
                     switch (imp.target) {
@@ -571,11 +517,6 @@ pub const WorkerResult = union(enum) {
                 r.reports.deinit(gpa);
             },
             .operation_failed => {},
-            .cycle_detected => |*r| {
-                if (r.cycle_info.cycle_path) |path| gpa.free(path);
-                for (r.reports.items) |*rep| rep.deinit();
-                r.reports.deinit(gpa);
-            },
             .worker_oom => {},
         }
     }
@@ -632,7 +573,7 @@ test "WorkerResult accessors" {
             .module_id = 1,
             .module_name = "Foo",
             .path = "/path/to/Foo.roc",
-            .source_file_state = .{ .hash = [_]u8{0} ** 32 },
+            .source_file_state = .{ .hash = @as([32]u8, @splat(0)) },
             .module_env = undefined,
             .cached_ast = undefined,
             .discovered_local_imports = std.ArrayList(DiscoveredLocalImport).empty,
@@ -640,7 +581,7 @@ test "WorkerResult accessors" {
             .reports = reports,
             .parse_ns = 1000,
             .is_entry_module = false,
-            .canonicalized_cache_key = [_]u8{0} ** 32,
+            .canonicalized_cache_key = @as([32]u8, @splat(0)),
         },
     };
 

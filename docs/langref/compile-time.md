@@ -28,7 +28,7 @@ Any expression which could have been a top-level declaration, even if it isn't *
 
 For example, `z.to_str()` could have been a top-level declaration because it only references a top-level declaration (namely, `z`). As such, `z.to_str()` will also get evaluated at compile time to produce the string `"3"`.
 
-The [string interpolation](strings#string-literal-conversion-and-interpolation) expression `"z is ${z.to_str()}"` also gets evaluated at compile time. It could have been a top-level declaration because it depends only on a [pure function](functions#pure-functions) (`to_str`) being called on a top-level value (`z`).
+The [string interpolation](strings#interpolation) expression `"z is ${z.to_str()}"` also gets evaluated at compile time. It could have been a top-level declaration because it depends only on a [pure function](functions#pure-functions) (`to_str`) being called on a top-level value (`z`).
 
 Putting all this together, the string `"z is 3"` will end up embedded in the static data section of this program's final binary. The values `1`, `2`, `3`, and `"z is "` (from the interpolation) will be dead-code eliminated and will not be stored in the binary.
 
@@ -116,7 +116,11 @@ If you call this at runtime with a large number, it can make a big list at runti
 
 In contrast, if you do it at compile time, and the big list ends up in the program's static binary data, then when the binary gets loaded into memory to run the program, the memory is always being taken up even if that code path never gets run.
 
-- trick: both branches of an [`if`](if-else) that depends on args, gets optimized away prob hopefully haha
+Values that were computed at compile time are also never freed, and they're never
+[unique](expressions#opportunistic-mutation), since the compiled program shares one copy of each of
+them. So the first time a program updates one of these values (for example, by appending to a list
+that was built at compile time), the update starts by copying it. After that, the copy is unique,
+so later updates to it can happen in place as usual.
 
 ## Uses
 

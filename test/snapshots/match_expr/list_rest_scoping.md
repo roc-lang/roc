@@ -149,12 +149,10 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 244)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "first"))))
-						(args
-							(e-num (value "1"))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "first")))
+						(e-num (value "1")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -164,12 +162,10 @@ match items {
 							(rest-at (index 0)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 253)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "last"))))
-						(args
-							(e-num (value "2"))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "last")))
+						(e-num (value "2")))))
 			(branch
 				(patterns
 					(pattern (degenerate false)
@@ -180,15 +176,13 @@ match items {
 							(rest-at (index 1)
 								(p-assign (ident "rest"))))))
 				(value
-					(e-dispatch-call (method "plus") (constraint-fn-var 255)
-						(receiver
-							(e-lookup-local
-								(p-assign (ident "x"))))
-						(args
-							(e-lookup-local
-								(p-assign (ident "y"))))))))))
+					(e-binop (op "add")
+						(e-lookup-local
+							(p-assign (ident "x")))
+						(e-lookup-local
+							(p-assign (ident "y")))))))))
 ~~~
 # TYPES
 ~~~clojure
-(expr (type "Dec"))
+(expr (type "_a"))
 ~~~

@@ -39,7 +39,7 @@ pub fn run(program: *Ast.Program) Allocator.Error!void {
         program.current_inline_scope = old_inline;
     }
     for (0..program.fnCount()) |index| {
-        const id: Ast.FnId = @enumFromInt(index);
+        const id: Ast.FnId = @fromBackingInt(@intCast(index));
         var function = program.getFn(id);
         if (function.body != .roc) continue;
         const outer_shapes = program.beginFnShapes(id);
@@ -289,9 +289,7 @@ const Normalizer = struct {
             const child = delivered.?;
             switch (current.stmt) {
                 .let_ => |*binding| binding.value = child,
-                .expr => |*value| value.* = child,
-                .dbg => |*value| value.* = child,
-                .expect => |*value| value.* = child,
+                .expr, .dbg, .expect => |*value| value.* = child,
                 .return_ => |*ret| ret.value = child,
                 .uninitialized, .crash, .checked_error => unreachable,
             }
@@ -312,8 +310,7 @@ const Normalizer = struct {
             const stmt = self.program.getStmt(source);
             const request: ?Request = switch (stmt) {
                 .let_ => |binding| if (binding.recursive) .{ .scope = binding.value } else .{ .expr = .{ .source = binding.value, .sink = frame.sink } },
-                .expr => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
-                .dbg => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
+                .expr, .dbg => |value| .{ .expr = .{ .source = value, .sink = frame.sink } },
                 // Expect conditions retain their run/omit execution context.
                 .expect => |value| .{ .scope = value },
                 .return_ => |ret| .{ .expr = .{ .source = ret.value, .sink = frame.sink } },
@@ -332,7 +329,11 @@ const Normalizer = struct {
     fn finishStatement(self: *Normalizer, sink_id: SinkId, normalized: Ast.Stmt) Allocator.Error!void {
         if (self.sink(sink_id).terminated) return;
         var stmt = normalized;
-        if (stmt == .let_ and terminal(self.program.getExpr(stmt.let_.value).data)) stmt = .{ .expr = stmt.let_.value };
+        if (stmt == .let_ and terminal(self.program.getExpr(stmt.let_.value).data)) {
+            // Read the value before the assignment rewrites `stmt`'s tag.
+            const value = stmt.let_.value;
+            stmt = .{ .expr = value };
+        }
         try self.append(sink_id, try self.program.addStmt(stmt));
         self.sink(sink_id).terminated = switch (stmt) {
             .return_, .crash, .checked_error => true,
@@ -730,8 +731,7 @@ const Normalizer = struct {
             .nominal => |*child| return try self.operandChild(frame, child, cursor, delivered),
             .field_access => |*field| return try self.operandChild(frame, &field.receiver, cursor, delivered),
             .tuple_access => |*access| return try self.operandChild(frame, &access.tuple, cursor, delivered),
-            .expect_err => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
-            .literal_rejected => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
+            inline .expect_err, .literal_rejected => |*failure| return try self.operandChild(frame, &failure.msg, cursor, delivered),
             .break_ => |*value| {
                 if (value.*) |*child| return try self.operandChild(frame, child, cursor, delivered);
                 return try self.finishExpr(frame);
@@ -800,7 +800,10 @@ const Normalizer = struct {
             if (branch.guard) |guard| return .{ .request = .{ .expr = .{ .source = guard, .sink = bindings_sink } } };
             frame.cursor += 1;
         } else if (branch.guard != null) {
-            branch.guard = delivered.?;
+            // A guard whose evaluation transfers control ends the branch's
+            // bindings there, so it produces no value to test: reaching the
+            // branch runs its bindings up to that transfer.
+            branch.guard = if (self.sink(bindings_sink).terminated) null else delivered.?;
         }
         branch.bindings = try self.program.addStmtSpan(self.sink(bindings_sink).list.items);
         self.releaseSinksFrom(bindings_sink);

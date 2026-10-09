@@ -599,7 +599,7 @@ test "emit optional access parenthesizes an if receiver" {
         .e_if = .{
             .branches = branches,
             .final_else = else_value,
-            .warn_unused_branches = true,
+            .origin = .source,
         },
     }, base.Region.zero());
     const expr_idx = try addFieldAccessPath(module_env, if_expr, &.{.{ .name = "field", .mode = .optional }});

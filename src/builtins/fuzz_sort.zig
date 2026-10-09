@@ -75,9 +75,9 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 
     std.debug.assert(@as(*isize, @ptrCast(@alignCast(count_ptr))).* > 0);
     @as(*isize, @ptrCast(@alignCast(count_ptr))).* -= 1;
-    if (a < b) return @intFromEnum(utils.Ordering.Before);
-    if (a > b) return @intFromEnum(utils.Ordering.After);
-    return @intFromEnum(utils.Ordering.Same);
+    if (a < b) return @backingInt(utils.Ordering.Before);
+    if (a > b) return @backingInt(utils.Ordering.After);
+    return @backingInt(utils.Ordering.Same);
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.c) void {

@@ -279,7 +279,7 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 				}
 			}
@@ -296,7 +296,7 @@ Builtin :: [].{
 						if Str.is_empty(json_trim_start(rest)) {
 							Ok(parsed.value)
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 				}
 			}
@@ -315,14 +315,14 @@ Builtin :: [].{
 							if Str.is_empty(json_trim_start(rest)) {
 								Ok(parsed.value)
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
 					}
 				}
 			}
 
-			invalid_json : [InvalidJson(Str), ..]
-			invalid_json = InvalidJson("Invalid JSON")
+			invalid_json : {} -> [InvalidJson(Str)]
+			invalid_json = |{}| InvalidJson("Invalid JSON")
 
 			parse_json_bool : Str -> Try({ value : Bool, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_bool = |raw| {
@@ -334,7 +334,7 @@ Builtin :: [].{
 				} else if Str.is_eq(parts.value, "false") {
 					Ok({ value: False, rest: JsonState.Input(json_trim_start(parts.after)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -346,7 +346,7 @@ Builtin :: [].{
 				if Str.is_eq(parts.value, "null") {
 					Ok(JsonState.Input(json_trim_start(parts.after)))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -359,7 +359,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "[") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "[")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -387,13 +387,13 @@ Builtin :: [].{
 						if JsonEncoding.allows_trailing_commas(encoding) {
 							Ok(Done(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]")))))
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					} else {
 						Ok(Continue(JsonState.Input(after_comma)))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -405,7 +405,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(trimmed, "["))
@@ -414,10 +414,10 @@ Builtin :: [].{
 					if Str.starts_with(after_open, "]") {
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_open, "]"))))
 					} else {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					}
 				} else if Str.starts_with(after_open, "]") {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok(JsonState.Input(after_open))
 				}
@@ -428,7 +428,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ","))))
@@ -454,7 +454,7 @@ Builtin :: [].{
 					}
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
 			## Parse a JSON integer or float scalar with a numeric prefix parser. The prefix
@@ -468,14 +468,14 @@ Builtin :: [].{
 				parsed = parse_prefix(trimmed)
 
 				if parsed.err != 0 {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				rest_len = Str.count_utf8_bytes(parsed.rest)
 				ends_scalar = rest_len == 0 or is_json_scalar_delimiter(str_get_utf8_byte_unsafe(parsed.rest, 0))
 
 				if !ends_scalar {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				token = match Str.drop_last_bytes(trimmed, rest_len) {
@@ -488,7 +488,7 @@ Builtin :: [].{
 				if is_json_literal(token) {
 					Ok({ value: parsed.value, rest: JsonState.Input(json_trim_start(parsed.rest)) })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -500,10 +500,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: JsonState.Input(json_trim_start(parts.after)) })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -635,7 +635,7 @@ Builtin :: [].{
 				trimmed = json_trim_start(raw)
 
 				if !Str.starts_with(trimmed, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				parts = Json.split_json_string_tail(Str.drop_prefix(trimmed, "\""))?
@@ -650,10 +650,10 @@ Builtin :: [].{
 				if Json.is_json_unsigned_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -664,10 +664,10 @@ Builtin :: [].{
 				if Json.is_json_signed_int_literal(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -678,10 +678,10 @@ Builtin :: [].{
 				if Json.is_json_number(parts.value) {
 					match parse_num(parts.value) {
 						Ok(value) => Ok({ value, rest: parts.rest })
-						Err(_) => Err(Json.invalid_json)
+						Err(_) => Err(Json.invalid_json({}))
 					}
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -838,7 +838,7 @@ Builtin :: [].{
 				if Str.starts_with(trimmed, "{") {
 					Ok(Uncounted(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, "{")))))
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -876,7 +876,7 @@ Builtin :: [].{
 				}
 
 				if !Str.starts_with(trimmed, ",") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_comma = json_trim_start(Str.drop_prefix(trimmed, ","))
@@ -886,7 +886,7 @@ Builtin :: [].{
 						after_record = json_trim_start(Str.drop_prefix(after_comma, "}"))
 						return Ok(Done(JsonState.Input(after_record)))
 					} else {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 				}
 
@@ -896,7 +896,7 @@ Builtin :: [].{
 			parse_json_object_key : Str -> Try({ name : Str, rest : JsonState }, [InvalidJson(Str)])
 			parse_json_object_key = |remaining| {
 				if !Str.starts_with(remaining, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_parts = Json.split_json_string_tail(Str.drop_prefix(remaining, "\""))?
@@ -904,7 +904,7 @@ Builtin :: [].{
 				after_key = json_trim_start(key_parts.after)
 
 				if !Str.starts_with(after_key, ":") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -965,7 +965,7 @@ Builtin :: [].{
 							if Json.is_json_scalar(scalar_parts.value) {
 								Ok(JsonState.Input(json_trim_start(scalar_parts.after)))
 							} else {
-								Err(Json.invalid_json)
+								Err(Json.invalid_json({}))
 							}
 						}
 					}
@@ -976,7 +976,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_field = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -987,14 +987,14 @@ Builtin :: [].{
 
 				while True {
 					if !Str.starts_with($after_field, "\"") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_skipped_key = skip_json_string_tail(Str.drop_prefix($after_field, "\""))?
 					after_key = json_trim_start(after_skipped_key)
 
 					if !Str.starts_with(after_key, ":") {
-						return Err(Json.invalid_json)
+						return Err(Json.invalid_json({}))
 					}
 
 					after_colon = json_trim_start(Str.drop_prefix(after_key, ":"))
@@ -1009,7 +1009,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_value_trimmed, ","))
@@ -1018,7 +1018,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "}"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1033,7 +1033,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "[") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				var $after_value = json_trim_start(Str.drop_prefix(remaining, "["))
@@ -1054,7 +1054,7 @@ Builtin :: [].{
 							}
 
 							if !Str.starts_with(after_nested_value_trimmed, ",") {
-								return Err(Json.invalid_json)
+								return Err(Json.invalid_json({}))
 							}
 
 							after_comma = json_trim_start(Str.drop_prefix(after_nested_value_trimmed, ","))
@@ -1063,7 +1063,7 @@ Builtin :: [].{
 								if JsonEncoding.allows_trailing_commas(encoding) {
 									return Ok(JsonState.Input(json_trim_start(Str.drop_prefix(after_comma, "]"))))
 								} else {
-									return Err(Json.invalid_json)
+									return Err(Json.invalid_json({}))
 								}
 							}
 
@@ -1089,19 +1089,19 @@ Builtin :: [].{
 							start_payloads: Json.start_string_tag_payloads,
 							next_payload: Json.next_string_tag_payload,
 							finish_payloads: Json.finish_string_tag_payloads,
-							missing: Json.invalid_json,
+							missing: Json.invalid_json({}),
 						},
 					)
 				}
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
 
 				if !Str.starts_with(after_open, "\"") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				key_split = Json.split_json_string_tail(Str.drop_prefix(after_open, "\""))
@@ -1112,17 +1112,17 @@ Builtin :: [].{
 						after_key = json_trim_start(key_parts.after)
 
 						if !Str.starts_with(after_key, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						payload = json_trim_start(Str.drop_prefix(after_key, ":"))
 
 						if Str.starts_with(payload, "}") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						if Str.starts_with(payload, ",") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						parsed = ParseTagUnionSpec.parse(
@@ -1134,7 +1134,7 @@ Builtin :: [].{
 								start_payloads: |state, count| Json.start_object_tag_payloads(encoding, state, count),
 								next_payload: |state, index, count| Json.next_object_tag_payload(encoding, state, index, count),
 								finish_payloads: |state, count| Json.finish_object_tag_payloads(encoding, state, count),
-								missing: Json.invalid_json,
+								missing: Json.invalid_json({}),
 							},
 						)?
 
@@ -1142,20 +1142,20 @@ Builtin :: [].{
 							Input(after_payload) => Json.finish_tag_payload(encoding, parsed.value, after_payload)
 						}
 					}
-					Err(_) => Err(Json.invalid_json)
+					Err(_) => Err(Json.invalid_json({}))
 				}
 			}
 
 			start_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			start_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			next_string_tag_payload : JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
-			next_string_tag_payload = |_, _, _| Err(Json.invalid_json)
+			next_string_tag_payload = |_, _, _| Err(Json.invalid_json({}))
 
 			finish_string_tag_payloads : JsonState, U64 -> Try(JsonState, [InvalidJson(Str)])
 			finish_string_tag_payloads = |state, count|
-				if count == 0 Ok(state) else Err(Json.invalid_json)
+				if count == 0 Ok(state) else Err(Json.invalid_json({}))
 
 			## A multi-payload tag writes its payloads as a JSON array, which is
 			## a fixed-arity sequence, so it reads back through the tuple
@@ -1179,7 +1179,7 @@ Builtin :: [].{
 			next_object_tag_payload : JsonEncoding, JsonState, U64, U64 -> Try(JsonState, [InvalidJson(Str)])
 			next_object_tag_payload = |encoding, state, index, count|
 				if count <= 1 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					JsonEncoding.parse_tuple_next(encoding, state, index, count)
 				}
@@ -1211,10 +1211,10 @@ Builtin :: [].{
 						}
 					}
 
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
-				Err(Json.invalid_json)
+				Err(Json.invalid_json({}))
 			}
 
 			consume_empty_json_object : Str -> Try({ after : Str }, [InvalidJson(Str)])
@@ -1222,7 +1222,7 @@ Builtin :: [].{
 				remaining = json_trim_start(raw)
 
 				if !Str.starts_with(remaining, "{") {
-					return Err(Json.invalid_json)
+					return Err(Json.invalid_json({}))
 				}
 
 				after_open = json_trim_start(Str.drop_prefix(remaining, "{"))
@@ -1230,7 +1230,7 @@ Builtin :: [].{
 				if Str.starts_with(after_open, "}") {
 					Ok({ after: Str.drop_prefix(after_open, "}") })
 				} else {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				}
 			}
 
@@ -1467,7 +1467,7 @@ Builtin :: [].{
 
 				if $found {
 					if $index == 0 {
-						Err(Json.invalid_json)
+						Err(Json.invalid_json({}))
 					} else {
 						value = match Str.drop_last_bytes(raw, len - $index) {
 							Ok(v) => v
@@ -1480,7 +1480,7 @@ Builtin :: [].{
 						Ok({ value, after })
 					}
 				} else if $index == 0 {
-					Err(Json.invalid_json)
+					Err(Json.invalid_json({}))
 				} else {
 					Ok({ value: raw, after: "" })
 				}
@@ -1514,7 +1514,7 @@ Builtin :: [].{
 							rest = json_trim_start(string_parts.after)
 							Ok({ value: string_parts.value, rest: JsonState.Input(rest) })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}
@@ -1706,7 +1706,7 @@ Builtin :: [].{
 						trimmed = json_trim_start(raw)
 
 						if !Str.starts_with(trimmed, ":") {
-							return Err(Json.invalid_json)
+							return Err(Json.invalid_json({}))
 						}
 
 						Ok(JsonState.Input(json_trim_start(Str.drop_prefix(trimmed, ":"))))
@@ -1723,7 +1723,7 @@ Builtin :: [].{
 			skip_record_field = |encoding, state| Json.skip_json_value(encoding, state)
 
 			invalid_value : JsonEncoding, JsonState -> [InvalidJson(Str)]
-			invalid_value = |_, _| Json.invalid_json
+			invalid_value = |_, _| Json.invalid_json({})
 
 			parse_tag_union : JsonEncoding, ParseTagUnionSpec(a), JsonState -> Try({ value : a, rest : JsonState }, [InvalidJson(Str)])
 			parse_tag_union = |encoding, spec, state|
@@ -1897,7 +1897,7 @@ Builtin :: [].{
 						} else if Str.is_eq(parts.value, "false") {
 							Ok({ value: False, rest: parts.rest })
 						} else {
-							Err(Json.invalid_json)
+							Err(Json.invalid_json({}))
 						}
 					}
 				}
@@ -2891,15 +2891,23 @@ Builtin :: [].{
 		from_quote : Str -> Try(Str, [BadQuotedBytes(Str)])
 		from_quote = |str| Ok(str)
 
-		## Assembles an interpolated string literal.
+		## Converts an interpolated string literal to a [Str].
 		##
-		## The compiler calls this when a string literal contains interpolations:
-		## the first argument is the literal segment before the first
-		## interpolation, and the iterator yields each interpolated value paired
-		## with the literal segment that follows it.
-		from_interpolation : Str, Iter((Str, Str)) -> Str
-		from_interpolation = |first, rest|
-			rest.fold(first, |acc, (interpolated, segment)| acc.concat(interpolated).concat(segment))
+		## The compiler calls this at compile time with the literal's segments: the
+		## text before the first interpolation, then the text after each one. It
+		## returns the function the compiler calls at runtime with the interpolated
+		## values, in order, to assemble the string.
+		## ```roc
+		## expect Str.from_interpolation(["a", "c"]).map_ok(|assemble| assemble(["b"])) == Ok("abc")
+		## ```
+		from_interpolation : List(Str) -> Try((List(Str) -> Str), [InvalidInterpolation(Str)])
+		from_interpolation = |segments|
+			Ok(
+				|values| {
+					first = List.first(segments).ok_or("")
+					List.fold_with_index(values, first, |acc, value, index| acc.concat(value).concat(List.get(segments, index + 1).ok_or("")))
+				},
+			)
 
 		## Split a string around a separator.
 		##
@@ -5253,7 +5261,7 @@ Builtin :: [].{
 			for item in list if predicate(item) {
 				return Ok(item)
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5265,7 +5273,7 @@ Builtin :: [].{
 			for item in list.iter_rev() if predicate(item) {
 				return Ok(item)
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the index of the first item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5281,7 +5289,7 @@ Builtin :: [].{
 				}
 				$idx = $idx + 1
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		## Find the index of the last item in a list that satisfies a given predicate, returning it wrapped in `Ok` if found, or `Err(NotFound)` if no such item exists.
@@ -5299,7 +5307,7 @@ Builtin :: [].{
 					return Ok($idx)
 				}
 			}
-			return Err(NotFound)
+			Err(NotFound)
 		}
 
 		# Split a list into two parts at a specified index, returning the part before the index and the part from the index onward.
@@ -5615,18 +5623,6 @@ Builtin :: [].{
 		is_err = |try| match try {
 			Ok(_) => False
 			Err(_) => True
-		}
-
-		## Forwards interpolated string literal assembly through an inner type
-		## whose `from_interpolation` method returns the same [Try].
-		from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err)
-			where [
-				ok.from_interpolation : Str, Iter((interpolated, Str)) -> Try(ok, err),
-			]
-		from_interpolation = |first, rest| {
-			OkType : ok
-
-			OkType.from_interpolation(first, rest)
 		}
 
 		## If the result is `Ok`, returns the value it holds. Otherwise, returns
@@ -7298,11 +7294,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 256).
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U8.shl_wrap(1, 8) == 1
+			## # 0b0000_0001 == 1
+			## expect U8.shl_wrap(0b0000_0001, 8) == 0b0000_0001
 			## ```
 			shl_wrap : U8, U8 -> U8
 
@@ -7313,11 +7310,12 @@ Builtin :: [].{
 			## [U8.shr_zf_wrap].
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U8.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U8.shr_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect U8.shr_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_wrap : U8, U8 -> U8
 
@@ -7326,64 +7324,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U8.shr_wrap].
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect U8.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U8.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U8.shr_zf_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect U8.shr_zf_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U8, U8 -> U8
 
 			## Returns the bitwise AND of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U8.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U8, U8 -> U8
 
 			## Returns the bitwise OR of two [U8] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U8.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U8, U8 -> U8
 
 			## Returns the bitwise XOR of two [U8] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U8.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U8, U8 -> U8
 
 			## Returns the bitwise NOT of a [U8] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U8.bitwise_not(0) == 255
+			## # 0b0000_0101 == 5
+			## # 0b1111_1010 == 250
+			## expect U8.bitwise_not(0b0000_0101) == 0b1111_1010
 			## ```
 			bitwise_not : U8 -> U8
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U8.count_leading_zero_bits(1) == 7
+			## # 0b0000_0001 == 1
+			## expect U8.count_leading_zero_bits(0b0000_0001) == 7
 			##
-			## expect U8.count_leading_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect U8.count_leading_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U8 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U8.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U8.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U8.count_trailing_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect U8.count_trailing_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U8 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U8.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U8.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U8.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U8.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U8 -> U8
 
 			## Build a [U8] from a list of base-10 digits, most significant first.
@@ -8093,11 +8115,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I8.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I8.shl_wrap(1, 8) == 1
+			## # 0b0000_0001 == 1
+			## expect I8.shl_wrap(0b0000_0001, 8) == 0b0000_0001
 			## ```
 			shl_wrap : I8, U8 -> I8
 
@@ -8108,44 +8131,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1110_0000
+			## # -8 == 0b1111_1000
 			## expect I8.shr_wrap(-32, 2) == -8
 			##
-			## expect I8.shr_wrap(32, 8) == 32
+			## # 0b0010_0000 == 32
+			## expect I8.shr_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_wrap : I8, U8 -> I8
 
 			## Shift the bits of an [I8] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 8, so shifting by 8 leaves the value unchanged and shifting by 9 shifts by 1.
 			## ```roc
-			## expect I8.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I8.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I8.shr_zf_wrap(32, 8) == 32
+			## # -1 == 0b1111_1111
+			## # 0b0000_1111 == 15
+			## expect I8.shr_zf_wrap(-1, 4) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I8.shr_zf_wrap(0b0010_0000, 8) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I8, U8 -> I8
 
 			## Returns the bitwise AND of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I8.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I8.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I8.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I8, I8 -> I8
 
 			## Returns the bitwise OR of two [I8] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I8.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I8.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1101
+			## expect I8.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I8, I8 -> I8
 
 			## Returns the bitwise XOR of two [I8] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I8.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I8.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I8, I8 -> I8
 
@@ -8153,32 +8210,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I8.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I8 -> I8
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111
 			## expect I8.count_leading_zero_bits(-1) == 0
 			##
-			## expect I8.count_leading_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect I8.count_leading_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I8 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1000
 			## expect I8.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I8.count_trailing_zero_bits(0) == 8
+			## # 0b0000_0000 == 0
+			## expect I8.count_trailing_zero_bits(0b0000_0000) == 8
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I8 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111
 			## expect I8.count_one_bits(-1) == 8
 			##
-			## expect I8.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I8.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I8 -> U8
 
 			## Iterator of integers beginning with this `I8` and ending with the other `I8`.
@@ -8869,11 +8940,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 65536).
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U16.shl_wrap(1, 16) == 1
+			## # 0b0000_0001 == 1
+			## expect U16.shl_wrap(0b0000_0001, 16) == 0b0000_0001
 			## ```
 			shl_wrap : U16, U8 -> U16
 
@@ -8884,11 +8956,12 @@ Builtin :: [].{
 			## [U16.shr_zf_wrap].
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U16.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U16.shr_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect U16.shr_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_wrap : U16, U8 -> U16
 
@@ -8897,64 +8970,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U16.shr_wrap].
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect U16.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U16.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U16.shr_zf_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect U16.shr_zf_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U16, U8 -> U16
 
 			## Returns the bitwise AND of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U16.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U16, U16 -> U16
 
 			## Returns the bitwise OR of two [U16] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U16.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U16, U16 -> U16
 
 			## Returns the bitwise XOR of two [U16] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U16.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U16, U16 -> U16
 
 			## Returns the bitwise NOT of a [U16] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U16.bitwise_not(0) == 65535
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1010 == 65530
+			## expect U16.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1010
 			## ```
 			bitwise_not : U16 -> U16
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U16.count_leading_zero_bits(1) == 15
+			## # 0b0000_0001 == 1
+			## expect U16.count_leading_zero_bits(0b0000_0001) == 15
 			##
-			## expect U16.count_leading_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect U16.count_leading_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U16 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U16.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U16.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U16.count_trailing_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect U16.count_trailing_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U16 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U16.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U16.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U16.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U16.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U16 -> U8
 
 			## Read a little-endian [U16] from the two bytes at the given byte
@@ -9723,11 +9820,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I16.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I16.shl_wrap(1, 16) == 1
+			## # 0b0000_0001 == 1
+			## expect I16.shl_wrap(0b0000_0001, 16) == 0b0000_0001
 			## ```
 			shl_wrap : I16, U8 -> I16
 
@@ -9738,44 +9836,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1000
 			## expect I16.shr_wrap(-32, 2) == -8
 			##
-			## expect I16.shr_wrap(32, 16) == 32
+			## # 0b0010_0000 == 32
+			## expect I16.shr_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_wrap : I16, U8 -> I16
 
 			## Shift the bits of an [I16] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 16, so shifting by 16 leaves the value unchanged and shifting by 17 shifts by 1.
 			## ```roc
-			## expect I16.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I16.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I16.shr_zf_wrap(32, 16) == 32
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I16.shr_zf_wrap(-1, 12) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I16.shr_zf_wrap(0b0010_0000, 16) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I16, U8 -> I16
 
 			## Returns the bitwise AND of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I16.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I16.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I16.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I16, I16 -> I16
 
 			## Returns the bitwise OR of two [I16] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I16.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I16.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1101
+			## expect I16.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I16, I16 -> I16
 
 			## Returns the bitwise XOR of two [I16] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I16.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I16.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I16, I16 -> I16
 
@@ -9783,32 +9915,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I16.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I16 -> I16
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
 			## expect I16.count_leading_zero_bits(-1) == 0
 			##
-			## expect I16.count_leading_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect I16.count_leading_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I16 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1000
 			## expect I16.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I16.count_trailing_zero_bits(0) == 16
+			## # 0b0000_0000 == 0
+			## expect I16.count_trailing_zero_bits(0b0000_0000) == 16
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I16 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
 			## expect I16.count_one_bits(-1) == 16
 			##
-			## expect I16.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I16.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I16 -> U8
 
 			## Read a little-endian [I16] from the two bytes at the given byte
@@ -10540,11 +10686,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 4294967296).
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U32.shl_wrap(1, 32) == 1
+			## # 0b0000_0001 == 1
+			## expect U32.shl_wrap(0b0000_0001, 32) == 0b0000_0001
 			## ```
 			shl_wrap : U32, U8 -> U32
 
@@ -10555,11 +10702,12 @@ Builtin :: [].{
 			## [U32.shr_zf_wrap].
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U32.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U32.shr_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect U32.shr_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_wrap : U32, U8 -> U32
 
@@ -10568,64 +10716,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U32.shr_wrap].
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect U32.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U32.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U32.shr_zf_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect U32.shr_zf_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U32, U8 -> U32
 
 			## Returns the bitwise AND of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U32.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U32, U32 -> U32
 
 			## Returns the bitwise OR of two [U32] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U32.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U32, U32 -> U32
 
 			## Returns the bitwise XOR of two [U32] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U32.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U32, U32 -> U32
 
 			## Returns the bitwise NOT of a [U32] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U32.bitwise_not(0) == 4294967295
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1010 == 4294967290
+			## expect U32.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1111_1111_1111_1111_1010
 			## ```
 			bitwise_not : U32 -> U32
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U32.count_leading_zero_bits(1) == 31
+			## # 0b0000_0001 == 1
+			## expect U32.count_leading_zero_bits(0b0000_0001) == 31
 			##
-			## expect U32.count_leading_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect U32.count_leading_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U32 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U32.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U32.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U32.count_trailing_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect U32.count_trailing_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U32 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U32.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U32.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U32.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U32.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U32 -> U8
 
 			## Read a little-endian [U32] from the four bytes at the given byte
@@ -11426,11 +11598,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I32.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I32.shl_wrap(1, 32) == 1
+			## # 0b0000_0001 == 1
+			## expect I32.shl_wrap(0b0000_0001, 32) == 0b0000_0001
 			## ```
 			shl_wrap : I32, U8 -> I32
 
@@ -11441,44 +11614,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I32.shr_wrap(-32, 2) == -8
 			##
-			## expect I32.shr_wrap(32, 32) == 32
+			## # 0b0010_0000 == 32
+			## expect I32.shr_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_wrap : I32, U8 -> I32
 
 			## Shift the bits of an [I32] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 32, so shifting by 32 leaves the value unchanged and shifting by 33 shifts by 1.
 			## ```roc
-			## expect I32.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I32.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I32.shr_zf_wrap(32, 32) == 32
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32.shr_zf_wrap(-1, 28) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I32.shr_zf_wrap(0b0010_0000, 32) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I32, U8 -> I32
 
 			## Returns the bitwise AND of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I32.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I32.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I32.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I32, I32 -> I32
 
 			## Returns the bitwise OR of two [I32] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I32.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I32.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I32.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I32, I32 -> I32
 
 			## Returns the bitwise XOR of two [I32] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I32.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I32.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I32, I32 -> I32
 
@@ -11486,32 +11693,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I32.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I32 -> I32
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I32.count_leading_zero_bits(-1) == 0
 			##
-			## expect I32.count_leading_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect I32.count_leading_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I32 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I32.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I32.count_trailing_zero_bits(0) == 32
+			## # 0b0000_0000 == 0
+			## expect I32.count_trailing_zero_bits(0b0000_0000) == 32
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I32 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I32.count_one_bits(-1) == 32
 			##
-			## expect I32.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I32.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I32 -> U8
 
 			## Read a little-endian [I32] from the four bytes at the given byte
@@ -12260,11 +12481,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 2^64).
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U64.shl_wrap(1, 64) == 1
+			## # 0b0000_0001 == 1
+			## expect U64.shl_wrap(0b0000_0001, 64) == 0b0000_0001
 			## ```
 			shl_wrap : U64, U8 -> U64
 
@@ -12275,11 +12497,12 @@ Builtin :: [].{
 			## [U64.shr_zf_wrap].
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U64.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U64.shr_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect U64.shr_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_wrap : U64, U8 -> U64
 
@@ -12288,64 +12511,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U64.shr_wrap].
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect U64.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U64.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U64.shr_zf_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect U64.shr_zf_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U64, U8 -> U64
 
 			## Returns the bitwise AND of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U64.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U64, U64 -> U64
 
 			## Returns the bitwise OR of two [U64] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U64.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U64, U64 -> U64
 
 			## Returns the bitwise XOR of two [U64] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U64.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U64, U64 -> U64
 
 			## Returns the bitwise NOT of a [U64] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U64.bitwise_not(0) == 18446744073709551615
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010 == 18446744073709551610
+			## expect U64.bitwise_not(0b0000_0101) == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
 			## ```
 			bitwise_not : U64 -> U64
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U64.count_leading_zero_bits(1) == 63
+			## # 0b0000_0001 == 1
+			## expect U64.count_leading_zero_bits(0b0000_0001) == 63
 			##
-			## expect U64.count_leading_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect U64.count_leading_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U64 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U64.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U64.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U64.count_trailing_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect U64.count_trailing_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U64 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U64.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U64.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U64.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U64.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U64 -> U8
 
 			## Read a little-endian [U64] from the eight bytes at the given byte
@@ -13209,11 +13456,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I64.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I64.shl_wrap(1, 64) == 1
+			## # 0b0000_0001 == 1
+			## expect I64.shl_wrap(0b0000_0001, 64) == 0b0000_0001
 			## ```
 			shl_wrap : I64, U8 -> I64
 
@@ -13224,44 +13472,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I64.shr_wrap(-32, 2) == -8
 			##
-			## expect I64.shr_wrap(32, 64) == 32
+			## # 0b0010_0000 == 32
+			## expect I64.shr_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_wrap : I64, U8 -> I64
 
 			## Shift the bits of an [I64] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 64, so shifting by 64 leaves the value unchanged and shifting by 65 shifts by 1.
 			## ```roc
-			## expect I64.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I64.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I64.shr_zf_wrap(32, 64) == 32
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I64.shr_zf_wrap(-1, 60) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I64.shr_zf_wrap(0b0010_0000, 64) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I64, U8 -> I64
 
 			## Returns the bitwise AND of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I64.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I64.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I64.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I64, I64 -> I64
 
 			## Returns the bitwise OR of two [I64] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I64.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I64.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I64.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I64, I64 -> I64
 
 			## Returns the bitwise XOR of two [I64] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I64.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I64.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I64, I64 -> I64
 
@@ -13269,32 +13551,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I64.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I64 -> I64
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I64.count_leading_zero_bits(-1) == 0
 			##
-			## expect I64.count_leading_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect I64.count_leading_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I64 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
 			## expect I64.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I64.count_trailing_zero_bits(0) == 64
+			## # 0b0000_0000 == 0
+			## expect I64.count_trailing_zero_bits(0b0000_0000) == 64
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I64 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
 			## expect I64.count_one_bits(-1) == 64
 			##
-			## expect I64.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I64.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I64 -> U8
 
 			## Read a little-endian [I64] from the eight bytes at the given byte
@@ -14065,11 +14361,12 @@ Builtin :: [].{
 			## multiplying by 2 (modulo 2^128).
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect U128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect U128.shl_wrap(1, 128) == 1
+			## # 0b0000_0001 == 1
+			## expect U128.shl_wrap(0b0000_0001, 128) == 0b0000_0001
 			## ```
 			shl_wrap : U128, U8 -> U128
 
@@ -14080,11 +14377,12 @@ Builtin :: [].{
 			## [U128.shr_zf_wrap].
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shr_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U128.shr_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U128.shr_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect U128.shr_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_wrap : U128, U8 -> U128
 
@@ -14093,64 +14391,88 @@ Builtin :: [].{
 			## integers this behaves the same as [U128.shr_wrap].
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect U128.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
 			## expect U128.shr_zf_wrap(0b1010_0000, 3) == 0b0001_0100
 			##
-			## expect U128.shr_zf_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect U128.shr_zf_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_zf_wrap : U128, U8 -> U128
 
 			## Returns the bitwise AND of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect U128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U128.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
 			## ```
 			bitwise_and : U128, U128 -> U128
 
 			## Returns the bitwise OR of two [U128] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect U128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U128.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
 			## ```
 			bitwise_or : U128, U128 -> U128
 
 			## Returns the bitwise XOR of two [U128] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect U128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U128.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
 			## ```
 			bitwise_xor : U128, U128 -> U128
 
 			## Returns the bitwise NOT of a [U128] value, flipping every bit so that
 			## each `0` becomes `1` and each `1` becomes `0`.
 			## ```roc
-			## expect U128.bitwise_not(0) == 340282366920938463463374607431768211455
+			## # 0b0000_0101 == 5
+			## # 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFA == 0b1111_1111_…_1111_1010
+			## expect U128.bitwise_not(0b0000_0101) == 0xFFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFF_FFFA
 			## ```
 			bitwise_not : U128 -> U128
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
-			## expect U128.count_leading_zero_bits(1) == 127
+			## # 0b0000_0001 == 1
+			## expect U128.count_leading_zero_bits(0b0000_0001) == 127
 			##
-			## expect U128.count_leading_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect U128.count_leading_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : U128 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
-			## expect U128.count_trailing_zero_bits(8) == 3
+			## # 0b0000_1000 == 8
+			## expect U128.count_trailing_zero_bits(0b0000_1000) == 3
 			##
-			## expect U128.count_trailing_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect U128.count_trailing_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : U128 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
-			## expect U128.count_one_bits(0b1011) == 3
+			## # 0b0000_1011 == 11
+			## expect U128.count_one_bits(0b0000_1011) == 3
 			##
-			## expect U128.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect U128.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : U128 -> U8
 
 			## Read a little-endian [U128] from the sixteen bytes at the given
@@ -15029,11 +15351,12 @@ Builtin :: [].{
 			## and zeros are shifted in on the right.
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shl_wrap(1, 3) == 8
-			##
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
 			## expect I128.shl_wrap(0b0000_0101, 2) == 0b0001_0100
 			##
-			## expect I128.shl_wrap(1, 128) == 1
+			## # 0b0000_0001 == 1
+			## expect I128.shl_wrap(0b0000_0001, 128) == 0b0000_0001
 			## ```
 			shl_wrap : I128, U8 -> I128
 
@@ -15044,44 +15367,78 @@ Builtin :: [].{
 			## toward negative infinity).
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shr_wrap(32, 2) == 8
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I128.shr_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
+			## # -32 == 0b1111_1111_…_1110_0000
+			## # -8 == 0b1111_1111_…_1111_1000
 			## expect I128.shr_wrap(-32, 2) == -8
 			##
-			## expect I128.shr_wrap(32, 128) == 32
+			## # 0b0010_0000 == 32
+			## expect I128.shr_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_wrap : I128, U8 -> I128
 
 			## Shift the bits of an [I128] to the right by the given number of
-			## positions.
+			## positions, filling the vacated high bits with zeros ("zero-fill").
 			## The count is taken modulo 128, so shifting by 128 leaves the value unchanged and shifting by 129 shifts by 1.
 			## ```roc
-			## expect I128.shr_zf_wrap(32, 2) == 8
-			##
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
 			## expect I128.shr_zf_wrap(0b0101_0000, 3) == 0b0000_1010
 			##
-			## expect I128.shr_zf_wrap(32, 128) == 32
+			## # -1 == 0b1111_1111_…_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I128.shr_zf_wrap(-1, 124) == 0b0000_1111
+			##
+			## # 0b0010_0000 == 32
+			## expect I128.shr_zf_wrap(0b0010_0000, 128) == 0b0010_0000
 			## ```
 			shr_zf_wrap : I128, U8 -> I128
 
 			## Returns the bitwise AND of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bit is `1` in both inputs.
 			## ```roc
-			## expect I128.bitwise_and(0b1100, 0b1010) == 0b1000
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I128.bitwise_and(0b0000_1100, 0b0000_1010) == 0b0000_1000
+			##
+			## # -8 == 0b1111_1111_…_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I128.bitwise_and(-8, 0b0001_1111) == 0b0001_1000
 			## ```
 			bitwise_and : I128, I128 -> I128
 
 			## Returns the bitwise OR of two [I128] values. Each bit in the result is
 			## `1` when the corresponding bit is `1` in either input.
 			## ```roc
-			## expect I128.bitwise_or(0b1100, 0b1010) == 0b1110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I128.bitwise_or(0b0000_1100, 0b0000_1010) == 0b0000_1110
+			##
+			## # -8 == 0b1111_1111_…_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_…_1111_1101
+			## expect I128.bitwise_or(-8, 0b0000_0101) == -3
 			## ```
 			bitwise_or : I128, I128 -> I128
 
 			## Returns the bitwise XOR of two [I128] values. Each bit in the result is
 			## `1` only when the corresponding bits of the inputs differ.
 			## ```roc
-			## expect I128.bitwise_xor(0b1100, 0b1010) == 0b0110
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I128.bitwise_xor(0b0000_1100, 0b0000_1010) == 0b0000_0110
+			##
+			## # -1 == 0b1111_1111_…_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_…_1111_1010
+			## expect I128.bitwise_xor(-1, 0b0000_0101) == -6
 			## ```
 			bitwise_xor : I128, I128 -> I128
 
@@ -15089,32 +15446,46 @@ Builtin :: [].{
 			## each `0` becomes `1` and each `1` becomes `0`. For signed integers
 			## this is equivalent to `-value - 1`.
 			## ```roc
-			## expect I128.bitwise_not(5) == -6
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_…_1111_1010
+			## expect I128.bitwise_not(0b0000_0101) == -6
 			## ```
 			bitwise_not : I128 -> I128
 
-			## Count the zero bits before the first one bit, starting at the most significant bit.
+			## Count the leading zeros: the zero bits before the first one bit, starting at the most significant bit.
 			## ```roc
+			## # -1 == 0b1111_1111_…_1111_1111
 			## expect I128.count_leading_zero_bits(-1) == 0
 			##
-			## expect I128.count_leading_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect I128.count_leading_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_leading_zero_bits : I128 -> U8
 
-			## Count the zero bits after the last one bit, starting at the least significant bit.
+			## Count the trailing zeros: the zero bits before the first one bit, starting at the least significant bit.
 			## ```roc
+			## # -8 == 0b1111_1111_…_1111_1000
 			## expect I128.count_trailing_zero_bits(-8) == 3
 			##
-			## expect I128.count_trailing_zero_bits(0) == 128
+			## # 0b0000_0000 == 0
+			## expect I128.count_trailing_zero_bits(0b0000_0000) == 128
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_trailing_zero_bits : I128 -> U8
 
-			## Count the one bits in the value.
+			## Count the ones: the one bits in the value. This is also known as population count, or popcount.
 			## ```roc
+			## # -1 == 0b1111_1111_…_1111_1111
 			## expect I128.count_one_bits(-1) == 128
 			##
-			## expect I128.count_one_bits(0) == 0
+			## # 0b0000_0000 == 0
+			## expect I128.count_one_bits(0b0000_0000) == 0
 			## ```
+			##
+			## This counts the bits of the number's value, not its bytes in memory, so it gives the same answer on big-endian and little-endian systems.
 			count_one_bits : I128 -> U8
 
 			## Read a little-endian [I128] from the sixteen bytes at the given
@@ -19013,24 +19384,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U8x16.splat(0b0000_1100).bitwise_and(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_1000)
+			## ```
 			bitwise_and : U8x16, U8x16 -> U8x16
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U8x16.splat(0b0000_1100).bitwise_or(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_1110)
+			## ```
 			bitwise_or : U8x16, U8x16 -> U8x16
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U8x16.splat(0b0000_1100).bitwise_xor(U8x16.splat(0b0000_1010)) == U8x16.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U8x16, U8x16 -> U8x16
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1010 == 250
+			## expect U8x16.splat(0b0000_0101).bitwise_not() == U8x16.splat(0b1111_1010)
+			## ```
 			bitwise_not : U8x16 -> U8x16
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -19040,6 +19434,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U8x16.splat(0b0011_1100).bit_select(U8x16.splat(0b0101_0101), U8x16.splat(0b0110_0110)) == U8x16.splat(0b0101_0110)
+			## ```
 			bit_select : U8x16, U8x16, U8x16 -> U8x16
 
 			## Compare lane-wise for equality: each result lane is 255 where
@@ -19085,7 +19486,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i8x16.bitmask` on wasm.
 			## ```roc
-			## expect U8x16.splat(255).to_bitmask() == 65535
+			## # 0b1000_0000 == 128
+			## # 0b0000_0000_0000_0010 == 2
+			## expect U8x16.splat(0).with_lane(1, 0b1000_0000).to_bitmask() == 0b0000_0000_0000_0010
+			##
+			## # 0b1000_0000 == 128
+			## # 0b1111_1111_1111_1111 == 65535
+			## expect U8x16.splat(0b1000_0000).to_bitmask() == 0b1111_1111_1111_1111
 			## ```
 			to_bitmask : U8x16 -> U16
 
@@ -19107,11 +19514,27 @@ Builtin :: [].{
 			## `psllw` + `pand` mask, with the count masked to the lane width
 			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
 			## `i8x16.shl` masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b0000_0101).shl_wrap(2) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U8x16.splat(0b0000_0001).shl_wrap(8) == U8x16.splat(0b0000_0001)
+			## ```
 			shl_wrap : U8x16, U8 -> U8x16
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 8. For unsigned lanes this
 			## behaves the same as [U8x16.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b1010_0000).shr_wrap(3) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U8x16.splat(0b0010_0000).shr_wrap(8) == U8x16.splat(0b0010_0000)
+			## ```
 			shr_wrap : U8x16, U8 -> U8x16
 
 			## Shift every lane's bits right by the same count, filling the
@@ -19123,6 +19546,14 @@ Builtin :: [].{
 			## the count masked to the lane width first; `ushr` on AArch64 NEON
 			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
 			## natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U8x16.splat(0b1010_0000).shr_zf_wrap(3) == U8x16.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U8x16.splat(0b0010_0000).shr_zf_wrap(8) == U8x16.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U8x16, U8 -> U8x16
 
 			## The value of the lane at the given index. Crashes if the index
@@ -19575,24 +20006,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I8x16.splat(0b0000_1100).bitwise_and(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I8x16.splat(-8).bitwise_and(I8x16.splat(0b0001_1111)) == I8x16.splat(0b0001_1000)
+			## ```
 			bitwise_and : I8x16, I8x16 -> I8x16
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I8x16.splat(0b0000_1100).bitwise_or(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1101
+			## expect I8x16.splat(-8).bitwise_or(I8x16.splat(0b0000_0101)) == I8x16.splat(-3)
+			## ```
 			bitwise_or : I8x16, I8x16 -> I8x16
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I8x16.splat(0b0000_1100).bitwise_xor(I8x16.splat(0b0000_1010)) == I8x16.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8x16.splat(-1).bitwise_xor(I8x16.splat(0b0000_0101)) == I8x16.splat(-6)
+			## ```
 			bitwise_xor : I8x16, I8x16 -> I8x16
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1010
+			## expect I8x16.splat(0b0000_0101).bitwise_not() == I8x16.splat(-6)
+			## ```
 			bitwise_not : I8x16 -> I8x16
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -19602,6 +20071,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I8x16.splat(0b0011_1100).bit_select(I8x16.splat(0b0101_0101), I8x16.splat(0b0110_0110)) == I8x16.splat(0b0101_0110)
+			## ```
 			bit_select : I8x16, I8x16, I8x16 -> I8x16
 
 			## Compare lane-wise for equality: each result lane is -1 (all bits
@@ -19649,7 +20125,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i8x16.bitmask` on wasm.
 			## ```roc
-			## expect I8x16.splat(-1).to_bitmask() == 65535
+			## # -1 == 0b1111_1111
+			## # 0b0000_0000_0000_0010 == 2
+			## expect I8x16.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0000_0000_0010
+			##
+			## # -1 == 0b1111_1111
+			## # 0b1111_1111_1111_1111 == 65535
+			## expect I8x16.splat(-1).to_bitmask() == 0b1111_1111_1111_1111
 			## ```
 			to_bitmask : I8x16 -> U16
 
@@ -19671,6 +20153,14 @@ Builtin :: [].{
 			## `psllw` + `pand` mask, with the count masked to the lane width
 			## first; AArch64 NEON `shl` takes the pre-masked count; wasm
 			## `i8x16.shl` masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I8x16.splat(0b0000_0101).shl_wrap(2) == I8x16.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I8x16.splat(0b0000_0001).shl_wrap(8) == I8x16.splat(0b0000_0001)
+			## ```
 			shl_wrap : I8x16, U8 -> I8x16
 
 			## Shift every lane's bits right by the same count, filling the
@@ -19682,6 +20172,18 @@ Builtin :: [].{
 			## the count masked to the lane width first; `ushr` on AArch64 NEON
 			## takes the pre-masked count; `i8x16.shr_u` on wasm masks the count
 			## natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8x16.splat(0b0101_0000).shr_zf_wrap(3) == I8x16.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111
+			## # 0b0000_1111 == 15
+			## expect I8x16.splat(-1).shr_zf_wrap(4) == I8x16.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I8x16.splat(0b0010_0000).shr_zf_wrap(8) == I8x16.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I8x16, U8 -> I8x16
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -19694,7 +20196,16 @@ Builtin :: [].{
 			## AArch64 NEON takes the pre-masked count; `i8x16.shr_s` on wasm
 			## masks the count natively.
 			## ```roc
-			## expect I8x16.splat(-8).shr_wrap(1).get_lane(0) == -4
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I8x16.splat(0b0101_0000).shr_wrap(3) == I8x16.splat(0b0000_1010)
+			##
+			## # -32 == 0b1110_0000
+			## # -8 == 0b1111_1000
+			## expect I8x16.splat(-32).shr_wrap(2) == I8x16.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I8x16.splat(0b0010_0000).shr_wrap(8) == I8x16.splat(0b0010_0000)
 			## ```
 			shr_wrap : I8x16, U8 -> I8x16
 
@@ -20076,24 +20587,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U16x8.splat(0b0000_1100).bitwise_and(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_1000)
+			## ```
 			bitwise_and : U16x8, U16x8 -> U16x8
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U16x8.splat(0b0000_1100).bitwise_or(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_1110)
+			## ```
 			bitwise_or : U16x8, U16x8 -> U16x8
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U16x8.splat(0b0000_1100).bitwise_xor(U16x8.splat(0b0000_1010)) == U16x8.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U16x8, U16x8 -> U16x8
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1010 == 65530
+			## expect U16x8.splat(0b0000_0101).bitwise_not() == U16x8.splat(0b1111_1111_1111_1010)
+			## ```
 			bitwise_not : U16x8 -> U16x8
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -20103,6 +20637,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U16x8.splat(0b0011_1100).bit_select(U16x8.splat(0b0101_0101), U16x8.splat(0b0110_0110)) == U16x8.splat(0b0101_0110)
+			## ```
 			bit_select : U16x8, U16x8, U16x8 -> U16x8
 
 			## Compare lane-wise for equality: each result lane is 65535 where
@@ -20148,7 +20689,13 @@ Builtin :: [].{
 			## narrowing sequence on AArch64 NEON (no single instruction), and
 			## `i16x8.bitmask` on wasm.
 			## ```roc
-			## expect U16x8.splat(65535).to_bitmask() == 255
+			## # 0b1000_0000_0000_0000 == 32768
+			## # 0b0000_0010 == 2
+			## expect U16x8.splat(0).with_lane(1, 0b1000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000 == 32768
+			## # 0b1111_1111 == 255
+			## expect U16x8.splat(0b1000_0000_0000_0000).to_bitmask() == 0b1111_1111
 			## ```
 			to_bitmask : U16x8 -> U8
 
@@ -20169,11 +20716,27 @@ Builtin :: [].{
 			## Lowers to `psllw` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b0000_0101).shl_wrap(2) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U16x8.splat(0b0000_0001).shl_wrap(16) == U16x8.splat(0b0000_0001)
+			## ```
 			shl_wrap : U16x8, U8 -> U16x8
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 16. For unsigned lanes this
 			## behaves the same as [U16x8.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b1010_0000).shr_wrap(3) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U16x8.splat(0b0010_0000).shr_wrap(16) == U16x8.splat(0b0010_0000)
+			## ```
 			shr_wrap : U16x8, U8 -> U16x8
 
 			## Shift every lane's bits right by the same count, filling the
@@ -20184,6 +20747,14 @@ Builtin :: [].{
 			## Lowers to `psrlw` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U16x8.splat(0b1010_0000).shr_zf_wrap(3) == U16x8.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U16x8.splat(0b0010_0000).shr_zf_wrap(16) == U16x8.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U16x8, U8 -> U16x8
 
 			## The value of the lane at the given index. Crashes if the index
@@ -20621,24 +21192,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I16x8.splat(0b0000_1100).bitwise_and(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I16x8.splat(-8).bitwise_and(I16x8.splat(0b0001_1111)) == I16x8.splat(0b0001_1000)
+			## ```
 			bitwise_and : I16x8, I16x8 -> I16x8
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I16x8.splat(0b0000_1100).bitwise_or(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1101
+			## expect I16x8.splat(-8).bitwise_or(I16x8.splat(0b0000_0101)) == I16x8.splat(-3)
+			## ```
 			bitwise_or : I16x8, I16x8 -> I16x8
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I16x8.splat(0b0000_1100).bitwise_xor(I16x8.splat(0b0000_1010)) == I16x8.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16x8.splat(-1).bitwise_xor(I16x8.splat(0b0000_0101)) == I16x8.splat(-6)
+			## ```
 			bitwise_xor : I16x8, I16x8 -> I16x8
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1010
+			## expect I16x8.splat(0b0000_0101).bitwise_not() == I16x8.splat(-6)
+			## ```
 			bitwise_not : I16x8 -> I16x8
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -20648,6 +21257,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I16x8.splat(0b0011_1100).bit_select(I16x8.splat(0b0101_0101), I16x8.splat(0b0110_0110)) == I16x8.splat(0b0101_0110)
+			## ```
 			bit_select : I16x8, I16x8, I16x8 -> I16x8
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -20692,6 +21308,15 @@ Builtin :: [].{
 			## Lowers to a `packsswb` + `pmovmskb` sequence on x86-64, a short
 			## narrowing sequence on AArch64 NEON (no single instruction), and
 			## `i16x8.bitmask` on wasm.
+			## ```roc
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I16x8.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b1111_1111 == 255
+			## expect I16x8.splat(-1).to_bitmask() == 0b1111_1111
+			## ```
 			to_bitmask : I16x8 -> U8
 
 			## Returns `Bool.True` if any lane's sign bit is set (any lane is
@@ -20711,6 +21336,14 @@ Builtin :: [].{
 			## Lowers to `psllw` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I16x8.splat(0b0000_0101).shl_wrap(2) == I16x8.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I16x8.splat(0b0000_0001).shl_wrap(16) == I16x8.splat(0b0000_0001)
+			## ```
 			shl_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane's bits right by the same count, preserving the
@@ -20721,6 +21354,18 @@ Builtin :: [].{
 			## Lowers to `psraw` on x86-64 with the count masked to the lane
 			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_s` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16x8.splat(0b0101_0000).shr_wrap(3) == I16x8.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1000
+			## expect I16x8.splat(-32).shr_wrap(2) == I16x8.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I16x8.splat(0b0010_0000).shr_wrap(16) == I16x8.splat(0b0010_0000)
+			## ```
 			shr_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane's bits right by the same count, filling the
@@ -20731,6 +21376,18 @@ Builtin :: [].{
 			## Lowers to `psrlw` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i16x8.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I16x8.splat(0b0101_0000).shr_zf_wrap(3) == I16x8.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I16x8.splat(-1).shr_zf_wrap(12) == I16x8.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I16x8.splat(0b0010_0000).shr_zf_wrap(16) == I16x8.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I16x8, U8 -> I16x8
 
 			## Shift every lane right by the same count, rounding to nearest
@@ -21120,24 +21777,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U32x4.splat(0b0000_1100).bitwise_and(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_1000)
+			## ```
 			bitwise_and : U32x4, U32x4 -> U32x4
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U32x4.splat(0b0000_1100).bitwise_or(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_1110)
+			## ```
 			bitwise_or : U32x4, U32x4 -> U32x4
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U32x4.splat(0b0000_1100).bitwise_xor(U32x4.splat(0b0000_1010)) == U32x4.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U32x4, U32x4 -> U32x4
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1010 == 4294967290
+			## expect U32x4.splat(0b0000_0101).bitwise_not() == U32x4.splat(0b1111_1111_1111_1111_1111_1111_1111_1010)
+			## ```
 			bitwise_not : U32x4 -> U32x4
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -21147,6 +21827,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U32x4.splat(0b0011_1100).bit_select(U32x4.splat(0b0101_0101), U32x4.splat(0b0110_0110)) == U32x4.splat(0b0101_0110)
+			## ```
 			bit_select : U32x4, U32x4, U32x4 -> U32x4
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -21192,7 +21879,13 @@ Builtin :: [].{
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i32x4.bitmask` on wasm.
 			## ```roc
-			## expect U32x4.splat(4294967295).to_bitmask() == 15
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000 == 2147483648
+			## # 0b0000_0010 == 2
+			## expect U32x4.splat(0).with_lane(1, 0b1000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000 == 2147483648
+			## # 0b0000_1111 == 15
+			## expect U32x4.splat(0b1000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_1111
 			## ```
 			to_bitmask : U32x4 -> U8
 
@@ -21213,11 +21906,27 @@ Builtin :: [].{
 			## Lowers to `pslld` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b0000_0101).shl_wrap(2) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U32x4.splat(0b0000_0001).shl_wrap(32) == U32x4.splat(0b0000_0001)
+			## ```
 			shl_wrap : U32x4, U8 -> U32x4
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 32. For unsigned lanes this
 			## behaves the same as [U32x4.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b1010_0000).shr_wrap(3) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U32x4.splat(0b0010_0000).shr_wrap(32) == U32x4.splat(0b0010_0000)
+			## ```
 			shr_wrap : U32x4, U8 -> U32x4
 
 			## Shift every lane's bits right by the same count, filling the
@@ -21228,6 +21937,14 @@ Builtin :: [].{
 			## Lowers to `psrld` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U32x4.splat(0b1010_0000).shr_zf_wrap(3) == U32x4.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U32x4.splat(0b0010_0000).shr_zf_wrap(32) == U32x4.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U32x4, U8 -> U32x4
 
 			## The value of the lane at the given index. Crashes if the index
@@ -21601,24 +22318,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I32x4.splat(0b0000_1100).bitwise_and(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I32x4.splat(-8).bitwise_and(I32x4.splat(0b0001_1111)) == I32x4.splat(0b0001_1000)
+			## ```
 			bitwise_and : I32x4, I32x4 -> I32x4
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I32x4.splat(0b0000_1100).bitwise_or(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I32x4.splat(-8).bitwise_or(I32x4.splat(0b0000_0101)) == I32x4.splat(-3)
+			## ```
 			bitwise_or : I32x4, I32x4 -> I32x4
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I32x4.splat(0b0000_1100).bitwise_xor(I32x4.splat(0b0000_1010)) == I32x4.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32x4.splat(-1).bitwise_xor(I32x4.splat(0b0000_0101)) == I32x4.splat(-6)
+			## ```
 			bitwise_xor : I32x4, I32x4 -> I32x4
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I32x4.splat(0b0000_0101).bitwise_not() == I32x4.splat(-6)
+			## ```
 			bitwise_not : I32x4 -> I32x4
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -21628,6 +22383,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I32x4.splat(0b0011_1100).bit_select(I32x4.splat(0b0101_0101), I32x4.splat(0b0110_0110)) == I32x4.splat(0b0101_0110)
+			## ```
 			bit_select : I32x4, I32x4, I32x4 -> I32x4
 
 			## Compare lane-wise for equality: each result lane is all-ones
@@ -21671,6 +22433,15 @@ Builtin :: [].{
 			## Lowers to `movmskps` on x86-64, a short emulated narrowing
 			## sequence on AArch64 NEON (no single instruction), and
 			## `i32x4.bitmask` on wasm.
+			## ```roc
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I32x4.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32x4.splat(-1).to_bitmask() == 0b0000_1111
+			## ```
 			to_bitmask : I32x4 -> U8
 
 			## Returns `Bool.True` if any lane's sign bit is set (any lane is
@@ -21690,6 +22461,14 @@ Builtin :: [].{
 			## Lowers to `pslld` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I32x4.splat(0b0000_0101).shl_wrap(2) == I32x4.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I32x4.splat(0b0000_0001).shl_wrap(32) == I32x4.splat(0b0000_0001)
+			## ```
 			shl_wrap : I32x4, U8 -> I32x4
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -21700,6 +22479,18 @@ Builtin :: [].{
 			## Lowers to `psrad` on x86-64 with the count masked to the lane
 			## width first, `sshr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_s` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32x4.splat(0b0101_0000).shr_wrap(3) == I32x4.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1000
+			## expect I32x4.splat(-32).shr_wrap(2) == I32x4.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I32x4.splat(0b0010_0000).shr_wrap(32) == I32x4.splat(0b0010_0000)
+			## ```
 			shr_wrap : I32x4, U8 -> I32x4
 
 			## Shift every lane's bits right by the same count, filling the
@@ -21710,6 +22501,18 @@ Builtin :: [].{
 			## Lowers to `psrld` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i32x4.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I32x4.splat(0b0101_0000).shr_zf_wrap(3) == I32x4.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I32x4.splat(-1).shr_zf_wrap(28) == I32x4.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I32x4.splat(0b0010_0000).shr_zf_wrap(32) == I32x4.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I32x4, U8 -> I32x4
 
 			## Arithmetic right shift that rounds to nearest by adding a
@@ -22026,24 +22829,47 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect U64x2.splat(0b0000_1100).bitwise_and(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_1000)
+			## ```
 			bitwise_and : U64x2, U64x2 -> U64x2
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect U64x2.splat(0b0000_1100).bitwise_or(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_1110)
+			## ```
 			bitwise_or : U64x2, U64x2 -> U64x2
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect U64x2.splat(0b0000_1100).bitwise_xor(U64x2.splat(0b0000_1010)) == U64x2.splat(0b0000_0110)
+			## ```
 			bitwise_xor : U64x2, U64x2 -> U64x2
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010 == 18446744073709551610
+			## expect U64x2.splat(0b0000_0101).bitwise_not() == U64x2.splat(0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010)
+			## ```
 			bitwise_not : U64x2 -> U64x2
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -22053,6 +22879,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect U64x2.splat(0b0011_1100).bit_select(U64x2.splat(0b0101_0101), U64x2.splat(0b0110_0110)) == U64x2.splat(0b0101_0110)
+			## ```
 			bit_select : U64x2, U64x2, U64x2 -> U64x2
 
 			## Compare lane-wise for equality: each result lane is all-ones where
@@ -22070,7 +22903,13 @@ Builtin :: [].{
 			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
 			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
 			## ```roc
-			## expect U64x2.splat(18446744073709551615).to_bitmask() == 3
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000 == 9223372036854775808
+			## # 0b0000_0010 == 2
+			## expect U64x2.splat(0).with_lane(1, 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0010
+			##
+			## # 0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000 == 9223372036854775808
+			## # 0b0000_0011 == 3
+			## expect U64x2.splat(0b1000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000).to_bitmask() == 0b0000_0011
 			## ```
 			to_bitmask : U64x2 -> U8
 
@@ -22091,11 +22930,27 @@ Builtin :: [].{
 			## Lowers to `psllq` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b0000_0101).shl_wrap(2) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect U64x2.splat(0b0000_0001).shl_wrap(64) == U64x2.splat(0b0000_0001)
+			## ```
 			shl_wrap : U64x2, U8 -> U64x2
 
 			## Shift every lane's bits right by the same count, filling with
 			## zeros. The count is taken modulo 64. For unsigned lanes this
 			## behaves the same as [U64x2.shr_zf_wrap].
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b1010_0000).shr_wrap(3) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U64x2.splat(0b0010_0000).shr_wrap(64) == U64x2.splat(0b0010_0000)
+			## ```
 			shr_wrap : U64x2, U8 -> U64x2
 
 			## Shift every lane's bits right by the same count, filling the
@@ -22106,6 +22961,14 @@ Builtin :: [].{
 			## Lowers to `psrlq` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b1010_0000 == 160
+			## # 0b0001_0100 == 20
+			## expect U64x2.splat(0b1010_0000).shr_zf_wrap(3) == U64x2.splat(0b0001_0100)
+			##
+			## # 0b0010_0000 == 32
+			## expect U64x2.splat(0b0010_0000).shr_zf_wrap(64) == U64x2.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : U64x2, U8 -> U64x2
 
 			## The value of the lane at the given index. Crashes if the index
@@ -22192,7 +23055,9 @@ Builtin :: [].{
 			## (polynomial, crypto extension) on AArch64 NEON, and a software
 			## sequence on wasm (no instruction).
 			## ```roc
-			## expect U64x2.splat(3).carryless_times_lo(U64x2.splat(5)).get_lane(0) == 15
+			## # 0b0000_0011 == 3
+			## # 0b0000_0101 == 5
+			## expect U64x2.splat(0b0000_0011).carryless_times_lo(U64x2.splat(0b0000_0011)).get_lane(0) == 0b0000_0101
 			## ```
 			carryless_times_lo : U64x2, U64x2 -> U64x2
 
@@ -22204,6 +23069,11 @@ Builtin :: [].{
 			## Lowers to `pclmulqdq` (immediate `0x11`) on x86-64, `pmull2`
 			## (polynomial, crypto extension) on AArch64 NEON, and a software
 			## sequence on wasm (no instruction).
+			## ```roc
+			## # 0b0000_0011 == 3
+			## # 0b0000_0101 == 5
+			## expect U64x2.splat(0b0000_0011).carryless_times_hi(U64x2.splat(0b0000_0011)).get_lane(0) == 0b0000_0101
+			## ```
 			carryless_times_hi : U64x2, U64x2 -> U64x2
 
 			## Read 16 bytes starting at the given byte index, as lanes in
@@ -22409,24 +23279,62 @@ Builtin :: [].{
 			##
 			## Lowers to `pand` on x86-64, `and` on AArch64 NEON, and
 			## `v128.and` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1000 == 8
+			## expect I64x2.splat(0b0000_1100).bitwise_and(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_1000)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0001_1111 == 31
+			## # 0b0001_1000 == 24
+			## expect I64x2.splat(-8).bitwise_and(I64x2.splat(0b0001_1111)) == I64x2.splat(0b0001_1000)
+			## ```
 			bitwise_and : I64x2, I64x2 -> I64x2
 
 			## Returns the bitwise OR of the two vectors' 128 bits.
 			##
 			## Lowers to `por` on x86-64, `orr` on AArch64 NEON, and `v128.or`
 			## on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_1110 == 14
+			## expect I64x2.splat(0b0000_1100).bitwise_or(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_1110)
+			##
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## # 0b0000_0101 == 5
+			## # -3 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1101
+			## expect I64x2.splat(-8).bitwise_or(I64x2.splat(0b0000_0101)) == I64x2.splat(-3)
+			## ```
 			bitwise_or : I64x2, I64x2 -> I64x2
 
 			## Returns the bitwise XOR of the two vectors' 128 bits.
 			##
 			## Lowers to `pxor` on x86-64, `eor` on AArch64 NEON, and
 			## `v128.xor` on wasm.
+			## ```roc
+			## # 0b0000_1100 == 12
+			## # 0b0000_1010 == 10
+			## # 0b0000_0110 == 6
+			## expect I64x2.splat(0b0000_1100).bitwise_xor(I64x2.splat(0b0000_1010)) == I64x2.splat(0b0000_0110)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64x2.splat(-1).bitwise_xor(I64x2.splat(0b0000_0101)) == I64x2.splat(-6)
+			## ```
 			bitwise_xor : I64x2, I64x2 -> I64x2
 
 			## Flips every one of the vector's 128 bits.
 			##
 			## Lowers to `pxor` with all-ones on x86-64, `mvn` on AArch64 NEON,
 			## and `v128.not` on wasm.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # -6 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1010
+			## expect I64x2.splat(0b0000_0101).bitwise_not() == I64x2.splat(-6)
+			## ```
 			bitwise_not : I64x2 -> I64x2
 
 			## Bitwise select: for each of the 128 bits, take the bit from
@@ -22436,6 +23344,13 @@ Builtin :: [].{
 			##
 			## Lowers to `pand`/`pandn`/`por` on x86-64, `bsl` on AArch64 NEON,
 			## and `v128.bitselect` on wasm.
+			## ```roc
+			## # 0b0011_1100 == 60
+			## # 0b0101_0101 == 85
+			## # 0b0110_0110 == 102
+			## # 0b0101_0110 == 86
+			## expect I64x2.splat(0b0011_1100).bit_select(I64x2.splat(0b0101_0101), I64x2.splat(0b0110_0110)) == I64x2.splat(0b0101_0110)
+			## ```
 			bit_select : I64x2, I64x2, I64x2 -> I64x2
 
 			## Compare lane-wise for equality: each result lane is all-ones where
@@ -22479,7 +23394,13 @@ Builtin :: [].{
 			## Lowers to `movmskpd` on x86-64, a short emulated sequence on AArch64
 			## NEON (no single instruction), and `i64x2.bitmask` on wasm.
 			## ```roc
-			## expect I64x2.splat(-1).to_bitmask() == 3
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0010 == 2
+			## expect I64x2.splat(0).with_lane(1, -1).to_bitmask() == 0b0000_0010
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_0011 == 3
+			## expect I64x2.splat(-1).to_bitmask() == 0b0000_0011
 			## ```
 			to_bitmask : I64x2 -> U8
 
@@ -22500,6 +23421,14 @@ Builtin :: [].{
 			## Lowers to `psllq` on x86-64 with the count masked to the lane
 			## width first, `shl` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shl` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0000_0101 == 5
+			## # 0b0001_0100 == 20
+			## expect I64x2.splat(0b0000_0101).shl_wrap(2) == I64x2.splat(0b0001_0100)
+			##
+			## # 0b0000_0001 == 1
+			## expect I64x2.splat(0b0000_0001).shl_wrap(64) == I64x2.splat(0b0000_0001)
+			## ```
 			shl_wrap : I64x2, U8 -> I64x2
 
 			## Shift every lane's bits right by the same count, replicating the
@@ -22511,6 +23440,18 @@ Builtin :: [].{
 			## to a `psrlq` + sign-fixup sequence, with the count masked to the
 			## lane width first; AArch64 NEON `sshr` takes the pre-masked count;
 			## wasm `i64x2.shr_s` masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64x2.splat(0b0101_0000).shr_wrap(3) == I64x2.splat(0b0000_1010)
+			##
+			## # -32 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1110_0000
+			## # -8 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1000
+			## expect I64x2.splat(-32).shr_wrap(2) == I64x2.splat(-8)
+			##
+			## # 0b0010_0000 == 32
+			## expect I64x2.splat(0b0010_0000).shr_wrap(64) == I64x2.splat(0b0010_0000)
+			## ```
 			shr_wrap : I64x2, U8 -> I64x2
 
 			## Shift every lane's bits right by the same count, filling the
@@ -22521,6 +23462,18 @@ Builtin :: [].{
 			## Lowers to `psrlq` on x86-64 with the count masked to the lane
 			## width first, `ushr` on AArch64 NEON taking the pre-masked count,
 			## and `i64x2.shr_u` on wasm, which masks the count natively.
+			## ```roc
+			## # 0b0101_0000 == 80
+			## # 0b0000_1010 == 10
+			## expect I64x2.splat(0b0101_0000).shr_zf_wrap(3) == I64x2.splat(0b0000_1010)
+			##
+			## # -1 == 0b1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111_1111
+			## # 0b0000_1111 == 15
+			## expect I64x2.splat(-1).shr_zf_wrap(60) == I64x2.splat(0b0000_1111)
+			##
+			## # 0b0010_0000 == 32
+			## expect I64x2.splat(0b0010_0000).shr_zf_wrap(64) == I64x2.splat(0b0010_0000)
+			## ```
 			shr_zf_wrap : I64x2, U8 -> I64x2
 
 			## The value of the lane at the given index. Crashes if the index

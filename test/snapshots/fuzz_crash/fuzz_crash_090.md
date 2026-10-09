@@ -157,13 +157,14 @@ e = {
 (can-ir
 	(d-let
 		(p-assign (ident "e"))
-		(e-runtime-error (tag "erroneous_value_expr"))))
+		(e-block
+			(e-runtime-error (tag "expr_syntax_error")))))
 ~~~
 # TYPES
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "Error")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "Error"))))
+		(expr (type "_a"))))
 ~~~

@@ -40,7 +40,7 @@ pub const Phase = enum {
     box_reuse,
 };
 
-const phase_count = std.meta.fields(Phase).len;
+const phase_count = @typeInfo(Phase).@"enum".field_names.len;
 
 /// Worker work only; inline execution leaves these counters zero.
 pub const ParallelMetrics = struct {
@@ -167,7 +167,7 @@ pub fn run(
         contexts.deinit(allocator);
     }
     for (0..store.procSpecCount()) |index| {
-        const proc: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+        const proc: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
         const body = switch (phase) {
             .forwarding_join => ForwardingJoinInline.rewritableProcBody(store, proc),
             .tag_fusion => TagCaseFusion.rewritableProcBody(store, proc),
@@ -176,7 +176,7 @@ pub fn run(
         };
         if (body == null) continue;
         const admitted = phaseAdmits(store, phase, proc);
-        if (!admitted and builtin.mode != .Debug) continue;
+        if (!admitted and builtin.mode != .debug) continue;
         try contexts.append(allocator, .{
             .source = store,
             .layouts = layouts,
@@ -239,7 +239,7 @@ pub fn run(
         if (context.failed) return error.OutOfMemory;
         if (context.shard == null) invariant("LIR pass completed without a procedure rewrite");
     }
-    if (builtin.mode == .Debug) {
+    if (builtin.mode == .debug) {
         validateWritableOwnership(allocator, contexts.items) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.SharedWritableStatement => invariant("procedure-local LIR rewrites shared a writable statement"),
@@ -250,10 +250,10 @@ pub fn run(
     for (contexts.items) |*context| {
         const shard = &context.shard.?;
         if (context.verify_only) {
-            if (context.changed) std.debug.panic("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @intFromEnum(context.proc), store.getProcSpec(context.proc).shapes });
+            if (context.changed) base.invariant("LIR pass {s} rewrote procedure {d} whose shapes {any} excluded it from the phase", .{ @tagName(phase), @backingInt(context.proc), store.getProcSpec(context.proc).shapes });
             if (parallel) if (metrics) |counts| {
                 counts.tasks_committed +|= 1;
-                counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
+                counts.committed_by_phase[@backingInt(phase)] +|= 1;
             };
             shard.deinit();
             context.shard = null;
@@ -271,8 +271,8 @@ pub fn run(
         }
         if (parallel) if (metrics) |counts| {
             counts.tasks_committed +|= 1;
-            counts.committed_by_phase[@intFromEnum(phase)] +|= 1;
-            counts.changed_by_phase[@intFromEnum(phase)] +|= @intFromBool(context.changed);
+            counts.committed_by_phase[@backingInt(phase)] +|= 1;
+            counts.changed_by_phase[@backingInt(phase)] +|= @intFromBool(context.changed);
             counts.prepared_statement_rows +|= @intCast(shard.procRewriteStatementIds().len);
             counts.appended_statements +|= @intCast(shard.cf_stmts.len());
         };
@@ -290,11 +290,10 @@ fn phaseAdmits(store: *const LirStore, phase: Phase, proc: LIR.LirProcSpecId) bo
         .branch_expectation => shapes.switch_stmt,
         .trmc => shapes.self_call,
         .loop_append => shapes.loop,
-        .forwarding_join => shapes.join_param,
+        .forwarding_join, .prune_join_params => shapes.join_param,
         .tag_fusion => shapes.join_param and shapes.switch_stmt,
-        .prune_join_params => shapes.join_param,
         .scalarize => shapes.join_aggregate_param or shapes.struct_build or shapes.tag_build,
-        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.num_comparison,
+        .range => shapes.checked_arithmetic or shapes.switch_stmt or shapes.unsigned_compare or shapes.simd_concat_shift,
         .box_reuse => shapes.box_box,
     };
 }
@@ -377,7 +376,7 @@ test "procedure rewrite ownership includes statements reached through shared met
 }
 
 fn invariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) @panic(message);
+    if (builtin.mode == .debug) @panic(message);
     unreachable;
 }
 
@@ -411,7 +410,7 @@ test "issue 11325 procedure counting reuses lane storage across distant local ID
             .source = &store,
             .layouts = &layouts,
             .phase = .box_reuse,
-            .proc = @enumFromInt(index),
+            .proc = @fromBackingInt(@intCast(index)),
         };
         _ = TaskContext.run(&context, .{
             .id = 0,

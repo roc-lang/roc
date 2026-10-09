@@ -237,8 +237,8 @@ const R_AARCH64 = std.elf.R_AARCH64;
 
 /// The enum member with `value`, or null for a value the enum does not name.
 fn enumFromInt(comptime E: type, value: u32) ?E {
-    inline for (@typeInfo(E).@"enum".fields) |field| {
-        if (field.value == value) return @enumFromInt(field.value);
+    inline for (@typeInfo(E).@"enum".field_values) |field_value| {
+        if (field_value == value) return @fromBackingInt(@intCast(field_value));
     }
     return null;
 }

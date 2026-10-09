@@ -3019,7 +3019,7 @@ pub inline fn swap_branchless(
 ) void {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const swapped = swap_branchless_return_gt(ptr, tmp, cmp, cmp_data, element_width, copy, indirect);
-    if (comptime builtin.mode == .Debug) {
+    if (comptime builtin.mode == .debug) {
         std.debug.assert(swapped <= 1);
     } else if (swapped > 1) {
         unreachable;
@@ -3057,11 +3057,11 @@ inline fn compare(
     if (indirect) {
         const lhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(lhs_opaque)), @src());
         const rhs_ptr: *[*]u8 = utils.alignedPtrCast(*[*]u8, @as([*]u8, @ptrCast(rhs_opaque)), @src());
-        return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs_ptr.*, rhs_ptr.*)));
+        return @as(Ordering, @fromBackingInt(@intCast(cmp(cmp_data, lhs_ptr.*, rhs_ptr.*))));
     } else {
         const lhs: [*]u8 = @ptrCast(lhs_opaque);
         const rhs: [*]u8 = @ptrCast(rhs_opaque);
-        return @as(Ordering, @enumFromInt(cmp(cmp_data, lhs, rhs)));
+        return @as(Ordering, @fromBackingInt(@intCast(cmp(cmp_data, lhs, rhs))));
     }
 }
 
@@ -3097,9 +3097,9 @@ fn test_i64_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a: *const i64 = utils.alignedPtrCast(*const i64, a_ptr.?, @src());
     const b: *const i64 = utils.alignedPtrCast(*const i64, b_ptr.?, @src());
 
-    if (a.* < b.*) return @intFromEnum(Ordering.Before);
-    if (a.* > b.*) return @intFromEnum(Ordering.After);
-    return @intFromEnum(Ordering.Same);
+    if (a.* < b.*) return @backingInt(Ordering.Before);
+    if (a.* > b.*) return @backingInt(Ordering.After);
+    return @backingInt(Ordering.Same);
 }
 
 fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
@@ -3108,9 +3108,9 @@ fn test_i64_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) 
 
     const count: *isize = utils.alignedPtrCast(*isize, count_ptr.?, @src());
     count.* -= 1;
-    if (a.* < b.*) return @intFromEnum(Ordering.Before);
-    if (a.* > b.*) return @intFromEnum(Ordering.After);
-    return @intFromEnum(Ordering.Same);
+    if (a.* < b.*) return @backingInt(Ordering.Before);
+    if (a.* > b.*) return @backingInt(Ordering.After);
+    return @backingInt(Ordering.Same);
 }
 
 fn test_i64_copy(dst_ptr: Opaque, src_ptr: Opaque, _: usize) callconv(.c) void {
@@ -3132,9 +3132,9 @@ const StableItem = struct {
 fn test_stable_item_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const StableItem, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const StableItem, b_ptr.?, @src());
-    if (a.key < b.key) return @intFromEnum(Ordering.Before);
-    if (a.key > b.key) return @intFromEnum(Ordering.After);
-    return @intFromEnum(Ordering.Same);
+    if (a.key < b.key) return @backingInt(Ordering.Before);
+    if (a.key > b.key) return @backingInt(Ordering.After);
+    return @backingInt(Ordering.Same);
 }
 
 fn test_stable_item_compare_refcounted(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
@@ -3162,9 +3162,9 @@ comptime {
 fn test_large_stable_item_compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const LargeStableItem, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const LargeStableItem, b_ptr.?, @src());
-    if (a.item.key < b.item.key) return @intFromEnum(Ordering.Before);
-    if (a.item.key > b.item.key) return @intFromEnum(Ordering.After);
-    return @intFromEnum(Ordering.Same);
+    if (a.item.key < b.item.key) return @backingInt(Ordering.Before);
+    if (a.item.key > b.item.key) return @backingInt(Ordering.After);
+    return @backingInt(Ordering.Same);
 }
 
 fn test_large_stable_item_copy(dst_ptr: Opaque, src_ptr: Opaque, _: usize) callconv(.c) void {
@@ -3281,7 +3281,7 @@ test "fluxsort reverses whole quadrants without shifting elements by a byte" {
         try expectStableItems(&items);
 
         // Every input element has to come back exactly once, unchanged.
-        var seen = [_]bool{false} ** len;
+        var seen = @as([len]bool, @splat(false));
         for (items) |item| {
             try testing.expect(item.input_index < len);
             try testing.expect(!seen[@intCast(item.input_index)]);
@@ -3306,9 +3306,9 @@ const Probe32 = struct {
 fn probe32Compare(_: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
     const a = utils.alignedPtrCast(*const Probe32, a_ptr.?, @src());
     const b = utils.alignedPtrCast(*const Probe32, b_ptr.?, @src());
-    if (a.key < b.key) return @intFromEnum(Ordering.Before);
-    if (a.key > b.key) return @intFromEnum(Ordering.After);
-    return @intFromEnum(Ordering.Same);
+    if (a.key < b.key) return @backingInt(Ordering.Before);
+    if (a.key > b.key) return @backingInt(Ordering.After);
+    return @backingInt(Ordering.Same);
 }
 
 fn probe32CompareOwned(count_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv(.c) u8 {
@@ -3416,9 +3416,9 @@ fn test_hostile_compare(seed_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) callconv
     const seed = utils.alignedPtrCast(*const u64, seed_ptr.?, @src()).*;
     const mixed = a.key *% 31 +% b.key *% 7 +% seed;
     return switch (mixed % 3) {
-        0 => @intFromEnum(Ordering.Before),
-        1 => @intFromEnum(Ordering.Same),
-        else => @intFromEnum(Ordering.After),
+        0 => @backingInt(Ordering.Before),
+        1 => @backingInt(Ordering.Same),
+        else => @backingInt(Ordering.After),
     };
 }
 
@@ -3428,9 +3428,9 @@ fn test_hostile_large_compare(seed_ptr: Opaque, a_ptr: Opaque, b_ptr: Opaque) ca
     const seed = utils.alignedPtrCast(*const u64, seed_ptr.?, @src()).*;
     const mixed = a.item.key *% 31 +% b.item.key *% 7 +% seed;
     return switch (mixed % 3) {
-        0 => @intFromEnum(Ordering.Before),
-        1 => @intFromEnum(Ordering.Same),
-        else => @intFromEnum(Ordering.After),
+        0 => @backingInt(Ordering.Before),
+        1 => @backingInt(Ordering.Same),
+        else => @backingInt(Ordering.After),
     };
 }
 
@@ -3470,7 +3470,7 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
                 env.getOps(),
             );
 
-            var seen = [_]bool{false} ** 400;
+            var seen = @as([400]bool, @splat(false));
             for (items[0..len]) |item| {
                 if (item.input_index >= len or seen[@intCast(item.input_index)]) {
                     std.debug.print("seed={d} len={d} duplicated input_index={d}\n", .{ seed, len, item.input_index });
@@ -3506,7 +3506,7 @@ test "sorting with a self-contradicting comparison still returns a permutation" 
                 env.getOps(),
             );
 
-            var wide_seen = [_]bool{false} ** 300;
+            var wide_seen = @as([300]bool, @splat(false));
             for (wide[0..wide_len]) |item| {
                 if (item.item.input_index >= wide_len or wide_seen[@intCast(item.item.input_index)]) {
                     std.debug.print("seed={d} wide_len={d} duplicated input_index={d}\n", .{ seed, wide_len, item.item.input_index });

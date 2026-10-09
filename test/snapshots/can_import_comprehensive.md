@@ -287,7 +287,16 @@ main = {
 (can-ir
 	(d-let
 		(p-assign (ident "main"))
-		(e-runtime-error (tag "erroneous_value_expr")))
+		(e-block
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(s-runtime-error (tag "qualified_ident_does_not_exist"))
+			(e-runtime-error (tag "erroneous_value_expr"))))
 	(s-import (mod "json.Json")
 		(exposes))
 	(s-import (mod "http.Client")
@@ -301,7 +310,7 @@ main = {
 ~~~clojure
 (inferred-types
 	(defs
-		(patt (type "(Error, Error, Error, Error, Error, Error, Error, Error)")))
+		(patt (type "_a")))
 	(expressions
-		(expr (type "(Error, Error, Error, Error, Error, Error, Error, Error)"))))
+		(expr (type "_a"))))
 ~~~

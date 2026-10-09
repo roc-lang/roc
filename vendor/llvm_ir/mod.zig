@@ -4,3 +4,7 @@ pub const ir = @import("ir.zig");
 pub const bindings = @import("bindings.zig");
 pub const bitcode_writer = @import("bitcode_writer.zig");
 pub const BitcodeReader = @import("BitcodeReader.zig");
+
+test {
+    _ = @import("upgrade_test.zig");
+}

@@ -285,7 +285,7 @@ fn checkElseSwitchProngs(allocator: Allocator, io: std.Io, file_path: []const u8
     const source = (try readSourceFileIfExists(allocator, io, file_path)) orelse return try allocator.dupe(u8, "");
     defer allocator.free(source);
 
-    var tree = try std.zig.Ast.parse(allocator, source, .zig);
+    var tree = try std.zig.Ast.parse(allocator, source, .{ .mode = .zig });
     defer tree.deinit(allocator);
 
     var errors: std.ArrayList(u8) = .empty;
@@ -294,7 +294,7 @@ fn checkElseSwitchProngs(allocator: Allocator, io: std.Io, file_path: []const u8
     for (tree.nodes.items(.tag), 0..) |tag, node_usize| {
         if (tag != .@"switch" and tag != .switch_comma) continue;
 
-        const node: std.zig.Ast.Node.Index = @enumFromInt(@as(u32, @intCast(node_usize)));
+        const node: std.zig.Ast.Node.Index = @fromBackingInt(@intCast(node_usize));
         const switch_node = tree.fullSwitch(node) orelse unreachable;
         var else_offset: ?usize = null;
         var has_literal_case = false;

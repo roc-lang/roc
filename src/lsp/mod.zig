@@ -9,7 +9,6 @@ pub const server = @import("server.zig");
 pub const syntax = @import("syntax.zig");
 pub const diagnostics = @import("diagnostics.zig");
 pub const document_store = @import("document_store.zig");
-pub const line_info = @import("line_info.zig");
 pub const position = @import("position.zig");
 pub const semantic_tokens = @import("semantic_tokens.zig");
 pub const capabilities = @import("capabilities.zig");

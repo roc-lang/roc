@@ -13,6 +13,7 @@ const core = @import("lir_core");
 
 const Arc = @import("arc.zig");
 const ImmortalLocals = @import("immortal_locals.zig");
+const TailDrive = @import("tail_drive.zig");
 const ProcPasses = @import("proc_passes.zig");
 const ReturnSlot = @import("return_slot.zig");
 const StrAppend = @import("str_append.zig");
@@ -124,7 +125,12 @@ pub const WorkMetrics = struct {
 pub const TargetConfig = struct {
     work_metrics: ?*WorkMetrics = null,
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
+    /// Bytes the consumer's erased callable values reserve at the start of
+    /// their captures (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32 = 0,
     specialization_strategy: SpecializationStrategy = .lss,
+    /// The consumer's actual code provider, declared before producer lowering.
+    code_provision: CodeProvision = .source_bodies,
     /// Reuse checking workers for generic post-check tasks when available.
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     checked_module_state: CheckedModuleState = .complete,
@@ -152,7 +158,7 @@ pub const TargetConfig = struct {
     proc_debug_names: bool = false,
     /// The object cache Monotype asks for closed specializations.
     spec_cache: ?postcheck.Common.SpecCacheLookup = null,
-    /// Whether Direct LIR may serve cache entries to the compile-time
+    /// Whether Monotype and Direct LIR may serve cache entries to the compile-time
     /// roots' closure. `prepareCheckedModulesMonotype` sets this from the
     /// modules: a match whose exhaustiveness only the evaluation can decide
     /// must run as the evaluator's own code, which reports the branches it
@@ -446,8 +452,8 @@ pub const Timing = struct {
         self.solved_lir_parallel_mutex.lockUncancelable(self.std_io);
         defer self.solved_lir_parallel_mutex.unlock(self.std_io);
         // All Solved-LIR metrics count completed work, not peaks or durations.
-        inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
-            @field(self.solved_lir_parallel, field.name) +|= @field(parallel, field.name);
+        inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names) |field_name| {
+            @field(self.solved_lir_parallel, field_name) +|= @field(parallel, field_name);
         }
     }
 
@@ -593,22 +599,22 @@ fn timingNowNs(std_io: std.Io) i64 {
 test "pipeline timing aggregates Solved-LIR counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: SolvedLirParallelMetrics = .{};
-    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
-        @field(first, field.name) = i + 1;
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        @field(first, field_name) = i + 1;
     }
     timing.addSolvedLirParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
-    inline for (std.meta.fields(SolvedLirParallelMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field.name));
-        @field(first, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.solved_lir_parallel, field_name));
+        @field(first, field_name) = std.math.maxInt(u64);
     }
     aggregate.addSolvedLirParallel(first);
     const saturated = aggregate.snapshot();
-    inline for (std.meta.fields(SolvedLirParallelMetrics)) |field| {
-        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field.name));
+    inline for (@typeInfo(SolvedLirParallelMetrics).@"struct".field_names) |field_name| {
+        try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.solved_lir_parallel, field_name));
     }
     try std.testing.expectEqual(@as(u64, 0), saturated.lir_gen_ns);
     aggregate = Timing.init(std.testing.io);
@@ -654,20 +660,20 @@ test "pipeline timing aggregates SpecConstr totals and preserves peaks" {
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot().spec_constr_parallel;
-    inline for (std.meta.fields(SpecConstrParallelMetrics)) |field| {
-        if (comptime std.mem.eql(u8, field.name, "peak_retained_shards")) {
-            try std.testing.expectEqual(@field(first, field.name), @field(doubled, field.name));
-        } else if (field.type == u64) {
-            try std.testing.expectEqual(2 * @field(first, field.name), @field(doubled, field.name));
+    inline for (@typeInfo(SpecConstrParallelMetrics).@"struct".field_names) |field_name| {
+        if (comptime std.mem.eql(u8, field_name, "peak_retained_shards")) {
+            try std.testing.expectEqual(@field(first, field_name), @field(doubled, field_name));
+        } else if (@FieldType(SpecConstrParallelMetrics, field_name) == u64) {
+            try std.testing.expectEqual(2 * @field(first, field_name), @field(doubled, field_name));
         } else {
-            for (@field(first, field.name), @field(doubled, field.name)) |value, total| {
+            for (@field(first, field_name), @field(doubled, field_name)) |value, total| {
                 try std.testing.expectEqual(2 * value, total);
             }
         }
-        if (field.type == u64) {
-            @field(first, field.name) = std.math.maxInt(u64);
+        if (@FieldType(SpecConstrParallelMetrics, field_name) == u64) {
+            @field(first, field_name) = std.math.maxInt(u64);
         } else {
-            @memset(&@field(first, field.name), std.math.maxInt(u64));
+            @memset(&@field(first, field_name), std.math.maxInt(u64));
         }
     }
     aggregate.addSpecConstrParallel(first);
@@ -701,31 +707,31 @@ test "pipeline timing preserves explicit SpecConstr metrics output" {
 test "pipeline timing aggregates ARC counters with saturation and fresh reset" {
     var timing = Timing.init(std.testing.io);
     var first: ArcParallelMetrics = .{};
-    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        if (field.type == u64) @field(first, field.name) = i + 1;
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) @field(first, field_name) = i + 1;
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| @field(first.uniqueness, field.name) = i + 1;
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names, 0..) |field_name, i| @field(first.uniqueness, field_name) = i + 1;
     timing.addArcParallel(first);
     var aggregate = Timing.init(std.testing.io);
     aggregate.addSnapshot(timing.snapshot());
     aggregate.addSnapshot(timing.snapshot());
     const doubled = aggregate.snapshot();
-    inline for (std.meta.fields(ArcParallelMetrics), 0..) |field, i| {
-        if (field.type == u64) {
-            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field.name));
-            @field(first, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names, 0..) |field_name, i| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) {
+            try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel, field_name));
+            @field(first, field_name) = std.math.maxInt(u64);
         }
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics), 0..) |field, i| {
-        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field.name));
-        @field(first.uniqueness, field.name) = std.math.maxInt(u64);
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names, 0..) |field_name, i| {
+        try std.testing.expectEqual(@as(u64, 2 * (i + 1)), @field(doubled.arc_parallel.uniqueness, field_name));
+        @field(first.uniqueness, field_name) = std.math.maxInt(u64);
     }
     aggregate.addArcParallel(first);
     const saturated = aggregate.snapshot();
-    inline for (std.meta.fields(ArcParallelMetrics)) |field| {
-        if (field.type == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field.name));
+    inline for (@typeInfo(ArcParallelMetrics).@"struct".field_names) |field_name| {
+        if (@FieldType(ArcParallelMetrics, field_name) == u64) try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel, field_name));
     }
-    inline for (std.meta.fields(Arc.UniquenessMetrics)) |field| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field.name));
+    inline for (@typeInfo(Arc.UniquenessMetrics).@"struct".field_names) |field_name| try std.testing.expectEqual(std.math.maxInt(u64), @field(saturated.arc_parallel.uniqueness, field_name));
     try std.testing.expectEqual(@as(u64, 0), saturated.arc_ns);
     aggregate = Timing.init(std.testing.io);
     try std.testing.expectEqualDeep(ArcParallelMetrics{}, aggregate.snapshot().arc_parallel);
@@ -893,21 +899,46 @@ pub const Observers = struct {
 
     pub fn fromTarget(target: TargetConfig) Observers {
         var observers = Observers{};
-        inline for (@typeInfo(Observers).@"struct".fields) |field| {
-            @field(observers, field.name) = @field(target, field.name);
+        inline for (@typeInfo(Observers).@"struct".field_names) |field_name| {
+            @field(observers, field_name) = @field(target, field_name);
         }
         return observers;
     }
 
     fn applyTo(self: Observers, target: *TargetConfig) void {
-        inline for (@typeInfo(Observers).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(Observers).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
 
 /// Serves closed specializations from the object cache.
 pub const SpecCacheLookup = postcheck.Common.SpecCacheLookup;
+
+/// Native provision is an explicit backend/target/splice contract, not an
+/// optimization policy. Only host dev objects share CTFE's artifact domain.
+pub const CodeProvision = enum {
+    /// LLVM, interpreter, images, or an emitter without an object splice source.
+    source_bodies,
+    /// Native dev emission with a splice source for CTFE's exact host domain.
+    host_dev_objects,
+    /// Native dev emission with its own target-specific splice source.
+    target_dev_objects,
+
+    pub fn permitsNativeObjects(self: CodeProvision) bool {
+        return self != .source_bodies;
+    }
+
+    /// Domain compatibility is necessary but not sufficient for shared body
+    /// elision: the session must also prove both readers own the same provider.
+    /// Other targets may still splice objects in their own continuation.
+    pub fn sharedDomain(self: CodeProvision, other: CodeProvision) CodeProvision {
+        return if (self == .host_dev_objects and other == .host_dev_objects)
+            .host_dev_objects
+        else
+            .source_bodies;
+    }
+};
 
 /// The settings a program's Solved stage is prepared under: the inlining
 /// and SpecConstr decisions made before any consumer lowers LIR. Consumers
@@ -919,15 +950,15 @@ pub const SolvedPolicy = struct {
 
     pub fn fromTarget(target: TargetConfig) SolvedPolicy {
         var policy: SolvedPolicy = undefined;
-        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
-            @field(policy, field.name) = @field(target, field.name);
+        inline for (@typeInfo(SolvedPolicy).@"struct".field_names) |field_name| {
+            @field(policy, field_name) = @field(target, field_name);
         }
         return policy;
     }
 
     pub fn applyTo(self: SolvedPolicy, target: *TargetConfig) void {
-        inline for (@typeInfo(SolvedPolicy).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(SolvedPolicy).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
@@ -939,6 +970,7 @@ pub const LirPolicy = struct {
     list_in_place_map: bool,
     proc_debug_names: bool,
     spec_cache: ?postcheck.Common.SpecCacheLookup,
+    code_provision: CodeProvision,
     comptime_closure_hits: bool,
     keep_specialization_procs: bool,
     promote_loop_appends: bool,
@@ -952,15 +984,15 @@ pub const LirPolicy = struct {
 
     pub fn fromTarget(target: TargetConfig) LirPolicy {
         var policy: LirPolicy = undefined;
-        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
-            @field(policy, field.name) = @field(target, field.name);
+        inline for (@typeInfo(LirPolicy).@"struct".field_names) |field_name| {
+            @field(policy, field_name) = @field(target, field_name);
         }
         return policy;
     }
 
     fn applyTo(self: LirPolicy, target: *TargetConfig) void {
-        inline for (@typeInfo(LirPolicy).@"struct".fields) |field| {
-            @field(target, field.name) = @field(self, field.name);
+        inline for (@typeInfo(LirPolicy).@"struct".field_names) |field_name| {
+            @field(target, field_name) = @field(self, field_name);
         }
     }
 };
@@ -972,6 +1004,9 @@ pub const Consumer = struct {
     roots: ConsumerRoots,
     /// Target pointer width this continuation commits layouts for.
     target_usize: base.target.TargetUsize,
+    /// Bytes this consumer's erased callable values reserve at the start of
+    /// their captures (`LirProgram.Result.erased_capture_prefix`).
+    erased_capture_prefix: u32 = 0,
     /// Whether this consumer runs or omits inline expects.
     inline_expects: InlineExpectMode,
     /// Completed compile-time scalar roots this consumer reads as literals.
@@ -1033,8 +1068,8 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.records.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .Debug) {
-            std.debug.panic("runtime schema invariant violated: missing record schema for {s}", .{type_name});
+        if (builtin.mode == .debug) {
+            base.invariant("runtime schema invariant violated: missing record schema for {s}", .{type_name});
         }
         unreachable;
     }
@@ -1043,8 +1078,8 @@ pub const RuntimeValueSchemaStore = struct {
         for (self.tag_unions.items) |schema| {
             if (std.mem.eql(u8, schema.type_name, type_name)) return schema;
         }
-        if (builtin.mode == .Debug) {
-            std.debug.panic("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
+        if (builtin.mode == .debug) {
+            base.invariant("runtime schema invariant violated: missing tag union schema for {s}", .{type_name});
         }
         unreachable;
     }
@@ -1100,7 +1135,7 @@ pub fn adoptReachableCompletedComptimeValues(lowered: *LoweredProgram) Allocator
     result.comptime_value_guards.clearRetainingCapacity();
     for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     for (lowered.frozen_static_data.?.exports) |item| {
-        if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+        if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
     }
     for (result.static_data_values.items) |*value| value.compile_time_root = null;
 }
@@ -1116,7 +1151,7 @@ fn completeComptimeValueSlots(lowered: *LoweredProgram) Allocator.Error!void {
     for (result.static_data_values.items) |*value| value.first_comptime_guard = null;
     if (lowered.frozen_static_data) |*frozen| {
         for (frozen.exports) |item| {
-            if (item.value_id) |id| result.static_data_values.items[@intFromEnum(id)].initializer = null;
+            if (item.value_id) |id| result.static_data_values.items[@backingInt(id)].initializer = null;
         }
         for (result.static_data_values.items) |*value| value.compile_time_root = null;
         try ReachableProcs.runWithFrozen(result, frozen);
@@ -1206,12 +1241,6 @@ pub const PreparedMonotype = struct {
     root_count: usize,
     test_plan_metadata: []postcheck.Common.RootTestPlanMetadata,
 
-    /// Fork only the target-dependent continuation. Specialization output is
-    /// copied exactly; checked lowering and its executor are not run again.
-    pub fn forkForTarget(self: *const PreparedMonotype, target_usize: base.target.TargetUsize) Allocator.Error!PreparedMonotype {
-        return self.forkForConsumer(target_usize, self.target.inline_expects);
-    }
-
     /// A shared program preserves both expect semantics explicitly. A program
     /// specialized for one mode cannot acquire the missing continuation later.
     pub fn forkForConsumer(self: *const PreparedMonotype, target_usize: base.target.TargetUsize, inline_expects: InlineExpectMode) Allocator.Error!PreparedMonotype {
@@ -1267,6 +1296,12 @@ pub fn prepareCheckedModulesMonotype(
     try verifyCheckedBoundary(modules, target);
     try requireHostedProceduresBound(modules, target);
 
+    // One checked-program proof governs both lookup stages. An early hit
+    // removes the source body, so Direct LIR cannot defer this decision until
+    // it discovers which procedures the evaluator reaches.
+    var prepared_target = target;
+    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
+
     const layout_requests = try collectLayoutRequests(allocator, modules.root.module, roots.layout_requests, roots.include_provided_data_exports);
     defer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(
@@ -1304,11 +1339,11 @@ pub fn prepareCheckedModulesMonotype(
             rootRequests(roots, layout_requests, static_data_requests),
             .{
                 .proc_debug_names = target.proc_debug_names or LirDump.filter() != null or SpecCensus.enabled(),
-                // A program that is also the compile-time evaluator's host
-                // takes its hits in Direct LIR, after the compile-time
-                // closure is known; only a runtime-only program can take
-                // them here.
-                .spec_cache = if (target.checked_module_state == .complete) target.spec_cache else null,
+                .spec_cache = if (monotypeCacheHitsAllowed(
+                    target.checked_module_state,
+                    prepared_target.comptime_closure_hits,
+                    target.code_provision,
+                )) target.spec_cache else null,
                 .post_check_executor = target.post_check_executor,
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
@@ -1324,8 +1359,6 @@ pub fn prepareCheckedModulesMonotype(
         );
     };
     if (SpecCensus.enabled()) try SpecCensus.runMonotype(allocator, modules, &mono);
-    var prepared_target = target;
-    prepared_target.comptime_closure_hits = comptimeClosureHitsAllowed(modules);
     return .{
         .allocator = allocator,
         .program = mono,
@@ -1333,6 +1366,31 @@ pub fn prepareCheckedModulesMonotype(
         .root_count = roots.requests.len,
         .test_plan_metadata = test_plan_metadata,
     };
+}
+
+/// Early hits erase producer bodies, so both native provision and the
+/// compile-time observation proof must authorize them before lowering.
+fn monotypeCacheHitsAllowed(state: CheckedModuleState, comptime_closure_hits: bool, provision: CodeProvision) bool {
+    return provision.permitsNativeObjects() and (state == .complete or comptime_closure_hits);
+}
+
+test "early cache requires declared native provision and the CTFE observation proof" {
+    for (std.enums.values(CodeProvision)) |provision| {
+        for ([_]bool{ false, true }) |proof| {
+            try std.testing.expectEqual(provision.permitsNativeObjects(), monotypeCacheHitsAllowed(.complete, proof, provision));
+            try std.testing.expectEqual(provision.permitsNativeObjects() and proof, monotypeCacheHitsAllowed(.checking_finalization, proof, provision));
+        }
+    }
+}
+
+test "shared producer native provision requires every consumer in the host dev domain" {
+    for (std.enums.values(CodeProvision)) |host| {
+        for (std.enums.values(CodeProvision)) |runtime| {
+            const expected: CodeProvision = if (host == .host_dev_objects and runtime == .host_dev_objects) .host_dev_objects else .source_bodies;
+            try std.testing.expectEqual(expected, host.sharedDomain(runtime));
+            try std.testing.expectEqual(expected, runtime.sharedDomain(host));
+        }
+    }
 }
 
 /// Whether every exhaustiveness site of the program resolves without the
@@ -1358,6 +1416,26 @@ fn hasCompileTimeOnlySite(sites: *const checked.CheckedExhaustivenessSiteTable) 
         }
     }
     return false;
+}
+
+test "CTFE cache proof rejects unresolved empirical exhaustiveness only" {
+    const policies = [_]checked.ExhaustivenessResolutionPolicy{
+        .not_pending,
+        .runtime_reachable,
+        .{ .compile_time_replaced_by_root = @fromBackingInt(3) },
+        .compile_time_only,
+    };
+    var sites = [_]checked.CheckedExhaustivenessSite{.{
+        .id = @fromBackingInt(5),
+        .kind = .match,
+        .region = std.mem.zeroes(base.Region),
+        .policy = .not_pending,
+    }};
+    for (policies) |policy| {
+        sites[0].policy = policy;
+        try std.testing.expectEqual(policy == .compile_time_only, hasCompileTimeOnlySite(&.{ .sites = &sites }));
+    }
+    try std.testing.expect(!hasCompileTimeOnlySite(&.{}));
 }
 
 /// Consumes the prepared program on success and failure. No specialization
@@ -1480,6 +1558,7 @@ pub fn lowerPreparedSolvedToLir(prepared: PreparedSolved) LowerResourceError!Low
     return lowerFinalConsumerToLir(prepared, .{
         .roots = .{},
         .target_usize = prepared.target.target_usize,
+        .erased_capture_prefix = prepared.target.erased_capture_prefix,
         .inline_expects = prepared.target.inline_expects,
         .completed_scalar_values = prepared.target.completed_scalar_values,
         .observers = Observers.fromTarget(prepared.target),
@@ -1548,6 +1627,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     const allocator = prepared.allocator;
     var target = prepared.target;
     target.target_usize = consumer.target_usize;
+    target.erased_capture_prefix = consumer.erased_capture_prefix;
     target.inline_expects = consumer.inline_expects;
     target.completed_scalar_values = consumer.completed_scalar_values;
     consumer.observers.applyTo(&target);
@@ -1566,9 +1646,9 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     defer lir_gen_timing_scope.end();
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
-    const lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
+    var lowered = try postcheck.SolvedLirLower.runBorrowed(allocator, target.target_usize, &prepared.program, .{
         .root_manifest = consumer.roots,
-        .spec_cache = target.spec_cache,
+        .spec_cache = if (target.code_provision.permitsNativeObjects()) target.spec_cache else null,
         .comptime_closure_hits = target.comptime_closure_hits,
         .inline_plan = prepared.inline_plan.view(),
         .keep_specialization_procs = target.keep_specialization_procs,
@@ -1588,6 +1668,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     });
     if (target.timing) |timing| timing.addSolvedLirParallel(parallel_metrics.?.*);
     lir_gen_timing_scope.end();
+    lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
 
     return .{ .output = lowered, .target = target };
 }
@@ -1713,11 +1794,11 @@ fn finishLoweredOutput(
         var seen = try allocator.alloc(bool, lowered.lir_result.store.procSpecCount());
         defer allocator.free(seen);
         @memset(seen, false);
-        for (arc_roots.items) |proc| seen[@intFromEnum(proc)] = true;
+        for (arc_roots.items) |proc| seen[@backingInt(proc)] = true;
         for (data.exports) |export_| for (export_.relocations) |relocation| {
             const proc = relocation.procedure orelse continue;
-            if (seen[@intFromEnum(proc)]) continue;
-            seen[@intFromEnum(proc)] = true;
+            if (seen[@backingInt(proc)]) continue;
+            seen[@backingInt(proc)] = true;
             try arc_roots.append(allocator, proc);
         };
     }
@@ -1731,6 +1812,8 @@ fn finishLoweredOutput(
     });
     if (target.timing) |timing| timing.addArcParallel(arc_metrics.?.*);
     arc_timing_scope.end();
+
+    try TailDrive.run(allocator, &lowered.lir_result.store, &.{ arc_roots.items, lowered.lir_result.boxy_worker_procs.items });
 
     // ARC settled every read that named a fresh form, so a fresh-form
     // procedure no read chose is now unreferenced.
@@ -1817,6 +1900,7 @@ pub const PreparedBoxy = struct {
             },
         );
         errdefer lowered.deinit();
+        lowered.lir_result.erased_capture_prefix = target.erased_capture_prefix;
         scope.end();
         var frozen: ?LirProgram.FrozenStaticData = null;
         return finishLoweredOutput(self.allocator, self.roots.requests.len, target, &lowered, &frozen);
@@ -1859,7 +1943,7 @@ pub fn prepareBoxyCheckedModules(
 }
 
 fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     for (store.getCFStmts()) |stmt| {
         if (stmt != .assign_low_level) continue;
         const op = stmt.assign_low_level.op;
@@ -1877,7 +1961,7 @@ fn verifyArithmeticBoundary(store: *const core.LirStore, before_prover: bool) vo
 }
 
 fn verifyCheckedBoundary(modules: CheckedModuleSet, target: TargetConfig) Allocator.Error!void {
-    if (builtin.mode != .Debug) return;
+    if (builtin.mode != .debug) return;
     switch (target.checked_module_state) {
         .complete => try modules.root.module.verifyComplete(),
         .checking_finalization => modules.root.module.verifyReadyForCompileTimeLowering(),
@@ -2046,8 +2130,8 @@ fn convertRuntimeSchemas(
 }
 
 fn checkedPipelineInvariant(comptime message: []const u8) noreturn {
-    if (builtin.mode == .Debug) {
-        std.debug.panic("checked pipeline invariant violated: {s}", .{message});
+    if (builtin.mode == .debug) {
+        base.invariant("checked pipeline invariant violated: {s}", .{message});
     }
     unreachable;
 }
@@ -2079,7 +2163,7 @@ const LirDump = if (builtin.os.tag == .freestanding) struct {
         const store = &result.store;
         const layouts = &result.layouts;
         for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const name = store.procDebugName(proc_id);
             if (name_filter.len != 0) {
                 const named = name orelse continue;
@@ -2126,8 +2210,8 @@ test "runtime extraction consumes producer root positions and preserves their or
     try std.testing.expectEqual(@as(usize, 2), lowered.lir_result.store.procSpecCount());
     try std.testing.expectEqual(@as(u32, 2), lowered.lir_result.root_metadata.items[0].order);
     try std.testing.expectEqual(@as(u32, 1), lowered.lir_result.root_metadata.items[1].order);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(lowered.lir_result.root_procs.items[0]));
-    try std.testing.expectEqual(@as(u32, 0), @intFromEnum(lowered.lir_result.root_procs.items[1]));
+    try std.testing.expectEqual(@as(u32, 1), @backingInt(lowered.lir_result.root_procs.items[0]));
+    try std.testing.expectEqual(@as(u32, 0), @backingInt(lowered.lir_result.root_procs.items[1]));
     try std.testing.expectEqual(lowered.lir_result.root_procs.items[0], lowered.main_proc.?);
 }
 
@@ -2161,7 +2245,7 @@ test "adopting completed compile-time values drops their initializers and identi
         .abi = .roc,
         .exposure = .private,
     });
-    const completed_slot: LIR.StaticDataId = @enumFromInt(lowered.lir_result.static_data_values.items.len);
+    const completed_slot: LIR.StaticDataId = @fromBackingInt(@intCast(lowered.lir_result.static_data_values.items.len));
     try lowered.lir_result.static_data_values.append(allocator, .{
         .initializer = procs[1],
         .layout_idx = .zst,
@@ -2222,9 +2306,9 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         // Bodies are appended in lowering order, so consecutive body ids
         // bound each function's expression count from above.
         for (0..lifted.fnCount()) |index| {
-            const lifted_fn = lifted.getFn(@enumFromInt(@as(u32, @intCast(index))));
+            const lifted_fn = lifted.getFn(@fromBackingInt(@intCast(@as(u32, @intCast(index)))));
             const body: usize = switch (lifted_fn.body) {
-                .roc => |body| @intFromEnum(body),
+                .roc => |body| @backingInt(body),
                 .hosted => 0,
             };
             const name = if (lifted.procDebugName(lifted_fn.symbol)) |id| lifted.names.exportNameText(id) else "?";
@@ -2245,13 +2329,12 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
     };
 
     fn defName(info: *const ModuleInfo, proc_base: u32) []const u8 {
-        const key = info.names.procBase(@enumFromInt(proc_base));
+        const key = info.names.procBase(@fromBackingInt(@intCast(proc_base)));
         if (key.export_name) |export_name| return info.names.exportNameText(export_name);
         const def_idx = key.source_def_idx orelse return "?";
-        const def = info.env.store.getDef(@enumFromInt(def_idx));
+        const def = info.env.store.getDef(@fromBackingInt(@intCast(def_idx)));
         return switch (info.env.store.getPattern(def.pattern)) {
-            .assign => |assign| info.env.getIdent(assign.ident),
-            .var_assign => |assign| info.env.getIdent(assign.ident),
+            inline .assign, .var_assign => |assign| info.env.getIdent(assign.ident),
             .as,
             .applied_tag,
             .nominal,
@@ -2601,7 +2684,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
                     callable_name = defName(info, proc_base);
                     if (callable_kind_is_template and sub < info.templates.templates.items.len) {
                         const source_fn_ty = info.templates.templates.items[sub].checked_fn_root;
-                        if (@intFromEnum(source_fn_ty) < info.types.stored_payloads.len) {
+                        if (@backingInt(source_fn_ty) < info.types.stored_payloads.len) {
                             poly = if (try checkedTypeHasVariable(allocator, info.types, source_fn_ty)) 1 else 0;
                         }
                     }
@@ -2638,7 +2721,7 @@ const SpecCensus = if (builtin.os.tag == .freestanding) struct {
         std.debug.print("CENSUS_STATIC\t{d}\t{d}\n", .{ result.static_data_values.items.len, result.const_plans.items.len });
         const store = &result.store;
         for (0..store.procSpecCount()) |index| {
-            const proc_id: LIR.LirProcSpecId = @enumFromInt(@as(u32, @intCast(index)));
+            const proc_id: LIR.LirProcSpecId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
             const spec = store.getProcSpec(proc_id);
             const name = store.procDebugName(proc_id) orelse "?";
             if (spec.body == null) {
