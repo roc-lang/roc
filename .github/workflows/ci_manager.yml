@@ -376,14 +376,19 @@ jobs:
       # build cache holds some (a versioned shared library such as the glibc
       # test stub is emitted as `libc.so` -> `libc.so.6` -> `libc.so.6.0.0`),
       # so there the artifact stores each link's target file instead.
+      #
+      # `zig-pkg` is where Zig 0.17 unpacks dependencies, the LLVM libraries
+      # among them. The cache records those files as link inputs, so a shard
+      # needs them in place before it re-stamps the cache; left out, Zig would
+      # unpack fresh copies afterwards and relink everything that uses LLVM.
       - name: Pack MiniCI build artifact
         shell: bash
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Windows" ]; then
-            tar --dereference -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+            tar --dereference -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
           else
-            tar -cf - .zig-cache zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
+            tar -cf - .zig-cache zig-pkg zig-out/bin zig-out/lib | zstd -T0 -3 -q -o minici-build.tar.zst
           fi
 
       # Packing is the disk high-water mark of this job. Report free space and
