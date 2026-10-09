@@ -2768,6 +2768,7 @@ pub fn build(b: *std.Build) void {
                     .{ .name = "builtins", .module = roc_modules.builtins },
                     .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                     .{ .name = "build_options", .module = roc_modules.build_options },
+                    .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
                 },
             }),
         });
@@ -4546,6 +4547,7 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "builtins", .module = roc_modules.builtins },
                 .{ .name = "bytebox", .module = bytebox.module("bytebox") },
                 .{ .name = "build_options", .module = roc_modules.build_options },
+                .{ .name = "msvc_runtime", .module = b.createModule(.{ .root_source_file = b.path("src/echo_platform/msvc_runtime.zig") }) },
             },
         }),
         .filters = test_filters,

@@ -32,6 +32,7 @@ const base = @import("base");
 const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
+const msvc_runtime = @import("msvc_runtime");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 const shim_symbols = builtins.shim_symbols;
 
@@ -5744,7 +5745,19 @@ fn copyNativeMuslTargetFile(
     filename: []const u8,
     dest_dir: []const u8,
 ) CliRunnerError!void {
-    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", target.roc_target, filename });
+    return copyFxTargetFile(io, allocator, target.roc_target, filename, dest_dir);
+}
+
+/// Copies one of the fx platform's link inputs for `roc_target` into
+/// `dest_dir`, for a staged platform that declares the same input.
+fn copyFxTargetFile(
+    io: std.Io,
+    allocator: Allocator,
+    roc_target: []const u8,
+    filename: []const u8,
+    dest_dir: []const u8,
+) CliRunnerError!void {
+    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", roc_target, filename });
     defer allocator.free(src);
     const dest = try std.fs.path.join(allocator, &.{ dest_dir, filename });
     defer allocator.free(dest);
@@ -12664,6 +12677,15 @@ fn runGlueRuntimeCase(
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
                 copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            }
+            if (target.kind == .windows) {
+                // An MSVC link uses only the inputs the platform declares, so
+                // the startup archive and import libraries the build prepared
+                // for fx sit beside the host library built below.
+                for (msvc_runtime.files) |filename| {
+                    copyFxTargetFile(io, allocator, target.roc_target, filename, target_dir) catch |err|
+                        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime {s}: {}", .{ filename, err }), env.dirs.work_dir);
+                }
             }
         },
         .wasm32 => {},
