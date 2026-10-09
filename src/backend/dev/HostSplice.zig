@@ -453,19 +453,87 @@ fn compilerFunction(name: []const u8, boxy_native_fns: *const BoxyNativeFnTable)
     return builtins.native_runtime_libcalls.resolve(name);
 }
 
+test "physical region symbols preserve duplicate proc helper and thunk offsets" {
+    if (comptime !LirCodeGenMod.host_lir_codegen_available) return error.SkipZigTest;
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    var layouts = try @import("layout").Store.init(allocator, @import("base").target.TargetUsize.native);
+    defer layouts.deinit();
+    var cg = try HostLirCodeGen.init(allocator, &store, &layouts, .{}, &.{}, .default);
+    defer cg.deinit();
+    const identity = lir.ProcIdentity.forTest(912);
+    var starts: [6]usize = undefined;
+    for (&starts, 0..) |*start, i| {
+        const kind: HostLirCodeGen.CodeRegionKind = switch (i / 2) {
+            0 => .{ .spliced_proc = identity },
+            1 => .spliced_helper,
+            2 => .{ .spliced_boxy_thunk = identity },
+            else => unreachable,
+        };
+        start.* = try cg.appendAssembledRegion(&.{ 0, 0, 0, 0 }, kind, 1, null);
+        if (i / 2 == 1) cg.code_regions.items[cg.code_regions.items.len - 1].artifact_helper_name = "duplicate_helper";
+    }
+    try cg.bindAssembledProc(identity, starts[1] + 1);
+    try cg.registerSplicedHelper("duplicate_helper", starts[3] + 1);
+    var symbols = std.StringHashMap(usize).init(allocator);
+    defer {
+        var names = symbols.keyIterator();
+        while (names.next()) |name| allocator.free(name.*);
+        symbols.deinit();
+    }
+    try collectCodeSymbols(allocator, &cg, &symbols);
+    for (starts, 0..) |start, i| {
+        const id = cg.codeRegions()[i].physical_symbol orelse unreachable;
+        try std.testing.expectEqual(id, try cg.internRegionCodeSymbol(start, 1));
+        try std.testing.expectEqual(@import("SymbolTable.zig").Scope.program, cg.symbolScope(id));
+        try std.testing.expectEqual(start + 1, symbols.get(cg.symbolName(id)).?);
+    }
+    const logical = try identity.symbolName(allocator);
+    defer allocator.free(logical);
+    try std.testing.expectEqual(starts[1] + 1, symbols.get(logical).?);
+    try std.testing.expectEqual(starts[3] + 1, symbols.get("duplicate_helper").?);
+    try std.testing.expectEqual(@as(usize, 8), symbols.count());
+}
+
 fn comptimeDictSeed() callconv(.c) u64 {
     return 0;
 }
 
-/// Every procedure and refcount helper of the image by the name object code
-/// gives it: the program's own, and the spliced ones.
-fn collectCodeSymbols(allocator: Allocator, codegen: *const HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
+/// Physical declarations preserve every callable variant. Logical declarations
+/// are aliases of consumer-selected providers, never dependency discovery.
+fn collectCodeSymbols(allocator: Allocator, codegen: *HostLirCodeGen, out: *std.StringHashMap(usize)) Allocator.Error!void {
     for (codegen.codeRegions()) |region| {
+        switch (region.kind) {
+            .proc, .spliced_proc, .rc_helper, .spliced_helper, .boxy_thunk, .spliced_boxy_thunk => {
+                const id = try codegen.internRegionCodeSymbol(region.start, region.entry);
+                const name = try allocator.dupe(u8, codegen.symbolName(id));
+                errdefer allocator.free(name);
+                const gop = try out.getOrPut(name);
+                if (gop.found_existing) allocator.free(name);
+                gop.value_ptr.* = region.start + region.entry;
+            },
+            else => continue,
+        }
         const name: []u8 = switch (region.kind) {
-            .proc => |proc_id| try codegen.store.getProcSpec(proc_id).identity.symbolName(allocator),
-            .spliced_proc => |identity| try identity.symbolName(allocator),
-            .rc_helper => |key| try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key),
-            .spliced_helper => try allocator.dupe(u8, region.artifact_helper_name orelse codegen.splicedHelperName(region.start + region.entry) orelse continue),
+            .proc => |proc_id| blk: {
+                const selected = codegen.compiledProcSymbol(proc_id) orelse continue;
+                if (selected.code_start != region.start + region.entry) continue;
+                break :blk try codegen.store.getProcSpec(proc_id).identity.symbolName(allocator);
+            },
+            .spliced_proc => |identity| blk: {
+                if (codegen.spliced_proc_starts.get(identity) != region.start + region.entry) continue;
+                break :blk try identity.symbolName(allocator);
+            },
+            .rc_helper => |key| blk: {
+                if (codegen.compiledRcHelperOffset(key) != region.start + region.entry) continue;
+                break :blk try LirCodeGenMod.compiledRcHelperSymbolName(allocator, codegen.layout_store, key);
+            },
+            .spliced_helper => blk: {
+                const name = region.artifact_helper_name orelse continue;
+                if (codegen.spliced_helper_offsets.get(name) != region.start + region.entry) continue;
+                break :blk try allocator.dupe(u8, name);
+            },
             .boxy_thunk, .spliced_boxy_thunk, .entrypoint, .message_pool_run, .branch_island, .hosted_stub => continue,
         };
         errdefer allocator.free(name);

@@ -1406,6 +1406,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             artifact_context_contract: ?FragmentContract = null,
             artifact_domain: ?CtfeContext.Domain = null,
             artifact_helper_name: ?[]const u8 = null,
+            /// Session-only name of this physical callable, never artifact identity.
+            physical_symbol: ?SymbolTable.Id = null,
         };
 
         /// Assembly preserves the original producer's proof, not the receiving
@@ -25891,6 +25893,27 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Name of an interned symbol.
         pub fn symbolName(self: *const Self, id: SymbolTable.Id) []const u8 {
             return self.codegen.symbols.names.items[@intFromEnum(id)];
+        }
+
+        /// Physical references bypass logical provider selection. The region owns
+        /// one program-scoped declaration for the lifetime of this image.
+        pub fn internRegionCodeSymbol(self: *Self, start: usize, entry: usize) Allocator.Error!SymbolTable.Id {
+            // Regions are appended in code-buffer order.
+            var lo: usize = 0;
+            var hi = self.code_regions.items.len;
+            while (lo < hi) {
+                const mid = lo + (hi - lo) / 2;
+                if (self.code_regions.items[mid].start < start) lo = mid + 1 else hi = mid;
+            }
+            std.debug.assert(lo < self.code_regions.items.len);
+            const region = &self.code_regions.items[lo];
+            std.debug.assert(region.start == start and region.entry == entry);
+            if (region.physical_symbol) |id| return id;
+            const name = try std.fmt.allocPrint(self.allocator, "roc__variant_{d}_{d}", .{ start, entry });
+            defer self.allocator.free(name);
+            const id = try self.internSymbolName(name, .program);
+            region.physical_symbol = id;
+            return id;
         }
 
         /// The scope generated code declared for symbol `id`.

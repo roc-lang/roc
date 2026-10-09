@@ -401,8 +401,43 @@ fn compileWithCodeGen(
     var seen_proc_symbol_names = std.StringHashMap(void).init(allocator);
     defer seen_proc_symbol_names.deinit();
 
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
-    try appendStaticDataExports(allocator, &codegen.codegen.symbols, static_strings.exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    var selected_targets = SelectedCodeSymbols.init(allocator);
+    defer selected_targets.deinit();
+    var physical_entries = std.AutoHashMap(usize, SymbolTable.Id).init(allocator);
+    defer physical_entries.deinit();
+    var physical_definitions = std.ArrayList(SymbolDefinition).empty;
+    defer physical_definitions.deinit(allocator);
+    for (codegen.codeRegions()) |region| {
+        switch (region.kind) {
+            .proc, .spliced_proc, .rc_helper, .spliced_helper, .boxy_thunk, .spliced_boxy_thunk => {},
+            else => continue,
+        }
+        const id = try codegen.internRegionCodeSymbol(region.start, region.entry);
+        try physical_entries.put(region.start + region.entry, id);
+        try physical_definitions.append(allocator, .{ .id = id, .symbol = .{
+            .name = codegen.symbolName(id),
+            .offset = region.start + region.entry,
+            .size = region.end - region.start - region.entry,
+            .is_global = false,
+            .is_function = true,
+            .is_external = false,
+            .section = .text,
+        } });
+    }
+    // Producer identities select the current consumer provider; physical
+    // declarations themselves never consult these logical maps.
+    for (proc_specs, 0..) |proc, index| {
+        if (proc.is_static_initializer) continue;
+        const proc_id: lir.LIR.LirProcSpecId = @enumFromInt(index);
+        const selected = codegen.compiledProcSymbol(proc_id) orelse unreachable;
+        try selected_targets.functions.put(proc_id, physical_entries.get(selected.code_start) orelse unreachable);
+    }
+    for (static_rc_helpers) |key| {
+        const selected = codegen.compiledStaticDataRcHelperInfo(key) orelse unreachable;
+        try selected_targets.helpers.put(key, physical_entries.get(selected.start_offset) orelse unreachable);
+    }
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, &selected_targets, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &codegen.codegen.symbols, &selected_targets, static_strings.exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     {
         // Readonly data named by native artifacts or spliced object-cache code
         // that this program did not define itself.
@@ -442,7 +477,7 @@ fn compileWithCodeGen(
                 .relocations = relocations,
             }) catch return CompilationError.OutOfMemory;
         }
-        try appendStaticDataExports(allocator, &codegen.codegen.symbols, extra.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+        try appendStaticDataExports(allocator, &codegen.codegen.symbols, &selected_targets, extra.items, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
     }
 
     for (proc_specs, 0..) |_, i| {
@@ -568,6 +603,7 @@ fn compileWithCodeGen(
             }) catch return CompilationError.OutOfMemory;
         }
     }
+    try symbols.appendSlice(allocator, physical_definitions.items);
     if (timing) |timings| timings.finish(symbol_relocations_started_ns, .symbol_relocations);
 
     // Generate entrypoint wrappers
@@ -842,9 +878,66 @@ fn resolveObjectSymbols(
     return .{ .symbols = symbols };
 }
 
+const SelectedCodeSymbols = struct {
+    functions: std.AutoHashMap(lir.LIR.LirProcSpecId, SymbolTable.Id),
+    helpers: std.AutoHashMap(layout.RcHelperKey, SymbolTable.Id),
+
+    fn init(allocator: Allocator) SelectedCodeSymbols {
+        return .{ .functions = .init(allocator), .helpers = .init(allocator) };
+    }
+
+    fn deinit(self: *SelectedCodeSymbols) void {
+        self.functions.deinit();
+        self.helpers.deinit();
+    }
+};
+
+test "physical region symbols static exports use selected provider not logical spelling" {
+    const allocator = std.testing.allocator;
+    var table: SymbolTable.Table = .{};
+    defer table.deinit(allocator);
+    const old = try table.intern(allocator, "roc__variant_0_0", .program);
+    const current = try table.intern(allocator, "roc__variant_16_4", .program);
+    var selected = SelectedCodeSymbols.init(allocator);
+    defer selected.deinit();
+    const proc: lir.LIR.LirProcSpecId = @enumFromInt(0);
+    try selected.functions.put(proc, current);
+    var symbols = std.ArrayList(SymbolDefinition).empty;
+    defer symbols.deinit(allocator);
+    try symbols.appendSlice(allocator, &.{
+        .{ .id = old, .symbol = .{ .name = "roc__variant_0_0", .offset = 0, .size = 16, .is_global = false, .is_function = true, .is_external = false, .section = .text } },
+        .{ .id = current, .symbol = .{ .name = "roc__variant_16_4", .offset = 20, .size = 12, .is_global = false, .is_function = true, .is_external = false, .section = .text } },
+    });
+    var rodata = std.ArrayList(u8).empty;
+    defer rodata.deinit(allocator);
+    var relocations = std.ArrayList(ObjectWriter.IndexedDataRelocation).empty;
+    defer relocations.deinit(allocator);
+    var zero_fill_size: u64 = 0;
+    try appendStaticDataExports(allocator, &table, &selected, &.{.{
+        .symbol_name = "pointer",
+        .bytes = &.{ 0, 0, 0, 0, 0, 0, 0, 0 },
+        .alignment = 8,
+        .is_global = false,
+        .relocations = &.{.{
+            .offset = 0,
+            .target_symbol_name = "logical_old_provider",
+            .procedure = proc,
+            .kind = .function_pointer,
+        }},
+    }}, &rodata, &zero_fill_size, &relocations, &symbols);
+    try std.testing.expectEqual(current, relocations.items[0].symbol);
+    try std.testing.expect(table.indices.get("logical_old_provider") == null);
+    var resolved = try resolveObjectSymbols(allocator, &table, symbols.items, &.{});
+    defer resolved.deinit(allocator);
+    try std.testing.expectEqual(@as(u64, 0), resolved.symbols[@intFromEnum(old)].offset);
+    try std.testing.expectEqual(@as(u64, 20), resolved.symbols[@intFromEnum(current)].offset);
+    try std.testing.expect(!resolved.symbols[@intFromEnum(current)].is_global);
+}
+
 fn appendStaticDataExports(
     allocator: Allocator,
     table: *SymbolTable.Table,
+    selected: ?*const SelectedCodeSymbols,
     exports: []const StaticDataExport,
     rodata: *std.ArrayList(u8),
     zero_fill_size: *u64,
@@ -869,12 +962,14 @@ fn appendStaticDataExports(
                 .data_symbol => |target| data_symbols[@intFromEnum(target)],
                 .named => blk: {
                     if (relocation.procedure) |proc| {
+                        if (selected) |targets| break :blk targets.functions.get(proc) orelse unreachable;
                         if (functions.get(proc)) |id| break :blk id;
                         const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         functions.put(proc, id) catch return CompilationError.OutOfMemory;
                         break :blk id;
                     }
                     if (relocation.rc_helper) |helper| {
+                        if (selected) |targets| break :blk targets.helpers.get(helper) orelse unreachable;
                         if (helpers.get(helper)) |id| break :blk id;
                         const id = table.internEmitted(allocator, relocation.target_symbol_name) catch return CompilationError.OutOfMemory;
                         helpers.put(helper, id) catch return CompilationError.OutOfMemory;
@@ -977,7 +1072,7 @@ fn compileStaticDataObjectBytes(
     defer rodata_relocations.deinit(allocator);
     var zero_fill_size: u64 = 0;
 
-    try appendStaticDataExports(allocator, &table, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
+    try appendStaticDataExports(allocator, &table, null, static_data_exports, &rodata, &zero_fill_size, &rodata_relocations, &symbols);
 
     // This object is linked separately from generated code. LLVM constant
     // expressions can reference any backing named by a frozen relocation,
