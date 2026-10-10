@@ -3737,8 +3737,12 @@ than a silent writer of undefined bytes:
 - *Scrubbable*: undefined bytes or bits exist, but the value itself identifies
   every one of them—a tagged union's discriminant names the live variant, an
   optional's null bit names an empty payload, a narrow scalar's declared width
-  names its value bits. Those are canonicalized into a writer-owned copy; the
-  source is never modified, so a frozen or shared store may be serialized.
+  names its value bits. The writer records the type-specific canonicalization
+  operation with the borrowed source slice. It scrubs the destination when
+  gathering into a buffer, or bounded per-type scratch when streaming to a file.
+  Neither scratch storage nor relocation metadata grows with the number of rows
+  in a column. The source is never modified, so a frozen or shared store may be
+  serialized.
 
 A fixed layout is the author's byte map, so an `extern struct` must declare the
 bytes its alignment adds, as an explicitly zero-defaulted reserved field, and every
@@ -3754,6 +3758,11 @@ safe: their inter-field gaps are scrubbable, but a member whose undefined bytes
 nothing identifies makes the whole type a compile error, exactly as a fixed layout
 would be. A checked store may keep an ergonomic in-memory shape, but not an
 unrepresentable one.
+
+Checked-module cache writes stream the header and the two relocatable
+bodies to a private staging file, then atomically rename it. They never gather
+another full-entry heap buffer. A failed write or rename removes the staging file
+and records a cache-write failure; partial data never becomes a cache entry.
 
 Serialization never writes spare capacity. A `SafeMultiList` persists its live
 rows as `std.MultiArrayList`'s own column layout with capacity equal to length, so
@@ -8073,6 +8082,15 @@ item alignment. Static-data materialization aligns the backing to that
 maximum while keeping the Roc list length and capacity in items rather than
 bytes.
 
+Monotype lowering also packs source lists whose items are all checked builtin
+numeric literals, before constructing per-item IR. It consumes the checked
+numeral data and concrete item type through the ordinary exact numeral-to-bit
+conversion, and records the scalar encoding and item count on the packed view.
+This applies at every list length and includes the initial compile-time evaluation,
+not just restoration of completed constants. A custom conversion plan or root,
+non-literal item, or rejected conversion retains its ordinary computation and
+diagnostic behavior; list packing never evaluates or bypasses such computations.
+
 Readonly literal export demand comes from the retained LIR procedure control-flow
 graphs and their explicit join-point inventories. String literals, packed-list
 literals, and string-match prefixes and delimiters name their exact backing
@@ -8151,6 +8169,31 @@ under—an unreasoned redirect does not compile, and adding a caller means
 adding or citing a member, which is greppable and reviewable. A new
 probe-then-mutate rewrite requires a declared rule in this document first;
 "it makes a test pass" is not a rule.
+
+### Concrete Builtin Numeral Introduction
+
+A numeric expression may omit constructing its `from_numeral` signature graph
+when its explicit suffix, or the checking context supplied by its enclosing
+construction, already names a concrete builtin numeric declaration and its exact
+literal fits that declaration. `checkConcreteBuiltinNumeral` introduces the
+ordinary builtin nominal through `unifyWith`, leaving the enclosing expression's
+ordinary expected-type relation in place. This is a mechanism: builtin conversion
+at this already fixed type has no user computation or remaining checked plan, and
+the checked numeral has the same concrete type and absent custom dispatch plan
+as after ordinary constraint solving. CIR retains an explicit literal plan with
+an absent constraint-function variable; finalization still seals that occurrence
+as `builtin_direct` or a checked error. Consumers must not invent a callable for
+that absent constraint-function variable.
+
+Only producer-owned builtin declaration identity qualifies. Transparent aliases
+may be followed; nominal wrappers, custom suffixes, borrowed record-field context,
+unresolved and generalized targets do not qualify. An invalid literal keeps its
+ordinary conversion constraint and occurrence-specific diagnostics. No arbitrary
+candidate is selected, no shared mutable signature is introduced, and no checked
+dispatch plan is restamped. Expression literals only are covered; pattern equality
+requirements retain their existing introduction path. Tests in
+`issue_11960_test.zig` pin concrete, inferred, custom, and rejected cases, and the
+absence of per-literal signature graphs for concrete builtin lists.
 
 ### Expected Shape Context
 
@@ -11212,6 +11255,11 @@ site to any family below must classify it here.
   would have copied.
 
 Other solved-graph mutations:
+
+- `checkConcreteBuiltinNumeral`—mechanism: Concrete Builtin Numeral
+  Introduction (above). Uses the existing `unifyWith` descriptor-introduction
+  mechanism for a proved concrete builtin conversion; does not mutate the
+  context's type or introduce a redirect rule.
 
 - `recordForMerge` / `tagUnionForMerge`—mechanism: row-extension
   preservation during ordinary unification. Both operand equivalence classes

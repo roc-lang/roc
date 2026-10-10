@@ -296,7 +296,9 @@ pub const Constants = struct {
     /// 136: Folded dispatch relations carry explicit target substitutions.
     /// 137: Module environments persist diagnostic host-return provenance.
     /// 138: Hosted Try errors no longer widen implicitly at question operators.
-    pub const CACHE_VERSION = 138;
+    /// 139: Literal dispatch plans store an optional conversion function, absent
+    ///      for a proved concrete builtin numeral.
+    pub const CACHE_VERSION = 139;
 };
 
 /// Configuration for the Roc cache system.

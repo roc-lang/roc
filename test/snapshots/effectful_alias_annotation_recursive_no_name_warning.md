@@ -126,7 +126,7 @@ main! = |_| {
 			(e-block
 				(s-let
 					(p-underscore)
-					(e-call (constraint-fn-var 305)
+					(e-call (constraint-fn-var 298)
 						(e-lookup-local
 							(p-assign (ident "recurse")))
 						(e-num (value "0"))))
