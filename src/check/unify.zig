@@ -4142,9 +4142,6 @@ pub const DeferredConstraintCheck = struct {
     /// leave the obligation waiting (Invariant D). The checker stamps this
     /// where an obligation enters the deferred queue.
     owner_group_index: ?u32 = null,
-    /// The creating scheme, or null outside a scheme. Component derivations
-    /// inherit this identity instead of borrowing the draining frame's scheme.
-    owner_scheme_root: ?Var = null,
     /// For an obligation waiting on its target, the checker's waiting-context
     /// epoch when it was last re-deferred; while the epoch is unchanged the
     /// obligation would be re-deferred exactly as before.

@@ -9675,7 +9675,14 @@ scheme-owned argument, result, and literal variables even though traversing the
 root type alone cannot reach them.
 
 Constraint creation records the innermost prospective scheme root as the exact
-owner. At that root's generalization boundary,
+owner. The owner belongs to the relation, keyed by its constraint callable
+where the relation is minted or copied: resolving it (selecting and
+instantiating its method target, or deriving a structural comparison's
+component obligations) runs under that owner, whichever later unification
+grounds its receiver and whichever boundary's checking drains its queue entry.
+Work a relation causes after its owner's boundary has captured belongs to the
+innermost enclosing root still prospective, or to none. At the owner's
+generalization boundary,
 `captureSchemeDispatchRequirements` moves each still-open relation on an
 outer-rank receiver into the scheme. A receiver created at the boundary's own
 rank is undecided until generalization adjusts ranks—it escapes exactly when
