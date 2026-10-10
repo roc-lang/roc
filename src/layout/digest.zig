@@ -219,6 +219,16 @@ pub const DigestCache = struct {
         self.digests = null;
     }
 
+    /// Forget the memoized digests that depend on `idx`, whose layout changed
+    /// in place. A memoized digest reaches every layout it depends on through
+    /// `Digests.get`, which memoizes each of those layouts before the digest
+    /// that depends on them, so a memo without `idx` holds no digest that
+    /// depends on it and nothing needs forgetting.
+    pub fn invalidateLayout(self: *DigestCache, idx: Idx) void {
+        const digests = if (self.digests) |*memoized| memoized else return;
+        if (digests.memo.contains(idx)) self.invalidate();
+    }
+
     pub fn get(self: *DigestCache, store: *const Store, idx: Idx) Allocator.Error!Digest {
         while (!self.lock.tryLock()) std.atomic.spinLoopHint();
         defer self.lock.unlock();

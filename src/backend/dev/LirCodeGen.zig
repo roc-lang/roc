@@ -951,8 +951,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         erased_arg_desc_offsets: []const lir.LIR.ErasedArgDescOffset,
         erased_arg_desc_params: []const lir.LIR.ErasedArgDescParam,
 
-        /// Map from LIR local id to value location (register or stack slot)
-        local_locations: std.AutoHashMap(u32, ValueLocation),
+        /// Value location (register or stack slot) of every bound local,
+        /// direct-indexed by the local's key.
+        local_locations: collections.DenseMap(u32, ValueLocation),
         stack_alloca_slots: collections.DenseMap(LocalId, i32),
         /// Indexes `ensureStableLocationsForStmtLocals` plans through: borrowed
         /// from the worker running this generator when it lends them (see
@@ -1572,7 +1573,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .erased_arg_desc_params = erased_arg_desc_params,
                 .boxy_worker_procs = boxy_worker_procs,
                 .boxy_runtime_used = boxy_worker_procs.len != 0,
-                .local_locations = std.AutoHashMap(u32, ValueLocation).init(allocator),
+                .local_locations = collections.DenseMap(u32, ValueLocation).init(allocator),
                 .stack_alloca_slots = collections.DenseMap(LocalId, i32).init(allocator),
                 .local_location_undo = .empty,
                 .vector_local_by_reg = .initFill(null),
@@ -20495,7 +20496,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const saved_current_stmt_id = self.current_stmt_id;
             const saved_vector_local_by_reg = self.vector_local_by_reg;
             const saved_vector_local_mask = self.vector_local_mask;
-            var saved_local_locations = self.local_locations.clone() catch return error.OutOfMemory;
+            var saved_local_locations = try self.local_locations.clone();
             defer saved_local_locations.deinit();
             const saved_local_location_undo = try self.allocator.dupe(LocalLocationUndo, self.local_location_undo.items);
             defer {

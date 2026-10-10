@@ -15601,8 +15601,10 @@ const ProcBodyBuilder = struct {
     lambda_arg_worker_reps: []Plan.TypeRepId,
     frame_locals: std.ArrayList(LIR.LocalId),
     loop_stack: std.ArrayList(LoopContext),
-    binder_locals: []?LIR.LocalId,
-    binder_reps: []?Plan.TypeRepId,
+    /// Locals and storage representations bound for this body's pattern
+    /// binders, direct-indexed by binder id so a body touches only the
+    /// binders it binds rather than a column over every binder in the module.
+    binder_bindings: collections.DenseMap(checked.PatternBinderId, BinderBinding),
     descriptor_locals: []?LIR.LocalId,
     descriptor_local_reps: []?Plan.TypeRepId,
     descriptor_bound: []bool,
@@ -16064,8 +16066,7 @@ const ProcBodyBuilder = struct {
             .lambda_arg_worker_reps = &.{},
             .frame_locals = .empty,
             .loop_stack = .empty,
-            .binder_locals = &.{},
-            .binder_reps = &.{},
+            .binder_bindings = collections.DenseMap(checked.PatternBinderId, BinderBinding).init(parent.allocator),
             .descriptor_locals = &.{},
             .descriptor_local_reps = &.{},
             .descriptor_bound = &.{},
@@ -16172,8 +16173,7 @@ const ProcBodyBuilder = struct {
         self.runtime_initialized_descriptor_locals.deinit(self.parent.allocator);
         self.adapter_descriptor_entries.deinit(self.parent.allocator);
         self.descriptor_rep_bindings.deinit(self.parent.allocator);
-        self.parent.allocator.free(self.binder_reps);
-        self.parent.allocator.free(self.binder_locals);
+        self.binder_bindings.deinit();
         self.loop_stack.deinit(self.parent.allocator);
         self.parent.allocator.free(self.lambda_arg_worker_reps);
         self.parent.allocator.free(self.lambda_arg_binding_locals);
@@ -16183,7 +16183,6 @@ const ProcBodyBuilder = struct {
     }
 
     fn bindLambdaArgs(self: *ProcBodyBuilder, args: []const checked.CheckedPatternId) Allocator.Error!void {
-        try self.ensureBinderLocals();
         self.lambda_arg_patterns = args;
 
         const worker_args = self.parent.layout_plan.workerLayoutSlice(self.worker_layout.args);
@@ -16222,7 +16221,7 @@ const ProcBodyBuilder = struct {
 
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             if (pattern.data == .assign)
-                self.bindPatternToLocal(pattern_id, binding_local)
+                try self.bindPatternToLocal(pattern_id, binding_local)
             else
                 try self.reservePatternBindings(pattern_id);
         }
@@ -16236,7 +16235,6 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("stored function capture plan referenced a missing ConstStore function");
         }
         const fn_value = store_module.const_store.getFn(source.fn_id);
-        try self.ensureBinderLocals();
 
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
@@ -16248,7 +16246,7 @@ const ProcBodyBuilder = struct {
                 .ty = capture.ty,
             }) orelse boxyLowerInvariant("stored function capture type was missing from the boxy representation plan");
             const local = try self.addFrameBoundaryTargetLocalForRep(target_rep);
-            self.bindLocal(binder, local);
+            try self.bindLocal(binder, local);
             try self.stored_capture_initializers.append(self.parent.allocator, .{
                 .local = local,
                 .node = capture.value,
@@ -17465,11 +17463,16 @@ const ProcBodyBuilder = struct {
         chain: ExprChain,
     };
 
+    /// One pattern binder's bindings in a body; see `binder_bindings`.
+    const BinderBinding = struct {
+        local: ?LIR.LocalId = null,
+        rep: ?Plan.TypeRepId = null,
+    };
+
     /// The builder state a module-context swap replaced.
     const ModuleExprSaved = struct {
         module: ProcedureModuleView,
-        binder_locals: []?LIR.LocalId,
-        binder_reps: []?Plan.TypeRepId,
+        binder_bindings: collections.DenseMap(checked.PatternBinderId, BinderBinding),
         lambda_arg_patterns: []const checked.CheckedPatternId,
         lambda_arg_binding_locals: []LIR.LocalId,
         lambda_arg_worker_reps: []Plan.TypeRepId,
@@ -17699,11 +17702,9 @@ const ProcBodyBuilder = struct {
     }
 
     fn restoreModuleExprContext(self: *ProcBodyBuilder, saved: ModuleExprSaved) void {
-        self.parent.allocator.free(self.binder_reps);
-        self.parent.allocator.free(self.binder_locals);
+        self.binder_bindings.deinit();
         self.module = saved.module;
-        self.binder_locals = saved.binder_locals;
-        self.binder_reps = saved.binder_reps;
+        self.binder_bindings = saved.binder_bindings;
         self.lambda_arg_patterns = saved.lambda_arg_patterns;
         self.lambda_arg_binding_locals = saved.lambda_arg_binding_locals;
         self.lambda_arg_worker_reps = saved.lambda_arg_worker_reps;
@@ -19349,16 +19350,14 @@ const ProcBodyBuilder = struct {
         if (stage == 0) {
             task.saved = .{
                 .module = self.module,
-                .binder_locals = self.binder_locals,
-                .binder_reps = self.binder_reps,
+                .binder_bindings = self.binder_bindings,
                 .lambda_arg_patterns = self.lambda_arg_patterns,
                 .lambda_arg_binding_locals = self.lambda_arg_binding_locals,
                 .lambda_arg_worker_reps = self.lambda_arg_worker_reps,
                 .current_lambda = self.current_lambda,
             };
             self.module = task.expr_module;
-            self.binder_locals = &.{};
-            self.binder_reps = &.{};
+            self.binder_bindings = collections.DenseMap(checked.PatternBinderId, BinderBinding).init(self.parent.allocator);
             self.lambda_arg_patterns = &.{};
             self.lambda_arg_binding_locals = &.{};
             self.lambda_arg_worker_reps = &.{};
@@ -25763,11 +25762,11 @@ const ProcBodyBuilder = struct {
             },
             .pending, .numeral, .str_from_quote, .str_segment, .str, .bytes_literal, .lookup_external, .lookup_required, .list, .empty_list, .tuple, .match_, .if_, .call, .record, .empty_record, .block, .tag, .nominal, .zero_argument_tag, .closure, .lambda, .binop, .unary_minus, .unary_not, .field_access, .dispatch_call, .interpolation, .structural_eq, .structural_hash, .method_eq, .type_dispatch_call, .tuple_access, .runtime_error, .crash, .dbg, .expect_err, .expect, .ellipsis, .anno_only, .break_, .return_, .for_, .hosted_lambda, .run_low_level => null,
         } orelse return planned_rep;
-        const binder_index = @backingInt(binder);
-        if (binder_index >= self.binder_reps.len) {
-            boxyLowerInvariant("boxy direct call operand binder representation exceeded binder storage");
+        self.assertKnownBinder(binder);
+        if (self.binder_bindings.getPtrConst(binder)) |binding| {
+            if (binding.rep) |rep| return rep;
         }
-        return self.binder_reps[binder_index] orelse planned_rep;
+        return planned_rep;
     }
 
     fn lowerWorkerCallLocalsInto(
@@ -41888,15 +41887,6 @@ const ProcBodyBuilder = struct {
         return try self.mutableDescriptorLocalForValue(target);
     }
 
-    fn ensureBinderLocals(self: *ProcBodyBuilder) Allocator.Error!void {
-        if (self.binder_locals.len != 0) return;
-        self.binder_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.module.checked_bodies.patternBinderCount());
-        errdefer self.parent.allocator.free(self.binder_locals);
-        self.binder_reps = try self.parent.allocator.alloc(?Plan.TypeRepId, self.module.checked_bodies.patternBinderCount());
-        @memset(self.binder_locals, null);
-        @memset(self.binder_reps, null);
-    }
-
     fn ensureDescriptorLocals(self: *ProcBodyBuilder) Allocator.Error!void {
         if (self.descriptor_locals.len != 0) return;
         self.descriptor_locals = try self.parent.allocator.alloc(?LIR.LocalId, self.parent.plan.descriptors.items.len);
@@ -42486,7 +42476,6 @@ const ProcBodyBuilder = struct {
         defer pending.deinit(allocator);
         try pending.append(allocator, root);
         while (pending.pop()) |pattern_id| {
-            try self.ensureBinderLocals();
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const children_start = pending.items.len;
             switch (pattern.data) {
@@ -42572,7 +42561,6 @@ const ProcBodyBuilder = struct {
         defer pending.deinit(allocator);
         try pending.append(allocator, root);
         while (pending.pop()) |pattern_id| {
-            try self.ensureBinderLocals();
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const children_start = pending.items.len;
             switch (pattern.data) {
@@ -42634,7 +42622,6 @@ const ProcBodyBuilder = struct {
         while (pending.pop()) |item| {
             const pattern_id = item.pattern_id;
             const source_rep = item.source_rep;
-            try self.ensureBinderLocals();
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const pattern_rep = self.repForType(pattern.ty);
             if (pattern_rep == source_rep or
@@ -42850,7 +42837,6 @@ const ProcBodyBuilder = struct {
         defer pending.deinit(allocator);
         try pending.append(allocator, root);
         while (pending.pop()) |pattern_id| {
-            try self.ensureBinderLocals();
             const pattern = self.module.checked_bodies.pattern(pattern_id);
             const children_start = pending.items.len;
             switch (pattern.data) {
@@ -42897,10 +42883,10 @@ const ProcBodyBuilder = struct {
         }
     }
 
-    fn bindPatternToLocal(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId, local: LIR.LocalId) void {
+    fn bindPatternToLocal(self: *ProcBodyBuilder, pattern_id: checked.CheckedPatternId, local: LIR.LocalId) Allocator.Error!void {
         const pattern = self.module.checked_bodies.pattern(pattern_id);
         switch (pattern.data) {
-            .assign => |binder| self.bindLocal(binder, local),
+            .assign => |binder| try self.bindLocal(binder, local),
             .pending, .as, .applied_tag, .nominal, .record_destructure, .list, .tuple, .numeral_literal, .str_literal, .str_interpolation, .underscore, .runtime_error => boxyLowerInvariant("boxy pattern required pattern lowering before it was emitted"),
         }
     }
@@ -42915,7 +42901,7 @@ const ProcBodyBuilder = struct {
             try self.addFrameLocalForRepWithFreshDescriptor(rep)
         else
             try self.addFrameLocalForRep(rep);
-        self.bindLocal(binder, local);
+        try self.bindLocal(binder, local);
     }
 
     fn reserveMatchBinderLocal(
@@ -42932,7 +42918,7 @@ const ProcBodyBuilder = struct {
         rep: Plan.TypeRepId,
     ) Allocator.Error!void {
         const local = try self.addFrameLocalForRepWithFreshDescriptor(rep);
-        self.bindLocalForRep(binder, local, rep);
+        try self.bindLocalForRep(binder, local, rep);
     }
 
     fn reserveBinderLocalIfFresh(
@@ -42944,11 +42930,21 @@ const ProcBodyBuilder = struct {
         try self.reserveBinderLocal(binder, ty);
     }
 
-    fn bindLocal(self: *ProcBodyBuilder, binder: checked.PatternBinderId, local: LIR.LocalId) void {
-        const index = @backingInt(binder);
-        if (index >= self.binder_locals.len) boxyLowerInvariant("boxy pattern referenced a missing pattern binder");
-        if (self.binder_locals[index] != null) boxyLowerInvariant("boxy pattern bound the same pattern binder more than once");
-        self.binder_locals[index] = local;
+    /// Debug check that `binder` names one of the module's pattern binders.
+    fn assertKnownBinder(self: *const ProcBodyBuilder, binder: checked.PatternBinderId) void {
+        if (@backingInt(binder) >= self.module.checked_bodies.patternBinderCount()) {
+            boxyLowerInvariant("boxy pattern referenced a missing pattern binder");
+        }
+    }
+
+    fn bindLocal(self: *ProcBodyBuilder, binder: checked.PatternBinderId, local: LIR.LocalId) Allocator.Error!void {
+        self.assertKnownBinder(binder);
+        const entry = try self.binder_bindings.getOrPut(binder);
+        if (entry.found_existing and entry.value_ptr.local != null) {
+            boxyLowerInvariant("boxy pattern bound the same pattern binder more than once");
+        }
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        entry.value_ptr.local = local;
     }
 
     fn bindLocalForRep(
@@ -42956,23 +42952,23 @@ const ProcBodyBuilder = struct {
         binder: checked.PatternBinderId,
         local: LIR.LocalId,
         rep: Plan.TypeRepId,
-    ) void {
-        self.bindLocal(binder, local);
-        const index = @backingInt(binder);
-        if (index >= self.binder_reps.len) boxyLowerInvariant("boxy pattern referenced a missing binder representation");
-        self.binder_reps[index] = rep;
+    ) Allocator.Error!void {
+        try self.bindLocal(binder, local);
+        self.binder_bindings.getPtr(binder).?.rep = rep;
     }
 
     fn binderLocalOrNull(self: *const ProcBodyBuilder, binder: checked.PatternBinderId) ?LIR.LocalId {
-        const index = @backingInt(binder);
-        if (index >= self.binder_locals.len) boxyLowerInvariant("boxy pattern referenced a missing pattern binder");
-        return self.binder_locals[index];
+        self.assertKnownBinder(binder);
+        const binding = self.binder_bindings.getPtrConst(binder) orelse return null;
+        return binding.local;
     }
 
     fn binderStorageRep(self: *ProcBodyBuilder, binder: checked.PatternBinderId) Plan.TypeRepId {
-        const index = @backingInt(binder);
-        if (index >= self.binder_reps.len) boxyLowerInvariant("boxy binder representation lookup referenced a missing binder");
-        return self.binder_reps[index] orelse self.repForType(self.binderType(binder));
+        self.assertKnownBinder(binder);
+        if (self.binder_bindings.getPtrConst(binder)) |binding| {
+            if (binding.rep) |rep| return rep;
+        }
+        return self.repForType(self.binderType(binder));
     }
 
     fn binderIsReassigned(
@@ -42987,9 +42983,8 @@ const ProcBodyBuilder = struct {
     }
 
     fn localForBinder(self: *ProcBodyBuilder, binder: checked.PatternBinderId) LIR.LocalId {
-        const binder_index = @backingInt(binder);
-        if (binder_index >= self.binder_locals.len) boxyLowerInvariant("boxy local lookup referenced a missing binder local");
-        return self.binder_locals[binder_index] orelse
+        self.assertKnownBinder(binder);
+        return self.binderLocalOrNull(binder) orelse
             boxyLowerInvariant("boxy local lookup referenced a binder before it was bound");
     }
 

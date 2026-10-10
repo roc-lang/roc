@@ -372,6 +372,12 @@ pub const Interpreter = struct {
     /// the same number of locals can reuse the same array, whichever proc it
     /// belongs to, so this grows only with the frames this interpreter runs.
     free_frame_slots: std.ArrayListUnmanaged(std.ArrayListUnmanaged([]LocalSlot)) = .empty,
+    /// Direct slot lookup per entered procedure: a frame local's slot is
+    /// `slot_of[id - base]`, and ids outside the frame hold `FrameSlotIndex.none`.
+    /// An index is built the first time a procedure is entered and is checked
+    /// against the frame-local span it was built from, so a procedure whose
+    /// frame locals are rewritten gets a fresh index.
+    frame_slot_indexes: collections.DenseMap(LirProcSpecId, FrameSlotIndex),
     boxy_tables: BoxyTables,
     runtime_boxy_type_descs: std.ArrayList(*const LirProgram.BoxyTypeDesc) = .empty,
     runtime_boxy_desc_ids: std.AutoHashMapUnmanaged(usize, u32) = .empty,
@@ -585,6 +591,15 @@ pub const Interpreter = struct {
         desc: ?*const LirProgram.BoxyTypeDesc = null,
     };
 
+    /// See `frame_slot_indexes`.
+    const FrameSlotIndex = struct {
+        span: LIR.LocalSpan,
+        base: u32,
+        slot_of: []u32,
+
+        const none = std.math.maxInt(u32);
+    };
+
     const Frame = struct {
         proc_id: LirProcSpecId,
         ret_layout: layout_mod.Idx,
@@ -593,25 +608,20 @@ pub const Interpreter = struct {
         caller_drives: bool = false,
         /// The proc's frame locals, sorted by id; `slots` is parallel to it.
         locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+        /// The proc's slot index (see `frame_slot_indexes`).
+        slot_base: u32,
+        slot_of: []const u32,
         /// The proc's join points, sorted by id.
         join_points: LirStore.StoreSpanBorrow(LIR.JoinPoint, "join_points"),
         slots: []LocalSlot,
 
         fn findSlotIndex(self: *const Frame, local_id: LocalId) ?usize {
-            var low: usize = 0;
-            var high: usize = self.locals.len;
-            const target = @backingInt(local_id);
-            while (low < high) {
-                const mid = low + (high - low) / 2;
-                const current = @backingInt(GuardedList.at(self.locals, mid));
-                if (current == target) return mid;
-                if (current < target) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
-            return null;
+            const id = @backingInt(local_id);
+            if (id < self.slot_base) return null;
+            const offset = id - self.slot_base;
+            if (offset >= self.slot_of.len) return null;
+            const slot = self.slot_of[offset];
+            return if (slot == FrameSlotIndex.none) null else slot;
         }
 
         fn joinPoint(self: *const Frame, join_point_id: LIR.JoinPointId) ?LIR.JoinPoint {
@@ -912,6 +922,7 @@ pub const Interpreter = struct {
             .helper = LayoutHelper.init(layout_store),
             .descriptor_arena = base.SingleThreadArena.init(allocator),
             .arena = base.SingleThreadArena.init(allocator),
+            .frame_slot_indexes = collections.DenseMap(LirProcSpecId, FrameSlotIndex).init(allocator),
             .roc_env = roc_env,
             .roc_ops = RocOps{
                 .env = @ptrCast(roc_env),
@@ -985,6 +996,9 @@ pub const Interpreter = struct {
             pool.deinit(self.allocator);
         }
         self.free_frame_slots.deinit(self.allocator);
+        var slot_indexes = self.frame_slot_indexes.valueIterator();
+        while (slot_indexes.next()) |index| self.allocator.free(index.slot_of);
+        self.frame_slot_indexes.deinit();
     }
 
     /// Install the explicit immutable data image that backs LIR static-data
@@ -2582,13 +2596,47 @@ pub const Interpreter = struct {
             }
         }
 
+        const slot_index = try self.frameSlotIndex(proc_id, proc_spec.frame_locals, locals);
         return .{
             .proc_id = proc_id,
             .ret_layout = proc_spec.ret_layout,
             .locals = locals,
+            .slot_base = slot_index.base,
+            .slot_of = slot_index.slot_of,
             .join_points = self.store.getJoinPointSpan(proc_spec.join_points),
             .slots = slots,
         };
+    }
+
+    /// The slot index of `proc_id`, built from its sorted frame locals on
+    /// first entry and rebuilt when the frame-local span changes.
+    fn frameSlotIndex(
+        self: *LirInterpreter,
+        proc_id: LirProcSpecId,
+        span: LIR.LocalSpan,
+        locals: LirStore.StoreSpanBorrow(LocalId, "local_ids"),
+    ) Allocator.Error!FrameSlotIndex {
+        const entry = try self.frame_slot_indexes.getOrPut(proc_id);
+        if (entry.found_existing) {
+            if (entry.value_ptr.span.start == span.start and entry.value_ptr.span.len == span.len) return entry.value_ptr.*;
+            self.allocator.free(entry.value_ptr.slot_of);
+        }
+        // Until the index is built, the entry names a span no procedure has,
+        // so a failed build is rebuilt on the next entry.
+        entry.value_ptr.* = .{ .span = .{ .start = std.math.maxInt(u32), .len = std.math.maxInt(u32) }, .base = 0, .slot_of = &.{} };
+        if (locals.len == 0) {
+            entry.value_ptr.span = span;
+            return entry.value_ptr.*;
+        }
+        const base_id = @backingInt(GuardedList.at(locals, 0));
+        const last_id = @backingInt(GuardedList.at(locals, locals.len - 1));
+        const slot_of = try self.allocator.alloc(u32, @as(usize, last_id - base_id) + 1);
+        @memset(slot_of, FrameSlotIndex.none);
+        for (0..locals.len) |slot| {
+            slot_of[@backingInt(GuardedList.at(locals, slot)) - base_id] = @intCast(slot);
+        }
+        entry.value_ptr.* = .{ .span = span, .base = base_id, .slot_of = slot_of };
+        return entry.value_ptr.*;
     }
 
     fn acquireFrameSlots(self: *LirInterpreter, len: usize) Allocator.Error![]LocalSlot {

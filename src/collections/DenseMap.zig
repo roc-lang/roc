@@ -156,6 +156,25 @@ pub fn DenseMap(comptime K: type, comptime V: type) type {
             return .{ .key = key, .value = value };
         }
 
+        /// A copy holding the same entries, with its own storage.
+        pub fn clone(self: *const Self) Allocator.Error!Self {
+            var copy = Self.init(self.allocator);
+            errdefer copy.deinit();
+            try copy.sparse_chunks.ensureTotalCapacityPrecise(self.allocator, self.sparse_chunks.items.len);
+            for (self.sparse_chunks.items) |chunk| {
+                const copied: ?*SparseChunk = if (chunk) |source| blk: {
+                    const fresh = try self.allocator.create(SparseChunk);
+                    fresh.* = source.*;
+                    break :blk fresh;
+                } else null;
+                copy.sparse_chunks.appendAssumeCapacity(copied);
+            }
+            copy.chunk_base = self.chunk_base;
+            try copy.active_indices.appendSlice(self.allocator, self.active_indices.items);
+            try copy.values.appendSlice(self.allocator, self.values.items);
+            return copy;
+        }
+
         pub fn ensureTotalCapacity(self: *Self, expected_count: usize) Allocator.Error!void {
             try self.active_indices.ensureTotalCapacity(self.allocator, expected_count);
             try self.values.ensureTotalCapacity(self.allocator, expected_count);
