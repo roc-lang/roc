@@ -1,6 +1,7 @@
 const std = @import("std");
 const stack_budget = @import("src/base/stack_budget.zig");
 const builtin = @import("builtin");
+const downstream_package = @import("src/build/downstream_package.zig");
 const modules = @import("src/build/modules.zig");
 const glibc_stub_build = @import("src/build/glibc_stub.zig");
 const ci_steps = @import("src/build/ci_steps.zig");
@@ -5222,6 +5223,7 @@ pub fn build(b: *std.Build) void {
         const unsupported_step = buildChecksRun(b, "coverage-unsupported");
         run_coverage_parser_step.dependOn(&unsupported_step.step);
     }
+    build_ci_step.dependOn(downstream_package.create(b, hostToolTarget(b, .debug)));
     build_ci_step.dependOn(build_roc_step);
     build_ci_step.dependOn(build_check_tools_step);
     build_ci_step.dependOn(build_check_glue_abi_step);
@@ -5745,8 +5747,10 @@ fn collectTestRuns(
 fn discoverBuiltinRocFiles(b: *std.Build) ![]const []const u8 {
     const io = b.graph.io;
     b.dependOnDirectoryContents(b.path("src/build/roc"));
-    const builtin_roc_path = b.root.joinString(b.allocator, "src/build/roc") catch @panic("OOM");
-    var builtin_roc_dir = try std.Io.Dir.openDirAbsolute(io, builtin_roc_path, .{ .iterate = true });
+    // The build root is only absolute for the top-level package: a fetched
+    // dependency's root is relative to the consumer's, so open it through
+    // `b.root` rather than as an absolute path.
+    var builtin_roc_dir = try b.root.openDir(io, "src/build/roc", .{ .iterate = true });
     defer builtin_roc_dir.close(io);
 
     var roc_files = std.ArrayList([]const u8).empty;
