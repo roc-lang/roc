@@ -19152,6 +19152,18 @@ Dead `Box` lenders are the explicit exception already modeled by the
 consuming/borrowing `Box.unbox` operation pair; they do not extend a borrow
 through the mutation merely because control flow separates unbox and re-box.
 
+### Tag Union Descriptors at Branch Joins
+
+Boxy lowering reserves a tag-union `if`/`match` result's descriptor local
+before lowering any branch when its committed representation includes an
+aggregate payload. Tag constructors materialize descriptors for these payloads
+regardless of whether their types are concrete. The descriptor is carried
+through the join with the value, and every variant initializes it, including
+zero-payload tags and tags with zero-sized payloads. A descriptor introduced
+while lowering one branch must never retroactively become an uninitialized
+join parameter on another branch. The reservation follows the union's explicit
+payload representations, independently of branch visitation order.
+
 ### Field Takes From Dying Aggregates
 
 A payload read pays a retain whenever its result must be owned, because the
