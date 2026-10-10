@@ -132,9 +132,6 @@ already diverged in behavior, not just in text.
   25.1k) that force helpers to be copied rather than shared; 53 and 17
   duplicated method names respectively, with divergence already
   present in both.
-- [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
-  the lowerer records erased ownership and the certifier re-derives it
-  with a copy of the rule; `.boxy` has no producer at all.
 
 Single-source primitive tables have landed (the batch's first
 project): `CheckedPrimitive`'s four post-check mappings—storage layout,
@@ -180,6 +177,20 @@ field dismantling's copy had not, so a field projection passed into a
 fallible call under such a `match` never got a restitution receipt. The
 shared walk also admits joins and aliases only before the discriminant
 read, which is what design.md states and what the certifier accepts.
+
+Erased-ownership single sourcing has landed, smaller than filed. The
+lowerer's decision was already LIR data—`assign_call_erased.reuse_source`
+—and the certifier's half of the rule had already moved into
+`lir/erased_owner.zig`, where it independently verifies that field
+against the emitted `assign_ref` chain (the check a certifier should make,
+so it stays; a per-local side table on `LirStore` would only have been
+re-checked by that same walk). What remained was the rule itself written
+twice: the lowerer's `transparentErasedOwnershipSource` and the LIR
+module's `transparentSource`. The edge now lives once in `lir_core`
+(`ErasedOwnerEdge`), every `assign_ref` the direct lowerer emits goes
+through `addAssignRef` so its target always gets recorded provenance, and
+source-text lints pin both. `.boxy` has no gap: it emits no owned erased
+calls, so it has no reuse source to choose, and a lint keeps it that way.
 
 One correction to the batch, from implementing it. The audit filed a
 `spec-constr-single-cloner` project on the claim that Monotype Lifted's

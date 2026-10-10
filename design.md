@@ -20219,10 +20219,13 @@ be an outer nominal or zero-discriminant tag wrapper only when the emitted
 `assign_ref` chain proves exact pointer representation at every edge. Debug LIR
 certification derives that exact allocation identity from those explicit
 producer operations and rejects a call that would pass one allocation to the
-machine ABI while consuming another in ARC. That resolution lives in
-`lir/erased_owner.zig`; a LIR transform that rewrites the definitions on such a
-chain, as join scalarization does when it turns field reads into aliases,
-re-resolves the reuse sources of the procedures it changes with it.
+machine ABI while consuming another in ARC. The representation-transparent
+`assign_ref` edge has one definition, `lir_core`'s `ErasedOwnerEdge`: the direct
+LIR lowerer records each emitted `assign_ref` target's provenance from it, and
+the resolution in `lir/erased_owner.zig` follows it. A LIR transform that
+rewrites the definitions on such a chain, as join scalarization does when it
+turns field reads into aliases, re-resolves the reuse sources of the procedures
+it changes with that resolution. Boxy lowering emits no owned erased calls.
 
 The erased ABI's capture pointer addresses the interior of the callable passed
 as the reuse ownership input. LLVM must not mark either parameter `noalias`:
