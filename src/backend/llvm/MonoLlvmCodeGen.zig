@@ -8670,8 +8670,11 @@ pub const MonoLlvmCodeGen = struct {
             }
         }
 
-        const symbol_name = try lir.Program.staticDataSymbolName(self.allocator, id);
-        defer self.allocator.free(symbol_name);
+        // Slot ordinals are consumer-local; only the producer's declaration
+        // identifies the same readonly value across independently linked images.
+        const row = self.static_data_export_rows.get(raw_id) orelse
+            std.debug.panic("LLVM static value {d} has no producer export", .{raw_id});
+        const symbol_name = self.static_data_exports[row].symbol_name;
         const value = (try self.staticDataSymbol(symbol_name)).toValue();
         try self.static_data_globals.put(raw_id, value);
         return value;
@@ -14074,6 +14077,36 @@ test "static-data slots with constant images are internal constants and function
     const callable = builder.variables.items[builder.variables.items.len - 1];
     try std.testing.expectEqual(.external, callable.global.ptrConst(&builder).linkage);
     try std.testing.expect(callable.init == .no_init);
+}
+
+test "static-data external references preserve producer symbols independently of slot ordinals" {
+    const allocator = std.testing.allocator;
+    var store = lir.LirStore.init(allocator);
+    defer store.deinit();
+    const target = try std.zig.system.resolveTargetQuery(std.testing.io, .{ .cpu_arch = .aarch64, .os_tag = .macos });
+    var codegen = MonoLlvmCodeGen.initForLinkedObject(allocator, &store, &.{}, &.{}, &.{}, target);
+    defer codegen.deinit();
+    const relocations = [_]lir.Program.StaticDataRelocation{.{
+        .offset = 0,
+        .target_symbol_name = "roc__p_callable",
+        .kind = .function_pointer,
+    }};
+    const exports = [_]lir.Program.StaticDataExport{.{
+        .value_id = @enumFromInt(41),
+        .symbol_name = "roc__sv_declared_callable",
+        .bytes = &([_]u8{0} ** 8),
+        .alignment = 8,
+        .relocations = &relocations,
+    }};
+    try codegen.setStaticDataExports(&exports);
+    var builder = try codegen.createBuilder("producer_static_symbols");
+    defer builder.deinit();
+    codegen.builder = &builder;
+    defer codegen.builder = null;
+
+    _ = try codegen.staticDataGlobal(exports[0].value_id.?, 8);
+    try std.testing.expect(codegen.static_data_symbols.contains(exports[0].symbol_name));
+    try std.testing.expect(!codegen.static_data_symbols.contains("roc__d41"));
 }
 
 test "frozen relocation offsets are bounded before host indexing for either target width" {
