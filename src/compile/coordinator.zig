@@ -1231,6 +1231,12 @@ pub const Coordinator = struct {
 
     /// Prevents nested or concurrent use of the shared worker result channel.
     post_check_session_active: std.atomic.Value(bool),
+    /// The work the active post-check session's submitter was doing when the
+    /// session began, if it recorded any. Workers record it while running the
+    /// session's tasks, so a crash on a worker names the stage it was working
+    /// for. Written before any task is sent, so the task channel orders it
+    /// before worker reads.
+    post_check_session_frame: ?base.ice_context.Frame = null,
     /// Set only after the frontend coordinator loop has drained every task and
     /// result. Post-check work shares those channels and cannot start earlier.
     frontend_complete: bool,
@@ -1386,6 +1392,7 @@ pub const Coordinator = struct {
             .shutting_down = std.atomic.Value(bool).init(false),
             .worker_oom = std.atomic.Value(bool).init(false),
             .post_check_session_active = std.atomic.Value(bool).init(false),
+            .post_check_session_frame = null,
             .frontend_complete = false,
             .total_remaining = 0,
             .app_package_name = null,
@@ -3106,12 +3113,24 @@ pub const Coordinator = struct {
 
     /// Execute a task inline with explicit worker allocators.
     fn executeTaskInline(self: *Coordinator, task: WorkerTask, allocators: WorkerTaskAllocators) Allocator.Error!WorkerResult {
-        return switch (task) {
-            .parse => |t| self.executeParse(t, allocators),
-            .canonicalize => |t| self.executeCanonicalize(t, allocators),
-            .type_check => |t| self.executeTypeCheck(t, allocators),
+        switch (task) {
+            .parse => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .parse, .module_name = t.module_name, .module_path = t.path });
+                defer ice.leave();
+                return self.executeParse(t, allocators);
+            },
+            .canonicalize => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .canonicalize, .module_name = t.module_name, .module_path = t.path });
+                defer ice.leave();
+                return self.executeCanonicalize(t, allocators);
+            },
+            .type_check => |t| {
+                const ice = base.ice_context.enter(.{ .phase = .type_check, .module_name = t.module_name, .module_path = t.path });
+                defer ice.leave();
+                return self.executeTypeCheck(t, allocators);
+            },
             .post_check => unreachable,
-        };
+        }
     }
 
     /// A stage-independent view over the persistent compilation workers.
@@ -3145,6 +3164,7 @@ pub const Coordinator = struct {
             base.invariant("{s}", .{"compiler coordinator started overlapping post-check sessions"});
         }
         std.debug.assert(self.inline_post_check_completion == null);
+        self.post_check_session_frame = base.ice_context.innermost();
     }
 
     fn submitPostCheckTask(context: *anyopaque, task: post_check_executor.Task) Allocator.Error!void {
@@ -6128,6 +6148,7 @@ pub const Coordinator = struct {
     /// Worker thread main function
     fn workerThread(self: *Coordinator, worker_id: usize) void {
         _ = base.stack_overflow.installForCurrentThread();
+        base.ice_context.setThreadRole(.{ .name = "compile worker", .index = worker_id });
 
         // Each worker has its own allocators for thread safety.
         // - gpa: smp_allocator for long-lived data (ModuleEnv, source)
@@ -6148,6 +6169,8 @@ pub const Coordinator = struct {
 
             if (t == .post_check) {
                 const task = t.post_check;
+                const ice = if (self.post_check_session_frame) |frame| base.ice_context.enter(frame) else null;
+                defer if (ice) |guard| guard.leave();
                 const completion: WorkerResult = .{ .post_check = .{
                     .id = task.id,
                     .worker_id = worker_id,

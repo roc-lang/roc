@@ -2471,6 +2471,8 @@ pub const MonoLlvmCodeGen = struct {
     }
 
     fn compileProcBody(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
+        const ice = Base.ice_context.enter(.{ .phase = .codegen, .stage = "llvm backend", .proc = self.store.iceContextProc(proc_id) });
+        defer ice.leave();
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;

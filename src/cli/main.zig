@@ -32,6 +32,16 @@ pub const std_options: std.Options = .{
     // signal-safe handler runs and we get stable exit codes (134/136/139).
     .enable_segfault_handler = builtin.os.tag != .windows and std.debug.default_enable_segfault_handler,
 };
+/// Every compiler panic prints what the panicking thread was doing and the
+/// command that reproduces it before the default panic message and stack
+/// trace (see `base.ice_context`).
+pub const panic = std.debug.FullPanic(panicWithIceContext);
+
+fn panicWithIceContext(msg: []const u8, first_trace_addr: ?usize) noreturn {
+    base.ice_context.reportPanicToStderr();
+    std.debug.defaultPanic(msg, first_trace_addr orelse @returnAddress());
+}
+
 var debug_threaded_io_instance: std.Io.Threaded = .init_single_threaded;
 /// Override the default debug IO so that `std.Options.debug_io` uses a properly
 /// initialized Threaded instance with a real allocator. Without this, the default
@@ -1434,6 +1444,18 @@ pub fn main(init: std.process.Init) Allocator.Error!void {
         try args_list.append(arena, arg);
     }
     const args = args_list.items;
+
+    base.ice_context.setThreadRole(.{ .name = "main" });
+    base.ice_context.setInvocation(args);
+    defer base.ice_context.clearInvocation();
+    if (comptime base.ice_context.forced_ice_supported) {
+        if (init.environ_map.get(base.ice_context.forced_ice_env_var)) |spec| {
+            if (!base.ice_context.armForcedIce(spec)) {
+                std.debug.print("{s}={s} names no compiler phase\n", .{ base.ice_context.forced_ice_env_var, spec });
+                std.process.exit(1);
+            }
+        }
+    }
 
     mainArgs(gpa, arena, args, init.io) catch |err| {
         // Handle OutOfMemory specially - it may not have been printed

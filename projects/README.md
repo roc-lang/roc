@@ -102,10 +102,15 @@ independent of the earlier batches and of each other:
   every `unreachable` under `src/` carries a same-line rationale (or
   is converted to a checked invariant), enforced forever by a CI lint
   with a shrinking allowlist.
-- [small/ice-crash-context.md](small/ice-crash-context.md)—
-  a panic handler that prints what the compiler was doing (phase,
-  module, def) plus a repro command before the stack trace, built from
-  thread-local context frames pushed at existing phase boundaries.
+
+The ICE crash-context project from this batch has landed (design.md
+"Crash Reports"). Corrections: the module is `base.ice_context`, since
+`eval` already has an unrelated `crash_context`; the repro command is the
+process's own command line and working directory rather than one derived
+from the crashing phase, so it reproduces imported-module and run-command
+crashes too; and frames name the module per front-end task, the stage per
+post-check step, and the procedure per codegen or interpreter unit, not
+individual defs.
 
 A fifth batch (2026-08-24) came out of a duplication audit of the
 stages between type checking and code generation—Monotype, Monotype

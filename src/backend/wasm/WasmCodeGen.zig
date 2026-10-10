@@ -6932,6 +6932,8 @@ fn registerProcSpec(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) 
 
 /// Compile a proc body. The proc must already be registered via registerProcSpec.
 fn compileProcSpecBody(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirProcSpec) Allocator.Error!void {
+    const ice = base.ice_context.enter(.{ .phase = .codegen, .stage = "wasm backend", .proc = self.store.iceContextProc(proc_id) });
+    defer ice.leave();
     const key: u32 = @backingInt(proc_id);
 
     // Get the pre-registered func_idx (must exist—registerProcSpec runs in pass 1)

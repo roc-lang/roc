@@ -22201,6 +22201,34 @@ test requirement, not a release-build compiler pass.
 
 If a boundary check fails, the compiler stops as a compiler bug.
 
+### Crash Reports
+
+When the compiler stops as a compiler bug, its report says what it was doing.
+`src/base/ice_context.zig` keeps a fixed-depth, thread-local stack of frames;
+each phase pushes one frame at its unit-of-work boundary and pops it with a
+guard whose `leave` asserts LIFO balance:
+
+- the coordinator's parse, canonicalize and type-check task for one module
+  (module name and path);
+- each post-check stage in `checked_pipeline.zig` (stage name). A worker
+  running a post-check executor task pushes a copy of the submitting thread's
+  innermost frame, captured when the session begins, when it has one;
+- each backend's per-procedure code generation (backend and procedure id);
+- each interpreter `eval` in the compiler's in-process host (root procedure
+  id). Platform builds of the interpreter touch no thread-local storage, so
+  they push nothing.
+
+Frames borrow their strings and resolve procedure names through the LIR store
+only while a report is printed, so a push is a small struct copy with no
+allocation, locking or cross-thread traffic. The CLI's `pub const panic`
+prints the panicking thread's frames, its role (main or compile worker) and
+the process's command line as the reproducing command, then delegates to the
+default panic handler for the message and stack trace. The compiler's
+fatal-signal handlers embed the same context without resolving names. A Debug
+compiler started with `ROC_DEBUG_FORCE_ICE=<phase>[:<module or stage>]`
+panics on purpose when a matching frame is pushed; CLI tests use it to pin
+each phase's report.
+
 
 ## Integer SIMD Builtins
 

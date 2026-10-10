@@ -253,7 +253,15 @@ const ExitExpectation = union(enum) {
     failure,
     code: u32,
     not_panic,
+    /// The process panicked: it aborted or exited with the abort status.
+    panic,
     any,
+};
+
+/// An environment variable a command case sets for its child process.
+const EnvVar = struct {
+    name: []const u8,
+    value: []const u8,
 };
 
 const FilePathMode = enum {
@@ -267,6 +275,7 @@ const CommandCase = struct {
     app_args: []const []const u8 = &.{},
     file_path_mode: FilePathMode = .absolute,
     stdin: ?[]const u8 = null,
+    env: []const EnvVar = &.{},
     exit: ExitExpectation = .success,
     stdout_exact: ?[]const u8 = null,
     stderr_exact: ?[]const u8 = null,
@@ -536,6 +545,10 @@ const Skip = union(enum) {
     always: []const u8,
     windows: []const u8,
 };
+
+/// The roc binary under test is built in this runner's optimize mode, and
+/// only a Debug compiler honors ROC_DEBUG_FORCE_ICE.
+const forced_ice_skip: Skip = if (builtin.mode == .debug) .never else .{ .always = "ROC_DEBUG_FORCE_ICE requires a Debug compiler" };
 
 /// A single CLI test operation—one matrix cell of work.
 const CliCase = struct {
@@ -2498,6 +2511,15 @@ const subcommand_cases = [_]CliCase{
     // Repro for https://github.com/roc-lang/roc/issues/10093: a non-regular
     // recursive nominal payload must report the undeclared type variable.
     .{ .id = 0, .suite = .subcommands, .name = "issue 10093: invalid matching nominal type module reports a diagnostic", .timeout_ms = 10_000, .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/issue_10093_matching_type_module/T.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "undeclared type variable" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "checked artifact invariant violated" }, .{ .stream = .stderr, .text = "invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // A Debug compiler started with ROC_DEBUG_FORCE_ICE panics on purpose in
+    // the named phase; its crash report names that phase's work, the thread,
+    // and the reproducing command ahead of the panic message.
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: parse names the module on the main thread", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "parse:Main" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "Roc hit an internal compiler error." }, .{ .stream = .stderr, .text = " (main), outermost first:\n  parse         module Main (" }, .{ .stream = .stderr, .text = "\nReproduce with:\n  cd " }, .{ .stream = .stderr, .text = " check -j1 --no-cache " }, .{ .stream = .stderr, .text = "forced internal compiler error requested by ROC_DEBUG_FORCE_ICE=parse:Main" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: canonicalize names the imported module", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j1", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "canonicalize:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "outermost first:\n  canonicalize  module Helper (" }, .{ .stream = .stderr, .text = "ice_context/Helper.roc)\n" }, .{ .stream = .stderr, .text = "\nReproduce with:\n" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: type-check on a worker names only that worker's module", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "check", "-j4", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "type_check:Helper" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = " (compile worker " }, .{ .stream = .stderr, .text = "outermost first:\n  type-check    module Helper (" }, .{ .stream = .stderr, .text = "ice_context/Helper.roc)\n\nReproduce with:\n" } }, .not_contains = &.{.{ .stream = .stderr, .text = "module Main" }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: post-check names the stage", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "post_check:lir_passes" }}, .exit = .panic, .contains = &.{ .{ .stream = .stderr, .text = "\n  post-check    lir_passes\n" }, .{ .stream = .stderr, .text = " --opt=interpreter --no-cache " } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: codegen names the backend and proc", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "codegen" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  codegen       dev backend, proc " }} } } },
+    .{ .id = 0, .suite = .subcommands, .name = "ICE report: interpret names the proc", .skip = forced_ice_skip, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/ice_context/Main.roc", .env = &.{.{ .name = "ROC_DEBUG_FORCE_ICE", .value = "interpret" }}, .exit = .panic, .contains = &.{.{ .stream = .stderr, .text = "\n  interpret     proc " }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "annotation-only decls in a non-platform type module are not flagged as effectful", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/AnnoOnlyNotEffectful.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{.{ .stream = .stderr, .text = "effectful function name" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10766: calling an annotation-only declaration reports it instead of crashing post-check", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue10766CalledAnnotationOnly.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "instantiation unified a primitive type with a non-primitive type" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10766: referencing an annotation-only value reports it instead of crashing post-check", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/cli/Issue10766AnnotationOnlyValue.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{.{ .stream = .stderr, .text = "declaration has no value" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "instantiation function read had a non-function node" }, .{ .stream = .stderr, .text = "reached unreachable code" } } } } },
@@ -4295,6 +4317,10 @@ fn runCommandCase(
     var env = buildCaseEnv(io, allocator) catch
         return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to create test environment" };
     defer env.deinit(allocator);
+    for (command.env) |entry| {
+        env.env_map.put(entry.name, entry.value) catch
+            return .{ .status = .infra_error, .phase = .setup, .duration_ns = timer.read(), .message = "failed to set case environment variable" };
+    }
 
     var run_timer = harness.Timer.start() catch return .{ .status = .infra_error, .phase = .run, .duration_ns = timer.read(), .message = "no clock" };
     const child_timeout_ms = childCommandTimeoutMs(&timer, timeout_ms) orelse
@@ -4497,6 +4523,11 @@ fn checkExitExpectation(
             const did_panic = result.term == .signal or
                 (result.term == .exited and result.term.exited == 134);
             return if (did_panic) "process panicked or aborted" else null;
+        },
+        .panic => {
+            const did_panic = result.term == .signal or
+                (result.term == .exited and result.term.exited == 134);
+            return if (did_panic) null else "expected the process to panic";
         },
         .any => null,
     };

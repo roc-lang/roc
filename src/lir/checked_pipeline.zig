@@ -571,21 +571,31 @@ const TimingPhase = enum {
     boxy_lower,
 };
 
-const PipelineTimingScope = struct {
+/// One post-check stage in progress: records the stage for crash reports and,
+/// when timing is enabled, its duration. `end` is idempotent so a stage can end
+/// explicitly and still be covered by a `defer` on error paths.
+const PipelineStageScope = struct {
     timing: ?*Timing = null,
     started_ns: i64 = 0,
-    phase: TimingPhase = undefined,
+    phase: TimingPhase,
+    ice: ?base.ice_context.Guard,
 
-    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineTimingScope {
-        const active = timing orelse return .{};
+    fn begin(timing: ?*Timing, phase: TimingPhase) PipelineStageScope {
+        const ice = base.ice_context.enter(.{ .phase = .post_check, .stage = @tagName(phase) });
+        const active = timing orelse return .{ .phase = phase, .ice = ice };
         return .{
             .timing = active,
             .started_ns = active.start(),
             .phase = phase,
+            .ice = ice,
         };
     }
 
-    fn end(self: *PipelineTimingScope) void {
+    fn end(self: *PipelineStageScope) void {
+        if (self.ice) |ice| {
+            ice.leave();
+            self.ice = null;
+        }
         const timing = self.timing orelse return;
         timing.finish(self.started_ns, self.phase);
         self.timing = null;
@@ -1314,7 +1324,8 @@ pub fn prepareCheckedModulesMonotype(
 
     const test_plan_metadata = try allocator.dupe(postcheck.Common.RootTestPlanMetadata, roots.test_plan_metadata);
     errdefer allocator.free(test_plan_metadata);
-    const monotype_started_ns = if (target.timing) |timing| timing.start() else 0;
+    var monotype_scope = PipelineStageScope.begin(target.timing, .monotype);
+    defer monotype_scope.end();
     var monotype_timing: ?postcheck.Monotype.Lower.Timing = if (target.timing) |timing|
         postcheck.Monotype.Lower.Timing.init(timing.std_io)
     else
@@ -1327,11 +1338,13 @@ pub fn prepareCheckedModulesMonotype(
         detail.body_work_timing_enabled = target.timing.?.detailed_monotype_body;
     }
     const mono = monotype: {
-        defer if (target.timing) |timing| {
-            timing.finish(monotype_started_ns, .monotype);
-            if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
-            if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
-        };
+        defer {
+            monotype_scope.end();
+            if (target.timing) |timing| {
+                if (monotype_timing) |*detail| timing.addMonotypeSnapshot(detail.snapshot());
+                if (monotype_diagnostics) |diagnostics| timing.addMonotypeDiagnostics(diagnostics);
+            }
+        }
         if (target.work_metrics) |metrics| metrics.monotype_runs += 1;
         break :monotype try postcheck.Monotype.Lower.run(
             allocator,
@@ -1449,7 +1462,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     var mono_owned = true;
     errdefer if (mono_owned) mono.deinit();
 
-    var lift_timing_scope = PipelineTimingScope.begin(target.timing, .lift);
+    var lift_timing_scope = PipelineStageScope.begin(target.timing, .lift);
     defer lift_timing_scope.end();
 
     // Each post-check transform consumes its input even when it returns an
@@ -1470,15 +1483,16 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
         .metrics_out = spec_constr_metrics,
     };
     var procedure_usage = if (target.inline_mode != .none) blk: {
-        var spec_constr_timing_scope = PipelineTimingScope.begin(target.timing, .spec_constr);
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
         defer spec_constr_timing_scope.end();
         const usage = try postcheck.MonotypeLifted.SpecConstr.runAndCollectProcedureUsageWithOptions(allocator, &lifted, target.spec_constr_clone_inlining, spec_constr_options);
         spec_constr_timing_scope.end();
         break :blk usage;
     } else blk: {
-        const spec_constr_started_ns = if (target.timing) |timing| timing.start() else 0;
+        var spec_constr_timing_scope = PipelineStageScope.begin(target.timing, .spec_constr);
+        defer spec_constr_timing_scope.end();
         try postcheck.MonotypeLifted.SpecConstr.runIteratorFusionWithOptions(allocator, &lifted, spec_constr_options);
-        if (target.timing) |timing| timing.finish(spec_constr_started_ns, .spec_constr);
+        spec_constr_timing_scope.end();
         break :blk postcheck.MonotypeLifted.SpecConstr.OwnedProcedureUsage.empty(allocator);
     };
     defer procedure_usage.deinit();
@@ -1488,7 +1502,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     if (target.lifted_expr_count_out) |slot| slot.* = lifted_expr_count;
     if (SpecCensus.enabled()) SpecCensus.runLifted(&lifted);
 
-    var lambda_solve_timing_scope = PipelineTimingScope.begin(target.timing, .lambda_solve);
+    var lambda_solve_timing_scope = PipelineStageScope.begin(target.timing, .lambda_solve);
     defer lambda_solve_timing_scope.end();
     const lifted_input = lifted;
     lifted_owned = false;
@@ -1497,7 +1511,7 @@ pub fn prepareMonotypeToSolved(prepared: PreparedMonotype) Allocator.Error!Prepa
     errdefer solved.deinit();
     lambda_solve_timing_scope.end();
 
-    var inline_plan_timing_scope = PipelineTimingScope.begin(
+    var inline_plan_timing_scope = PipelineStageScope.begin(
         if (target.inline_mode != .none) target.timing else null,
         .inline_plan,
     );
@@ -1642,7 +1656,7 @@ fn generateConsumerLir(prepared: *PreparedSolved, consumer: Consumer) LowerResou
     }
     if (target.work_metrics) |metrics| metrics.lir_continuations += 1;
     if (target.lifted_expr_count_out) |slot| slot.* = prepared.lifted_expr_count;
-    var lir_gen_timing_scope = PipelineTimingScope.begin(target.timing, .lir_gen);
+    var lir_gen_timing_scope = PipelineStageScope.begin(target.timing, .lir_gen);
     defer lir_gen_timing_scope.end();
     var local_parallel_metrics: SolvedLirParallelMetrics = .{};
     const parallel_metrics = solvedLirMetricsOutput(target, &local_parallel_metrics);
@@ -1716,7 +1730,7 @@ fn finishLoweredOutput(
     frozen: *?LirProgram.FrozenStaticData,
 ) LowerResourceError!LoweredProgram {
     verifyArithmeticBoundary(&lowered.lir_result.store, false);
-    var lir_passes_timing_scope = PipelineTimingScope.begin(target.timing, .lir_passes);
+    var lir_passes_timing_scope = PipelineStageScope.begin(target.timing, .lir_passes);
     defer lir_passes_timing_scope.end();
     var local_pass_metrics: LirPassParallelMetrics = .{};
     var pass_target = target;
@@ -1783,7 +1797,7 @@ fn finishLoweredOutput(
     }
     lir_passes_timing_scope.end();
 
-    var arc_timing_scope = PipelineTimingScope.begin(target.timing, .arc);
+    var arc_timing_scope = PipelineStageScope.begin(target.timing, .arc);
     defer arc_timing_scope.end();
     var local_arc_metrics: ArcParallelMetrics = .{};
     const arc_metrics = arcMetricsOutput(target, &local_arc_metrics);
@@ -1885,7 +1899,7 @@ pub const PreparedBoxy = struct {
 
     pub fn lower(self: *const PreparedBoxy, target: TargetConfig) LowerResourceError!LoweredProgram {
         std.debug.assert(target.specialization_strategy == .boxy);
-        var scope = PipelineTimingScope.begin(target.timing, .boxy_lower);
+        var scope = PipelineStageScope.begin(target.timing, .boxy_lower);
         defer scope.end();
         var lowered = try postcheck.Boxy.Lower.run(
             self.allocator,
@@ -1922,7 +1936,7 @@ pub fn prepareBoxyCheckedModules(
     errdefer allocator.free(layout_requests);
     const static_data_requests = try collectStaticDataRequests(allocator, modules.root.module, roots.static_data_requests, roots.include_provided_data_exports);
     errdefer allocator.free(static_data_requests);
-    var scope = PipelineTimingScope.begin(target.timing, .boxy_plan);
+    var scope = PipelineStageScope.begin(target.timing, .boxy_plan);
     defer scope.end();
     const plan = try postcheck.Boxy.Plan.analyzeProgram(allocator, .{
         .root_module = modules.root,

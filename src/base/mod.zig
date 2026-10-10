@@ -34,6 +34,9 @@ pub const ConcurrentU64 = @import("ConcurrentU64.zig").ConcurrentU64;
 pub const SmallStringInterner = @import("SmallStringInterner.zig");
 
 pub const invariant = @import("invariant.zig").invariant;
+/// Per-thread record of in-flight compiler work, printed when the compiler
+/// crashes.
+pub const ice_context = @import("ice_context.zig");
 /// The exhaustive classification of each phase-state field against the
 /// phase's definitional frames.
 pub const state_discipline = @import("state_discipline.zig");
@@ -188,6 +191,7 @@ test "base tests" {
     std.testing.refAllDecls(@import("ConcurrentU64.zig"));
     std.testing.refAllDecls(@import("DataSpan.zig"));
     std.testing.refAllDecls(@import("Ident.zig"));
+    std.testing.refAllDecls(@import("ice_context.zig"));
     std.testing.refAllDecls(@import("InternedBytes.zig"));
     std.testing.refAllDecls(@import("memory_fault.zig"));
     std.testing.refAllDecls(@import("module_identity.zig"));
