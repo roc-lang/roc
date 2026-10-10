@@ -597,6 +597,40 @@ sub check_iterator_lowering_uses_explicit_ids {
 
 check_iterator_lowering_uses_explicit_ids();
 
+# Lift capture analysis has exactly one free-variable walk: `CaptureWalk` in
+# lift.zig. The capture dependency graph and the Lifter's inline-lambda and
+# operand fill-in collection supply only its actions, so binder scoping, the
+# traversal, and which locals count as free-variable occurrences cannot drift
+# between the initial lift and the post-lift re-solve. Any of those concerns
+# appearing outside `CaptureWalk` is a second walk.
+sub check_single_lift_capture_walk {
+    my $rel = 'src/postcheck/monotype_lifted/lift.zig';
+    my $path = File::Spec->catfile($ROOT, $rel);
+    open my $fh, '<', $path or die "failed to read $rel: $!\n";
+
+    my $top_level = '';
+    my $line_no = 0;
+    while (my $line = <$fh>) {
+        ++$line_no;
+        chomp $line;
+        my $code = zig_code_line($line);
+        if ($code =~ /^(?:pub\s+)?(?:fn|const|var)\s+([A-Za-z0-9_]+)\b/ || $code =~ /^test\b/) {
+            $top_level = defined $1 ? $1 : 'test';
+        }
+        next if $top_level eq 'CaptureWalk' || $top_level eq 'test';
+        if ($code =~ /\bforEachBoundLocal\b/ ||
+            $code =~ /\bjoin_point\.retained\b/ ||
+            $code =~ /\bpayload_switch\.payload\b/ ||
+            $code =~ /\bfn\s+push(?:Expr|Stmt)Work\b/) {
+            push @violations, "$rel:$line_no: second-lift-capture-walk: $line";
+        }
+    }
+
+    close $fh or die "failed to close $rel: $!\n";
+}
+
+check_single_lift_capture_walk();
+
 if (@violations) {
     print "Post-check architecture violations found:\n";
     print "$_\n" for @violations;

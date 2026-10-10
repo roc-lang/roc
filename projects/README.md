@@ -54,10 +54,11 @@ run `CaptureDependencyGraph.solve`, so there is one fixpoint driver, and the
 stale-id override it worried about is gone: operand keys join to slots by
 their explicit namespace. The `if_initialized_payload` payload is a read of
 the parser loop's payload parameter, not a binder, so the capture arms were
-already right and now say so. One residue remains: the Lifter computes
-inline-lambda captures and finalizes operands with the `CaptureSet` walker,
-while everything else uses the graph builder's walker, so the free-variable
-walk itself still exists twice.
+already right and now say so. The free-variable walk itself had also
+existed twice (the graph builder's and the Lifter's `CaptureSet`, used for
+inline lambdas and operand fill-in); both now run the one `CaptureWalk`,
+supplying only their actions, and `run-check-postcheck-architecture` rejects
+a second walk in `lift.zig`.
 
 The Lambda Mono oracle-fidelity project has landed. Its dead `Queue` had
 already been deleted. The materializer now asserts that every type source of
