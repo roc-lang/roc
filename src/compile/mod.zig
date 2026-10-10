@@ -230,6 +230,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_11527_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11908_test.zig"));
     std.testing.refAllDecls(@import("test/optimized_literal_roots_test.zig"));
+    std.testing.refAllDecls(@import("test/demand_driven_ctfe_test.zig"));
     std.testing.refAllDecls(@import("test/issue_11528_test.zig"));
     std.testing.refAllDecls(@import("test/consumer_manifest_test.zig"));
     std.testing.refAllDecls(@import("test/package_effect_boundary_test.zig"));

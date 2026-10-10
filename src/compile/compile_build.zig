@@ -854,6 +854,14 @@ pub const BuildEnv = struct {
         return if (coordinator.program_session) |*session| session else unreachable;
     }
 
+    /// The compile-time evaluation program this compilation lowered and
+    /// completed, while its program session retains it.
+    pub fn compileTimeProgram(self: *BuildEnv) ?*const lir.CheckedPipeline.LoweredProgram {
+        const coordinator = self.coordinator orelse return null;
+        const session = if (coordinator.program_session) |*session| session else return null;
+        return if (session.host) |*host| host else null;
+    }
+
     /// Reuse compilation workers for post-check lowering after checking finishes.
     ///
     /// Embeddings without a coordinator retain sequential post-check lowering.
