@@ -23,6 +23,19 @@ Commit `847aeab60b` (main at the start of this work), ReleaseFast, `--no-cache`:
 | `roc build examples/query.roc` (LLVM, speed) | 524.75 G |
 | `roc test test/fx/issue8826_full.roc` | 141.4 M |
 
+## Results
+
+ReleaseFast, `perf stat -e instructions:u` pinned to P-cores, `--no-cache`,
+measured at the commit that indexes procedure debug names and inhabitation
+graph rows:
+
+| Workload | Baseline | This branch | Change |
+| --- | ---: | ---: | ---: |
+| `roc check -j1 package/main.roc` (roc-pg) | 266.28 G | 253.05 G | -5.0% |
+| `roc build --opt=dev examples/query.roc` | 244.83 G | 239.5 G | -2.2% |
+| `roc build examples/query.roc` (LLVM) | 524.75 G | 427.02 G | -18.6% |
+| `roc test test/fx/issue8826_full.roc` | 141.4 M | 140.4 M | -0.7% |
+
 ## Method
 
 The whole of `src/` was audited directory by directory. Each `.zig` file on
@@ -170,6 +183,12 @@ stages it touches; the instruction-count effect is reported in "Results".
     topology walks: same change.
 33. `src/postcheck/monotype/ast.zig:1417`: the procedure debug-name map indexes
     symbols in a `DenseMap` instead of scanning its list.
+
+34. `src/postcheck/monotype_lifted/spec_constr.zig:5889`: `runClone` frame
+    stacks return, cleared, to a fixed pool in the cloner scratch.
+35. `src/check/exhaustive.zig:1226-1259`: the inhabitation graph's roots,
+    rows, and assumed-empty set are `DenseMap`s over the root var, and parent
+    edges are chained through one shared list instead of a list per node.
 
 ## Findings from profiling
 
@@ -564,7 +583,7 @@ reading code, and were not in the audit above.
 - category F, B; runs per inhabitedness query (per match column with a possibly-uninhabited type; memoized by `inhabitedness_memo` but each miss builds a graph); impact low-medium; risk low
 - Finding: list-of-lists for parents (`deinit` walks all nodes), and `usize` for indices/`remaining` where u32 suffices (not an invariant issue since these are graph-local, but doubles memory).
 - Fix: CSR edges (append `(child,parent)` then group) or an intrusive `first_parent/next_parent` chain; `roots` -> `DenseMap(Var, u32)`.
-- Status: open
+- Status: fixed (fix 35)
 
 ### src/check/exhaustive.zig:2429-2457, 2601-2652, 3808: per-column `ArrayList(ListArity)` built and `toOwnedSlice`'d
 - category A, D; runs per list-pattern column specialization; impact low; risk low
