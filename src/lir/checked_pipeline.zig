@@ -173,6 +173,10 @@ pub const TargetConfig = struct {
     /// shape-comparison tests turn it off because promotion intentionally
     /// changes the loop skeleton of qualifying sides.
     promote_loop_appends: bool = true,
+    /// Let Monotype replay completed interface summaries. Turning it off
+    /// expands every interface request freshly, which must lower the same
+    /// program; tests compare the two.
+    replay_interface_summaries: bool = true,
     /// Route each literal tag edge straight to the arm that matches it:
     /// tag-case fusion and known-tag jump threading. Every runtime
     /// optimization level runs them, as it does TRMC and loop append
@@ -1348,6 +1352,7 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .literal_roots = target.literal_roots,
+                .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,

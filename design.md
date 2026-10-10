@@ -12659,6 +12659,16 @@ declaration and callable type only. Draft-local capture contexts are Monotype
 BodyDraft data, are intentionally absent from durable specialization evidence, and
 must be attached when the real dispatch call lowers; declaration-only replay
 evidence can never be consumed by body emission.
+Interface replay is faithful to open leaves. A summary captures an
+unresolved cell as an unresolved cell carrying its recorded numeric and row
+defaults, and replay instantiates it as a fresh unresolved cell with those
+same defaults, never as the Monotype the defaults would produce. Relating a
+replay to a request therefore leaves the request's open cells exactly as
+open as a fresh expansion leaves them, so no reader of live graph state
+during lowering (dispatch evidence resolution, reachability proofs, active
+snapshots, specialization identity) can observe whether a callee's interface
+was replayed or expanded. Defaults are applied only by finalization and by
+read-only provisional views, and neither takes part in replay.
 
 Within the specialization, each body instantiation context has an exact fresh
 scope identity, owns one checked module id, and caches nodes by checked type id
@@ -12851,9 +12861,17 @@ contributed its relations. An active exact request joins its active interface;
 completed independent requests instantiate fresh cells. Returning from a child
 alone is not evidence that a recursive component's constraints are complete.
 
-Completed summaries are retained across bodies. The coordinator and each
-executor lane own cumulative tables. Frozen inputs borrow the coordinator table
-read-only; ordered commit relocates interned type leaves and interned names.
+Completed summaries are retained across bodies. Whether a body finds a
+summary depends on scheduling: which lane completed it and whether it was
+committed before the body's job was captured. Because replay is faithful to
+open leaves, that availability changes only how much relation work a body
+repeats, never what it lowers. The pins are the compile tests "interface
+summary replay of an open request leaf lowers like a fresh expansion within
+one body" and "... across bodies", which lower one program with and without
+summary replay and require identical specialization identities and LIR. The
+coordinator and each executor lane own cumulative tables. Frozen inputs borrow
+the coordinator table read-only; ordered commit relocates interned type leaves
+and interned names.
 Settled leaves across each completed batch share one type import and interning
 transaction. Cache insertion retains worker leaves before their transaction ends;
 coordinator leaves already belong to permanent storage and need no extra sealing.

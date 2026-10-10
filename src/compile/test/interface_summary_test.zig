@@ -208,3 +208,49 @@ test "interface summaries stay verified for mutually recursive methods of an imp
     try std.testing.expect(diagnostics.specialization.interface_parametric_requests >= 2);
     try std.testing.expectEqual(std.debug.runtime_safety, diagnostics.specialization.interface_summary_verifications > 0);
 }
+
+// `run`'s `Ok` payload is a checked variable nothing constrains, whose
+// recorded default is the empty tag union. Every call after the first relates
+// `outer`'s and `middle`'s interfaces from completed summaries, so a replay
+// that closed the request's open leaf to that default early would change what
+// dispatch evidence, reachability, and specialization identity read.
+const open_leaf_forwarding =
+    \\outer = |hooks| {
+    \\    _ = hooks.get
+    \\    middle(hooks)
+    \\}
+    \\middle = |hooks| {
+    \\    get = hooks.get
+    \\    _ = get("name")
+    \\    run = hooks.run
+    \\    output = run()?
+    \\    parse(output.trim())
+    \\}
+    \\parse : Str -> Try(I32, _)
+    \\parse = |_s| Ok(1)
+    \\
+;
+
+test "interface summary replay of an open request leaf lowers like a fresh expansion within one body" {
+    try harness.expectInterfaceSummaryReplayFaithfulLir(open_leaf_forwarding ++
+        \\main! = |_args| {
+        \\    hooks = { run: || Err(CommandNotFound), get: |_name| "x" }
+        \\    _ = outer(hooks)
+        \\    _ = outer(hooks)
+        \\    Ok({})
+        \\}
+    );
+}
+
+test "interface summary replay of an open request leaf lowers like a fresh expansion across bodies" {
+    try harness.expectInterfaceSummaryReplayFaithfulLir(open_leaf_forwarding ++
+        \\first = |hooks| outer(hooks)
+        \\second = |hooks| outer(hooks)
+        \\main! = |_args| {
+        \\    hooks = { run: || Err(CommandNotFound), get: |_name| "x" }
+        \\    _ = first(hooks)
+        \\    _ = second(hooks)
+        \\    Ok({})
+        \\}
+    );
+}

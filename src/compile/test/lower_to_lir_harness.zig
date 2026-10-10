@@ -220,6 +220,8 @@ pub const LirLoweringOptions = struct {
     /// Receives deterministic Monotype work counters. This is independent of
     /// elapsed-time measurement and is available at the `monotype_only` boundary.
     monotype_diagnostics_out: ?*postcheck.Monotype.Lower.Diagnostics = null,
+    /// Let Monotype replay completed interface summaries.
+    replay_interface_summaries: bool = true,
 };
 
 /// Lower an app whose body is `app_body` (everything after the platform header
@@ -984,6 +986,42 @@ pub fn expectTargetIndependentLir(app_body: []const u8) LowerToLirHarnessError!v
     try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
 }
 
+/// Lower `app_body` with and without replaying completed interface summaries
+/// and assert both runs produce the same specialization identities and
+/// byte-identical LIR. A replay instantiates the summary's open cells as fresh
+/// unresolved cells carrying their recorded defaults, so the live graph a
+/// body's lowering reads cannot depend on whether a callee's summary was
+/// already completed. The replaying run must actually hit a summary, and the
+/// other must expand every request.
+pub fn expectInterfaceSummaryReplayFaithfulLir(app_body: []const u8) LowerToLirHarnessError!void {
+    var replayed: postcheck.Monotype.Lower.Diagnostics = .{};
+    var expanded: postcheck.Monotype.Lower.Diagnostics = .{};
+    try runToLir(app_body, null, .{ .monotype_only = true, .monotype_diagnostics_out = &replayed }, null);
+    try runToLir(app_body, null, .{
+        .monotype_only = true,
+        .monotype_diagnostics_out = &expanded,
+        .replay_interface_summaries = false,
+    }, null);
+    try std.testing.expect(replayed.specialization.interface_summary_hits > 0);
+    try std.testing.expectEqual(@as(u64, 0), expanded.specialization.interface_summary_hits);
+
+    const gpa = std.testing.allocator;
+    const cap = 1 << 22;
+    const buf_a = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_a);
+    const buf_b = try gpa.alloc(u8, cap);
+    defer gpa.free(buf_b);
+    var writer_a = std.Io.Writer.fixed(buf_a);
+    var writer_b = std.Io.Writer.fixed(buf_b);
+    try runToLir(app_body, &writer_a, .{ .proc_debug_names = true, .dump_proc_identities = true }, null);
+    try runToLir(app_body, &writer_b, .{
+        .proc_debug_names = true,
+        .dump_proc_identities = true,
+        .replay_interface_summaries = false,
+    }, null);
+    try std.testing.expectEqualStrings(writer_a.buffered(), writer_b.buffered());
+}
+
 fn runToLir(
     app_body: []const u8,
     dump: ?*std.Io.Writer,
@@ -1208,7 +1246,10 @@ fn lowerAppPathToLir(
                 .imports = imports,
             },
             .{ .requests = lir_roots },
-            .{ .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null },
+            .{
+                .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null,
+                .replay_interface_summaries = opts.replay_interface_summaries,
+            },
         );
         mono.deinit();
         if (opts.monotype_diagnostics_out) |out| out.* = diagnostics;
@@ -1266,6 +1307,7 @@ fn lowerAppPathToLir(
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,
         .prove_ranges = opts.prove_ranges,
+        .replay_interface_summaries = opts.replay_interface_summaries,
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .post_check_executor = post_check_executor,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,
