@@ -242,6 +242,15 @@ const Lowerer = struct {
     pat_map: []?Ast.PatId,
     stmt_map: []?Ast.StmtId,
     comptime_site_map: []?Ast.ComptimeSiteId,
+    /// Indices written into `local_map`, `expr_map`, `pat_map`, and
+    /// `stmt_map` while lowering the current function specialization. The
+    /// maps span every lifted node in the program, so resetting them for the
+    /// next specialization clears only these slots rather than the whole
+    /// program's columns.
+    touched_locals: std.ArrayList(u32),
+    touched_exprs: std.ArrayList(u32),
+    touched_pats: std.ArrayList(u32),
+    touched_stmts: std.ArrayList(u32),
     fn_specs: std.ArrayList(FnSpec),
     fn_spec_map: std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage),
     fn_written: std.ArrayList(bool),
@@ -308,6 +317,10 @@ const Lowerer = struct {
             .pat_map = pat_map,
             .stmt_map = stmt_map,
             .comptime_site_map = comptime_site_map,
+            .touched_locals = .empty,
+            .touched_exprs = .empty,
+            .touched_pats = .empty,
+            .touched_stmts = .empty,
             .fn_specs = .empty,
             .fn_spec_map = std.HashMap(FnSpec, Ast.FnId, FnSpecContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}),
             .fn_written = .empty,
@@ -332,6 +345,10 @@ const Lowerer = struct {
         self.fn_spec_map.deinit();
         self.fn_specs.deinit(self.allocator);
         self.type_map.deinit();
+        self.touched_stmts.deinit(self.allocator);
+        self.touched_pats.deinit(self.allocator);
+        self.touched_exprs.deinit(self.allocator);
+        self.touched_locals.deinit(self.allocator);
         self.allocator.free(self.stmt_map);
         self.allocator.free(self.comptime_site_map);
         self.allocator.free(self.pat_map);
@@ -399,14 +416,24 @@ const Lowerer = struct {
         }
     }
 
+    /// Clear the slots the previous specialization wrote into the per-node
+    /// maps, leaving every other slot at its initial `null`.
+    fn resetNodeMaps(self: *Lowerer) void {
+        for (self.touched_locals.items) |index| self.local_map[index] = null;
+        for (self.touched_exprs.items) |index| self.expr_map[index] = null;
+        for (self.touched_pats.items) |index| self.pat_map[index] = null;
+        for (self.touched_stmts.items) |index| self.stmt_map[index] = null;
+        self.touched_locals.clearRetainingCapacity();
+        self.touched_exprs.clearRetainingCapacity();
+        self.touched_pats.clearRetainingCapacity();
+        self.touched_stmts.clearRetainingCapacity();
+    }
+
     fn lowerFnSpec(self: *Lowerer, out_id: Ast.FnId, spec: FnSpec) Allocator.Error!void {
         const fn_id = spec.source;
         const fn_ = self.solved.lifted.fns[@backingInt(fn_id)];
         self.captures.clearRetainingCapacity();
-        @memset(self.local_map, null);
-        @memset(self.expr_map, null);
-        @memset(self.pat_map, null);
-        @memset(self.stmt_map, null);
+        self.resetNodeMaps();
 
         const solved_fn_ty = spec.solved_fn_ty;
         const func = switch (self.solved.types.rootContent(solved_fn_ty)) {
@@ -843,6 +870,7 @@ const Lowerer = struct {
         }
         const data = try self.buildExprData(task, expr);
         const lowered = try self.program.addExpr(.{ .ty = task.ty, .data = data });
+        try self.touched_exprs.append(self.allocator, @intCast(index));
         self.expr_map[index] = lowered;
         self.program.current_loc = task.saved_loc;
         self.program.current_region = task.saved_region;
@@ -1195,6 +1223,7 @@ const Lowerer = struct {
             .checked_error => |msg| .{ .checked_error = msg },
         };
         const lowered = try self.program.addStmt(lowered_stmt);
+        try self.touched_stmts.append(self.allocator, @intCast(index));
         self.stmt_map[index] = lowered;
         self.program.current_loc = task.saved_loc;
         self.program.current_region = task.saved_region;
@@ -1272,6 +1301,7 @@ const Lowerer = struct {
             .str_pattern => .{ .str_pattern = parts[0].get(.str_pattern) },
         };
         const lowered = try self.program.addPat(.{ .ty = task.ty, .data = data });
+        try self.touched_pats.append(self.allocator, @intCast(index));
         self.pat_map[index] = lowered;
         return .{ .ret = .{ .pat = lowered } };
     }
@@ -2099,6 +2129,7 @@ const Lowerer = struct {
         const lifted_local = self.solved.lifted.locals[index];
         const lowered = try self.program.addLocalWithBinder(lifted_local.symbol, ty, lifted_local.binder);
         try self.program.setLocalName(lowered, self.solved.lifted.localName(@fromBackingInt(@intCast(index))));
+        try self.touched_locals.append(self.allocator, @intCast(index));
         self.local_map[index] = lowered;
         return lowered;
     }

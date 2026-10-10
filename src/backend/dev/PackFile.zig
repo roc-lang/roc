@@ -11,6 +11,7 @@
 //! consumer must bind that domain explicitly or omit lines from debug emission.
 
 const std = @import("std");
+const collections = @import("collections");
 const lir = @import("lir");
 const ProcArtifact = @import("ProcArtifact.zig");
 const RelocationMod = @import("Relocation.zig");
@@ -201,7 +202,7 @@ pub fn write(allocator: Allocator, set: *const ProcArtifact.Set, specs: []const 
 
 /// Decode a pack. Every slice in the result is owned by the pack's arena.
 pub fn read(allocator: Allocator, bytes: []const u8) ReadError!Pack {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
     var reader = Reader{ .bytes = bytes };
@@ -462,7 +463,7 @@ test "pack ownership survives input destruction and allocation failure" {
 
 fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!void {
     const set = ProcArtifact.Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
             .code = "code",
@@ -493,7 +494,7 @@ fn testOwnedPack(allocator: Allocator) (ReadError || error{TestExpectedEqual})!v
 
 test "pack bytes round-trip every artifact field and spec entry" {
     const testing = std.testing;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     const a = arena.allocator();
     const refs = try a.dupe(ProcArtifact.Reference, &.{
         .{ .site = 5, .form = .call, .target = 1, .delta = 8 },
@@ -619,7 +620,7 @@ test "pack preserves independent and relation-dependent semantic summaries" {
     const Attempt = struct {
         fn run(allocator: Allocator, relation: ?[32]u8) (ReadError || error{ TestExpectedEqual, TestExpectedError, TestUnexpectedError })!void {
             const set = ProcArtifact.Set{
-                .arena = std.heap.ArenaAllocator.init(allocator),
+                .arena = collections.SingleThreadArena.init(allocator),
                 .artifacts = &.{.{
                     .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
                     .code = "code",
@@ -666,11 +667,11 @@ test "pack writes program-local constants and every reference to them under cont
     // Two programs gave one program-local name to different constants.
     const names = [_][]const u8{ "first", "second" };
     var packed_names: [names.len][]const u8 = undefined;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     for (names, 0..) |bytes, index| {
         const set = ProcArtifact.Set{
-            .arena = std.heap.ArenaAllocator.init(testing.allocator),
+            .arena = collections.SingleThreadArena.init(testing.allocator),
             .artifacts = &.{.{
                 .kind = .{ .proc = lir.ProcIdentity.forTest(1) },
                 .code = "code",

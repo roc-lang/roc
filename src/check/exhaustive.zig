@@ -4466,7 +4466,7 @@ fn inhabitedGraphDiamondCase(graph_allocator: Allocator, depth: usize, recursive
     }
     const reader = cache.reader(&store);
     // Baseline union descriptions belong to the caller's scratch allocator.
-    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    var query_arena = base.SingleThreadArena.init(gpa);
     defer query_arena.deinit();
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
         var graph: InhabitedGraph = .{ .gpa = graph_allocator, .store = reader, .idents = test_idents, .mode = mode };
@@ -4824,7 +4824,7 @@ fn inhabitedRecordRowsCase(graph_allocator: Allocator, depth: usize) (Allocator.
     std.mem.reverse(Var, tails.items);
     const backward = try store.freshFromContent(.{ .structure = .{ .tuple = .{ .elems = try store.appendVars(tails.items) } } });
     const reader = cache.reader(&store);
-    var query_arena = std.heap.ArenaAllocator.init(gpa);
+    var query_arena = base.SingleThreadArena.init(gpa);
     defer query_arena.deinit();
     for ([_]InhabitedMode{ .general, .payload, .known_absent }) |mode| {
         for (wrappers, [_]bool{ false, false, true, true, true, false, true }) |root, expected| {
@@ -4919,7 +4919,7 @@ fn recordTailBlockersCase(analysis_allocator: Allocator, depth: usize) (Allocato
         }),
         .ext = empty_union,
     } } });
-    var query_arena = std.heap.ArenaAllocator.init(analysis_allocator);
+    var query_arena = base.SingleThreadArena.init(analysis_allocator);
     defer query_arena.deinit();
     const reader = cache.reader(&store);
     for ([_]Var{ root, shared, cycle }) |payload| {

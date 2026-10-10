@@ -1506,7 +1506,7 @@ const State = struct {
 };
 
 test "forked state preserves independent tag-union variant witnesses" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var store = LirStore.init(testing.allocator);
@@ -1526,7 +1526,7 @@ test "forked state preserves independent tag-union variant witnesses" {
 }
 
 test "forked state shares unchanged maybe-uninitialized facts" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var source = try State.init(arena.allocator(), &.{}, 4);
@@ -1545,7 +1545,7 @@ test "forked state shares unchanged maybe-uninitialized facts" {
 }
 
 test "certifier debt index follows sign changes and isolates branches" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var state = try State.init(arena.allocator(), &.{}, 0);
     try state.addBalance(7, -2);
@@ -2091,9 +2091,9 @@ const Certifier = struct {
     rc_local: []const bool,
     maybe_uninitialized: *const MaybeUninitializedConditions,
     values: std.ArrayList(ValueInfo) = .empty,
-    lender_arena: std.heap.ArenaAllocator,
+    lender_arena: base.SingleThreadArena,
     /// Persistent path-state nodes share this procedure-scoped lifetime.
-    state_arena: std.heap.ArenaAllocator,
+    state_arena: base.SingleThreadArena,
     records: collections.DenseMap(LIR.JoinPointId, JoinRecord),
     memo: std.AutoHashMap(MemoEntry, void),
     /// Statements with more than one structural predecessor. Only these
@@ -2134,7 +2134,7 @@ const Certifier = struct {
     /// dense proc-local positions, so the cache is cleared at each proc boundary.
     reads_before_rebind_cache: collections.DenseMap(LIR.CFStmtId, arc_liveness.Row),
     /// Backs the current proc's read-before-rebind rows.
-    liveness_arena: std.heap.ArenaAllocator,
+    liveness_arena: base.SingleThreadArena,
     /// Exact erased-allocation producer relation for the current proc, plus
     /// calls checked after every reachable definition has been collected.
     erased_owners: erased_owner.Owners,
@@ -2193,7 +2193,7 @@ const Certifier = struct {
     work_stats: ?*CertifierWorkStats,
     /// Immutable layout claim sets survive per-procedure state-arena resets.
     claim_layouts: std.AutoHashMapUnmanaged(layout_mod.Idx, ClaimSet) = .empty,
-    claim_arena: std.heap.ArenaAllocator,
+    claim_arena: base.SingleThreadArena,
     /// Proc and statement being certified; written by `certifyProc` and
     /// `runSegment` before any read.
     current_proc: LIR.LirProcSpecId = undefined,
@@ -2221,9 +2221,9 @@ const Certifier = struct {
             .sigs = sigs,
             .rc_local = rc_local,
             .maybe_uninitialized = maybe_uninitialized,
-            .lender_arena = std.heap.ArenaAllocator.init(allocator),
-            .state_arena = std.heap.ArenaAllocator.init(allocator),
-            .claim_arena = std.heap.ArenaAllocator.init(allocator),
+            .lender_arena = base.SingleThreadArena.init(allocator),
+            .state_arena = base.SingleThreadArena.init(allocator),
+            .claim_arena = base.SingleThreadArena.init(allocator),
             .records = collections.DenseMap(LIR.JoinPointId, JoinRecord).init(allocator),
             .memo = std.AutoHashMap(MemoEntry, void).init(allocator),
             .repr_scratch = collections.DenseMap(ValueId, u32).init(allocator),
@@ -2239,7 +2239,7 @@ const Certifier = struct {
             .domain_values_scratch = collections.DenseMap(ValueId, void).init(allocator),
             .value_reach_seen = collections.DenseMap(ValueId, void).init(allocator),
             .reads_before_rebind_cache = collections.DenseMap(LIR.CFStmtId, arc_liveness.Row).init(allocator),
-            .liveness_arena = std.heap.ArenaAllocator.init(allocator),
+            .liveness_arena = base.SingleThreadArena.init(allocator),
             .erased_owners = erased_owner.Owners.init(allocator),
             .seen_outcomes = std.AutoHashMap(u32, void).init(allocator),
             .diag = diag,
@@ -4442,7 +4442,7 @@ const Certifier = struct {
         }
         errdefer self.clearReadsBeforeRebindCache();
 
-        var graph_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var graph_arena = base.SingleThreadArena.init(self.allocator);
         defer graph_arena.deinit();
         const graph_allocator = graph_arena.allocator();
 
@@ -7047,7 +7047,7 @@ test "certifier state indexes explicit proc locals" {
     const first: LIR.LocalId = @fromBackingInt(@intCast(1));
     const second: LIR.LocalId = @fromBackingInt(@intCast(3));
     const local_dense = [_]u32{ no_dense, 0, no_dense, 1 };
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = base.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     var state = try State.init(arena.allocator(), &local_dense, 2);

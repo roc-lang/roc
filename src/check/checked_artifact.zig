@@ -703,7 +703,7 @@ test "ExportTable: serialize/deserialize round-trip preserves defs" {
     const defs = [_]CIR.Def.Idx{ @fromBackingInt(@intCast(3)), @fromBackingInt(@intCast(9)), @fromBackingInt(@intCast(17)), @fromBackingInt(@intCast(42)) };
     const table = ExportTable{ .defs = @constCast(&defs) };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -18800,7 +18800,7 @@ const EvidencePass = struct {
     /// Stable copies of enumerated semantic paths. Evidence resolution may
     /// recursively enumerate another scheme before finishing the current
     /// vector, so consumers cannot retain aliases into `enum_scratch`.
-    enumerated_path_arena: std.heap.ArenaAllocator,
+    enumerated_path_arena: base.SingleThreadArena,
     /// Scratch backing for the chain currently being resolved against.
     chain_scratch: std.ArrayList(ChainLevel),
     /// Per-plan / per-iterator-plan visited flags: a plan reachable from two
@@ -18891,7 +18891,7 @@ const EvidencePass = struct {
             .scheme_vars_pool = .empty,
             .site_substitutions = .empty,
             .enum_scratch = .{},
-            .enumerated_path_arena = std.heap.ArenaAllocator.init(allocator),
+            .enumerated_path_arena = base.SingleThreadArena.init(allocator),
             .chain_scratch = .empty,
         };
     }
@@ -27176,7 +27176,7 @@ pub const PlatformPairing = struct {
         }
 
         /// The arena owns the relocated buffer; the platform outlives this view.
-        pub fn install(self: *const Serialized, platform: *const CheckedModuleArtifact, arena: *std.heap.ArenaAllocator) CheckedModuleArtifact {
+        pub fn install(self: *const Serialized, platform: *const CheckedModuleArtifact, arena: *base.SingleThreadArena) CheckedModuleArtifact {
             const address = @intFromPtr(self);
             const allocator = arena.allocator();
             var result = platform.*;
@@ -27228,8 +27228,8 @@ pub fn pairCheckedPlatform(
 ) Allocator.Error!CheckedModuleArtifact {
     std.debug.assert(platform.evaluation_state == .finalized);
     std.debug.assert(platform.checking_context_identity.platform_app_relation == null);
-    const arena = try allocator.create(std.heap.ArenaAllocator);
-    arena.* = std.heap.ArenaAllocator.init(allocator);
+    const arena = try allocator.create(base.SingleThreadArena);
+    arena.* = base.SingleThreadArena.init(allocator);
     errdefer {
         arena.deinit();
         allocator.destroy(arena);
@@ -33577,7 +33577,7 @@ pub const CheckedModuleArtifact = struct {
     serialized_backing: ?[]align(CompactWriter.SERIALIZATION_ALIGNMENT.toByteUnits()) u8 = null,
     serialized_backing_is_static: bool = false,
     /// Session-owned metadata overlay borrowing an immutable platform artifact.
-    pairing_arena: ?*std.heap.ArenaAllocator = null,
+    pairing_arena: ?*base.SingleThreadArena = null,
 
     pub fn owningAllocator(self: *const CheckedModuleArtifact) Allocator {
         return if (self.pairing_arena) |arena| arena.child_allocator else self.canonical_names.allocator;
@@ -39672,7 +39672,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     });
 
     // Serialize → aligned buffer → deserialize.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CW.init();
@@ -39807,7 +39807,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
     const operands = [_][]const CheckedExprId{ &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{}, &.{@fromBackingInt(@intCast(4))}, &.{}, &.{}, &.{}, &.{} };
     try CheckedLoopMutationPublisher.publish(gpa, &store, &operands);
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), CheckedBodyStore.Serialized);
@@ -39902,7 +39902,7 @@ test "CheckedBodyStore: POD round-trip preserves exprs, paths, match branches, s
     try store.commitStringLiterals(gpa, &.{ "boom", "second" });
     store.stored_exprs.items[@backingInt(e0)].contains_diagnostic_error = true;
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CW.init();
@@ -40032,7 +40032,7 @@ test "CheckedModuleArtifact.Serialized: round-trip preserves POD identity and su
         .const_store = const_store_src,
     };
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
 
@@ -40958,7 +40958,7 @@ test "pairing type columns borrow frozen storage until written" {
     const duplicate = try source.reserveDistinctSyntheticTypeRoot(allocator, source.roots.items[0].key, false);
     try source.fillSyntheticTypeRoot(allocator, duplicate, .empty_record);
     try std.testing.expectEqual(root, source.rootForKey(source.roots.items[0].key).?);
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), CheckedTypeStore.Serialized);

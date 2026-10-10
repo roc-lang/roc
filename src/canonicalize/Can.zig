@@ -400,6 +400,11 @@ scratch_free_vars: base.Scratch(Pattern.Idx),
 scratch_captures: base.Scratch(Pattern.Idx),
 /// Scratch bound variables (for filtering out locally-bound vars from captures)
 scratch_bound_vars: base.Scratch(Pattern.Idx),
+/// Membership index over a run of `scratch_bound_vars`, rebuilt by
+/// `indexBoundVarsFrom` for each run of free vars checked against it. It is
+/// direct-indexed by pattern id and retained across queries, so a query
+/// clears only the entries the previous query put in it.
+bound_vars_index: collections.DenseMap(Pattern.Idx, void),
 /// Scratch holding the bound-pattern set of each in-progress declaration (the
 /// `defining_bound_vars` span points into this). Kept separate from
 /// `scratch_bound_vars` so it survives across the body canonicalization without
@@ -844,6 +849,7 @@ pub fn deinit(
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
+    self.bound_vars_index.deinit();
     self.scratch_defining_bound_vars.deinit();
     self.scratch_reassign_targets.deinit();
     self.scratch_local_function_patterns.deinit();
@@ -919,6 +925,7 @@ fn initInternal(
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
+        .bound_vars_index = collections.DenseMap(Pattern.Idx, void).init(gpa),
         .scratch_defining_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_reassign_targets = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_local_function_patterns = try base.Scratch(Pattern.Idx).init(gpa),
@@ -11352,6 +11359,16 @@ fn canonicalizeStandaloneForStatement(
     return CanonicalizedStatement{ .idx = stmt_idx, .free_vars = free_vars };
 }
 
+/// Index the bound vars recorded in `scratch_bound_vars` since `start` for
+/// membership queries over a run of free vars.
+fn indexBoundVarsFrom(self: *Self, start: u32) std.mem.Allocator.Error!*const collections.DenseMap(Pattern.Idx, void) {
+    self.bound_vars_index.clearRetainingCapacity();
+    for (self.scratch_bound_vars.sliceFromStart(start)) |pattern_idx| {
+        try self.bound_vars_index.put(pattern_idx, {});
+    }
+    return &self.bound_vars_index;
+}
+
 fn runExprKernel(
     self: *Self,
     ast_expr_idx: AST.Expr.Idx,
@@ -11365,7 +11382,7 @@ fn runExprKernel(
     var fallback_state = std.heap.BufferFirstAllocator.init(&fallback_state_buffer, self.env.gpa);
     const frame_allocator = fallback_state.allocator();
 
-    var block_state_arena = std.heap.ArenaAllocator.init(frame_allocator);
+    var block_state_arena = base.SingleThreadArena.init(frame_allocator);
     defer block_state_arena.deinit();
     const block_state_allocator = block_state_arena.allocator();
 
@@ -14104,8 +14121,7 @@ fn runExprKernel(
             }
 
             const body_free_vars_slice = self.scratch_free_vars.sliceFromSpan(can_body.free_vars);
-            var bound_vars_view = try self.scratch_bound_vars.setViewFrom(bound_vars_top, self.env.gpa);
-            defer bound_vars_view.deinit();
+            const bound_vars_view = try self.indexBoundVarsFrom(bound_vars_top);
             for (body_free_vars_slice) |fv| {
                 if (!self.scratch_captures.containsFrom(state.captures_top, fv) and
                     !bound_vars_view.contains(fv) and
@@ -14521,8 +14537,7 @@ fn runExprKernel(
                 @memcpy(guard_free_vars_copy, guard_fv_slice);
 
                 self.scratch_free_vars.clearFrom(state.body_free_vars_start);
-                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
-                defer bound_vars_view.deinit();
+                const bound_vars_view = try self.indexBoundVarsFrom(state.branch_bound_vars_top);
                 for (guard_free_vars_copy) |fv| {
                     if (!bound_vars_view.contains(fv) and
                         !self.isGloballyResolvablePattern(fv) and
@@ -14570,8 +14585,7 @@ fn runExprKernel(
                 @memcpy(body_free_vars_copy, body_fv_slice);
 
                 self.scratch_free_vars.clearFrom(state.body_free_vars_start_after_guard);
-                var bound_vars_view = try self.scratch_bound_vars.setViewFrom(state.branch_bound_vars_top, self.env.gpa);
-                defer bound_vars_view.deinit();
+                const bound_vars_view = try self.indexBoundVarsFrom(state.branch_bound_vars_top);
                 for (body_free_vars_copy) |fv| {
                     if (!bound_vars_view.contains(fv) and
                         !self.isGloballyResolvablePattern(fv) and

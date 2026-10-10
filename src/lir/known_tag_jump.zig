@@ -77,7 +77,7 @@ pub fn runProc(store: *LirStore, proc: LIR.LirProcSpecId, allocator: Allocator, 
     // Each rewrite deletes at least one join-parameter write, so the loop
     // runs at most once per such write.
     while (true) {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         defer arena.deinit();
         var analysis = try Analysis.init(store, body, arena.allocator());
         const candidate = try analysis.findCandidate() orelse return;

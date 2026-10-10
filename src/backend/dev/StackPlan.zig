@@ -696,7 +696,7 @@ fn assignSlots(self: *Self) Allocator.Error!void {
     // Each slot's reservations; their nodes live only while slots are assigned.
     var reservations: std.ArrayList(Reservations) = .empty;
     defer reservations.deinit(self.allocator);
-    var nodes = std.heap.ArenaAllocator.init(self.allocator);
+    var nodes = collections.SingleThreadArena.init(self.allocator);
     defer nodes.deinit();
     for (order.items) |index| {
         const value = &self.values.items[index];

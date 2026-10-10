@@ -32,6 +32,7 @@
 //! validate the payload/box layouts before rewriting.
 
 const std = @import("std");
+const collections = @import("collections");
 const Allocator = std.mem.Allocator;
 const core = @import("lir_core");
 const layout_mod = @import("layout");
@@ -765,7 +766,7 @@ fn testDirectBoxReuse(per_proc: bool) (Allocator.Error || error{ TestExpectedEqu
     if (per_proc) {
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = collections.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         try runProc(&store, &layouts, caller, scratch.allocator());
         try std.testing.expectEqual(layout_count, layouts.layoutCount());

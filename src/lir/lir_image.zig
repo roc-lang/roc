@@ -1777,7 +1777,7 @@ test "LIR image copies and round-trips every populated store field" {
     // Build the compiler result outside the image buffer so this test proves
     // copying transfers every mapped field instead of retaining source
     // pointers.
-    var source_arena = std.heap.ArenaAllocator.init(gpa);
+    var source_arena = base.SingleThreadArena.init(gpa);
     defer source_arena.deinit();
     const source_allocator = source_arena.allocator();
 

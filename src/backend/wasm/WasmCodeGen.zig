@@ -1517,7 +1517,7 @@ pub fn generateEntrypointWrapper(
     };
 
     // Classify the natural C-ABI wasm signature for this entrypoint.
-    var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+    var arena_state = base.SingleThreadArena.init(self.allocator);
     defer arena_state.deinit();
     const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
 
@@ -7738,7 +7738,7 @@ pub fn registerHostedSymbolTargets(self: *Self, proc_specs: []const LIR.LirProcS
             hosted_arg_layouts[i] = self.procLocalLayoutIdx(param);
         }
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const lowered = layout.abi.lower(arena_state.allocator(), self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, hosted_arg_layouts, spec.ret_layout, false) catch return error.OutOfMemory;
 
@@ -7823,7 +7823,7 @@ fn emitHostedCall(
     }
 
     // Lower the call to the wasm C ABI (shared classifier, same as the other backends).
-    var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+    var arena_state = base.SingleThreadArena.init(self.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const lowered = layout.abi.lower(arena, self.getLayoutStore(), if (self.cpu_level == .v1) .wasm32v1 else .wasm32, arg_layouts, ret_layout, false) catch return error.OutOfMemory;

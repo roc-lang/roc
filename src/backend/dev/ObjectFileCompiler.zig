@@ -1132,7 +1132,7 @@ test "ObjectFileCompiler runtime static-root pack owns only reachable canonical 
     const native_targets = if (LirCodeGenMod.host_lir_codegen_available) .{comptime RocTarget.detectNative()} else .{};
     inline for (.{ RocTarget.x64linux, RocTarget.arm64linux } ++ native_targets) |target| {
         var result = producer: {
-            var arena = std.heap.ArenaAllocator.init(allocator);
+            var arena = collections.SingleThreadArena.init(allocator);
             defer arena.deinit();
             const a = arena.allocator();
             var store = LirStore.init(a);

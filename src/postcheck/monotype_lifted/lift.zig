@@ -1829,7 +1829,7 @@ const CaptureUpdate = struct {
 /// affected edges, and each operand-expression node is activated at most once.
 const CaptureDependencyGraph = struct {
     backing_allocator: Allocator,
-    arena: *std.heap.ArenaAllocator,
+    arena: *base.SingleThreadArena,
     allocator: Allocator,
     program: *Ast.Program,
     lifter: ?*Lifter,
@@ -1844,9 +1844,9 @@ const CaptureDependencyGraph = struct {
     next_update: usize,
 
     fn init(allocator: Allocator, program: *Ast.Program, lifter: ?*Lifter) Allocator.Error!CaptureDependencyGraph {
-        const arena = try allocator.create(std.heap.ArenaAllocator);
+        const arena = try allocator.create(base.SingleThreadArena);
         errdefer allocator.destroy(arena);
-        arena.* = std.heap.ArenaAllocator.init(allocator);
+        arena.* = base.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const scratch = arena.allocator();
         const states = try scratch.alloc(CaptureFnState, program.fnCount());

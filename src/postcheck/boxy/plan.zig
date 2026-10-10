@@ -11881,7 +11881,7 @@ const Builder = struct {
         // signature appears in no type the caller's body mentions, so the
         // substitution is the only place it is named. The images depend only
         // on the edge, so they are computed once.
-        var image_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var image_arena = base.SingleThreadArena.init(self.allocator);
         defer image_arena.deinit();
         const image_allocator = image_arena.allocator();
         const edge_images = try image_allocator.alloc(std.AutoHashMapUnmanaged(TypeRepId, []const TypeRepId), edges.items.len);

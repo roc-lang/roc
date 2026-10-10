@@ -39,8 +39,6 @@ pub fn Scratch(comptime T: type) type {
         }
 
         /// Check if a value is in the array starting from a given position.
-        /// Note: If checking multiple values against the same range, use `setViewFrom()`
-        /// to build a SetView once and call `contains()` on it multiple times.
         pub fn containsFrom(self: *const Self, start: u32, val: T) bool {
             const range = self.items.items[@intCast(start)..];
             for (range) |item| {
@@ -49,37 +47,6 @@ pub fn Scratch(comptime T: type) type {
                 }
             }
             return false;
-        }
-
-        /// A view into a range of the scratch buffer optimized for membership queries.
-        pub const SetView = struct {
-            set: std.AutoHashMapUnmanaged(T, void),
-            allocator: std.mem.Allocator,
-
-            pub fn init(allocator: std.mem.Allocator, items: []const T) std.mem.Allocator.Error!SetView {
-                var set = std.AutoHashMapUnmanaged(T, void){};
-                errdefer set.deinit(allocator);
-                try set.ensureTotalCapacity(allocator, @intCast(items.len));
-                for (items) |item| {
-                    set.putAssumeCapacity(item, {});
-                }
-                return .{ .set = set, .allocator = allocator };
-            }
-
-            pub fn deinit(self: *SetView) void {
-                self.set.deinit(self.allocator);
-                self.* = undefined;
-            }
-
-            pub fn contains(self: *const SetView, val: T) bool {
-                return self.set.contains(val);
-            }
-        };
-
-        /// Create a SetView for efficient repeated membership queries on a range.
-        /// Remember to call deinit() on the returned SetView when done.
-        pub fn setViewFrom(self: *const Self, start: u32, allocator: std.mem.Allocator) std.mem.Allocator.Error!SetView {
-            return SetView.init(allocator, self.items.items[@intCast(start)..]);
         }
 
         /// Places a new index of type `T` in the scratch

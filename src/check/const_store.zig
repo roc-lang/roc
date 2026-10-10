@@ -1497,7 +1497,7 @@ test "ConstStore: build, serialize/relocate, and read back values, fns, strings"
     });
 
     // Serialize → aligned buffer → deserialize.
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     const aa = arena.allocator();
     var writer = CompactWriter.init();
@@ -1633,7 +1633,7 @@ test "ConstStore: exact function capture back-edge survives serialization" {
     store.fill(fn_node, .{ .fn_value = fn_id });
     try store.verifyComplete();
 
-    var arena = std.heap.ArenaAllocator.init(gpa);
+    var arena = base.SingleThreadArena.init(gpa);
     defer arena.deinit();
     var writer = CompactWriter.init();
     const header = try writer.appendAlloc(arena.allocator(), ConstStore.Serialized);

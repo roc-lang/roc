@@ -1171,7 +1171,7 @@ fn valuePositionMask(
     const mask = try allocator.alloc(bool, targets.len);
     errdefer allocator.free(mask);
     @memset(mask, false);
-    var scratch = std.heap.ArenaAllocator.init(allocator);
+    var scratch = base.SingleThreadArena.init(allocator);
     defer scratch.deinit();
     const arena = scratch.allocator();
     const excluded = try arena.alloc(bool, targets.len);
@@ -4121,6 +4121,11 @@ const Builder = struct {
     current_loc: base.SourceLoc,
     current_region: base.Region,
     proc_debug_names: bool,
+    /// Frame stacks of finished `BodyContext.runLower` calls, kept with their
+    /// capacity for the next run. Each run takes its own stack, so a nested
+    /// run never moves the frame an outer step is still working on, and a
+    /// body's lowering does not grow a stack from empty per nested run.
+    lower_frame_pool: std.ArrayList(std.ArrayList(BodyContext.LowerFrame)) = .empty,
     /// The object cache consulted for closed specializations, if any.
     spec_cache: ?Common.SpecCacheLookup,
     counters: ?*SpecializationCounters,
@@ -4255,7 +4260,7 @@ const Builder = struct {
     final_body_output_allowance: FinalBodyOutputCounts = .{},
     /// Owns every materialized `SpecEvidence` tree; freed wholesale with the
     /// builder.
-    evidence_arena: std.heap.ArenaAllocator,
+    evidence_arena: base.SingleThreadArena,
     /// The stored form `constFnEvidence` last produced for each innermost
     /// evidence vector, which callers lowering one request pass repeatedly.
     const_evidence_memo: std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence),
@@ -4397,7 +4402,7 @@ const Builder = struct {
             .static_data_ids = std.AutoHashMap(StaticDataUse, Common.StaticDataId).init(allocator),
             .static_data_uses = .empty,
             .static_data_eligibility = std.AutoHashMap(ConstNodeAddress, bool).init(allocator),
-            .evidence_arena = std.heap.ArenaAllocator.init(allocator),
+            .evidence_arena = base.SingleThreadArena.init(allocator),
             .const_evidence_memo = std.AutoHashMap(ConstEvidenceMemoKey, StoredConstFnEvidence).init(allocator),
             .const_evidence_by_content = std.AutoHashMap(u64, StoredConstFnEvidence).init(allocator),
             .site_evidence_memo = std.AutoHashMap(SiteEvidenceMemoKey, SiteEvidenceMemo).init(allocator),
@@ -4595,6 +4600,8 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        for (self.lower_frame_pool.items) |*frames| frames.deinit(self.allocator);
+        self.lower_frame_pool.deinit(self.allocator);
         var parametric_masks = self.parametric_scheme_vars.valueIterator();
         while (parametric_masks.next()) |mask| self.allocator.free(mask.*);
         self.parametric_scheme_vars.deinit(self.allocator);
@@ -4828,7 +4835,7 @@ const Builder = struct {
             .destination_names = &self.program.names,
             .committed = committed_types,
         };
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        var scratch = base.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
         for (entries) |entry| {
             _ = scratch.reset(.retain_capacity);
@@ -15320,6 +15327,17 @@ fn DraftSpecLookup(comptime Family: type) type {
             self.prefixes.deinit(self.allocator);
         }
 
+        /// Drop every entry while keeping the outer tables' capacity for the
+        /// next specialization job.
+        fn clearRetainingCapacity(self: *Self) void {
+            self.open_requests.clearRetainingCapacity();
+            self.digest_requests.clearRetainingCapacity();
+            for (self.overflow_lists.items) |*list| list.deinit(self.allocator);
+            self.overflow_lists.clearRetainingCapacity();
+            for (self.prefixes.values()) |*pairs| pairs.deinit(self.allocator);
+            self.prefixes.clearRetainingCapacity();
+        }
+
         fn isEmpty(self: *const Self) bool {
             return self.prefixes.count() == 0 and self.open_requests.count() == 0 and self.digest_requests.count() == 0 and self.overflow_lists.items.len == 0;
         }
@@ -17638,76 +17656,42 @@ const BodyDraftStore = struct {
         self.interface_replay.deinit(self.allocator);
         self.interface_replay = InterfaceReplayState.init(self.allocator);
         self.freeDeferredBoundaryPayloads();
-        self.deferred_const_uses.deinit(self.allocator);
-        self.deferred_const_uses = .empty;
-        self.deferred_structural_eqs.deinit(self.allocator);
-        self.deferred_structural_eqs = .empty;
-        self.deferred_structural_serializations.deinit(self.allocator);
-        self.deferred_structural_serializations = .empty;
-        self.deferred_stored_codec_restores.deinit(self.allocator);
-        self.deferred_stored_codec_restores = .empty;
-        self.deferred_callsite_intrinsics.deinit(self.allocator);
-        self.deferred_callsite_intrinsics = .empty;
-        self.deferred_inspects.deinit(self.allocator);
-        self.deferred_inspects = .empty;
-        self.local_proc_contexts.deinit(self.allocator);
-        self.local_proc_contexts = .empty;
-        self.prepared_codec_calls.deinit(self.allocator);
-        self.prepared_codec_calls = .empty;
-        self.prepared_inspect_methods.deinit(self.allocator);
-        self.prepared_inspect_methods = .empty;
-        self.structural_eq_method_calls.deinit(self.allocator);
-        self.structural_eq_method_calls = .empty;
+        self.deferred_const_uses.clearRetainingCapacity();
+        self.deferred_structural_eqs.clearRetainingCapacity();
+        self.deferred_structural_serializations.clearRetainingCapacity();
+        self.deferred_stored_codec_restores.clearRetainingCapacity();
+        self.deferred_callsite_intrinsics.clearRetainingCapacity();
+        self.deferred_inspects.clearRetainingCapacity();
+        self.local_proc_contexts.clearRetainingCapacity();
+        self.prepared_codec_calls.clearRetainingCapacity();
+        self.prepared_inspect_methods.clearRetainingCapacity();
+        self.structural_eq_method_calls.clearRetainingCapacity();
 
-        self.active_callable_eval_bindings.deinit(self.allocator);
-        self.active_callable_eval_bindings = .empty;
-        self.active_const_node_bindings.deinit(self.allocator);
-        self.active_const_node_bindings = .empty;
-        self.active_const_node_binding_indices.deinit();
-        self.active_const_node_binding_indices = std.AutoHashMap(ActiveConstNodeAddress, u32).init(self.allocator);
-        self.materialized_const_nodes.deinit(self.allocator);
-        self.materialized_const_nodes = .empty;
-        self.materialized_const_node_indices.deinit();
-        self.materialized_const_node_indices = std.AutoHashMap(MaterializedConstNodeAddress, u32).init(self.allocator);
-        self.active_const_bindings.deinit(self.allocator);
-        self.active_const_bindings = .empty;
+        self.active_callable_eval_bindings.clearRetainingCapacity();
+        self.active_const_node_bindings.clearRetainingCapacity();
+        self.active_const_node_binding_indices.clearRetainingCapacity();
+        self.materialized_const_nodes.clearRetainingCapacity();
+        self.materialized_const_node_indices.clearRetainingCapacity();
+        self.active_const_bindings.clearRetainingCapacity();
 
-        self.runtime_value_demands.deinit(self.allocator);
-        self.runtime_value_demands = .empty;
-        self.runtime_demand_guard_frames.deinit(self.allocator);
-        self.runtime_demand_guard_frames = .empty;
-        self.template_spec_reuses.deinit(self.allocator);
-        self.template_spec_reuses = .empty;
-        self.nested_spec_reuses.deinit(self.allocator);
-        self.nested_spec_reuses = .empty;
-        self.impossibility_proofs.deinit(self.allocator);
-        self.impossibility_proofs = .empty;
-        self.impossibility_proof_ids.deinit(self.allocator);
-        self.impossibility_proof_ids = .empty;
-        self.expr_impossibility_proofs.deinit(self.allocator);
-        self.expr_impossibility_proofs = .empty;
-        self.pat_impossibility_proofs.deinit(self.allocator);
-        self.pat_impossibility_proofs = .empty;
-        self.stmt_impossibility_proofs.deinit(self.allocator);
-        self.stmt_impossibility_proofs = .empty;
+        self.runtime_value_demands.clearRetainingCapacity();
+        self.runtime_demand_guard_frames.clearRetainingCapacity();
+        self.template_spec_reuses.clearRetainingCapacity();
+        self.nested_spec_reuses.clearRetainingCapacity();
+        self.impossibility_proofs.clearRetainingCapacity();
+        self.impossibility_proof_ids.clearRetainingCapacity();
+        self.expr_impossibility_proofs.clearRetainingCapacity();
+        self.pat_impossibility_proofs.clearRetainingCapacity();
+        self.stmt_impossibility_proofs.clearRetainingCapacity();
 
-        self.template_spec_lookup.deinit();
-        self.template_spec_lookup = DraftTemplateSpecLookup.init(self.allocator);
-        self.nested_spec_lookup.deinit();
-        self.nested_spec_families.deinit();
-        self.nested_spec_lookup = DraftNestedSpecLookup.init(self.allocator);
-        self.nested_spec_families = std.AutoHashMap(DraftNestedFamilyAddress, void).init(self.allocator);
+        self.template_spec_lookup.clearRetainingCapacity();
+        self.nested_spec_lookup.clearRetainingCapacity();
+        self.nested_spec_families.clearRetainingCapacity();
         var template_lists = self.template_specs_by_template.valueIterator();
         while (template_lists.next()) |list| list.deinit(self.allocator);
-        self.template_specs_by_template.deinit();
-        self.template_spec_by_fn.deinit();
-        self.template_specs_by_template = std.AutoHashMap(names.ProcTemplate, std.ArrayList(u32)).init(self.allocator);
-        self.template_spec_by_fn = collections.DenseMap(DraftFnId, u32).init(self.allocator);
-        self.closed_direct_specializations.deinit();
-        self.closed_direct_specializations = std.AutoHashMap(
-            ClosedDirectCallIdentity,
-            ClosedDirectDraftSpecialization,
-        ).init(self.allocator);
+        self.template_specs_by_template.clearRetainingCapacity();
+        self.template_spec_by_fn.clearRetainingCapacity();
+        self.closed_direct_specializations.clearRetainingCapacity();
 
         self.spec_job_workspace = null;
         self.mutable_graph_names = null;
@@ -19108,14 +19092,14 @@ const InterfaceSummaryRelocation = struct {
 
 const InterfaceSummaryCache = struct {
     allocator: Allocator,
-    evidence_arena: std.heap.ArenaAllocator,
+    evidence_arena: base.SingleThreadArena,
     entries: std.ArrayList(InterfaceSummaryEntry) = .empty,
     buckets: std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)),
 
     fn init(allocator: Allocator) InterfaceSummaryCache {
         return .{
             .allocator = allocator,
-            .evidence_arena = std.heap.ArenaAllocator.init(allocator),
+            .evidence_arena = base.SingleThreadArena.init(allocator),
             .buckets = std.AutoHashMap(InterfaceReplayAddress, std.ArrayList(u32)).init(allocator),
         };
     }
@@ -24924,7 +24908,7 @@ const BodyContext = struct {
             .destination_names = self.nameStoreMut(),
             .importing = self,
         };
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        var scratch = base.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
         const imported_request = try entry.request.copy(scratch.allocator(), relocation);
         if (!try imported_request.eql(request, self.typeStore(), self.nameStore())) return null;
@@ -24946,7 +24930,7 @@ const BodyContext = struct {
             .destination_names = self.nameStoreMut(),
             .sealer = &sealer,
         };
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        var scratch = base.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
         return try binding.cache.insert(self.typeStore(), self.nameStore(), .{
             .address = entry.address,
@@ -25305,7 +25289,7 @@ const BodyContext = struct {
     const DirectCalleeExpansion = struct {
         caller: *BodyContext,
         replay_state: *InterfaceReplayState,
-        input_arena: std.heap.ArenaAllocator,
+        input_arena: base.SingleThreadArena,
         request_roots: std.ArrayList(NodeId) = .empty,
         callee_ctx: BodyContext = undefined,
         callee_ctx_live: bool = false,
@@ -25371,7 +25355,7 @@ const BodyContext = struct {
             const parametric_request = for (hole_classes) |hole_class| {
                 if (hole_class != null) break true;
             } else false;
-            var component_scratch = std.heap.ArenaAllocator.init(self.allocator);
+            var component_scratch = base.SingleThreadArena.init(self.allocator);
             defer component_scratch.deinit();
             const single_request_constraints: ?InterfaceConstraints = if (single_request_component and parametric_request)
                 try InterfaceConstraints.capture(self.graph, component_scratch.allocator(), roots)
@@ -25388,7 +25372,7 @@ const BodyContext = struct {
                 // constraints. Store each interface only after this fixed point.
                 while (replay_state.stack.pop()) |index| {
                     const entry = &replay_state.entries.items[index];
-                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    var scratch = base.SingleThreadArena.init(self.allocator);
                     defer scratch.deinit();
                     // Members of a larger component are captured after relating
                     // back to each other's requests, so their interfaces hold the
@@ -31172,22 +31156,26 @@ const BodyContext = struct {
 
     /// Run a lowering computation to completion on an explicit frame stack.
     fn runLower(self: *BodyContext, root: LowerTask) Allocator.Error!LowerResult {
-        var frames: std.ArrayList(LowerFrame) = .empty;
-        defer frames.deinit(self.allocator);
+        const frames_allocator = self.builder.allocator;
+        var frames = self.builder.lower_frame_pool.pop() orelse std.ArrayList(LowerFrame).empty;
+        defer {
+            frames.clearRetainingCapacity();
+            self.builder.lower_frame_pool.append(frames_allocator, frames) catch frames.deinit(frames_allocator);
+        }
         errdefer {
             while (frames.pop()) |frame| {
                 var owned = frame;
                 owned.ctx.releaseLowerFrame(&owned);
             }
         }
-        try frames.append(self.allocator, .{ .ctx = self, .task = root });
+        try frames.append(frames_allocator, .{ .ctx = self, .task = root });
         var input: ?LowerResult = null;
         while (true) {
             const frame = &frames.items[frames.items.len - 1];
             const step = try frame.ctx.stepLower(frame, input);
             switch (step) {
                 .call => {
-                    const next = frames.addOne(self.allocator) catch |err| {
+                    const next = frames.addOne(frames_allocator) catch |err| {
                         var unstarted: LowerFrame = .{ .ctx = step.call.ctx, .task = step.call.task };
                         unstarted.ctx.releaseLowerFrame(&unstarted);
                         return err;
@@ -50507,7 +50495,7 @@ const BodyContext = struct {
             Common.invariant("scheme requirements were not the checked requirement row they named");
         }
 
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        var scratch = base.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
         const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), roots.items);
         const shape = try input.identityInto(self.graph, scratch.allocator());
@@ -50611,7 +50599,7 @@ const BodyContext = struct {
             }, local),
             .structural => unreachable,
         };
-        var scratch = std.heap.ArenaAllocator.init(self.allocator);
+        var scratch = base.SingleThreadArena.init(self.allocator);
         defer scratch.deinit();
         const input = try InterfaceConstraints.capture(self.graph, scratch.allocator(), &.{constraint_node});
         const request = try input.identityInto(self.graph, scratch.allocator());
@@ -50707,7 +50695,7 @@ const BodyContext = struct {
             break :blk try target_ctx.instNode(lookup.target.callable_ty);
         };
         if (cacheable) {
-            var scratch = std.heap.ArenaAllocator.init(self.allocator);
+            var scratch = base.SingleThreadArena.init(self.allocator);
             defer scratch.deinit();
             _ = try self.insertInterfaceSummary(.{
                 .address = address,

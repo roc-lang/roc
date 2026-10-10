@@ -2370,7 +2370,7 @@ fn testLiteralInitializedStruct(procedure_local: bool) (Allocator.Error || error
     }, .none);
     if (procedure_local) {
         for (0..store.procSpecCount()) |index| {
-            var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+            var scratch = collections.SingleThreadArena.init(testing.allocator);
             defer scratch.deinit();
             try runProc(store, &f.layouts, @fromBackingInt(@intCast(index)), scratch.allocator());
         }

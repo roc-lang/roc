@@ -13,6 +13,7 @@
 //! consumer so they agree by construction.
 
 const std = @import("std");
+const collections = @import("collections");
 
 const layout = @import("../layout.zig");
 const store_mod = @import("../store.zig");
@@ -856,7 +857,7 @@ test "AArch64 ABI target preserves operating-system variants" {
 test "lower aarch64: random_plant(i32) -> Plant is all registers, no ops" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -874,7 +875,7 @@ test "lower aarch64: random_plant(i32) -> Plant is all registers, no ops" {
 test "lower aarch64: HFA and large aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -895,7 +896,7 @@ test "lower aarch64: HFA and large aggregates" {
 test "lower aarch64: pointer-shaped byval layouts use integer registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -922,7 +923,7 @@ test "lower aarch64: pointer-shaped byval layouts use integer registers" {
 test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -941,7 +942,7 @@ test "lower x86_64 sysv: Plant in one int eightbyte, mixed struct splits" {
 test "lower native vectors preserve a single vector register piece" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -965,7 +966,7 @@ test "lower native vectors preserve a single vector register piece" {
 test "lower aarch64 vector aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -989,7 +990,7 @@ test "lower aarch64 vector aggregates" {
 test "lower transparent tag payloads with their C ABI leaf class" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1014,7 +1015,7 @@ test "lower transparent tag payloads with their C ABI leaf class" {
 test "lower win64: 16-byte struct is indirect, Plant is one register" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1043,7 +1044,7 @@ test "lower win64: 16-byte struct is indirect, Plant is one register" {
 test "lower wasm32: single-variant tag union returns payload register" {
     var store = try Store.init(testing.allocator, .u32);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1059,7 +1060,7 @@ test "lower wasm32: single-variant tag union returns payload register" {
 test "physical sysv allocation spills whole aggregates and aligns vectors" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1091,7 +1092,7 @@ test "physical sysv allocation spills whole aggregates and aligns vectors" {
 test "physical win64 allocation uses shared argument positions" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1111,7 +1112,7 @@ test "physical win64 allocation uses shared argument positions" {
 test "physical aarch64 allocation spills complete HFA and integer aggregates" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1143,7 +1144,7 @@ test "physical aarch64 allocation spills complete HFA and integer aggregates" {
 test "physical aarch64 multi-vector aggregate passes a pointer in a GP register" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1161,7 +1162,7 @@ test "physical aarch64 multi-vector aggregate passes a pointer in a GP register"
 test "LLVM carriers preserve native multi-register argument identity" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1210,7 +1211,7 @@ test "LLVM carriers preserve native multi-register argument identity" {
 test "physical aarch64 aligns 16-byte multiword arguments to even GP registers" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
@@ -1236,7 +1237,7 @@ test "physical aarch64 aligns 16-byte multiword arguments to even GP registers" 
 test "physical Apple arm64 stack arguments use compact natural alignment" {
     var store = try Store.init(testing.allocator, .u64);
     defer store.deinit();
-    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena_state = collections.SingleThreadArena.init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 

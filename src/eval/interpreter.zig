@@ -5418,7 +5418,7 @@ pub const Interpreter = struct {
             const hosted_fn = self.roc_ops.hosted_fns.fns[hosted.dispatch_index];
             // Call the hosted function with the platform C ABI via the fixed register-image
             // trampoline (no runtime code generation).
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             host_trampoline.call(
                 self.layout_store,

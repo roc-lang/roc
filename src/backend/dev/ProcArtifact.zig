@@ -18,6 +18,7 @@
 //! as compiling it directly.
 
 const std = @import("std");
+const collections = @import("collections");
 const Sha256 = @import("base").Sha256;
 const lir = @import("lir");
 const layout = @import("layout");
@@ -151,7 +152,7 @@ pub const Artifact = struct {
 /// An ordered set of artifacts covering one code buffer. Order is emission
 /// order, which `assemble` reproduces.
 pub const Set = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     artifacts: []const Artifact,
 
     pub fn deinit(self: *Set) void {
@@ -273,7 +274,7 @@ fn cloneData(a: Allocator, item: DataItem) Allocator.Error!DataItem {
 /// Deep-copy sets into one ownership domain, rebasing only set-local references.
 /// Callers select cache entries using their full compilation provenance.
 pub fn combine(allocator: Allocator, sets: []const *const Set) Allocator.Error!Set {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const a = arena.allocator();
     var artifacts = std.ArrayList(Artifact).empty;
@@ -336,7 +337,7 @@ pub const ExtractError = Allocator.Error || error{
 /// node whose rendering refers to nothing above its own frame.
 pub const ContentNames = struct {
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     /// Every carried item, by the name its program gave it.
     items: std.StringHashMapUnmanaged(DataItem) = .empty,
     /// Content name of each program-local item.
@@ -349,7 +350,7 @@ pub const ContentNames = struct {
     const no_reference: u32 = std.math.maxInt(u32);
 
     pub fn init(allocator: Allocator, set: *const Set) Allocator.Error!ContentNames {
-        var self = ContentNames{ .allocator = allocator, .arena = std.heap.ArenaAllocator.init(allocator) };
+        var self = ContentNames{ .allocator = allocator, .arena = collections.SingleThreadArena.init(allocator) };
         errdefer self.deinit();
         for (set.artifacts) |artifact| {
             for (artifact.data) |item| try self.items.put(allocator, item.name, item);
@@ -460,7 +461,7 @@ pub const ContentNames = struct {
 /// Immutable data catalog prepared once by the coordinator. Worker lookups
 /// borrow it read-only; retained artifacts copy only their reachable closure.
 pub const PreparedData = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     items: std.StringHashMapUnmanaged(DataItem),
 
     pub fn init(
@@ -469,7 +470,7 @@ pub const PreparedData = struct {
         constant_exports: []const lir.Program.StaticDataExport,
         spliced_data: []const DataItem,
     ) Allocator.Error!PreparedData {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
         const a = arena.allocator();
         var items = std.StringHashMapUnmanaged(DataItem){};
@@ -546,7 +547,7 @@ pub fn extractPrepared(
     layout_store: *const layout.Store,
     prepared: *const PreparedData,
 ) ExtractError!Set {
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     errdefer arena.deinit();
     const arena_allocator = arena.allocator();
 
@@ -1264,7 +1265,7 @@ test "artifact local calls reserve veneers before later regions exceed reach" {
     image.codegen.branch_reach_limit = 4096;
     const gap = @as([8192]u8, @splat(0));
     var set = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{
             .{
                 .kind = .entrypoint,
@@ -1311,7 +1312,7 @@ fn testPreparedData(allocator: Allocator) (ExtractError || error{ TestExpectedEq
     }, &.{});
     var prepared_live = true;
     defer if (prepared_live) prepared.deinit();
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const a = arena.allocator();
     var local = std.StringHashMap(DataItem).init(allocator);
@@ -1407,7 +1408,7 @@ test "artifact metadata queues unresolved targets and preserves same-offset line
 
 fn testCombineOwnership(allocator: Allocator) (Allocator.Error || error{TestExpectedEqual})!void {
     const source = Set{
-        .arena = std.heap.ArenaAllocator.init(allocator),
+        .arena = collections.SingleThreadArena.init(allocator),
         .artifacts = &.{.{
             .kind = .{ .rc_helper = "helper" },
             .code = "code",
@@ -1468,7 +1469,7 @@ fn testReloc(offset: u32, name: []const u8, addend: i64) DataRelocation {
 /// A set whose one artifact carries `data`; the set owns nothing.
 fn testDataSet(storage: *[1]Artifact, data: []const DataItem) Set {
     storage[0] = .{ .kind = .entrypoint, .code = &.{}, .entry = 0, .frame = null, .refs = &.{}, .relocations = &.{}, .data = data };
-    return .{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator), .artifacts = storage };
+    return .{ .arena = collections.SingleThreadArena.init(std.testing.allocator), .artifacts = storage };
 }
 
 test "constants are named by content across programs, through cycles, and never when host-visible" {

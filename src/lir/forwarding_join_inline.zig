@@ -446,7 +446,7 @@ const TestError = ResourceError || error{ TestExpectedEqual, TestUnexpectedResul
 
 fn testRun(store: *LirStore, layouts: *const layout_mod.Store, proc: LIR.LirProcSpecId, scratch_allocator: Allocator, mode: TestMode) ResourceError!void {
     if (mode == .standalone) return run(store, layouts);
-    var scratch = std.heap.ArenaAllocator.init(scratch_allocator);
+    var scratch = collections.SingleThreadArena.init(scratch_allocator);
     defer scratch.deinit();
     const allocator = if (mode == .direct_scratch) scratch_allocator else scratch.allocator();
     var join_params = body_clone.JoinParamIndex.init(allocator);

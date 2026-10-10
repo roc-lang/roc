@@ -896,7 +896,7 @@ const SourceCache = struct {
     /// Ownership-neutral roots and frames never follow emitted proc metadata.
     body: ?LIR.CFStmtId,
     frame: LIR.LocalSpan,
-    arena: ?std.heap.ArenaAllocator = null,
+    arena: ?collections.SingleThreadArena = null,
     local_index: collections.DenseMap(LIR.LocalId, u32) = undefined,
     domain: ProcArcDomain = undefined,
     liveness: SourceLiveness = undefined,
@@ -910,7 +910,7 @@ const SourceCache = struct {
 
     fn execute(self: *SourceCache, allocator: Allocator) ResourceError!void {
         const body = self.body orelse return;
-        self.arena = std.heap.ArenaAllocator.init(allocator);
+        self.arena = collections.SingleThreadArena.init(allocator);
         const arena = self.arena.?.allocator();
         self.local_index = collections.DenseMap(LIR.LocalId, u32).init(arena);
         self.domain = try ProcArcDomain.init(arena, self.template.store, self.template.solution, self.template.local_contains_refcounted, &self.local_index, self.frame);
@@ -935,7 +935,7 @@ const EmissionOwner = struct {
     inserter: Inserter,
     source: *SourceCache,
     job: QueuedVariant,
-    arena: ?std.heap.ArenaAllocator = null,
+    arena: ?collections.SingleThreadArena = null,
     shard: ?LirStore = null,
     domain: ProcArcDomain = undefined,
     death_scratch: std.ArrayList(ReleaseDecision) = .empty,
@@ -967,7 +967,7 @@ const EmissionOwner = struct {
     }
 
     fn plan(self: *EmissionOwner, allocator: Allocator) ResourceError!void {
-        self.arena = std.heap.ArenaAllocator.init(allocator);
+        self.arena = collections.SingleThreadArena.init(allocator);
         const inserter = &self.inserter;
         const store = inserter.store;
         const solution = inserter.solution;
@@ -7049,7 +7049,7 @@ const Inserter = struct {
     /// debug oracle: the loop forest, each node's component, each loop's carried
     /// row, and a support witness for every bit a unit was found to expose.
     const LivenessCertificate = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         forest: LoopForest = undefined,
         component_of: []const u32 = &.{},
         carried: []const ExactBitSet = &.{},
@@ -7317,7 +7317,7 @@ const Inserter = struct {
             graph.nodes.deinit(self.source_liveness.scratch_allocator);
             graph.successors.deinit(self.source_liveness.scratch_allocator);
         };
-        var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
+        var scratch_arena = collections.SingleThreadArena.init(self.source_liveness.scratch_allocator);
         defer scratch_arena.deinit();
         const scratch_allocator = scratch_arena.allocator();
         var work = std.ArrayList(u32).empty;
@@ -7703,7 +7703,7 @@ const Inserter = struct {
     /// than its size times its depth.
     fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
         if (builtin.mode != .debug) return self.solveStructuredLiveness(graph, null);
-        var certificate = LivenessCertificate{ .arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator) };
+        var certificate = LivenessCertificate{ .arena = collections.SingleThreadArena.init(self.source_liveness.scratch_allocator) };
         defer certificate.arena.deinit();
         try self.solveStructuredLiveness(graph, &certificate);
         try self.certifyStructuredLiveness(graph, &certificate);
@@ -7725,7 +7725,7 @@ const Inserter = struct {
     /// path to a read: the fixed point is the least one.
     fn certifyStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph, certificate: *const LivenessCertificate) ResourceError!void {
         if (builtin.mode != .debug) return;
-        var arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
+        var arena = collections.SingleThreadArena.init(self.source_liveness.scratch_allocator);
         defer arena.deinit();
         const allocator = arena.allocator();
         const forest = &certificate.forest;
@@ -7879,7 +7879,7 @@ const Inserter = struct {
     }
 
     fn solveStructuredLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph, certificate: ?*LivenessCertificate) ResourceError!void {
-        var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
+        var scratch_arena = collections.SingleThreadArena.init(self.source_liveness.scratch_allocator);
         defer scratch_arena.deinit();
         const allocator = scratch_arena.allocator();
         // What the oracle checks outlives the solve.
@@ -9180,7 +9180,7 @@ fn fixtureTableIndex(comptime index: u32) u32 {
 }
 
 test "exact ARC sets preserve operations across persistent forks" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     const word_bits = @bitSizeOf(usize);
     for ([_]usize{ word_bits, word_bits + 1 }) |bit_len| {
@@ -9205,7 +9205,7 @@ test "exact ARC sets preserve operations across persistent forks" {
 }
 
 test "statement components never number a successor's component lower" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     // 0 -> 1 -> 2 -> 1 (a loop of 1 and 2), 2 -> 3, 0 -> 4 -> 3.
     const succ_starts = [_]u32{ 0, 2, 3, 5, 5, 6 };
@@ -10944,7 +10944,7 @@ test "ARC proc domain excludes scalar and other-proc locals" {
     defer solution.deinit();
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
 
     {
@@ -11039,7 +11039,7 @@ test "ARC proc domain filters module-wide borrow groups to its frame" {
 
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var domain = try ProcArcDomain.init(
         arena.allocator(),
@@ -11084,7 +11084,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     const concrete_rc = [_]bool{ false, true, false };
     var global_local_index = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer global_local_index.deinit();
-    var domain_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var domain_arena = collections.SingleThreadArena.init(testing.allocator);
     defer domain_arena.deinit();
     var domain = try ProcArcDomain.init(
         domain_arena.allocator(),
@@ -11097,7 +11097,7 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     defer domain.clearGlobalIndices();
     try testing.expectEqual(@as(usize, 2), domain.resource_locals.len);
 
-    var liveness_arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var liveness_arena = collections.SingleThreadArena.init(testing.allocator);
     defer liveness_arena.deinit();
     var source_liveness = SourceLiveness.init(liveness_arena.allocator(), testing.allocator);
     var loop_liveness_caches = std.ArrayList(LoopLivenessCache).empty;
@@ -11131,7 +11131,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     const rc = [_]bool{true};
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &rc, &.{}, &.{proc}, true);
     defer solution.deinit();
-    var durable = std.heap.ArenaAllocator.init(testing.allocator);
+    var durable = collections.SingleThreadArena.init(testing.allocator);
     defer durable.deinit();
     var source = SourceLiveness.init(durable.allocator(), testing.allocator);
     var inserter = Inserter{
@@ -11144,7 +11144,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
         .source_liveness = &source,
     };
     {
-        var temporary = std.heap.ArenaAllocator.init(testing.allocator);
+        var temporary = collections.SingleThreadArena.init(testing.allocator);
         defer temporary.deinit();
         var indices = collections.DenseMap(LIR.LocalId, u32).init(temporary.allocator());
         var domain = try ProcArcDomain.init(temporary.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
@@ -11188,7 +11188,7 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     rc[@backingInt(local)] = true;
     var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, rc, &.{}, &.{proc}, true);
     defer solution.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     // A module-sized u32 array cannot fit; one sparse page and tiny frame can.
     var storage: [4096]u8 = undefined;
@@ -11244,7 +11244,7 @@ test "ARC sparse join seeds agree with exhaustive group predicates and emission 
     concrete_rc[7] = false;
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer indices.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &concrete_rc, &indices, f.store.getProcSpec(proc).frame_locals);
     defer domain.clearGlobalIndices();
@@ -11308,7 +11308,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     for (locals, 0..) |local, i| try testing.expectEqual(locals[i % 3], solution.leaderOf(local));
     var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
     defer indices.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
     defer domain.clearGlobalIndices();
@@ -11344,7 +11344,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
 }
 
 test "ARC raw-liveness ranges exclude boundary bits without scanning wide empty groups" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     var reads = try ExactBitSet.initEmpty(arena.allocator(), 1_000_001);
     for ([_]usize{ 0, 63, 64, 511, 512, 999999, 1000000 }) |bit| try reads.set(bit);
@@ -16366,7 +16366,7 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             // Preparation is source-owned, but boundary reads are selected by
             // the emitted convention. Exercise both preparation orders, then
             // query a frozen cache without permitting further allocation.
-            var arena = std.heap.ArenaAllocator.init(testing.allocator);
+            var arena = collections.SingleThreadArena.init(testing.allocator);
             defer arena.deinit();
             var indices = collections.DenseMap(LIR.LocalId, u32).init(arena.allocator());
             var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, rc, &indices, f.store.getProcSpec(callee).frame_locals);
@@ -18696,7 +18696,7 @@ test "RC alias of a parameter consumed in the body solves the parameter owned" {
 }
 
 test "ARC ownership iteration skips absent resources and preserves release order" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    var arena = collections.SingleThreadArena.init(testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     const width = 65536;

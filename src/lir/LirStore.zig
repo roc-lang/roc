@@ -68,6 +68,9 @@ const RowIdContext = struct {
 const RewriteKeys = struct {
     indices: std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage),
     ids: std.ArrayList(u32) = .empty,
+    /// Whether `ids` is sorted, so a lookup is a binary search over it
+    /// rather than a hash probe. Set by `finish`, cleared by `prepare`.
+    sorted: bool = false,
 
     fn init(allocator: Allocator) RewriteKeys {
         return .{ .indices = std.HashMap(u32, u32, RowIdContext, std.hash_map.default_max_load_percentage).initContext(allocator, .{}) };
@@ -83,6 +86,7 @@ const RewriteKeys = struct {
         if (entry.found_existing) return false;
         entry.value_ptr.* = 0;
         try self.ids.append(allocator, id);
+        self.sorted = false;
         return true;
     }
 
@@ -91,10 +95,25 @@ const RewriteKeys = struct {
         for (self.ids.items, 0..) |id, dense_index| {
             self.indices.getPtr(id).?.* = @intCast(dense_index);
         }
+        self.sorted = true;
+    }
+
+    /// The dense position of `id` among the prepared ids, if prepared.
+    fn lookup(self: *const RewriteKeys, id: u32) ?u32 {
+        if (!self.sorted) return self.indices.get(id);
+        var low: usize = 0;
+        var high: usize = self.ids.items.len;
+        while (low < high) {
+            const mid = low + (high - low) / 2;
+            const candidate = self.ids.items[mid];
+            if (candidate == id) return @intCast(mid);
+            if (candidate < id) low = mid + 1 else high = mid;
+        }
+        return null;
     }
 
     fn index(self: *const RewriteKeys, start: u32, len: u32) ?u32 {
-        const first = self.indices.get(start) orelse return null;
+        const first = self.lookup(start) orelse return null;
         if (len > 1) {
             // Sorted unique IDs make endpoint equality sufficient to prove
             // every row of this span was prepared, without scanning it.
@@ -1165,7 +1184,7 @@ pub fn sourceFileModuleIdentity(self: *const Self, file: u32) [32]u8 {
 pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_locs.owned(private)) return rewrite.cf_stmt_locs.rows.get(private);
         }
     }
@@ -1180,7 +1199,7 @@ pub fn stmtLoc(self: *const Self, id: CFStmtId) base.SourceLoc {
 pub fn stmtInlineScope(self: *const Self, id: CFStmtId) InlineScopeId {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_inline_scopes.owned(private)) return rewrite.cf_stmt_inline_scopes.rows.get(private);
         }
     }
@@ -1224,7 +1243,7 @@ pub fn addInlineScope(self: *Self, scope: InlineScope) Allocator.Error!InlineSco
 pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_regions.owned(private)) return rewrite.cf_stmt_regions.rows.get(private);
         }
     }
@@ -1239,7 +1258,7 @@ pub fn stmtRegion(self: *const Self, id: CFStmtId) base.Region {
 pub fn stmtOriginKind(self: *const Self, id: CFStmtId) OriginKind {
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmt_origin_kinds.owned(private)) return rewrite.cf_stmt_origin_kinds.rows.get(private);
         }
     }
@@ -1718,7 +1737,7 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     self.verifyCFStmtId(id);
     const index = @backingInt(id);
     if (self.proc_rewrite) |*rewrite| {
-        if (rewrite.cf_stmts.keys.indices.get(index)) |private| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
             if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.get(private);
         }
     }

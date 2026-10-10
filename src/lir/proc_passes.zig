@@ -221,7 +221,7 @@ pub fn run(
             context.completed = true;
         }
     } else {
-        var scratch = std.heap.ArenaAllocator.init(allocator);
+        var scratch = base.SingleThreadArena.init(allocator);
         defer scratch.deinit();
         var analysis = BodyClone.AnalysisScratch.init(allocator);
         defer analysis.deinit();

@@ -1309,7 +1309,7 @@ const InlineScopeRebasePair = struct {
 
 const Pass = struct {
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     program: *Ast.Program,
     plans: []FnPlan,
     symbols: Common.SymbolGen,
@@ -1353,7 +1353,7 @@ const Pass = struct {
 
     const PatternRequest = struct { fn_id: Ast.FnId, pattern: CallPattern };
     const RequestSink = struct {
-        arena: std.heap.ArenaAllocator,
+        arena: collections.SingleThreadArena,
         items: std.ArrayList(PatternRequest) = .empty,
     };
 
@@ -1385,13 +1385,13 @@ const Pass = struct {
             output.* = .{
                 .allocator = allocator,
                 .program = try self.source.program.cloneForSpecConstrBody(allocator, self.fn_id),
-                .requests = .{ .arena = std.heap.ArenaAllocator.init(allocator) },
+                .requests = .{ .arena = collections.SingleThreadArena.init(allocator) },
             };
             errdefer output.program.deinit();
             errdefer output.requests.arena.deinit();
             var pass: Pass = .{
                 .allocator = scratch,
-                .arena = std.heap.ArenaAllocator.init(scratch),
+                .arena = collections.SingleThreadArena.init(scratch),
                 .program = &output.program,
                 .plans = self.source.plans,
                 .symbols = self.source.symbols,
@@ -1533,7 +1533,7 @@ const Pass = struct {
                 if (failure) |err| return err;
             } else {
                 for (work[0..count]) |*item| {
-                    var scratch = std.heap.ArenaAllocator.init(self.allocator);
+                    var scratch = collections.SingleThreadArena.init(self.allocator);
                     defer scratch.deinit();
                     try item.execute(self.allocator, scratch.allocator());
                 }
@@ -1605,7 +1605,7 @@ const Pass = struct {
         next_join_point: u32,
     };
     fn init(allocator: Allocator, program: *Ast.Program) Allocator.Error!Pass {
-        var arena = std.heap.ArenaAllocator.init(allocator);
+        var arena = collections.SingleThreadArena.init(allocator);
         errdefer arena.deinit();
 
         const plans = try allocator.alloc(FnPlan, program.fnCount());
@@ -5405,7 +5405,7 @@ const Cloner = struct {
     /// Symbolic values, shapes, and strict-binding chains owned by this clone.
     /// Accepted call patterns are copied into the pass-wide arena before this
     /// short-lived scratch arena is released.
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     source_fn: Ast.FnId,
     pattern: CallPattern,
     subst: Subst,
@@ -5530,7 +5530,7 @@ const Cloner = struct {
             .pass = pass,
             .purpose = .specialization,
             .source_reuse = .none,
-            .arena = std.heap.ArenaAllocator.init(pass.allocator),
+            .arena = collections.SingleThreadArena.init(pass.allocator),
             .source_fn = source_fn,
             .pattern = pattern,
             .subst = Subst.init(pass.allocator),
@@ -5570,7 +5570,7 @@ const Cloner = struct {
             .pass = pass,
             .purpose = .rewrite,
             .source_reuse = .none,
-            .arena = std.heap.ArenaAllocator.init(pass.allocator),
+            .arena = collections.SingleThreadArena.init(pass.allocator),
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
             .subst = Subst.init(pass.allocator),
@@ -16784,7 +16784,7 @@ const ReverseSpecConstrExecutor = struct {
         const self: *@This() = @ptrCast(@alignCast(context));
         self.len -= 1;
         const task = self.queued[self.len];
-        var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+        var scratch = collections.SingleThreadArena.init(std.testing.allocator);
         defer scratch.deinit();
         var lane = TaskExecutor.LaneState.init(std.testing.allocator);
         defer lane.deinit();
@@ -18020,7 +18020,7 @@ test "value substitutability is exact at any depth" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18070,7 +18070,7 @@ test "making a substitutable value reusable keeps it whole at any size" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });
@@ -18106,7 +18106,7 @@ test "value substitution bounds the expansion of shared sub-values" {
     var cloner = Cloner.initForRewrite(&pass);
     defer cloner.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = collections.SingleThreadArena.init(allocator);
     defer arena.deinit();
 
     const u8_ty = try program.types.add(.{ .primitive = .u8 });

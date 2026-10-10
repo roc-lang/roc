@@ -241,6 +241,14 @@ alias_row_names: std.ArrayListUnmanaged(AliasRowName),
 /// The entries of `alias_row_names` that belong to long runs, so a long
 /// row's duplicate-name check is one lookup rather than a scan of its run.
 alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void),
+/// Finished expression-kernel activities kept for reuse, each with its task
+/// stack's capacity retained, so checking a body does not pay a heap
+/// allocation and a task stack grown from empty per `checkExpr`.
+expr_kernel_pool: std.ArrayList(*ExprKernelActivity),
+/// Activity stacks of finished `runCheckActivities` calls, kept with their
+/// capacity for the next run. Each run takes its own stack, so a nested run
+/// never moves the activity an outer step is still working on.
+check_activity_pool: std.ArrayList(std.ArrayList(CheckActivity)),
 /// A map from one var to another. Used to apply type arguments in instantiation
 rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
 /// Header rigid vars for the currently-processed type declaration.
@@ -3652,6 +3660,8 @@ fn initAssumePrepared(
         .alias_row_frames = .empty,
         .alias_row_names = .empty,
         .alias_row_name_set = .empty,
+        .expr_kernel_pool = .empty,
+        .check_activity_pool = .empty,
         .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .pending_default_checks = .empty,
@@ -3815,6 +3825,13 @@ pub fn fixupTypeWriter(self: *Self) void {
 
 /// Deinit owned fields
 pub fn deinit(self: *Self) void {
+    for (self.expr_kernel_pool.items) |state| {
+        state.tasks.deinit(self.gpa);
+        self.gpa.destroy(state);
+    }
+    self.expr_kernel_pool.deinit(self.gpa);
+    for (self.check_activity_pool.items) |*activities| activities.deinit(self.gpa);
+    self.check_activity_pool.deinit(self.gpa);
     self.canonical_key_writer.deinit();
     self.owner_envs_by_identity.deinit(self.gpa);
     self.regions.deinit(self.gpa);
@@ -6715,8 +6732,19 @@ const Env = struct {
     /// env's clean prefix has accounted for.
     clean_log_cursor: usize = 0,
     clean_generation: u64 = 0,
-    /// Clean-prefix positions by the triggers that may change their entries.
-    clean_index: std.AutoHashMapUnmanaged(u64, std.ArrayListUnmanaged(u32)) = .empty,
+    /// Clean-prefix positions by the triggers that may change their entries:
+    /// `clean_index` holds the first link of each trigger's chain through
+    /// `clean_links`, so forgetting the prefix clears two flat tables rather
+    /// than one list per trigger ever seen.
+    clean_index: std.AutoHashMapUnmanaged(u64, u32) = .empty,
+    clean_links: std.ArrayListUnmanaged(CleanLink) = .empty,
+
+    const CleanLink = struct {
+        position: u32,
+        next: u32,
+
+        const none = std.math.maxInt(u32);
+    };
 
     fn init(
         gpa: std.mem.Allocator,
@@ -6735,16 +6763,15 @@ const Env = struct {
     fn deinit(self: *Env, gpa: std.mem.Allocator) void {
         self.var_pool.deinit();
         self.deferred_static_dispatch_constraints.deinit(gpa);
-        var lists = self.clean_index.valueIterator();
-        while (lists.next()) |list| list.deinit(gpa);
         self.clean_index.deinit(gpa);
+        self.clean_links.deinit(gpa);
     }
 
     /// Forget the clean prefix.
     fn clearClean(self: *Env) void {
         self.clean_len = 0;
-        var lists = self.clean_index.valueIterator();
-        while (lists.next()) |list| list.clearRetainingCapacity();
+        if (self.clean_index.count() != 0) self.clean_index.clearRetainingCapacity();
+        self.clean_links.clearRetainingCapacity();
     }
 
     /// Entries at `len` and beyond moved or left the queue.
@@ -18088,8 +18115,11 @@ fn checkActivityDone(result: CheckActivityResult) CheckActivityStep {
 
 /// Run a checking activity, and every activity it suspends on, to completion.
 fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Error!CheckActivityResult {
-    var activities: std.ArrayList(CheckActivity) = .empty;
-    defer activities.deinit(self.gpa);
+    var activities = self.check_activity_pool.pop() orelse std.ArrayList(CheckActivity).empty;
+    defer {
+        activities.clearRetainingCapacity();
+        self.check_activity_pool.append(self.gpa, activities) catch activities.deinit(self.gpa);
+    }
     errdefer while (activities.pop()) |activity| {
         var owned = activity;
         self.abortCheckActivity(&owned, env);
@@ -18103,7 +18133,7 @@ fn runCheckActivities(self: *Self, root: CheckActivity, env: *Env) Allocator.Err
             .push => try self.pushCheckActivity(&activities, step.push, env),
             .done => {
                 switch (activity.*) {
-                    .expr => |state| self.gpa.destroy(state),
+                    .expr => |state| self.releaseExprKernelActivity(state),
                     .ensure_group, .group, .def, .boundary, .pending_targets, .predeclared_uses => {},
                 }
                 activities.items.len -= 1;
@@ -18149,8 +18179,7 @@ fn abortCheckActivity(self: *Self, activity: *CheckActivity, env: *Env) void {
                 var owned_task = task;
                 self.abortExprTask(&owned_task, env);
             }
-            state.tasks.deinit(self.gpa);
-            self.gpa.destroy(state);
+            self.releaseExprKernelActivity(state);
         },
         .boundary => |*state| if (state.owns_roots) self.gpa.free(state.roots),
         .ensure_group, .pending_targets, .predeclared_uses => {},
@@ -25006,9 +25035,25 @@ fn checkExprWithFunctionOwner(self: *Self, expr_idx: CIR.Expr.Idx, env: *Env, ex
 }
 
 fn newExprKernelActivity(self: *Self, next: ExprChildRequest) Allocator.Error!*ExprKernelActivity {
+    if (self.expr_kernel_pool.pop()) |state| {
+        var tasks = state.tasks;
+        tasks.clearRetainingCapacity();
+        state.* = .{ .next = next, .tasks = tasks };
+        return state;
+    }
     const state = try self.gpa.create(ExprKernelActivity);
     state.* = .{ .next = next };
     return state;
+}
+
+/// Return a finished or aborted kernel activity to the pool. Its task stack
+/// is empty; its capacity is kept for the next activity.
+fn releaseExprKernelActivity(self: *Self, state: *ExprKernelActivity) void {
+    std.debug.assert(state.tasks.items.len == 0);
+    self.expr_kernel_pool.append(self.gpa, state) catch {
+        state.tasks.deinit(self.gpa);
+        self.gpa.destroy(state);
+    };
 }
 
 fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Allocator.Error!CheckActivityStep {
@@ -25051,7 +25096,6 @@ fn stepExprKernel(self: *Self, state: *ExprKernelActivity, env: *Env) std.mem.Al
         }
 
         if (state.tasks.items.len == 0) {
-            state.tasks.deinit(self.gpa);
             return checkActivityDone(.{ .does_fx = state.child_does_fx.? });
         }
         const task = &state.tasks.items[state.tasks.items.len - 1];
@@ -30744,7 +30788,7 @@ fn collectAbsentCtorPayloadBlockers(
     constructed_tags: []const Ident.Idx,
     out: *std.ArrayList(Var),
 ) Allocator.Error!void {
-    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    var arena = base.SingleThreadArena.init(self.gpa);
     defer arena.deinit();
 
     var open_cache = exhaustive.NominalOpenCache.init(self.gpa);
@@ -44571,9 +44615,14 @@ fn syncCleanDeferredPrefix(self: *Self, env: *Env) void {
     const log = self.waiting_trigger_log.items;
     if (env.clean_len != 0) {
         for (log[env.clean_log_cursor..]) |key| {
-            const positions = env.clean_index.getPtr(key) orelse continue;
-            for (positions.items) |position| env.truncateClean(position);
-            positions.clearRetainingCapacity();
+            const head = env.clean_index.getPtr(key) orelse continue;
+            var link = head.*;
+            while (link != Env.CleanLink.none) {
+                const entry = env.clean_links.items[link];
+                env.truncateClean(entry.position);
+                link = entry.next;
+            }
+            head.* = Env.CleanLink.none;
             if (env.clean_len == 0) break;
         }
     }
@@ -44608,8 +44657,10 @@ fn extendCleanDeferredPrefix(self: *Self, env: *Env, rebuilt_from: usize) Alloca
 
 fn indexCleanDeferredEntry(self: *Self, env: *Env, key: u64, position: u32) Allocator.Error!void {
     const gop = try env.clean_index.getOrPut(self.gpa, key);
-    if (!gop.found_existing) gop.value_ptr.* = .empty;
-    try gop.value_ptr.append(self.gpa, position);
+    if (!gop.found_existing) gop.value_ptr.* = Env.CleanLink.none;
+    const link: u32 = @intCast(env.clean_links.items.len);
+    try env.clean_links.append(self.gpa, .{ .position = position, .next = gop.value_ptr.* });
+    gop.value_ptr.* = link;
 }
 
 fn beginStaticDispatchDrain(self: *Self, is_numeric_default_pass: bool, start: usize) StaticDispatchDrain {

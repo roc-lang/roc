@@ -229,7 +229,7 @@ test "trmc per-proc and serial TCE preserve metadata and no-op procs" {
         try prepareLayouts(&store, &layouts);
         const layout_count = layouts.layoutCount();
         if (per_proc) {
-            var scratch = std.heap.ArenaAllocator.init(allocator);
+            var scratch = collections.SingleThreadArena.init(allocator);
             defer scratch.deinit();
             const report = (try runProc(&store, &layouts, proc_id, scratch.allocator())).?;
             try std.testing.expectEqual(@as(usize, 0), report.construct_count);

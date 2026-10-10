@@ -145,7 +145,7 @@ const RootState = union(enum) { pending, active, completed: RunOutcome };
 pub const Evaluator = struct {
     gpa: std.mem.Allocator,
     program: *const Ast.Program,
-    arena: std.heap.ArenaAllocator,
+    arena: base.SingleThreadArena,
     inputs: Inputs,
     root_states: []RootState,
 
@@ -190,7 +190,7 @@ pub const Evaluator = struct {
             .root_states = states,
             .gpa = gpa,
             .program = program,
-            .arena = std.heap.ArenaAllocator.init(gpa),
+            .arena = base.SingleThreadArena.init(gpa),
             .dbg_events = .empty,
             .expect_failures = .empty,
             .unsupported = null,

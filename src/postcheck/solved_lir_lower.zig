@@ -3256,7 +3256,7 @@ const Lowerer = struct {
     /// from a frozen image does (see `ComptimeScalarValues`); null leaves the
     /// value to its slot.
     fn lowerConstructionExprInto(self: *Lowerer, where: LowerSite, target: LIR.LocalId, expr_id: Lifted.ExprId, ty: Type.TypeId, next: LIR.CFStmtId) Common.LowerError!?LIR.CFStmtId {
-        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        var arena = base.SingleThreadArena.init(self.allocator);
         defer arena.deinit();
         const layout_idx = self.result.store.getLocal(target).layout_idx;
         const construction = try self.constructionOfExpr(arena.allocator(), expr_id, ty, layout_idx) orelse return null;
@@ -6173,7 +6173,7 @@ const Lowerer = struct {
         scrutinee_local: LIR.LocalId = undefined,
         done: LIR.JoinPointId = undefined,
         /// Owns the decision tree and its emitter.
-        arena: ?*std.heap.ArenaAllocator = null,
+        arena: ?*base.SingleThreadArena = null,
         emitter: *match_tree.Compiler(MatchTreeCtx).Emitter = undefined,
     };
 
@@ -7012,7 +7012,7 @@ const Lowerer = struct {
         if (candidate.storage.needsTargetStorage(self.result.layouts.targetUsize()) and self.layoutNeedsStaticData(layout_idx)) {
             const id = try self.lirStaticDataFor(candidate, ty, layout_idx);
             // A list of copies keeps its slot and also names its fresh form.
-            var arena = std.heap.ArenaAllocator.init(self.allocator);
+            var arena = base.SingleThreadArena.init(self.allocator);
             defer arena.deinit();
             const fresh_alternative = if (try self.uniformListOfExpr(arena.allocator(), candidate.runtime_expr, ty, layout_idx)) |uniform|
                 try self.uniformListConstructor(where, id, uniform, layout_idx)
@@ -8395,8 +8395,8 @@ const Lowerer = struct {
         // (src/postcheck/match_tree.zig): one multiway test per tested
         // occurrence, one discriminant/length/field read per position, and
         // branch bodies lowered exactly once.
-        const arena_state = try self.allocator.create(std.heap.ArenaAllocator);
-        arena_state.* = std.heap.ArenaAllocator.init(self.allocator);
+        const arena_state = try self.allocator.create(base.SingleThreadArena);
+        arena_state.* = base.SingleThreadArena.init(self.allocator);
         errdefer {
             arena_state.deinit();
             self.allocator.destroy(arena_state);

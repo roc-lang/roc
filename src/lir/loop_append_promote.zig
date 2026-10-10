@@ -3741,7 +3741,7 @@ test "promote threads slack through an append-only loop" {
     }, .none);
 
     {
-        var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
         defer scratch.deinit();
         try runProc(store, &f.layouts, proc_id, scratch.allocator());
     }

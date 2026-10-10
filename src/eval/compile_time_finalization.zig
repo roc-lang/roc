@@ -5045,7 +5045,7 @@ test "CTFE native emission uses worker callbacks and retains reusable code witho
         fn end(_: *anyopaque) void {}
         fn submit(raw: *anyopaque, task: tasks.Task) Allocator.Error!void {
             const self: *@This() = @ptrCast(@alignCast(raw));
-            var scratch = std.heap.ArenaAllocator.init(std.testing.allocator);
+            var scratch = base.SingleThreadArena.init(std.testing.allocator);
             defer scratch.deinit();
             self.callbacks += 1;
             const value = task.run(task.context, .{
@@ -5173,7 +5173,7 @@ test "shared compile-time debug replay sorts module root and event identities" {
 
 test "completed frozen graphs rebase independent nested symbols" {
     const allocator = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(allocator);
+    var arena = base.SingleThreadArena.init(allocator);
     defer arena.deinit();
     const temporary = arena.allocator();
     const first = try static_data_exports.cloneStaticData(temporary, &.{

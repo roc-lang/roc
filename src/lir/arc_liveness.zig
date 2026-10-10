@@ -127,7 +127,7 @@ pub const Graph = struct {
 /// Solves every node's row. Rows and their shared subtrees live in
 /// `allocator`; all other work uses `scratch_allocator` and is freed.
 pub fn solve(allocator: Allocator, scratch_allocator: Allocator, graph: *const Graph) Allocator.Error![]Row {
-    var scratch_arena = std.heap.ArenaAllocator.init(scratch_allocator);
+    var scratch_arena = collections.SingleThreadArena.init(scratch_allocator);
     defer scratch_arena.deinit();
     const scratch = scratch_arena.allocator();
     const node_count = graph.nodeCount();
@@ -470,7 +470,7 @@ fn expectRowBits(row: *const Row, expected: []const usize) error{TestExpectedEqu
 }
 
 test "liveness carries a value through a nested loop that never mentions it" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     // 0: def 0 -> 1
@@ -495,7 +495,7 @@ test "liveness carries a value through a nested loop that never mentions it" {
 }
 
 test "liveness stops at definitions inside a loop" {
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    var arena = collections.SingleThreadArena.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
     // 0 -> 1; 1: loop header -> 2, 3; 2: def 0 -> 1; 3: reads 0

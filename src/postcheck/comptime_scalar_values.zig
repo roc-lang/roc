@@ -28,6 +28,7 @@
 //! same constructions through the restored expressions; the lowerer's
 //! static-data candidate path decides those.
 const std = @import("std");
+const collections = @import("collections");
 const builtins = @import("builtins");
 const check = @import("check");
 const core = @import("lir_core");
@@ -80,7 +81,7 @@ pub const CompletedScalarValues = struct {
     /// construction, keyed like `entries`.
     uniform_lists: UniformMap,
     /// Owns the nested constructions the entries point into.
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
 
     const Key = struct {
         module: checked.ModuleId,
@@ -106,7 +107,7 @@ pub const CompletedScalarValues = struct {
     /// Collects every completed successful root of `program` whose frozen
     /// image decodes to a construction.
     pub fn init(allocator: Allocator, program: *const Program.Result, frozen: *const Program.FrozenStaticData) Allocator.Error!CompletedScalarValues {
-        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = std.heap.ArenaAllocator.init(allocator) };
+        var values = CompletedScalarValues{ .entries = .empty, .uniform_lists = .empty, .arena = collections.SingleThreadArena.init(allocator) };
         errdefer values.deinit(allocator);
         var decoder = Decoder{ .program = program, .frozen = frozen, .arena = values.arena.allocator() };
         for (program.static_data_values.items, 0..) |entry, index| {

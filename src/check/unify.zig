@@ -2887,6 +2887,18 @@ const Unifier = struct {
     /// * `only_in_b_fields`
     /// * `in_both_fields`
     ///
+    /// Sort gathered record fields by name. Gathering keeps each row's own
+    /// order, so the fields are usually already sorted: one ordered pass over
+    /// them costs a comparison per field, where a sort would compare each
+    /// field's text several times.
+    fn sortFieldsByName(self: *const Self, fields: []RecordField) void {
+        var index: usize = 1;
+        while (index < fields.len) : (index += 1) {
+            if (RecordField.orderByName(self.ident_store, fields[index - 1], fields[index]) == .gt) break;
+        } else return;
+        std.mem.sort(RecordField, fields, self.ident_store, comptime RecordField.sortByNameAsc);
+    }
+
     /// The result is a set of ranges that can be used to slice those buffers.
     ///
     /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
@@ -2898,9 +2910,9 @@ const Unifier = struct {
     ) std.mem.Allocator.Error!PartitionedRecordFields {
         // Sort the fields (gathering maintains partial order, but unification may create unsorted unions)
         const a_fields = scratch.gathered_fields.sliceRange(a_fields_range);
-        std.mem.sort(RecordField, a_fields, self.ident_store, comptime RecordField.sortByNameAsc);
+        self.sortFieldsByName(a_fields);
         const b_fields = scratch.gathered_fields.sliceRange(b_fields_range);
-        std.mem.sort(RecordField, b_fields, self.ident_store, comptime RecordField.sortByNameAsc);
+        self.sortFieldsByName(b_fields);
 
         // Get the start of index of the new range
         const a_fields_start: u32 = @intCast(scratch.only_in_a_fields.len());
@@ -3819,14 +3831,17 @@ const Unifier = struct {
             .start = @fromBackingInt(@intCast(b_indices_start)),
             .count = @intCast(b_constraints.len),
         });
-        std.mem.sort(u32, a_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = a_constraints,
-        }, ConstraintOrder.lessThan);
-        std.mem.sort(u32, b_indices, ConstraintOrder{
-            .unifier = self,
-            .constraints = b_constraints,
-        }, ConstraintOrder.lessThan);
+        // Constraint lists are usually already in evidence order, so an
+        // ordered pass costs one comparison per constraint where a sort
+        // would compare each constraint's name text several times.
+        const a_order = ConstraintOrder{ .unifier = self, .constraints = a_constraints };
+        if (!std.sort.isSorted(u32, a_indices, a_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, a_indices, a_order, ConstraintOrder.lessThan);
+        }
+        const b_order = ConstraintOrder{ .unifier = self, .constraints = b_constraints };
+        if (!std.sort.isSorted(u32, b_indices, b_order, ConstraintOrder.lessThan)) {
+            std.mem.sort(u32, b_indices, b_order, ConstraintOrder.lessThan);
+        }
 
         var a_group_start: usize = 0;
         var b_group_start: usize = 0;
@@ -4613,7 +4628,9 @@ pub const Scratch = struct {
         self.fresh_vars.items.clearRetainingCapacity();
         self.occurs_scratch.reset();
         self.visited_vars.items.clearRetainingCapacity();
-        self.visited_index.clearRetainingCapacity();
+        // Clearing a hash map rewrites its whole metadata array, so an empty
+        // index is left alone rather than paying for its retained capacity.
+        if (self.visited_index.count() != 0) self.visited_index.clearRetainingCapacity();
         self.visited_index_pairs = 0;
         self.constraint_visited_vars.items.clearRetainingCapacity();
         self.opened_nominals.clearRetainingCapacity();

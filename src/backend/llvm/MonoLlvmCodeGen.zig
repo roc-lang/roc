@@ -1935,7 +1935,7 @@ pub const MonoLlvmCodeGen = struct {
         self.tail_scratch.appendNTimes(self.allocator, .{}, group_count) catch return error.OutOfMemory;
         // Under tail drivers the arguments travel through static storage.
         if (self.usesTailDrivers()) return;
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         for (procs) |proc| {
             const group = proc.tail_group orelse continue;
@@ -2106,7 +2106,7 @@ pub const MonoLlvmCodeGen = struct {
             wip.cursor = .{ .block = block };
             const proc = self.store.getProcSpec(member);
             const fast = self.fast_registry.get(@backingInt(member)) orelse return error.CompilationFailed;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = Base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const sig = try self.fastSignature(arena_state.allocator(), proc);
             const offsets = try self.allocator.alloc(u32, sig.arg_layouts.len);
@@ -2270,7 +2270,7 @@ pub const MonoLlvmCodeGen = struct {
     fn declareFastProcSpec(self: *MonoLlvmCodeGen, proc_id: LirProcSpecId, proc: LirProcSpec) Error!void {
         const builder = self.builder orelse return error.CompilationFailed;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
 
@@ -2377,7 +2377,7 @@ pub const MonoLlvmCodeGen = struct {
         const entry = wip.block(0, "entry") catch return error.OutOfMemory;
         wip.cursor = .{ .block = entry };
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         const offsets = try self.computeArgOffsets(sig.arg_layouts, true);
@@ -2474,7 +2474,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder = self.builder orelse return error.CompilationFailed;
         const fast_func: ?LlvmBuilder.Function.Index = if (fastAbiEligible(proc)) self.fast_registry.get(@backingInt(proc_id)) else null;
         const func = fast_func orelse self.proc_registry.get(@backingInt(proc_id)) orelse return error.CompilationFailed;
-        var fast_arena = std.heap.ArenaAllocator.init(self.allocator);
+        var fast_arena = Base.SingleThreadArena.init(self.allocator);
         defer fast_arena.deinit();
         const fast_sig: ?FastSignature = if (fast_func != null) try self.fastSignature(fast_arena.allocator(), proc) else null;
 
@@ -2696,7 +2696,7 @@ pub const MonoLlvmCodeGen = struct {
             null;
         const ptr_ty = builder.ptrType(.default) catch return error.OutOfMemory;
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 
@@ -4697,7 +4697,7 @@ pub const MonoLlvmCodeGen = struct {
         is_cold: bool,
     ) Error!void {
         const builder, const wip = try self.builderAndWip();
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
@@ -4767,7 +4767,7 @@ pub const MonoLlvmCodeGen = struct {
         const arg_locals = self.store.getLocalSpan(args);
         try self.materializeLocalSpanIfDeferred(arg_locals);
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const sig = try self.fastSignature(arena_state.allocator(), proc);
         if (sig.arg_layouts.len != arg_locals.len) return error.CompilationFailed;
@@ -13906,7 +13906,7 @@ pub const MonoLlvmCodeGen = struct {
         const builder, const wip = try self.builderAndWip();
         const ptr_ty = try self.ptrType();
 
-        var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+        var arena_state = Base.SingleThreadArena.init(self.allocator);
         defer arena_state.deinit();
         const arena = arena_state.allocator();
 

@@ -9,6 +9,7 @@ const base = @import("base");
 const types_store = @import("store.zig");
 const types_mod = @import("types.zig");
 const DenseMap = @import("collections").DenseMap;
+const DenseMapPool = @import("collections").DenseMapPool;
 
 const TypesStore = types_store.Store;
 const Var = types_mod.Var;
@@ -146,6 +147,15 @@ pub const Scratch = struct {
     reach_heads: ?DenseMap(Var, u32) = null,
     reach_stack: std.ArrayListUnmanaged(Var) = .empty,
     reach_state: ?DenseMap(Var, bool) = null,
+    /// Buffers for the marker pre-walk (`collectMarkerChoices`): its
+    /// worklist, the declaration binders it collects, and a pool of visited
+    /// sets holding one bit per polarity/reach pair for each visited root.
+    /// A walk takes the lists out of the scratch while it runs, so a nested
+    /// instantiation reached through a placement provider starts from empty
+    /// buffers of its own and the outer walk's contents are untouched.
+    marker_pending: std.ArrayListUnmanaged(MarkerItem) = .empty,
+    marker_binders: std.ArrayListUnmanaged(Var) = .empty,
+    marker_visited: ?DenseMapPool(Var, u8) = null,
 
     pub fn deinit(self: *Scratch, gpa: std.mem.Allocator) void {
         self.frames.deinit(gpa);
@@ -158,6 +168,14 @@ pub const Scratch = struct {
         if (self.reach_heads) |*heads| heads.deinit();
         self.reach_stack.deinit(gpa);
         if (self.reach_state) |*state| state.deinit();
+        self.marker_pending.deinit(gpa);
+        self.marker_binders.deinit(gpa);
+        if (self.marker_visited) |*pool| pool.deinit();
+    }
+
+    fn markerVisited(self: *Scratch, gpa: std.mem.Allocator) *DenseMapPool(Var, u8) {
+        if (self.marker_visited == null) self.marker_visited = .init(gpa);
+        return &self.marker_visited.?;
     }
 
     fn reachHeads(self: *Scratch, gpa: std.mem.Allocator) *DenseMap(Var, u32) {
@@ -170,6 +188,10 @@ pub const Scratch = struct {
         return &self.reach_state.?;
     }
 };
+
+/// One pending occurrence of the marker pre-walk: a var together with the
+/// polarity and adapter reach it is reached at.
+const MarkerItem = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
 
 /// One incoming edge of a type-graph node, recorded by the scheme pre-walk so
 /// reachability of a generalized variable can be propagated from a child to
@@ -771,19 +793,33 @@ pub const Instantiator = struct {
     /// occurrence contributes; argument storage is not another occurrence.
     fn collectMarkerChoices(self: *Self, root: Var, choices: *std.AutoHashMapUnmanaged(Var, bool)) std.mem.Allocator.Error!bool {
         const marker_ident = self.polarity_var_ident orelse return true;
-        const Item = struct { var_: Var, polarity: Polarity, reach: AdapterReachPosition };
+        const Item = MarkerItem;
         const allocator = self.store.gpa;
-        var pending: std.ArrayList(Item) = .empty;
-        defer pending.deinit(allocator);
-        var visited: std.AutoHashMapUnmanaged(Item, void) = .empty;
-        defer visited.deinit(allocator);
-        var binders: std.ArrayList(Var) = .empty;
-        defer binders.deinit(allocator);
+        const buffers = self.scratch();
+        var pending = buffers.marker_pending;
+        buffers.marker_pending = .empty;
+        defer {
+            pending.clearRetainingCapacity();
+            buffers.marker_pending.deinit(allocator);
+            buffers.marker_pending = pending;
+        }
+        var binders = buffers.marker_binders;
+        buffers.marker_binders = .empty;
+        defer {
+            binders.clearRetainingCapacity();
+            buffers.marker_binders.deinit(allocator);
+            buffers.marker_binders = binders;
+        }
+        var visited = buffers.markerVisited(allocator).acquire();
+        defer buffers.markerVisited(allocator).release(&visited);
         try pending.append(allocator, .{ .var_ = root, .polarity = self.current_polarity, .reach = self.current_reach });
         while (pending.pop()) |item| {
             const resolved = self.store.resolveVar(item.var_);
-            const visit = try visited.getOrPut(allocator, .{ .var_ = resolved.var_, .polarity = item.polarity, .reach = item.reach });
-            if (visit.found_existing) continue;
+            const visit_bit: u8 = @as(u8, 1) << (@as(u3, @backingInt(item.polarity)) * 4 + @as(u3, @backingInt(item.reach)));
+            const visit = try visited.getOrPut(resolved.var_);
+            if (!visit.found_existing) visit.value_ptr.* = 0;
+            if (visit.value_ptr.* & visit_bit != 0) continue;
+            visit.value_ptr.* |= visit_bit;
             switch (resolved.desc.content) {
                 .rigid => |rigid| if (rigid.name.eql(marker_ident)) {
                     const allows_open = item.polarity == .pos and (self.polarity_var_behavior != .defer_open or item.reach != .nested);

@@ -242,6 +242,14 @@ pub const ClosedTypeBuild = struct {
     node: NodeId,
 };
 
+/// One label's pairing state for the row relation in flight; see
+/// `InstGraph.row_label_slots`.
+const RowLabelSlot = struct {
+    right_generation: u32,
+    right_index: u32,
+    left_generation: u32,
+};
+
 /// Content of an instantiation-graph node. Rows carry explicit extension
 /// links; `redirect` is the union-find edge.
 pub const InstNode = union(enum) {
@@ -609,7 +617,7 @@ pub const InterfaceConstraints = struct {
     /// were joined. Two expansions of one request constrain its interface
     /// identically exactly when these bytes agree.
     pub fn equivalenceIdentityInto(self: InterfaceConstraints, graph: *InstGraph, allocator: Allocator) Allocator.Error![]const u8 {
-        var arena = std.heap.ArenaAllocator.init(graph.allocator);
+        var arena = base.SingleThreadArena.init(graph.allocator);
         defer arena.deinit();
         var renumberer = EquivalenceRenumberer{ .source = self, .types = graph.types, .name_store = graph.name_store, .allocator = arena.allocator() };
         const constraints = try renumberer.run();
@@ -1999,7 +2007,7 @@ pub const InstGraph = struct {
     types: *Type.Store,
     name_store: *const names.NameStore,
     diagnostics: ?*GraphDiagnostics,
-    arena_impl: std.heap.ArenaAllocator,
+    arena_impl: base.SingleThreadArena,
     nodes: std.ArrayList(InstNode),
     field_kinds: std.ArrayList(FieldKindNode),
     versions: std.ArrayList(u32),
@@ -2106,13 +2114,13 @@ pub const InstGraph = struct {
     /// Transitive unification scratch, one entry per call in flight; a union
     /// can unify again while an outer call is still draining.
     unify_scratch_pool: std.ArrayList(UnifyScratch) = .empty,
-    /// Record-row pairing by label id. An entry is current only when its
-    /// generation equals `row_label_generation`, so a row relation claims
-    /// fresh slots without clearing them. Row pairing completes before any
-    /// queued relation runs, so one set serves every relation.
-    row_label_right_generation: std.ArrayList(u32) = .empty,
-    row_label_right_index: std.ArrayList(u32) = .empty,
-    row_label_left_generation: std.ArrayList(u32) = .empty,
+    /// Row pairing by label id. A slot is current only when its generation
+    /// equals `row_label_generation`, so a row relation claims fresh slots
+    /// without clearing them. Row pairing completes before any queued
+    /// relation runs, so one column serves every relation. The column grows
+    /// by explicit reallocation, never by resizing in place, so the number of
+    /// allocations a relation makes does not depend on the heap's layout.
+    row_label_slots: []RowLabelSlot = &.{},
     row_label_generation: u32 = 0,
     /// Buffers borrowed by every `InterfaceConstraints.identityInto`.
     identity_bytes_scratch: std.ArrayList(u8) = .empty,
@@ -2128,7 +2136,7 @@ pub const InstGraph = struct {
     uninhabited_scan_scratch: GraphUninhabitedScan.Eval.Scratch = .{},
     /// Emptied arenas that keep their buffers, for work that needs a
     /// short-lived arena many times over.
-    spare_arenas: std.ArrayList(std.heap.ArenaAllocator) = .empty,
+    spare_arenas: std.ArrayList(base.SingleThreadArena) = .empty,
     /// Roots whose every reachable node was found resolved, stamped with the
     /// `resolved_epoch` current at that walk. Resolvedness survives every
     /// union (a concrete class always wins over a variable), every content
@@ -2180,7 +2188,7 @@ pub const InstGraph = struct {
             .types = types,
             .name_store = name_store,
             .diagnostics = null,
-            .arena_impl = std.heap.ArenaAllocator.init(allocator),
+            .arena_impl = base.SingleThreadArena.init(allocator),
             .nodes = .empty,
             .field_kinds = .empty,
             .versions = .empty,
@@ -2363,9 +2371,7 @@ pub const InstGraph = struct {
         self.never_uninhabited.deinit();
         for (self.unify_scratch_pool.items) |*scratch| scratch.deinit(self.allocator);
         self.unify_scratch_pool.deinit(self.allocator);
-        self.row_label_right_generation.deinit(self.allocator);
-        self.row_label_right_index.deinit(self.allocator);
-        self.row_label_left_generation.deinit(self.allocator);
+        self.allocator.free(self.row_label_slots);
         self.capture_scratch.deinit(allocator);
         self.identity_bytes_scratch.deinit(allocator);
         self.identity_leaves_scratch.deinit(allocator);
@@ -3476,14 +3482,14 @@ pub const InstGraph = struct {
     }
 
     /// An empty arena, reusing a released arena's buffers when one is spare.
-    pub fn acquireArena(self: *InstGraph) std.heap.ArenaAllocator {
-        return self.spare_arenas.pop() orelse std.heap.ArenaAllocator.init(self.allocator);
+    pub fn acquireArena(self: *InstGraph) base.SingleThreadArena {
+        return self.spare_arenas.pop() orelse base.SingleThreadArena.init(self.allocator);
     }
 
     /// Empty an arena from `acquireArena` and keep its buffers for the next
     /// one. An arena that grew large is freed instead, as is one the spare
     /// list has no room for.
-    pub fn releaseArena(self: *InstGraph, used: std.heap.ArenaAllocator) void {
+    pub fn releaseArena(self: *InstGraph, used: base.SingleThreadArena) void {
         var released = used;
         if (released.queryCapacity() > spare_arena_capacity or !released.reset(.retain_capacity)) {
             released.deinit();
@@ -4912,25 +4918,37 @@ pub const InstGraph = struct {
         var only_private = std.ArrayList(InstTag).empty;
         defer only_private.deinit(self.allocator);
 
-        // Each private label's position, so every public label pairs in
-        // constant time.
-        var private_positions: std.AutoHashMapUnmanaged(names.TagNameId, u32) = .empty;
-        defer private_positions.deinit(self.allocator);
-        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.tags.len));
+        // Each private label's position in the generation-stamped label
+        // slots, so every public label pairs in constant time. The pairing is
+        // read out completely before any payload relation runs, since a
+        // relation can pair rows of its own and claim the next generation.
+        const generation = try self.claimTagLabelGeneration(flat_public.tags, flat_private.tags);
         for (flat_private.tags, 0..) |private_tag, index| {
-            const entry = private_positions.getOrPutAssumeCapacity(private_tag.name);
-            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private tag labels");
-            entry.value_ptr.* = @intCast(index);
+            const slot: usize = @backingInt(private_tag.name);
+            if (self.row_label_slots[slot].right_generation == generation) {
+                Common.invariant("opaque interface relation received duplicate private tag labels");
+            }
+            self.row_label_slots[slot].right_generation = generation;
+            self.row_label_slots[slot].right_index = @intCast(index);
         }
+        const public_positions = try self.allocator.alloc(?u32, flat_public.tags.len);
+        defer self.allocator.free(public_positions);
         const private_shared = try self.allocator.alloc(bool, flat_private.tags.len);
         defer self.allocator.free(private_shared);
         @memset(private_shared, false);
+        for (flat_public.tags, public_positions) |public_tag, *position| {
+            const slot: usize = @backingInt(public_tag.name);
+            if (self.row_label_slots[slot].right_generation == generation) {
+                const index = self.row_label_slots[slot].right_index;
+                position.* = index;
+                private_shared[index] = true;
+            } else {
+                position.* = null;
+            }
+        }
 
-        for (flat_public.tags) |public_tag| {
-            const matched: ?InstTag = if (private_positions.get(public_tag.name)) |position| blk: {
-                private_shared[position] = true;
-                break :blk flat_private.tags[position];
-            } else null;
+        for (flat_public.tags, public_positions) |public_tag, position| {
+            const matched: ?InstTag = if (position) |index| flat_private.tags[index] else null;
             if (matched) |private_tag| {
                 if (public_tag.payloads.len != private_tag.payloads.len) {
                     Common.invariant("opaque interface relation received one tag at two payload arities");
@@ -4997,25 +5015,37 @@ pub const InstGraph = struct {
         var only_private = std.ArrayList(InstField).empty;
         defer only_private.deinit(self.allocator);
 
-        // Each private label's position, so every public label pairs in
-        // constant time.
-        var private_positions: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
-        defer private_positions.deinit(self.allocator);
-        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.fields.len));
+        // Each private label's position in the generation-stamped label
+        // slots, so every public label pairs in constant time. The pairing is
+        // read out completely before any field relation runs, since a
+        // relation can pair rows of its own and claim the next generation.
+        const generation = try self.claimRowLabelGeneration(flat_public.fields, flat_private.fields);
         for (flat_private.fields, 0..) |private_field, index| {
-            const entry = private_positions.getOrPutAssumeCapacity(private_field.name);
-            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private record labels");
-            entry.value_ptr.* = @intCast(index);
+            const slot: usize = @backingInt(private_field.name);
+            if (self.row_label_slots[slot].right_generation == generation) {
+                Common.invariant("opaque interface relation received duplicate private record labels");
+            }
+            self.row_label_slots[slot].right_generation = generation;
+            self.row_label_slots[slot].right_index = @intCast(index);
         }
+        const public_positions = try self.allocator.alloc(?u32, flat_public.fields.len);
+        defer self.allocator.free(public_positions);
         const private_shared = try self.allocator.alloc(bool, flat_private.fields.len);
         defer self.allocator.free(private_shared);
         @memset(private_shared, false);
+        for (flat_public.fields, public_positions) |public_field, *position| {
+            const slot: usize = @backingInt(public_field.name);
+            if (self.row_label_slots[slot].right_generation == generation) {
+                const index = self.row_label_slots[slot].right_index;
+                position.* = index;
+                private_shared[index] = true;
+            } else {
+                position.* = null;
+            }
+        }
 
-        for (flat_public.fields) |public_field| {
-            const matched: ?InstField = if (private_positions.get(public_field.name)) |position| blk: {
-                private_shared[position] = true;
-                break :blk flat_private.fields[position];
-            } else null;
+        for (flat_public.fields, public_positions) |public_field, position| {
+            const matched: ?InstField = if (position) |index| flat_private.fields[index] else null;
             if (matched) |private_field| {
                 _ = self.unifyFieldKinds(
                     public_field.kind,
@@ -6055,12 +6085,12 @@ pub const InstGraph = struct {
                 if (public_row.fields.len != request_row.fields.len) {
                     Common.invariant("request container join received records with different field counts");
                 }
-                var request_names: std.AutoHashMapUnmanaged(names.RecordFieldNameId, void) = .empty;
-                defer request_names.deinit(self.allocator);
-                try request_names.ensureTotalCapacity(self.allocator, @intCast(request_row.fields.len));
-                for (request_row.fields) |request_field| request_names.putAssumeCapacity(request_field.name, {});
+                const generation = try self.claimRowLabelGeneration(public_row.fields, request_row.fields);
+                for (request_row.fields) |request_field| {
+                    self.row_label_slots[@backingInt(request_field.name)].right_generation = generation;
+                }
                 for (public_row.fields) |public_field| {
-                    if (!request_names.contains(public_field.name)) {
+                    if (self.row_label_slots[@backingInt(public_field.name)].right_generation != generation) {
                         Common.invariant("request container join received records with different fields");
                     }
                 }
@@ -6980,20 +7010,36 @@ pub const InstGraph = struct {
 
     /// Start a record-row pairing whose label slots cover both rows.
     fn claimRowLabelGeneration(self: *InstGraph, left: []const InstField, right: []const InstField) Allocator.Error!u32 {
-        var needed: usize = self.row_label_right_generation.items.len;
+        var needed: usize = self.row_label_slots.len;
         for (left) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
         for (right) |field| needed = @max(needed, @as(usize, @backingInt(field.name)) + 1);
-        if (needed > self.row_label_right_generation.items.len) {
-            const old_len = self.row_label_right_generation.items.len;
-            try self.row_label_right_generation.resize(self.allocator, needed);
-            try self.row_label_right_index.resize(self.allocator, needed);
-            try self.row_label_left_generation.resize(self.allocator, needed);
-            @memset(self.row_label_right_generation.items[old_len..], 0);
-            @memset(self.row_label_left_generation.items[old_len..], 0);
+        return self.claimLabelGeneration(needed);
+    }
+
+    /// Start a tag-row pairing whose label slots cover both rows. Tag and
+    /// record label ids share the slot columns: a pairing is over one row
+    /// kind, and every pairing claims a fresh generation.
+    fn claimTagLabelGeneration(self: *InstGraph, left: []const InstTag, right: []const InstTag) Allocator.Error!u32 {
+        var needed: usize = self.row_label_slots.len;
+        for (left) |tag| needed = @max(needed, @as(usize, @backingInt(tag.name)) + 1);
+        for (right) |tag| needed = @max(needed, @as(usize, @backingInt(tag.name)) + 1);
+        return self.claimLabelGeneration(needed);
+    }
+
+    /// Claim a fresh label generation over `needed` label slots. Reading the
+    /// slots of a generation must finish before any relation that can pair
+    /// rows runs, since that relation claims the next generation.
+    fn claimLabelGeneration(self: *InstGraph, needed: usize) Allocator.Error!u32 {
+        if (needed > self.row_label_slots.len) {
+            const old = self.row_label_slots;
+            const grown = try self.allocator.alloc(RowLabelSlot, @max(needed, old.len * 2));
+            @memcpy(grown[0..old.len], old);
+            @memset(grown[old.len..], .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
+            self.allocator.free(old);
+            self.row_label_slots = grown;
         }
         if (self.row_label_generation == std.math.maxInt(u32)) {
-            @memset(self.row_label_right_generation.items, 0);
-            @memset(self.row_label_left_generation.items, 0);
+            @memset(self.row_label_slots, .{ .right_generation = 0, .right_index = 0, .left_generation = 0 });
             self.row_label_generation = 0;
         }
         self.row_label_generation += 1;
@@ -7157,19 +7203,19 @@ pub const InstGraph = struct {
         const generation = try self.claimRowLabelGeneration(flat_left.fields, flat_right.fields);
         for (flat_right.fields, 0..) |right_field, index| {
             const slot = @backingInt(right_field.name);
-            if (self.row_label_right_generation.items[slot] == generation) continue;
-            self.row_label_right_generation.items[slot] = generation;
-            self.row_label_right_index.items[slot] = @intCast(index);
+            if (self.row_label_slots[slot].right_generation == generation) continue;
+            self.row_label_slots[slot].right_generation = generation;
+            self.row_label_slots[slot].right_index = @intCast(index);
         }
         for (flat_left.fields) |left_field| {
-            self.row_label_left_generation.items[@backingInt(left_field.name)] = generation;
+            self.row_label_slots[@backingInt(left_field.name)].left_generation = generation;
         }
 
         for (flat_left.fields) |left_field| {
             var shared = false;
             const left_slot = @backingInt(left_field.name);
-            if (self.row_label_right_generation.items[left_slot] == generation) {
-                const right_field = flat_right.fields[self.row_label_right_index.items[left_slot]];
+            if (self.row_label_slots[left_slot].right_generation == generation) {
+                const right_field = flat_right.fields[self.row_label_slots[left_slot].right_index];
                 const merged_kind = self.unifyFieldKinds(
                     left_field.kind,
                     left_field.default,
@@ -7201,7 +7247,7 @@ pub const InstGraph = struct {
             }
         }
         for (flat_right.fields) |right_field| {
-            if (self.row_label_left_generation.items[@backingInt(right_field.name)] == generation) continue;
+            if (self.row_label_slots[@backingInt(right_field.name)].left_generation == generation) continue;
             try merged.append(row_allocator, right_field);
             try only_right.append(row_allocator, right_field);
         }
@@ -12985,7 +13031,11 @@ test "issue 11362: iterator-free finalization performs no graph walks" {
 
 test "issue 11362: iterator index tracks argument unions collisions and provenance replacement" {
     try testGeneratedIteratorIndex(std.testing.allocator);
-    try std.testing.checkAllAllocationFailures(std.testing.allocator, testGeneratedIteratorIndex, .{});
+    // The graph's per-node columns grow by in-place remaps whose success
+    // depends on the heap's layout, so the failure check runs over an
+    // allocator that refuses in-place growth.
+    var deterministic = base.DeterministicAllocator.init(std.testing.allocator);
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), testGeneratedIteratorIndex, .{});
 }
 
 fn testGeneratedIteratorIndex(gpa: Allocator) (Allocator.Error || error{ TestUnexpectedResult, TestExpectedEqual })!void {
@@ -13826,7 +13876,7 @@ test "finished witness capture work is independent of permanent class history" {
                 var diagnostics: GraphDiagnostics = .{};
                 graph.setDiagnostics(&diagnostics);
                 for (0..capture_count) |_| {
-                    var scratch = std.heap.ArenaAllocator.init(allocator);
+                    var scratch = base.SingleThreadArena.init(allocator);
                     defer scratch.deinit();
                     const captured = try InterfaceConstraints.capture(graph, scratch.allocator(), &.{root});
                     try std.testing.expectEqual(@as(usize, 1), captured.open_nodes.len);

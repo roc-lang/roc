@@ -236,7 +236,7 @@ pub const FieldRestitutionArg = struct {
 
 /// Per-procedure dismantling decisions consumed while emitting ARC operations.
 pub const Dismantles = struct {
-    arena: std.heap.ArenaAllocator,
+    arena: base.SingleThreadArena,
     /// `assign_ref .field` statements whose reads consume the container's
     /// stored unit; emission skips their retain.
     takes: std.AutoHashMapUnmanaged(LIR.CFStmtId, Take),
@@ -2170,7 +2170,7 @@ pub fn compute(
     // Second phase: verify the surviving candidates' read shapes and spines,
     // and build the output.
     var result = Dismantles{
-        .arena = std.heap.ArenaAllocator.init(gpa),
+        .arena = base.SingleThreadArena.init(gpa),
         .takes = .empty,
         .containers = .empty,
         .owned_only_takes = .empty,

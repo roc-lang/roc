@@ -16779,7 +16779,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_windows
             else
                 .x86_64_sysv;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
             const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;
@@ -24966,7 +24966,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .x86_64_windows
             else
                 .x86_64_sysv;
-            var arena_state = std.heap.ArenaAllocator.init(self.allocator);
+            var arena_state = base.SingleThreadArena.init(self.allocator);
             defer arena_state.deinit();
             const lowered = layout.abi.lower(arena_state.allocator(), self.layout_store, abi_target, arg_layouts, ret_layout, false) catch return error.OutOfMemory;
             const physical = layout.abi.assignPhysicalArgs(arena_state.allocator(), self.layout_store, abi_target, lowered, arg_layouts) catch return error.OutOfMemory;

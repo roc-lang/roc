@@ -351,7 +351,7 @@ const ReverseExecutor = struct {
     fn submit(context: *anyopaque, task: executor.Task) std.mem.Allocator.Error!void {
         const self: *ReverseExecutor = @ptrCast(@alignCast(context));
         if (self.fail_submit_task == task.id) return error.OutOfMemory;
-        var scratch = std.heap.ArenaAllocator.init(testing.allocator);
+        var scratch = collections.SingleThreadArena.init(testing.allocator);
         defer scratch.deinit();
         const worker_id = task.id % self.lanes;
         const result = task.run(task.context, .{

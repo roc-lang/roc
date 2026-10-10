@@ -4586,7 +4586,7 @@ const UniquenessWorkspace = struct {
     order: UseOrder,
     use_answers: std.AutoHashMap(UseOrder.UseQuery, bool),
     consumption: ConsumptionProof = .{},
-    scratch: std.heap.ArenaAllocator,
+    scratch: collections.SingleThreadArena,
     iterations: usize = 0,
 
     fn init(allocator: Allocator, store: *const LirStore, proc_stmts: []const std.ArrayList(LIR.CFStmtId)) SolveError!UniquenessWorkspace {
@@ -4608,7 +4608,7 @@ const UniquenessWorkspace = struct {
             .stmts = stmts,
             .order = try UseOrder.init(allocator, store, lists),
             .use_answers = std.AutoHashMap(UseOrder.UseQuery, bool).init(allocator),
-            .scratch = std.heap.ArenaAllocator.init(allocator),
+            .scratch = collections.SingleThreadArena.init(allocator),
         };
     }
 
@@ -4676,7 +4676,7 @@ pub fn settleUniqueness(
 /// the takes or the signatures a settlement starts from, so one solution
 /// builds it once and every settlement on that solution reuses it.
 const UniquenessStructure = struct {
-    memory: std.heap.ArenaAllocator,
+    memory: collections.SingleThreadArena,
     store: *const LirStore,
     rc_local: []const bool,
     stmt_count: usize,
@@ -4697,7 +4697,7 @@ const UniquenessStructure = struct {
         const self = try allocator.create(UniquenessStructure);
         errdefer allocator.destroy(self);
         self.* = .{
-            .memory = std.heap.ArenaAllocator.init(allocator),
+            .memory = collections.SingleThreadArena.init(allocator),
             .store = store,
             .rc_local = &.{},
             .stmt_count = store.cfStmtCount(),
@@ -4825,7 +4825,7 @@ const UniquenessProcUpdate = struct {
 /// its scratch allocator. Clean components retain these exact verdicts.
 const UniquenessComponentResult = struct {
     allocator: Allocator,
-    arena: std.heap.ArenaAllocator,
+    arena: collections.SingleThreadArena,
     workspace: UniquenessWorkspace,
     uniqueness: Uniqueness,
     updates: []UniquenessProcUpdate,
@@ -4877,7 +4877,7 @@ const UniquenessComponentTask = struct {
             errdefer allocator.destroy(owner);
             owner.* = .{
                 .allocator = allocator,
-                .arena = std.heap.ArenaAllocator.init(allocator),
+                .arena = collections.SingleThreadArena.init(allocator),
                 .workspace = undefined,
                 .uniqueness = undefined,
                 .updates = undefined,
@@ -4905,7 +4905,7 @@ const UniquenessComponentTask = struct {
                 .stmts = self.component.stmts.items,
                 .order = order,
                 .use_answers = std.AutoHashMap(UseOrder.UseQuery, bool).init(persistent),
-                .scratch = std.heap.ArenaAllocator.init(allocator),
+                .scratch = collections.SingleThreadArena.init(allocator),
             };
             owner.workspace.order.use_answers = &owner.workspace.use_answers;
             self.component.result = owner;
@@ -5118,7 +5118,7 @@ pub fn settleUniquenessWithOptions(
     consume_dead_boxes: bool,
     options: UniquenessOptions,
 ) SolveError!void {
-    var memory = std.heap.ArenaAllocator.init(allocator);
+    var memory = collections.SingleThreadArena.init(allocator);
     defer memory.deinit();
     const arena = memory.allocator();
     const proc_count = store.procSpecCount();
