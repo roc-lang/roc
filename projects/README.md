@@ -10,8 +10,9 @@ is not done until every criterion listed there holds.
 
 - `small/`—localized, mostly additive checks or deletions, low design risk;
   hours to days each.
-- `big/`—projects on the order of weeks each: cross-cutting, and several
-  require a design decision before implementation starts.
+- Projects on the order of weeks each (cross-cutting, and several
+  requiring a design decision before implementation starts) are tracked
+  as GitHub issues and linked from this README by issue number.
 
 The projects come from a root-cause analysis of eight weeks of bug fixes
 (May–June 2026), a July 2026 duplication audit, and a July 2026 differential
@@ -66,7 +67,7 @@ confirmed the prevailing single-source pattern holds in most places
 these projects close the holdouts. All are independent of the earlier
 batches and of each other:
 
-- [big/runtime-representation-single-sourcing.md](big/runtime-representation-single-sourcing.md)—
+- [#12165](https://github.com/roc-lang/roc/issues/12165)—
   backends stop re-encoding RocStr/RocList offsets, flag bits, the
   refcount contract, and C-ABI thresholds as magic numbers.
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
@@ -80,11 +81,11 @@ A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are
 independent of the earlier batches and of each other:
 
-- [big/parallel-backend-codegen.md](big/parallel-backend-codegen.md)—
-  dev-backend code generation moves from one sequential proc loop to
-  per-proc worker generation feeding a single deterministic writer; no
-  new IR, the per-proc code/relocation artifacts are the handoff unit.
-- [big/unreachable-rationale-comments.md](big/unreachable-rationale-comments.md)—
+- [#12162](https://github.com/roc-lang/roc/issues/12162)—
+  dev-backend RC helpers and wasm backend code generation move to the
+  per-proc worker generation and single deterministic writer the
+  dev backend already uses for procedures.
+- [#12164](https://github.com/roc-lang/roc/issues/12164)—
   every `unreachable` under `src/` carries a same-line rationale (or
   is converted to a checked invariant), enforced forever by a CI lint
   with a shrinking allowlist.
@@ -106,18 +107,17 @@ states as "record the decision, consume it later" are implemented as
 "re-derive it from the emitted shape". Several of these pairs have
 already diverged in behavior, not just in text.
 
-- [big/one-value-semantics-layer.md](big/one-value-semantics-layer.md)—
-  `Inspect` (four implementations, four copies of the format
-  strings), structural equality and hashing (two), and `match`
+- [#12166](https://github.com/roc-lang/roc/issues/12166)—
+  `Inspect` (three implementations, three copies of the format
+  strings), structural equality and hashing (three to four), and `match`
   compilation (`.boxy` never adopted the shared decision-tree
-  compiler, contrary to this README and `postcheck/mod.zig`) collapse
+  compiler, contrary to design.md) collapse
   onto one shape-parameterized layer, plus a standing `.lss`/`.boxy`
   differential harness.
-- [big/postcheck-lowerer-decomposition.md](big/postcheck-lowerer-decomposition.md)—
-  the god-structs (`BodyContext` at 36.6k lines, `ProcBodyBuilder` at
-  25.1k) that force helpers to be copied rather than shared; 53 and 17
-  duplicated method names respectively, with divergence already
-  present in both.
+- [#12163](https://github.com/roc-lang/roc/issues/12163)—
+  the god-structs (`BodyContext` at 44.5k lines, `ProcBodyBuilder` at
+  28.3k) that force helpers to be copied rather than shared, with
+  divergence already present in both.
 - [small/arc-shared-predicates.md](small/arc-shared-predicates.md)—
   four ARC predicates defined twice, including the refcounted-local
   predicate where the RC inserter and its own certifier already use
@@ -228,7 +228,7 @@ landed and were removed (`silent-drift-guards`,
 plain names marked landed, and the two recommended-order lists dropped
 their landed entry and renumbered.
 
-Within the rest of this batch, the two `big` projects compose in either
+Within the rest of this batch, #12166 and #12163 compose in either
 order. The rest are independent.
 
 ## Recommended order
@@ -297,8 +297,8 @@ enforced by a debug statement-count lint. The 2026-08-24 audit found
 `.boxy` never adopted it (`grep -rn match_tree src/postcheck/boxy/` is
 empty; `boxy/lower.zig` folds branches into a sequential chain), so the
 "shared by both LIR lowerers" claim in `src/postcheck/mod.zig` is not yet
-true. Closing that is step 6 of
-[big/one-value-semantics-layer.md](big/one-value-semantics-layer.md).
+true. Closing that is part of
+[#12166](https://github.com/roc-lang/roc/issues/12166).
 
 Single-source builtin registration has landed: the seven hand-typed
 `roc_builtins_*` symbol/ABI tables now derive from one comptime registry
