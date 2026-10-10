@@ -72,9 +72,18 @@ batches and of each other:
 - [small/llvm-conversion-op-explicit-dispatch.md](small/llvm-conversion-op-explicit-dispatch.md)—
   end the LLVM backend's `@tagName`-substring dispatch for numeric
   conversion ops (the one backend exempt from switch exhaustiveness).
-- [small/build-and-ci-single-lists.md](small/build-and-ci-single-lists.md)—
-  the nightly and Nix CI legs name MiniCI jobs by hand instead of
-  invoking MiniCI's own gate list.
+
+One CI gate list outside pull requests has landed. The nightly legs on
+hosts PR CI never uses (`minici-other-hosts` in `ci_zig.yml`) and the
+Nix test leg run `zig build minici -- --minici-lane secondary` instead
+of naming jobs, and a `workflows` table in `src/build/minici.zig`
+declares how each CI file runs MiniCI; `--minici-verify-workflows`, run
+on every PR, checks each file against it, including that none runs a
+MiniCI job by hand. That check found a fifth hand-listed job the
+project had missed (`run-coverage-parser` on arm64 Linux). `glue`'s
+module tests joined MiniCI (about 20 s, so no shard moved). The Debug
+`-Dfuzz` `run-test-zig` aggregate still runs nightly, because several
+of its suites (rc-conformance, boxy-abi, and others) are not MiniCI jobs.
 
 A fourth batch (2026-07-20) targets operational robustness and
 build-throughput gaps rather than sources of truth. The projects are
