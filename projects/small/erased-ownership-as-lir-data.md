@@ -152,8 +152,6 @@ peak-RSS check on a large corpus program rather than assuming.
 
 ## Related projects
 
-- [arc-shared-predicates.md](arc-shared-predicates.md)—the other
-  duplicated-predicate cluster in the same stage; land either first.
 - [hoist-consumes-dispatch-evidence.md](hoist-consumes-dispatch-evidence.md)—
   the same "consume the recorded decision instead of re-deriving it"
   cure at the checker boundary.

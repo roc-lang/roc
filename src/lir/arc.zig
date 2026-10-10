@@ -1723,14 +1723,10 @@ const RestitutionSwitch = struct {
 };
 
 const OutcomeRestitution = struct {
-    refinement: OutcomeRefinement,
+    refinement: LIR.CFStmtId,
     sig: arc_sig.RcSig,
     position: usize,
     resource: RestoredResource,
-};
-
-const OutcomeRefinement = struct {
-    stmt: LIR.CFStmtId,
 };
 
 /// Stop entry for switch-continuation collection. `summary` is set for the
@@ -5773,72 +5769,6 @@ const Inserter = struct {
         return (self.solution.uniqueSeedMaskOf(proc_id) & bit) != 0;
     }
 
-    fn findOutcomeRefinement(
-        self: *Inserter,
-        target: LIR.LocalId,
-        next: LIR.CFStmtId,
-        sig: arc_sig.RcSig,
-    ) ResourceError!?OutcomeRefinement {
-        if (sig.outcomes.isEmpty()) return null;
-        var aliases = std.ArrayList(LIR.LocalId).empty;
-        try aliases.append(self.emission_allocator, target);
-        var discriminant: ?LIR.LocalId = null;
-        var cursor = next;
-        while (true) {
-            const stmt = self.store.getCFStmt(cursor);
-            if (stmt == .assign_ref) {
-                const assign = stmt.assign_ref;
-                switch (assign.op) {
-                    .local => |source| {
-                        var source_is_result = false;
-                        for (aliases.items) |alias| {
-                            if (alias == source) {
-                                source_is_result = true;
-                                break;
-                            }
-                        }
-                        if (!source_is_result) return null;
-                        var already = false;
-                        for (aliases.items) |alias| already = already or alias == assign.target;
-                        if (!already) try aliases.append(self.emission_allocator, assign.target);
-                        cursor = assign.next;
-                    },
-                    .discriminant => |op| {
-                        var source_is_result = false;
-                        for (aliases.items) |alias| {
-                            if (alias == op.source) {
-                                source_is_result = true;
-                                break;
-                            }
-                        }
-                        if (!source_is_result or discriminant != null) return null;
-                        discriminant = assign.target;
-                        cursor = assign.next;
-                    },
-                    .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
-                }
-            } else if (stmt == .join) {
-                // Declaring a continuation does not execute it; a statement
-                // `match` over the result declares its merge join first and
-                // switches in the join's remainder.
-                cursor = stmt.join.remainder;
-            } else if (stmt == .switch_stmt) {
-                if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
-                return .{ .stmt = cursor };
-            } else {
-                return null;
-            }
-        }
-    }
-
-    fn outcomeMaskForValue(outcomes: []const arc_sig.Outcome, value: u64) ?arc_sig.ParamMask {
-        if (value > std.math.maxInt(u32)) return null;
-        for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u32, @intCast(value))) return outcome.restituted_params;
-        }
-        return null;
-    }
-
     fn outcomeRestitutableMask(self: *const Inserter, sig: arc_sig.RcSig) arc_sig.ParamMask {
         var mask: arc_sig.ParamMask = 0;
         for (self.solution.sigTable().outcomesOf(sig)) |outcome| {
@@ -5892,27 +5822,6 @@ const Inserter = struct {
         return true;
     }
 
-    fn defaultOutcomeMask(
-        outcomes: []const arc_sig.Outcome,
-        branches: anytype,
-    ) ?arc_sig.ParamMask {
-        var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
-        var any = false;
-        for (outcomes) |outcome| {
-            var explicit = false;
-            for (0..GuardedList.borrowLen(branches)) |index| {
-                if (GuardedList.at(branches, index).value == outcome.discriminant) {
-                    explicit = true;
-                    break;
-                }
-            }
-            if (explicit) continue;
-            any = true;
-            mask &= outcome.restituted_params;
-        }
-        return if (any) mask else null;
-    }
-
     fn restoredResourceEql(a: RestoredResource, b: RestoredResource) bool {
         return switch (a) {
             .unit => |unit| b == .unit and b.unit == unit,
@@ -5946,11 +5855,11 @@ const Inserter = struct {
     /// never the argument's own unit.
     fn rootUnitReceipt(
         self: *const Inserter,
-        refinement: OutcomeRefinement,
+        refinement: LIR.CFStmtId,
         position: usize,
         local: LIR.LocalId,
     ) ?LIR.LocalId {
-        const entry = self.restitution_switches.getPtr(refinement.stmt) orelse return null;
+        const entry = self.restitution_switches.getPtr(refinement) orelse return null;
         const resource = entry.position_resources[position] orelse return null;
         return switch (resource) {
             .unit => |unit| if (unit != self.unitOf(local)) unit else null,
@@ -5960,11 +5869,11 @@ const Inserter = struct {
 
     fn clearOutcomeRestoration(
         self: *Inserter,
-        refinement: OutcomeRefinement,
+        refinement: LIR.CFStmtId,
         position: usize,
     ) void {
         const bit = arc_sig.paramBit(position) orelse return;
-        const entry = self.restitution_switches.getPtr(refinement.stmt) orelse return;
+        const entry = self.restitution_switches.getPtr(refinement) orelse return;
         const old = entry.position_resources[position] orelse {
             entry.restored_positions &= ~bit;
             return;
@@ -5987,15 +5896,15 @@ const Inserter = struct {
 
     fn registerOutcomeRestoration(
         self: *Inserter,
-        refinement: OutcomeRefinement,
+        refinement: LIR.CFStmtId,
         sig: arc_sig.RcSig,
         position: usize,
         resource: RestoredResource,
     ) ResourceError!void {
         const bit = arc_sig.paramBit(position) orelse return;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const switch_stmt = self.store.getCFStmt(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
-        const entry = try self.restitution_switches.getOrPut(self.solve_allocator, refinement.stmt);
+        const entry = try self.restitution_switches.getOrPut(self.solve_allocator, refinement);
         if (!entry.found_existing) {
             const branch_resources = try self.solve_allocator.alloc(std.ArrayList(RestoredResource), GuardedList.borrowLen(branches));
             @memset(branch_resources, .empty);
@@ -6013,10 +5922,10 @@ const Inserter = struct {
         entry.value_ptr.position_resources[position] = resource;
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         for (0..GuardedList.borrowLen(branches)) |index| {
-            const mask = outcomeMaskForValue(outcomes, GuardedList.at(branches, index).value) orelse continue;
+            const mask = arc_sig.outcomeMaskForValue(outcomes, GuardedList.at(branches, index).value) orelse continue;
             if ((mask & bit) != 0) try self.appendUniqueRestoredResource(&entry.value_ptr.branch_resources[index], resource);
         }
-        if (defaultOutcomeMask(outcomes, branches)) |mask| {
+        if (arc_sig.defaultOutcomeMask(outcomes, branches)) |mask| {
             if ((mask & bit) != 0) try self.appendUniqueRestoredResource(&entry.value_ptr.default_resources, resource);
         }
         entry.value_ptr.restored_positions |= bit;
@@ -6675,21 +6584,21 @@ const Inserter = struct {
         sig: arc_sig.RcSig,
     ) ResourceError!?OutcomeRestitution {
         const bit = arc_sig.paramBit(position) orelse return null;
-        const refinement = try self.findOutcomeRefinement(target, next, sig) orelse return null;
-        const switch_stmt = self.store.getCFStmt(refinement.stmt).switch_stmt;
+        const refinement = try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, sig.outcomes) orelse return null;
+        const switch_stmt = self.store.getCFStmt(refinement).switch_stmt;
         const branches = self.store.getCFSwitchBranches(switch_stmt.branches);
         const outcomes = self.solution.sigTable().outcomesOf(sig);
         var has_restored_outcome = false;
         for (0..GuardedList.borrowLen(branches)) |index| {
             const branch = GuardedList.at(branches, index);
-            const mask = outcomeMaskForValue(outcomes, branch.value) orelse continue;
+            const mask = arc_sig.outcomeMaskForValue(outcomes, branch.value) orelse continue;
             if ((mask & bit) != 0) {
                 has_restored_outcome = true;
             } else if (try self.ownershipPlaceUsedInPath(branch.body, local)) {
                 return null;
             }
         }
-        if (defaultOutcomeMask(outcomes, branches)) |mask| {
+        if (arc_sig.defaultOutcomeMask(outcomes, branches)) |mask| {
             if ((mask & bit) != 0) {
                 has_restored_outcome = true;
             } else if (try self.ownershipPlaceUsedInPath(switch_stmt.default_branch, local)) {
@@ -6734,7 +6643,7 @@ const Inserter = struct {
             self.outcomeArgumentsHaveDistinctPlaces(span, outcome_sig);
         const outcome_mask = self.outcomeRestitutableMask(outcome_sig);
         const outcome_refinement = if (outcome_places_distinct)
-            try self.findOutcomeRefinement(target, next, outcome_sig)
+            try arc_solve.findOutcomeRefinement(self.emission_allocator, self.store, target, next, outcome_sig.outcomes)
         else
             null;
 
@@ -6790,7 +6699,7 @@ const Inserter = struct {
             else
                 .{ .unit = owner };
             const restitution: ?OutcomeRestitution = if (field_receipt) |receipt| blk: {
-                if (outcome_refinement == null or receipt.refinement != outcome_refinement.?.stmt) break :blk null;
+                if (outcome_refinement == null or receipt.refinement != outcome_refinement.?) break :blk null;
                 break :blk .{
                     .refinement = outcome_refinement.?,
                     .sig = outcome_sig,
@@ -6903,7 +6812,7 @@ const Inserter = struct {
                 null
             else if (field_receipt) |receipt| blk: {
                 break :blk .{
-                    .refinement = .{ .stmt = receipt.refinement },
+                    .refinement = receipt.refinement,
                     .sig = outcome_sig,
                     .position = position,
                     .resource = restored_resource,
@@ -17411,132 +17320,154 @@ test "RC field takes through repeated dominating complete projections" {
 }
 
 test "RC field take restores the exact aggregate field on checked failure without optional specialization" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
+    // Insertion and field dismantling share one refinement walk, so a
+    // statement `match` that declares its merge join between the call and the
+    // discriminant read refines the same switch for both.
+    for ([_]bool{ false, true }) |through_match_join| {
+        var f = try ArcTest.init(testing.allocator);
+        defer f.deinit();
 
-    const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
-        try f.layouts.ensureZstLayout(),
-        f.list_i64,
-    });
+        const outcome_layout = try f.layouts.putTagUnion(&[_]layout_mod.Idx{
+            try f.layouts.ensureZstLayout(),
+            f.list_i64,
+        });
 
-    // Callee convention: success consumes the list into the result; failure
-    // returns the unchanged entry ownership unit by outcome convention.
-    const callee_list = try f.local(f.list_i64);
-    const callee_choose = try f.local(.i64);
-    const callee_changed = try f.local(f.list_i64);
-    const callee_result = try f.local(outcome_layout);
-    const callee_success_ret = try f.ret(callee_result);
-    const callee_success_tag = try f.assignTag(callee_result, 1, callee_changed, callee_success_ret);
-    const callee_mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
-        .target = callee_changed,
-        .op = .list_reverse,
-        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
-        .args = try f.span(&.{callee_list}),
-        .next = callee_success_tag,
-    } }, .test_fixture);
-    const callee_failure_ret = try f.ret(callee_result);
-    const callee_failure_tag = try f.assignTag(callee_result, 0, null, callee_failure_ret);
-    const callee_body = try f.switchStmt(callee_choose, callee_mutate, callee_failure_tag, null);
-    const callee = try f.addProc(&.{ callee_list, callee_choose }, callee_body, outcome_layout);
+        // Callee convention: success consumes the list into the result; failure
+        // returns the unchanged entry ownership unit by outcome convention.
+        const callee_list = try f.local(f.list_i64);
+        const callee_choose = try f.local(.i64);
+        const callee_changed = try f.local(f.list_i64);
+        const callee_result = try f.local(outcome_layout);
+        const callee_success_ret = try f.ret(callee_result);
+        const callee_success_tag = try f.assignTag(callee_result, 1, callee_changed, callee_success_ret);
+        const callee_mutate = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = callee_changed,
+            .op = .list_reverse,
+            .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .args = try f.span(&.{callee_list}),
+            .next = callee_success_tag,
+        } }, .test_fixture);
+        const callee_failure_ret = try f.ret(callee_result);
+        const callee_failure_tag = try f.assignTag(callee_result, 0, null, callee_failure_ret);
+        const callee_body = try f.switchStmt(callee_choose, callee_mutate, callee_failure_tag, null);
+        const callee = try f.addProc(&.{ callee_list, callee_choose }, callee_body, outcome_layout);
 
-    // Caller takes pair.field0 into the checked call. Its failure arm rereads
-    // that same committed place and consumes it; field1 remains residual on
-    // both arms. The first projection has exactly one operand read (the call),
-    // so Dismantles can publish an exact call-argument field receipt.
-    const first = try f.local(f.list_i64);
-    const second = try f.local(f.list_i64);
-    const pair = try f.local(f.pair_list);
-    const first_projection = try f.local(f.list_i64);
-    const caller_choose = try f.local(.i64);
-    const call_result = try f.local(outcome_layout);
-    const discriminant = try f.local(.u8);
-    const failure_projection = try f.local(f.list_i64);
-    const failure_changed = try f.local(f.list_i64);
-    const answer = try f.local(.i64);
-    const caller_ret = try f.ret(answer);
-    const success = try f.assignI64(answer, 1, caller_ret);
-    const failure_done = try f.assignI64(answer, 0, caller_ret);
-    const failure_consume = try f.store.addCFStmt(.{ .assign_low_level = .{
-        .target = failure_changed,
-        .op = .list_reverse,
-        .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
-        .args = try f.span(&.{failure_projection}),
-        .next = failure_done,
-    } }, .test_fixture);
-    const failure_read = try f.assignRefField(failure_projection, pair, 0, failure_consume);
-    const refine = try f.switchStmt(discriminant, success, failure_read, null);
-    const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
-    const call = try f.store.addCFStmt(.{ .assign_call = .{
-        .target = call_result,
-        .proc = callee,
-        .args = try f.span(&.{ first_projection, caller_choose }),
-        .next = read_discriminant,
-    } }, .test_fixture);
-    const choose = try f.assignI64(caller_choose, 1, call);
-    const first_read = try f.assignRefField(first_projection, pair, 0, choose);
-    const make_pair = try f.assignStruct(pair, &.{ first, second }, first_read);
-    const make_second = try f.assignList(second, &.{}, make_pair);
-    const caller_body = try f.assignList(first, &.{}, make_second);
-    const caller = try f.addProc(&.{}, caller_body, .i64);
+        // Caller takes pair.field0 into the checked call. Its failure arm rereads
+        // that same committed place and consumes it; field1 remains residual on
+        // both arms. The first projection has exactly one operand read (the call),
+        // so Dismantles can publish an exact call-argument field receipt.
+        const first = try f.local(f.list_i64);
+        const second = try f.local(f.list_i64);
+        const pair = try f.local(f.pair_list);
+        const first_projection = try f.local(f.list_i64);
+        const caller_choose = try f.local(.i64);
+        const call_result = try f.local(outcome_layout);
+        const discriminant = try f.local(.u8);
+        const failure_projection = try f.local(f.list_i64);
+        const failure_changed = try f.local(f.list_i64);
+        const answer = try f.local(.i64);
+        const caller_ret = try f.ret(answer);
+        const merge = f.freshJoinPointId();
+        const success_value = try f.local(.i64);
+        const failure_value = try f.local(.i64);
+        const success = if (through_match_join) blk: {
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+            const set = try f.store.addCFStmt(.{ .set_local = .{ .target = answer, .value = success_value, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+            break :blk try f.assignI64(success_value, 1, set);
+        } else try f.assignI64(answer, 1, caller_ret);
+        const failure_done = if (through_match_join) blk: {
+            const jump = try f.store.addCFStmt(.{ .jump = .{ .target = merge } }, .test_fixture);
+            const set = try f.store.addCFStmt(.{ .set_local = .{ .target = answer, .value = failure_value, .mode = .initialize_join_param, .next = jump } }, .test_fixture);
+            break :blk try f.assignI64(failure_value, 0, set);
+        } else try f.assignI64(answer, 0, caller_ret);
+        const failure_consume = try f.store.addCFStmt(.{ .assign_low_level = .{
+            .target = failure_changed,
+            .op = .list_reverse,
+            .rc_effect = LIR.LowLevel.RcEffect.runtimeUniqueness(1),
+            .args = try f.span(&.{failure_projection}),
+            .next = failure_done,
+        } }, .test_fixture);
+        const failure_read = try f.assignRefField(failure_projection, pair, 0, failure_consume);
+        const refine = try f.switchStmt(discriminant, success, failure_read, null);
+        const read_discriminant = try f.assignDiscriminant(discriminant, call_result, refine);
+        const after_call = if (through_match_join) try f.store.addCFStmt(.{ .join = .{
+            .id = merge,
+            .params = try f.span(&.{answer}),
+            .body = caller_ret,
+            .remainder = read_discriminant,
+        } }, .test_fixture) else read_discriminant;
+        const call = try f.store.addCFStmt(.{ .assign_call = .{
+            .target = call_result,
+            .proc = callee,
+            .args = try f.span(&.{ first_projection, caller_choose }),
+            .next = after_call,
+        } }, .test_fixture);
+        const choose = try f.assignI64(caller_choose, 1, call);
+        const first_read = try f.assignRefField(first_projection, pair, 0, choose);
+        const make_pair = try f.assignStruct(pair, &.{ first, second }, first_read);
+        const make_second = try f.assignList(second, &.{}, make_pair);
+        const caller_body = try f.assignList(first, &.{}, make_second);
+        const caller = try f.addProc(&.{}, caller_body, .i64);
 
-    const base_proc_count = f.store.procSpecCount();
-    try insert(&f.store, &f.layouts, .{ .specialize = false });
+        const base_proc_count = f.store.procSpecCount();
+        try insert(&f.store, &f.layouts, .{ .specialize = false });
 
-    // The exact outcome variant is mandatory in dev/no-inline mode. Both
-    // field reads are moves, so neither manufactures a list unit.
-    try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
-    try testing.expectEqual(@as(usize, 0), f.countRc(first_projection, .incref));
-    try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
-    try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
+        // The exact outcome variant is mandatory in dev/no-inline mode. Both
+        // field reads are moves, so neither manufactures a list unit.
+        try testing.expectEqual(base_proc_count + 1, f.store.procSpecCount());
+        try testing.expectEqual(@as(usize, 0), f.countRc(first_projection, .incref));
+        try testing.expectEqual(@as(usize, 0), f.countRc(failure_projection, .incref));
+        try testing.expectEqual(@as(usize, 0), f.countRc(pair, .decref));
 
-    var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
-    var remaining = f.store.cfStmtCount() + 1;
-    while (remaining > 0) : (remaining -= 1) {
-        const stmt = f.store.getCFStmt(cursor);
-        if (stmt == .assign_call and stmt.assign_call.target == call_result) {
-            try testing.expect(@backingInt(stmt.assign_call.proc) >= base_proc_count);
-            break;
+        var cursor = f.store.getProcSpec(caller).body orelse return error.MissingCallerBody;
+        var remaining = f.store.cfStmtCount() + 1;
+        while (remaining > 0) : (remaining -= 1) {
+            const stmt = f.store.getCFStmt(cursor);
+            if (stmt == .assign_call and stmt.assign_call.target == call_result) {
+                try testing.expect(@backingInt(stmt.assign_call.proc) >= base_proc_count);
+                break;
+            }
+            cursor = switch (stmt) {
+                inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
+                .init_uninitialized,
+                .assign_call,
+                .assign_call_erased,
+                .assign_packed_erased_fn,
+                .assign_boxy_desc_ref,
+                .assign_boxy_dict_ref,
+                .assign_boxy_box,
+                .assign_boxy_record_update,
+                .assign_boxy_reuse_box,
+                .assign_boxy_unbox,
+                .assign_boxy_adapt,
+                .assign_boxy_inspect,
+                .assign_boxy_eq,
+                .assign_boxy_hash,
+                .assign_boxy_tag,
+                .assign_boxy_tag_payload,
+                .boxy_tag_match,
+                .assign_call_dict,
+                .assign_low_level,
+                .store_struct,
+                .store_tag,
+                .expect_err,
+                .runtime_error,
+                .comptime_exhaustiveness_failed,
+                .switch_stmt,
+                .switch_initialized_payload,
+                .str_match,
+                .str_match_set,
+                .loop_continue,
+                .loop_break,
+                .join,
+                .jump,
+                .ret,
+                .crash,
+                => return error.MissingOutcomeCall,
+            };
         }
-        cursor = switch (stmt) {
-            inline .assign_ref, .assign_literal, .assign_list, .assign_struct, .assign_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free, .comptime_branch_taken => |linear| linear.next,
-            .init_uninitialized,
-            .assign_call,
-            .assign_call_erased,
-            .assign_packed_erased_fn,
-            .assign_boxy_desc_ref,
-            .assign_boxy_dict_ref,
-            .assign_boxy_box,
-            .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
-            .assign_boxy_adapt,
-            .assign_boxy_inspect,
-            .assign_boxy_eq,
-            .assign_boxy_hash,
-            .assign_boxy_tag,
-            .assign_boxy_tag_payload,
-            .boxy_tag_match,
-            .assign_call_dict,
-            .assign_low_level,
-            .store_struct,
-            .store_tag,
-            .expect_err,
-            .runtime_error,
-            .comptime_exhaustiveness_failed,
-            .switch_stmt,
-            .switch_initialized_payload,
-            .str_match,
-            .str_match_set,
-            .loop_continue,
-            .loop_break,
-            .join,
-            .jump,
-            .ret,
-            .crash,
-            => return error.MissingOutcomeCall,
-        };
+        try testing.expect(remaining > 0);
     }
-    try testing.expect(remaining > 0);
 }
 
 test "RC field-take demand crosses complete tag payload and wrapper calls" {

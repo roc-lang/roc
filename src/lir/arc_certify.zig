@@ -1194,63 +1194,6 @@ const RestitutionReceipt = struct {
     mutations: []const OwnershipMutation = &.{},
 };
 
-/// Primary local rebound by an emitted statement. Outcome certification keeps
-/// a discriminant witness only for the exact current binding of the proc's
-/// returned local; `assign_tag` establishes a replacement witness after this
-/// generic kill runs.
-fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
-    return switch (stmt) {
-        inline .init_uninitialized,
-        .assign_ref,
-        .assign_literal,
-        .assign_call,
-        .assign_call_erased,
-        .assign_packed_erased_fn,
-        .assign_boxy_desc_ref,
-        .assign_boxy_dict_ref,
-        .assign_boxy_box,
-        .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
-        .assign_boxy_unbox,
-        .assign_boxy_adapt,
-        .assign_boxy_inspect,
-        .assign_boxy_eq,
-        .assign_boxy_hash,
-        .assign_boxy_tag,
-        .assign_boxy_tag_payload,
-        .assign_call_dict,
-        .assign_low_level,
-        .assign_list,
-        .assign_struct,
-        .assign_tag,
-        .set_local,
-        => |binding| binding.target,
-        inline .store_struct, .store_tag => |store_stmt| store_stmt.dest,
-        .debug,
-        .expect,
-        .expect_err,
-        .runtime_error,
-        .comptime_exhaustiveness_failed,
-        .comptime_branch_taken,
-        .incref,
-        .decref,
-        .decref_if_initialized,
-        .free,
-        .switch_stmt,
-        .switch_initialized_payload,
-        .str_match,
-        .str_match_set,
-        .boxy_tag_match,
-        .join,
-        .jump,
-        .ret,
-        .crash,
-        .loop_continue,
-        .loop_break,
-        => null,
-    };
-}
-
 /// Immutable per-value data shared by every forked state in one proc walk.
 const ValueInfo = struct {
     /// First local bound to this value; used for stable cross-path naming.
@@ -2966,11 +2909,7 @@ const Certifier = struct {
     }
 
     fn restitutedParamsForDiscriminant(self: *const Certifier, discriminant: u32) ?arc_sig.ParamMask {
-        const outcomes = self.sigs.outcomesOf(self.current_sig);
-        for (outcomes) |outcome| {
-            if (outcome.discriminant == discriminant) return outcome.restituted_params;
-        }
-        return null;
+        return arc_sig.outcomeMaskForValue(self.sigs.outcomesOf(self.current_sig), discriminant);
     }
 
     fn applyOutcomeRestitution(self: *Certifier, state: *State) CertifyError!void {
@@ -3011,13 +2950,9 @@ const Certifier = struct {
     }
 
     fn callOutcomeMask(self: *const Certifier, value: ValueId, discriminant: u64) ?arc_sig.ParamMask {
-        if (value >= self.values.items.len or discriminant > std.math.maxInt(u32)) return null;
-        const info = self.values.items[value];
-        const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
-        for (outcomes) |outcome| {
-            if (outcome.discriminant == @as(u32, @intCast(discriminant))) return outcome.restituted_params;
-        }
-        return null;
+        if (value >= self.values.items.len) return null;
+        const outcomes = self.sigs.outcomesOf(.{ .outcomes = self.values.items[value].call_outcomes });
+        return arc_sig.outcomeMaskForValue(outcomes, discriminant);
     }
 
     fn defaultCallOutcomeMask(
@@ -3026,23 +2961,8 @@ const Certifier = struct {
         branches: anytype,
     ) ?arc_sig.ParamMask {
         if (value >= self.values.items.len) return null;
-        const info = self.values.items[value];
-        const outcomes = self.sigs.outcomesOf(.{ .outcomes = info.call_outcomes });
-        var mask: arc_sig.ParamMask = std.math.maxInt(arc_sig.ParamMask);
-        var any = false;
-        for (outcomes) |outcome| {
-            var explicit = false;
-            for (0..GuardedList.borrowLen(branches)) |index| {
-                if (GuardedList.at(branches, index).value == outcome.discriminant) {
-                    explicit = true;
-                    break;
-                }
-            }
-            if (explicit) continue;
-            any = true;
-            mask &= outcome.restituted_params;
-        }
-        return if (any) mask else null;
+        const outcomes = self.sigs.outcomesOf(.{ .outcomes = self.values.items[value].call_outcomes });
+        return arc_sig.defaultOutcomeMask(outcomes, branches);
     }
 
     fn restoreCallOutcome(
@@ -5811,7 +5731,10 @@ const Certifier = struct {
 
             const stmt = self.store.getCFStmt(cursor);
             if (self.current_return_local) |return_local| {
-                if (resultBindingTarget(stmt)) |target| {
+                // Emission rebinding of the returned local kills its witness exactly
+                // as it does in the solver's outcome domain; `assign_tag`
+                // establishes a replacement witness after this generic kill.
+                if (arc_solve.outcomeBindingTarget(stmt)) |target| {
                     if (target == return_local) state.result_discriminant = no_dense;
                 }
             }

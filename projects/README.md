@@ -118,10 +118,6 @@ already diverged in behavior, not just in text.
   25.1k) that force helpers to be copied rather than shared; 53 and 17
   duplicated method names respectively, with divergence already
   present in both.
-- [small/arc-shared-predicates.md](small/arc-shared-predicates.md)—
-  four ARC predicates defined twice, including the refcounted-local
-  predicate where the RC inserter and its own certifier already use
-  different code.
 - [small/erased-ownership-as-lir-data.md](small/erased-ownership-as-lir-data.md)—
   the lowerer records erased ownership and the certifier re-derives it
   with a copy of the rule; `.boxy` has no producer at all.
@@ -158,6 +154,18 @@ erased-callable proc lost it. `box_reuse` adopted the shared
 eligibility predicate; `loop_append_promote` deliberately did not,
 because its gate is a genuinely different one (it admits non-Roc ABI
 procs), which is recorded here rather than papered over.
+
+One definition per ARC predicate has landed. The refcounted-local
+predicate had already collapsed to a single layout query by the time the
+project ran, but the outcome predicates had not: the outcome-row mask
+arithmetic now lives once in `arc_sig.zig`, and the refinement walk and
+outcome binding target once in `arc_solve.zig`, pinned by a source-text
+lint in `arc_solve.zig`. The merge closed a live divergence: insertion's
+walk had learned to step over a statement `match`'s merge join while
+field dismantling's copy had not, so a field projection passed into a
+fallible call under such a `match` never got a restitution receipt. The
+shared walk also admits joins and aliases only before the discriminant
+read, which is what design.md states and what the certifier accepts.
 
 One correction to the batch, from implementing it. The audit filed a
 `spec-constr-single-cloner` project on the claim that Monotype Lifted's
