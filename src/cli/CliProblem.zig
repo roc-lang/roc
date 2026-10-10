@@ -1010,7 +1010,6 @@ fn createDownloadFailedReport(allocator: Allocator, info: anytype) Allocator.Err
         error.UnsupportedTarget,
         error.UnsupportedWatchMode,
         error.WasmOutputWriteFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => false,

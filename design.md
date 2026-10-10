@@ -21396,19 +21396,29 @@ triple, builtin objects, platform-input directory, and final link. It never
 classifies a COFF input as MSVC or MinGW from its container format, symbols,
 or linker failures.
 
-An MSVC target uses the Windows SDK and MSVC runtime discovered for that
-target. A MinGW target does not discover or add MSVC inputs. It uses LLD's
-MinGW mode and links only the startup objects, runtime archives, and import
-libraries declared explicitly by the platform target, together with Roc's
-generated objects. This lets a platform provide a cgo host and its matching
-MinGW runtime without either the compiler or linker reconstructing the host's
-ABI from the archive.
+Neither Windows ABI discovers anything on the machine running the link. Both
+pass `/nodefaultlib` and link only the startup code, runtime archives, and
+import libraries declared explicitly by the platform target, together with
+Roc's generated objects; a `/defaultlib` directive embedded in an input is
+ignored. An MSVC target does not locate Visual Studio or a Windows SDK, so it
+links identically on a machine that has neither and when cross-compiling. A
+MinGW target additionally selects LLD's MinGW mode. This lets a platform
+provide a cgo host and its matching runtime without either the compiler or
+linker reconstructing the host's ABI from the archive.
 
-The synthetic default platform declares MinGW startup and library inputs from
-the same inventory used to embed the vendored runtime in the compiler. Default
-app staging writes those files into the selected target's platform directory;
-the linker consumes them as ordinary explicit platform inputs. Baseline CPU
-targets use the same runtime bytes as their matching architecture and ABI.
+A Windows platform target therefore declares the symbol LLD infers as the
+image entry (`mainCRTStartup`, or `_DllMainCRTStartup` for a `Shared` output),
+whatever C runtime its host needs, and import libraries for `kernel32` and
+`ntdll`, which Roc's own runtime objects import from.
+
+The synthetic default platform declares its Windows startup and library
+inputs from the same inventories used to embed those runtimes in the
+compiler: the vendored MinGW runtime, and for MSVC a startup archive built
+from `src/default_platform/msvc_runtime/` beside the same import libraries.
+Default app staging writes those files into the selected target's platform
+directory; the linker consumes them as ordinary explicit platform inputs.
+Baseline CPU targets use the same runtime bytes as their matching
+architecture and ABI.
 
 ```text
 targets: {

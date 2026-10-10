@@ -8378,7 +8378,7 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = platform_main_path, .data = defaultBuildPlatformSource(args) });
     try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = echo_module_path, .data = echo_platform.echo_module_source });
 
-    try writeDefaultMingwRuntime(ctx, platform_dir, args);
+    try writeDefaultWindowsRuntime(ctx, platform_dir, args);
 
     var synthetic_args = args;
     synthetic_args.path = app_path;
@@ -8399,23 +8399,35 @@ fn rocBuildDefaultApp(ctx: *CliCtx, args: cli_args.BuildArgs, staged: *default_a
     }
 }
 
-fn writeDefaultMingwRuntime(ctx: *CliCtx, platform_dir: []const u8, args: cli_args.BuildArgs) CliMainError!void {
+/// Writes the embedded C runtime a Windows default-platform link declares as
+/// explicit inputs. Neither Windows ABI takes anything from the machine.
+fn writeDefaultWindowsRuntime(ctx: *CliCtx, platform_dir: []const u8, args: cli_args.BuildArgs) CliMainError!void {
     const target = if (args.target) |name|
         RocTarget.fromString(name) orelse return
     else
         roc_target.host_cpu.nativeTarget();
-    if (target.windowsAbi() != .mingw) return;
+    const abi = target.windowsAbi() orelse return;
     const target_dir = try std.fs.path.join(ctx.arena, &.{ platform_dir, "targets", @tagName(target) });
     try std.Io.Dir.cwd().createDirPath(ctx.io.std_io, target_dir);
-    inline for (echo_platform.mingw_runtime.files) |filename| {
-        const bytes = if (builtin.is_test) "" else if (target.toCpuArch() == .x86_64)
-            @import("embedded_assets").file("targets/x64mingw/" ++ filename)
-        else blk: {
-            std.debug.assert(target.toCpuArch() == .aarch64);
-            break :blk @import("embedded_assets").file("targets/arm64mingw/" ++ filename);
-        };
-        const path = try std.fs.path.join(ctx.arena, &.{ target_dir, filename });
-        try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = bytes });
+    const is_x64 = target.toCpuArch() == .x86_64;
+    std.debug.assert(is_x64 or target.toCpuArch() == .aarch64);
+    switch (abi) {
+        .mingw => inline for (echo_platform.mingw_runtime.files) |filename| {
+            const bytes = if (builtin.is_test) "" else if (is_x64)
+                @import("embedded_assets").file("targets/x64mingw/" ++ filename)
+            else
+                @import("embedded_assets").file("targets/arm64mingw/" ++ filename);
+            const path = try std.fs.path.join(ctx.arena, &.{ target_dir, filename });
+            try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = bytes });
+        },
+        .msvc => inline for (echo_platform.msvc_runtime.files) |filename| {
+            const bytes = if (builtin.is_test) "" else if (is_x64)
+                @import("embedded_assets").file("targets/x64win/" ++ filename)
+            else
+                @import("embedded_assets").file("targets/arm64win/" ++ filename);
+            const path = try std.fs.path.join(ctx.arena, &.{ target_dir, filename });
+            try std.Io.Dir.cwd().writeFile(ctx.io.std_io, .{ .sub_path = path, .data = bytes });
+        },
     }
 }
 
