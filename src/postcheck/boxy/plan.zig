@@ -3791,6 +3791,10 @@ const Builder = struct {
     };
 
     allocator: Allocator,
+    /// Reusable scratch for `appendStoredCallableCaptureSources`: one flag per
+    /// persisted capture of the stored function being planned, set when that
+    /// capture is accounted for.
+    stored_capture_consumed: std.ArrayList(bool) = .empty,
     root_module: ?checked.LoweringModuleView,
     root_view: ModuleView,
     extra_module_views: []const ModuleView,
@@ -3932,6 +3936,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.stored_capture_consumed.deinit(self.allocator);
         var host_nominal_keys = self.host_nominals.keyIterator();
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
         self.host_nominals.deinit(self.allocator);
@@ -6759,25 +6764,68 @@ const Builder = struct {
             .structural => |derivation| derivation,
             .direct_pending, .direct_closed, .direct_parametric, .evidence_dependent, .checked_error, .@"unreachable" => return null,
         };
-        const kind: GeneratedCodecKind = switch (derivation.kind()) {
-            .parser => .parser_constructor,
-            .encoder => .encoder_constructor,
+        const derivation_kind = derivation.kind();
+        switch (derivation_kind) {
+            .parser, .encoder => {},
             .equality, .hash, .map, .map_effectful => return null,
-        };
+        }
         const derivation_id = dispatch.generated_codec_derivation orelse
             boxyPlanInvariant("structural codec dispatch had no checked derivation reference");
-        if (@backingInt(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-            boxyPlanInvariant("structural codec dispatch referenced a missing checked derivation");
-        }
-        const contract = view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
         return .{
-            .source = .{ .generated_codec = .{
-                .kind = kind,
-                .shape = typeRef(view, contract.source_shape_ty),
-                .contract_derivation = derivation_id,
-            } },
-            .worker_type = typeRef(view, contract.source_constructor_ty),
+            .source = structuralCodecWorkerSource(view, derivation_kind, derivation_id, dispatch.dispatcher_ty, dispatch.callable_ty),
+            .worker_type = structuralCodecWorkerType(view, derivation_id),
         };
+    }
+
+    /// The one worker source of a checked structural codec derivation. A
+    /// direct structural call and structural callable-dictionary evidence
+    /// both key the derivation's generated constructor here, by the
+    /// derivation's own source shape, so one derivation reaches one worker
+    /// (`stepEnsureWorker` dedupes on the exact source and type). The use's
+    /// dispatcher and callable must agree with the derivation they name.
+    fn structuralCodecWorkerSource(
+        view: ModuleView,
+        derivation_kind: static_dispatch.StructuralKind,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+        dispatcher_ty: checked.CheckedTypeId,
+        callable_ty: checked.CheckedTypeId,
+    ) WorkerSource {
+        const kind: GeneratedCodecKind, const contract_kind: static_dispatch.GeneratedCodecDerivationKind = switch (derivation_kind) {
+            .parser => .{ .parser_constructor, .parser },
+            .encoder => .{ .encoder_constructor, .encoder },
+            .equality, .hash, .map, .map_effectful => boxyPlanInvariant("a non-codec structural derivation reached codec worker keying"),
+        };
+        const contract = structuralCodecContract(view, derivation_id);
+        if (contract.kind != contract_kind or
+            !std.meta.eql(view.checked_types.rootKey(contract.source_constructor_ty), view.checked_types.rootKey(callable_ty)) or
+            !std.meta.eql(view.checked_types.structuralRootKey(contract.source_shape_ty), view.checked_types.structuralRootKey(dispatcher_ty)))
+        {
+            boxyPlanInvariant("structural codec use disagreed with its checked derivation");
+        }
+        return .{ .generated_codec = .{
+            .kind = kind,
+            .shape = typeRef(view, contract.source_shape_ty),
+            .contract_derivation = derivation_id,
+        } };
+    }
+
+    /// The checked type of a structural codec derivation's one worker
+    /// (`structuralCodecWorkerSource`).
+    fn structuralCodecWorkerType(
+        view: ModuleView,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+    ) CheckedTypeIdentity {
+        return typeRef(view, structuralCodecContract(view, derivation_id).source_constructor_ty);
+    }
+
+    fn structuralCodecContract(
+        view: ModuleView,
+        derivation_id: static_dispatch.GeneratedCodecDerivationId,
+    ) static_dispatch.GeneratedCodecDerivation {
+        if (@backingInt(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
+            boxyPlanInvariant("structural codec use referenced a missing checked derivation");
+        }
+        return view.static_dispatch_plans.generated_codec_derivations[@backingInt(derivation_id)];
     }
 
     fn stepIteratorFor(self: *Builder, actions: *std.ArrayList(PlanAction), view: ModuleView, maybe_plan: ?static_dispatch.IteratorForPlanId) Allocator.Error!void {
@@ -7264,13 +7312,23 @@ const Builder = struct {
             => store_view,
         };
         const capture = state.fn_value.captures[state.index];
+        var next = state;
+        next.index += 1;
+        // A recursive-binding capture fills no worker slot (see
+        // `appendStoredCallableCaptureSources`), so it has no
+        // representation to analyze.
+        switch (capture.kind) {
+            .lexical => {},
+            .recursive_binding => {
+                try self.pushPlanActions(actions, &.{.{ .const_fn_capture = next }});
+                return;
+            },
+        }
         const source_type = if (capture.id.isCanonical())
             typeRef(fn_view, self.checkedBinderType(fn_view, capture.id.binder()))
         else
             self.generatedWorkerCaptureType(state.worker, capture.id);
         const capture_rep = try self.analyzeStoredType(store_view, capture.ty, source_type);
-        var next = state;
-        next.index += 1;
         try self.pushPlanActions(actions, &.{
             .{ .static_const_node = .{ .store_view = store_view, .node = capture.value, .rep_id = capture_rep, .const_type = capture.ty, .visited = state.visited } },
             .{ .const_fn_capture = next },
@@ -12392,7 +12450,8 @@ const Builder = struct {
     fn directCallCallableDerivedSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!?Span {
         const site_view = self.moduleForId(direct.call.module);
         const call_expr = site_view.checked_bodies.expr(direct.call.expr);
-        if (call_expr.data == .call) return null;
+        // An ordinary call and a producer call at a lookup are not dispatches.
+        if (call_expr.data == .call or isLookupExpr(call_expr.data)) return null;
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
@@ -13047,21 +13106,31 @@ const Builder = struct {
         const worker = self.plan.workers.items[@backingInt(worker_id)];
         const captures = self.plan.erasedCaptureSlice(worker.erased_captures);
         const start: u32 = @intCast(self.plan.stored_callable_capture_sources.items.len);
-        var const_capture_count: usize = 0;
+        const consumed = &self.stored_capture_consumed;
+        consumed.clearRetainingCapacity();
+        try consumed.appendNTimes(self.allocator, false, fn_value.captures.len);
 
         for (captures) |capture| {
             if (capture.kind != .captured_value) continue;
             const capture_id = capture.capture_id orelse
                 boxyPlanInvariant("stored callable value capture had no checked capture id");
-            var persisted_capture: ?check.ConstStore.ConstCapture = null;
-            for (fn_value.captures) |persisted| {
+            var persisted_index: ?usize = null;
+            for (fn_value.captures, 0..) |persisted, index| {
                 if (std.meta.eql(persisted.id, capture_id)) {
-                    persisted_capture = persisted;
+                    persisted_index = index;
                     break;
                 }
             }
-            const source: StoredCallableCaptureSource.Source = if (persisted_capture) |persisted| blk: {
-                const_capture_count += 1;
+            const source: StoredCallableCaptureSource.Source = if (persisted_index) |index| blk: {
+                const persisted = fn_value.captures[index];
+                switch (persisted.kind) {
+                    .lexical => {},
+                    .recursive_binding => boxyPlanInvariant("stored callable worker slot named a recursive-binding capture"),
+                }
+                if (consumed.items[index]) {
+                    boxyPlanInvariant("stored callable worker consumed one persisted capture twice");
+                }
+                consumed.items[index] = true;
                 break :blk .{ .const_node = .{
                     .store_module = stored_fn.module,
                     .node = persisted.value,
@@ -13073,8 +13142,22 @@ const Builder = struct {
                 .source = source,
             });
         }
-        if (const_capture_count != fn_value.captures.len) {
-            boxyPlanInvariant("stored callable worker did not consume every persisted capture");
+        // A persisted recursive-binding capture is a top-level root's own
+        // recursive binding, recorded explicitly when compile-time evaluation
+        // reserved it (`ConstCaptureKind.recursive_binding`). Checked closure
+        // captures never include it: the worker reaches that root through its
+        // own top-level reference, so it has no worker slot to fill.
+        for (fn_value.captures, consumed.items) |persisted, *was_consumed| {
+            switch (persisted.kind) {
+                .lexical => {},
+                .recursive_binding => {
+                    if (was_consumed.*) boxyPlanInvariant("stored callable recursive-binding capture was consumed by a worker slot");
+                    was_consumed.* = true;
+                },
+            }
+        }
+        for (consumed.items) |was_consumed| {
+            if (!was_consumed) boxyPlanInvariant("stored callable worker did not consume every persisted capture");
         }
         return .{
             .start = start,
@@ -16704,16 +16787,9 @@ const Builder = struct {
                         .parser, .encoder => blk_worker: {
                             const derivation_id = structural.generated_codec_derivation orelse
                                 boxyPlanInvariant("structural codec evidence had no checked derivation reference");
-                            if (@backingInt(derivation_id) >= view.static_dispatch_plans.generated_codec_derivations.len) {
-                                boxyPlanInvariant("structural codec evidence referenced a missing checked derivation");
-                            }
                             break :blk_worker .{ .worker = try self.ensureWorker(
-                                .{ .generated_codec = .{
-                                    .kind = if (structural_kind == .parser) .parser_constructor else .encoder_constructor,
-                                    .shape = typeRef(view, structural.dispatcher_ty),
-                                    .contract_derivation = derivation_id,
-                                } },
-                                callable_type,
+                                structuralCodecWorkerSource(view, structural_kind, derivation_id, structural.dispatcher_ty, structural.callable_ty),
+                                structuralCodecWorkerType(view, derivation_id),
                                 null,
                             ) };
                         },
@@ -19696,6 +19772,12 @@ const Builder = struct {
         };
         for (fn_value.captures) |capture| {
             if (!capture.id.isCanonical()) continue;
+            // A recursive-binding capture's binder belongs to its root's
+            // module, which need not be the function's, and fills no slot.
+            switch (capture.kind) {
+                .lexical => {},
+                .recursive_binding => continue,
+            }
             _ = try self.analyzeType(fn_view, self.checkedBinderType(fn_view, capture.id.binder()));
         }
     }
@@ -22290,6 +22372,7 @@ test "boxy planner walks callable eval finalized const function bodies" {
     const capture_value = try const_store.append(.{ .scalar = .{ .u64 = 42 } });
     const captures = [_]check.ConstStore.ConstCapture{.{
         .id = checked.CaptureId.fromBinder(@fromBackingInt(@intCast(fixtureTableIndex(0)))),
+        .kind = .lexical,
         .ty = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .value = capture_value,
     }};

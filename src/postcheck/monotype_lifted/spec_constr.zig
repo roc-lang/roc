@@ -11636,6 +11636,7 @@ const Cloner = struct {
                 source_local.binder,
                 id,
                 source_local.checked_capture_id,
+                source_local.capture_kind,
             );
             worker_captures[index] = .{ .local = local, .ty = capture_ty };
             const local_expr = try self.addExpr(.{

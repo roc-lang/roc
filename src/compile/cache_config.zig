@@ -298,7 +298,9 @@ pub const Constants = struct {
     /// 138: Hosted Try errors no longer widen implicitly at question operators.
     /// 139: Literal dispatch plans store an optional conversion function, absent
     ///      for a proved concrete builtin numeral.
-    pub const CACHE_VERSION = 139;
+    /// 140: Stored closure captures record whether each is a lexical capture
+    ///      or a top-level compile-time root's recursive binding.
+    pub const CACHE_VERSION = 140;
 };
 
 /// Configuration for the Roc cache system.

@@ -2395,6 +2395,8 @@ pub const CheckedTypeId = checked_ids.CheckedTypeId;
 pub const ConstStore = const_store.ConstStore;
 pub const ConstNodeId = const_store.ConstNodeId;
 pub const ConstFnId = const_store.ConstFnId;
+pub const ConstCaptureKind = const_store.ConstCaptureKind;
+pub const ConstRecursiveBinding = const_store.ConstRecursiveBinding;
 pub const ConstValue = const_store.ConstValue;
 pub const ConstScalar = const_store.ConstScalar;
 pub const ConstList = const_store.ConstList;
@@ -28312,7 +28314,7 @@ fn checkedTypeHasNoReachableCallableSlots(
 }
 
 /// Public `ComptimeRootId` declaration.
-pub const ComptimeRootId = enum(u32) { _ };
+pub const ComptimeRootId = checked_ids.ComptimeRootId;
 
 /// Public `CompileTimeRootKind` declaration.
 pub const CompileTimeRootKind = enum {
@@ -40277,8 +40279,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0x1E, 0xDC, 0xAA, 0xFE, 0xF0, 0xDA, 0xA0, 0x8F, 0x11, 0xF2, 0x70, 0x4B, 0xE9, 0xED, 0x93,
-        0x7C, 0x88, 0x20, 0xB5, 0xB8, 0xD3, 0x0C, 0xF7, 0x76, 0xBB, 0xCC, 0xCE, 0xF0, 0xA0, 0xB9, 0xF7,
+        0xB4, 0x4E, 0x56, 0x31, 0xF8, 0x45, 0x59, 0x1D, 0x0E, 0x92, 0xB9, 0x00, 0x50, 0x99, 0x1A, 0x32,
+        0xB7, 0xA9, 0x3D, 0xF7, 0x65, 0x63, 0x3E, 0x87, 0x04, 0x4A, 0x2C, 0xBF, 0x09, 0x5B, 0xEF, 0xB2,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

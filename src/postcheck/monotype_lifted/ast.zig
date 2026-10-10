@@ -1489,6 +1489,7 @@ pub const Program = struct {
         binder: ?check.CheckedModule.PatternBinderId,
         capture_id: check.CheckedModule.CaptureId,
         checked_capture_id: ?check.CheckedModule.CaptureId,
+        capture_kind: check.CheckedModule.ConstCaptureKind,
     ) std.mem.Allocator.Error!LocalId {
         if (checked_capture_id) |checked_id| {
             if (checked_id.isCanonical()) {
@@ -1513,6 +1514,7 @@ pub const Program = struct {
             .binder = binder,
             .capture_id = capture_id,
             .checked_capture_id = checked_capture_id,
+            .capture_kind = capture_kind,
         });
         try self.local_names.append(self.allocator, "");
         return id;
