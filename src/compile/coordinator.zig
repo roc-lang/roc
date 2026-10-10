@@ -687,6 +687,10 @@ pub const ModuleState = struct {
     /// with a published artifact; borrows the platform's checked env.
     platform_requirement_surface: ?PlatformRequirementSurface = null,
     pending_evaluation: ?*messages.PendingEvaluationState = null,
+    /// A cached artifact this compilation reopened to evaluate roots no
+    /// earlier compilation demanded: how many requested roots were
+    /// unevaluated when it was reopened.
+    reopened_unevaluated: ?usize = null,
     /// Cached AST from parsing (owned, null after canonicalization)
     cached_ast: ?*AST,
     /// Current compilation phase
@@ -2799,6 +2803,27 @@ pub const Coordinator = struct {
                 try pending.appendSlice(self.gpa, artifact.direct_import_artifact_keys);
             }
         }
+        // A finalized artifact whose requested roots earlier compilations
+        // left unevaluated joins this evaluation, which evaluates the ones
+        // this compilation demands against that same checked artifact
+        // (design.md "Demand-Driven Compile-Time Evaluation").
+        var reopen = self.packages.iterator();
+        while (reopen.next()) |package| {
+            for (package.value_ptr.*.modules.items) |*mod| {
+                if (mod.pending_evaluation != null) continue;
+                const artifact = mod.checkedArtifact() orelse continue;
+                if (artifact.evaluation_state != .finalized or !artifact.hasUnevaluatedRequests()) continue;
+                if (dependency_root != null and !dependencies.contains(artifact.key.bytes)) continue;
+                // A platform awaiting its app relation finalizes in the pass
+                // that evaluates the platform alone, which demands every root.
+                if (artifact.hasUnboundPlatformRequirements()) coordinatorInvariant("platform awaiting its app relation left compile-time roots unevaluated", .{});
+                const state = try UnfinalizedReportDestinations.newState(self);
+                errdefer state.deinit();
+                try artifact.reopenForEvaluation(self.gpa);
+                mod.pending_evaluation = state;
+                mod.reopened_unevaluated = unevaluatedRequestCount(artifact);
+            }
+        }
         var entries = std.ArrayList(Entry).empty;
         defer entries.deinit(self.gpa);
         var packages = self.packages.iterator();
@@ -2863,7 +2888,9 @@ pub const Coordinator = struct {
                 try cached_debug_modules.append(self.gpa, artifact);
         }
         if (extra_cached) |artifact| {
-            if (artifact.compile_time_debug.entries.len != 0) try cached_debug_modules.append(self.gpa, artifact);
+            // A reopened composition replays its stored observations as one
+            // of the modules this evaluation finalizes.
+            if (artifact.evaluation_state == .finalized and artifact.compile_time_debug.entries.len != 0) try cached_debug_modules.append(self.gpa, artifact);
         }
         // An explicit runtime root set (a command that names its own roots,
         // such as `roc test`) is its own program. Every other command
@@ -2965,6 +2992,16 @@ pub const Coordinator = struct {
         );
         for (entries.items) |entry| try self.commitPreparedModule(entry.mod);
         try unfinalized.commit();
+    }
+
+    fn unevaluatedRequestCount(artifact: *const CheckedArtifact.CheckedModuleArtifact) usize {
+        var count: usize = 0;
+        for (artifact.root_requests.compile_time_requests) |request| {
+            const root = request.compile_time_root orelse continue;
+            if (artifact.compile_time_roots.root(root).payload == .unevaluated or
+                artifact.compile_time_roots.root(root).payload == .pending) count += 1;
+        }
+        return count;
     }
 
     /// Report destinations for checked modules whose finalization completed
@@ -3103,7 +3140,11 @@ pub const Coordinator = struct {
             artifact.evaluation_diagnostics.deinit(artifact.canonical_names.allocator);
             artifact.evaluation_diagnostics = diagnostics;
         }
-        if (mod.reports.items.len == 0) {
+        // A reopened cache entry is published again only when this
+        // compilation evaluated roots it lacked.
+        const evaluated_more = if (mod.reopened_unevaluated) |before| unevaluatedRequestCount(artifact) < before else true;
+        mod.reopened_unevaluated = null;
+        if (mod.reports.items.len == 0 and evaluated_more) {
             if (artifact.pairing_arena == null) self.storeCheckedModuleInCache(artifact, mod.has_source_version_pin) else self.storePlatformPairingInCache(artifact);
         }
         state.deinit();

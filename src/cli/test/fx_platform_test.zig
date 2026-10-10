@@ -2326,3 +2326,179 @@ test "imports reject package-root escape and physical source aliases" {
     try util.checkFailure(root_alias_result);
     try testing.expect(std.mem.find(u8, root_alias_result.stderr, "import source alias") != null);
 }
+
+/// One `roc` invocation of a compile-time demand test app: its exit status,
+/// its standard output, and which of the package's `dbg` observations it
+/// reported.
+const ComptimeDemandRun = struct {
+    stdout: []const u8,
+    base: bool,
+    read_by_app_b: bool,
+    never_read: bool,
+
+    fn deinit(self: ComptimeDemandRun, allocator: std.mem.Allocator) void {
+        allocator.free(self.stdout);
+    }
+};
+
+fn runComptimeDemandApp(
+    allocator: std.mem.Allocator,
+    args: []const []const u8,
+    app: []const u8,
+    cache_env: *const std.process.Environ.Map,
+) FxPlatformTestError!ComptimeDemandRun {
+    const result = try util.runRocWithEnv(std.testing.io, allocator, args, app, cache_env);
+    errdefer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    try util.checkSuccess(result);
+    return .{
+        .stdout = result.stdout,
+        .base = std.mem.find(u8, result.stderr, "evaluating base") != null,
+        .read_by_app_b = std.mem.find(u8, result.stderr, "evaluating read_by_app_b") != null,
+        .never_read = std.mem.find(u8, result.stderr, "evaluating never_read") != null,
+    };
+}
+
+test "a build evaluates only the package constants its program reads, with or without a cache" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // Uncached, then a cold cache, then a warm one: every run evaluates (or
+    // replays the observations of) exactly the roots the program reads. App
+    // A reads `read_by_app_a`, whose value reads `base`; nothing reads the
+    // other two constants.
+    const invocations = [_][]const []const u8{ &.{"--no-cache"}, &.{}, &.{} };
+    for (invocations) |args| {
+        const run = try runComptimeDemandApp(allocator, args, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+        try testing.expect(run.base);
+        try testing.expect(!run.read_by_app_b);
+        try testing.expect(!run.never_read);
+    }
+}
+
+test "a build evaluates a root that an earlier build's cached module left unevaluated" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const cache_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(cache_path);
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    // App A caches the package with only its own roots evaluated.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+    }
+    // App B reads a root that cache entry left unevaluated, so B evaluates
+    // it against the same checked module, and nothing else.
+    for (0..2) |_| {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_b.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("b: 7\n", run.stdout);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(!run.base);
+        try testing.expect(!run.never_read);
+    }
+    // App A still observes only its own roots, though the cache now holds
+    // B's evaluated root too.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings("a: 42\n", run.stdout);
+        try testing.expect(run.base);
+        try testing.expect(!run.read_by_app_b);
+        try testing.expect(!run.never_read);
+    }
+    // Checking evaluates every root, including the one no build demanded.
+    {
+        const run = try runComptimeDemandApp(allocator, &.{"check"}, "test/fx/comptime_demand_app_a.roc", &cache_env);
+        defer run.deinit(allocator);
+        try testing.expect(run.base);
+        try testing.expect(run.read_by_app_b);
+        try testing.expect(run.never_read);
+    }
+}
+
+/// Build a compile-time demand pack test app for the dev backend against the
+/// object cache in `cache_env`, run it, and report its output and whether the
+/// build observed `table`'s `dbg`.
+fn buildAndRunComptimeDemandPackApp(
+    allocator: std.mem.Allocator,
+    tmp_path: []const u8,
+    app: []const u8,
+    no_cache: bool,
+    cache_env: *const std.process.Environ.Map,
+) FxPlatformTestError!ComptimeDemandRun {
+    const output_path = try std.fs.path.join(allocator, &.{ tmp_path, "app.bin" });
+    defer allocator.free(output_path);
+    const output_arg = try std.fmt.allocPrint(allocator, "--output={s}", .{output_path});
+    defer allocator.free(output_arg);
+    const args: []const []const u8 = if (no_cache) &.{ "build", "--opt=dev", "--no-cache", output_arg } else &.{ "build", "--opt=dev", output_arg };
+    const build_result = try util.runRocWithEnv(std.testing.io, allocator, args, app, cache_env);
+    defer allocator.free(build_result.stdout);
+    defer allocator.free(build_result.stderr);
+    try util.checkSuccess(build_result);
+    const run_result = try util.runChildWithTimeout(std.testing.io, allocator, &.{output_path}, .{
+        .max_output_bytes = 1024 * 1024,
+    });
+    defer allocator.free(run_result.stderr);
+    errdefer allocator.free(run_result.stdout);
+    switch (run_result.term) {
+        .exited => |code| if (code != 0) return error.UnexpectedExitCode,
+        .signal, .stopped, .unknown => return error.UnexpectedTermination,
+    }
+    return .{
+        .stdout = run_result.stdout,
+        .base = std.mem.find(u8, build_result.stderr, "evaluating table") != null,
+        .read_by_app_b = false,
+        .never_read = false,
+    };
+}
+
+test "an app linking an object-cache entry still evaluates the compile-time roots that entry reads" {
+    const allocator = testing.allocator;
+
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    const tmp_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, ".", allocator);
+    defer allocator.free(tmp_path);
+    const cache_path = try std.fs.path.join(allocator, &.{ tmp_path, "roc-cache" });
+    defer allocator.free(cache_path);
+    try tmp_dir.dir.createDirPath(std.testing.io, "roc-cache");
+    var cache_env = std.process.Environ.Map.init(allocator);
+    defer cache_env.deinit();
+    try cache_env.put("ROC_CACHE_DIR", cache_path);
+
+    const Step = struct { app: []const u8, no_cache: bool, stdout: []const u8, observes_table: bool };
+    // `table` is read directly by one app and only through `Lib.sum_table`
+    // by another, whose build may link `sum_table` from a pack an earlier
+    // build wrote: either way that build evaluates or replays `table`. An
+    // app reading neither never observes it, whatever the cache holds.
+    const steps = [_]Step{
+        .{ .app = "test/fx/comptime_demand_pack_none.roc", .no_cache = false, .stdout = "a: 42\n", .observes_table = false },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = false, .stdout = "b: 16\n", .observes_table = true },
+        .{ .app = "test/fx/comptime_demand_pack_direct.roc", .no_cache = false, .stdout = "c: 6\n", .observes_table = true },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = false, .stdout = "b: 16\n", .observes_table = true },
+        .{ .app = "test/fx/comptime_demand_pack_via_fn.roc", .no_cache = true, .stdout = "b: 16\n", .observes_table = true },
+        .{ .app = "test/fx/comptime_demand_pack_none.roc", .no_cache = false, .stdout = "a: 42\n", .observes_table = false },
+    };
+    for (steps) |step| {
+        const run = try buildAndRunComptimeDemandPackApp(allocator, tmp_path, step.app, step.no_cache, &cache_env);
+        defer run.deinit(allocator);
+        try testing.expectEqualStrings(step.stdout, run.stdout);
+        try testing.expectEqual(step.observes_table, run.base);
+    }
+}

@@ -298,6 +298,19 @@ pub const Options = struct {
     static_data_literals: bool = false,
     /// Produce immutable selected-root reads for a shared evaluation/runtime session.
     comptime_value_reads: bool = false,
+    /// With `comptime_value_reads`, lower a compile-time root's body only
+    /// once the program demands the root, and make program roots only of
+    /// the compile-time roots the program demands (design.md "Demand-Driven
+    /// Compile-Time Evaluation").
+    demand_driven_comptime_roots: bool = false,
+    /// With `comptime_value_reads`, receives the compile-time roots the
+    /// program demands and the checked roots each of its compile-time roots
+    /// reads.
+    comptime_demand_out: ?*ComptimeDemand = null,
+    /// Receives what each object-cache specialization's code reads of
+    /// compile-time evaluation, for a program whose specializations may be
+    /// written to the object cache.
+    spec_comptime_reads_out: ?*SpecComptimeReads = null,
     /// Turn each specialized custom literal's conversion into a literal root
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
@@ -308,6 +321,584 @@ pub const Options = struct {
     post_check_executor: ?base.post_check_task_executor.Executor = null,
     /// Optional phase timings for the work owned by Monotype lowering.
     timing: ?*Timing = null,
+};
+
+/// What a shared program demands of compile-time evaluation (design.md
+/// "Demand-Driven Compile-Time Evaluation").
+pub const ComptimeDemand = struct {
+    allocator: Allocator,
+    /// The checked roots each of the program's compile-time roots reads,
+    /// directly or through the code it reaches: one range of `reads` per
+    /// program root, for the program's first `root_reads.len` roots.
+    root_reads: []Common.Span(EntryRoot) = &.{},
+    reads: []EntryRoot = &.{},
+    /// Every root whose stored value the program demands: each root it
+    /// restores from a checked module's store, and every root such a root
+    /// reads, transitively.
+    stored: []EntryRoot = &.{},
+    /// How many compile-time roots the program declared; `root_reads.len`
+    /// of them became program roots.
+    declared_root_count: usize = 0,
+
+    pub fn rootReads(self: *const ComptimeDemand, index: usize) []const EntryRoot {
+        const span = self.root_reads[index];
+        return self.reads[span.start..][0..span.len];
+    }
+
+    pub fn deinit(self: *ComptimeDemand) void {
+        self.allocator.free(self.root_reads);
+        self.allocator.free(self.reads);
+        self.allocator.free(self.stored);
+        self.* = .{ .allocator = self.allocator };
+    }
+};
+
+/// What a lowered program demands of compile-time evaluation, computed over
+/// its committed definitions (`Builder.advanceComptimeDemand` and
+/// `Builder.orderComptimeRoots`).
+///
+/// A definition references the definitions its body names, and reads the
+/// checked roots its body reads through a slot or by restoring a stored
+/// value. A slot read's initializer is the read's representation evidence,
+/// not a call, so the walk does not follow it. Demand is reachability: a root
+/// is demanded when a definition reachable from the program's entries, or
+/// from a demanded root's definition, reads it. A committed definition
+/// nothing reachable references, such as a callee body an immediate claim
+/// lowered for a caller that kept its own copy, demands nothing.
+///
+/// The state persists across the lowering's drains. Definitions only grow,
+/// and a definition is summarized once its body is final: after the drain
+/// that completed it.
+const ComptimeDemandState = struct {
+    const Range = struct { start: u32, len: u32 };
+    /// `local` is set when the body evaluates a root in place: code that
+    /// computes the root's value whenever it runs, which another program
+    /// cannot link while it evaluates the root itself.
+    const Summary = struct { refs: Range, reads: Range, local: bool };
+    const RootBytes = struct { module: [32]u8, root: u32 };
+    const Visit = union(enum) { expr: Ast.ExprId, stmt: Ast.StmtId };
+    /// Items number definitions first and nested definitions after them, in
+    /// two disjoint ranges of one id space.
+    const nested_bit: u32 = 1 << 31;
+
+    def_summaries: std.ArrayList(?Summary) = .empty,
+    nested_summaries: std.ArrayList(?Summary) = .empty,
+    summary_refs: std.ArrayList(u32) = .empty,
+    summary_reads: std.ArrayList(u32) = .empty,
+    /// Definition item per function id.
+    fn_items: std.ArrayList(?u32) = .empty,
+    indexed_defs: usize = 0,
+    indexed_nested_defs: usize = 0,
+    /// Every root the walk met, interned.
+    roots: std.ArrayList(EntryRoot) = .empty,
+    root_ids: std.AutoHashMapUnmanaged(RootBytes, u32) = .empty,
+    /// Per interned root: met by a reachable read already.
+    root_handled: std.ArrayList(bool) = .empty,
+    /// Root values restored or evaluated in place, by expression, and
+    /// whether the expression evaluates its root in place.
+    value_reads: std.AutoHashMapUnmanaged(Ast.ExprId, Range) = .empty,
+    value_read_roots: std.ArrayList(u32) = .empty,
+    value_read_evaluated: std.ArrayList(bool) = .empty,
+    ingested_value_reads: usize = 0,
+    /// The roots each procedure an object-cache entry serves read, by the
+    /// procedure's function: its body is skipped, so its reads come from the
+    /// entry (`Common.SpecCacheHit.comptime_root_reads`).
+    cached_fn_reads: std.AutoHashMapUnmanaged(Ast.FnId, Range) = .empty,
+    cached_fn_read_roots: std.ArrayList(u32) = .empty,
+    ingested_cached_fns: usize = 0,
+    expr_marks: std.ArrayList(u32) = .empty,
+    def_marks: std.ArrayList(u32) = .empty,
+    nested_marks: std.ArrayList(u32) = .empty,
+    root_marks: std.ArrayList(u32) = .empty,
+    generation: u32 = 0,
+    visits: std.ArrayList(Visit) = .empty,
+    summary_local: bool = false,
+    closure_local: bool = false,
+    items: std.ArrayList(u32) = .empty,
+    closure: std.ArrayList(u32) = .empty,
+    /// Items reachable from the entries and the demanded roots' definitions.
+    def_reached: std.ArrayList(bool) = .empty,
+    nested_reached: std.ArrayList(bool) = .empty,
+    /// Entries already walked: program roots that are not compile-time
+    /// roots, static-data request definitions, and literal roots.
+    walked_deferred_roots: usize = 0,
+    walked_layout_requests: usize = 0,
+    walked_literal_roots: usize = 0,
+    /// Declared root per interned root id, and the declared roots demanded.
+    declared_by_root: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty,
+    indexed_declared_roots: usize = 0,
+    demanded: std.ArrayList(bool) = .empty,
+    /// Demanded declared roots whose bodies entered the queue since the last
+    /// drain; the walk enters their definitions once that drain lowers them.
+    awaiting_bodies: std.ArrayList(u32) = .empty,
+    /// Roots whose stored values the program demands.
+    stored_demanded: std.ArrayList(u32) = .empty,
+
+    fn deinit(self: *ComptimeDemandState, allocator: Allocator) void {
+        self.def_summaries.deinit(allocator);
+        self.nested_summaries.deinit(allocator);
+        self.summary_refs.deinit(allocator);
+        self.summary_reads.deinit(allocator);
+        self.fn_items.deinit(allocator);
+        self.roots.deinit(allocator);
+        self.root_ids.deinit(allocator);
+        self.root_handled.deinit(allocator);
+        self.value_reads.deinit(allocator);
+        self.value_read_roots.deinit(allocator);
+        self.value_read_evaluated.deinit(allocator);
+        self.cached_fn_reads.deinit(allocator);
+        self.cached_fn_read_roots.deinit(allocator);
+        self.expr_marks.deinit(allocator);
+        self.def_marks.deinit(allocator);
+        self.nested_marks.deinit(allocator);
+        self.root_marks.deinit(allocator);
+        self.visits.deinit(allocator);
+        self.items.deinit(allocator);
+        self.closure.deinit(allocator);
+        self.def_reached.deinit(allocator);
+        self.nested_reached.deinit(allocator);
+        var lists = self.declared_by_root.valueIterator();
+        while (lists.next()) |list| list.deinit(allocator);
+        self.declared_by_root.deinit(allocator);
+        self.demanded.deinit(allocator);
+        self.awaiting_bodies.deinit(allocator);
+        self.stored_demanded.deinit(allocator);
+    }
+
+    fn defItem(def: Ast.DefId) u32 {
+        return @backingInt(def);
+    }
+
+    fn intern(self: *ComptimeDemandState, allocator: Allocator, root: EntryRoot) Allocator.Error!u32 {
+        const entry = try self.root_ids.getOrPut(allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
+        if (!entry.found_existing) {
+            entry.value_ptr.* = @intCast(self.roots.items.len);
+            try self.roots.append(allocator, root);
+            try self.root_marks.append(allocator, 0);
+            try self.root_handled.append(allocator, false);
+        }
+        return entry.value_ptr.*;
+    }
+
+    fn nextGeneration(self: *ComptimeDemandState) u32 {
+        self.generation += 1;
+        return self.generation;
+    }
+
+    /// Bring the indexes up to the program as it stands: every function's
+    /// definition, every committed restore of a stored value, and every
+    /// declared root.
+    fn index(self: *ComptimeDemandState, allocator: Allocator, builder: *Builder, view: Ast.ProgramView) Allocator.Error!void {
+        if (self.fn_items.items.len < view.fns.len) try self.fn_items.appendNTimes(allocator, null, view.fns.len - self.fn_items.items.len);
+        while (self.indexed_defs < view.defs.len) : (self.indexed_defs += 1) {
+            if (view.defs[self.indexed_defs].fn_id) |fn_id| self.fn_items.items[@backingInt(fn_id)] = @intCast(self.indexed_defs);
+        }
+        while (self.indexed_nested_defs < view.nested_defs.len) : (self.indexed_nested_defs += 1) {
+            self.fn_items.items[@backingInt(view.nested_defs[self.indexed_nested_defs].fn_id)] = @as(u32, @intCast(self.indexed_nested_defs)) | nested_bit;
+        }
+        try growTo(allocator, &self.def_summaries, view.defs.len, null);
+        try growTo(allocator, &self.nested_summaries, view.nested_defs.len, null);
+        try growTo(allocator, &self.def_marks, view.defs.len, 0);
+        try growTo(allocator, &self.nested_marks, view.nested_defs.len, 0);
+        try growTo(allocator, &self.def_reached, view.defs.len, false);
+        try growTo(allocator, &self.nested_reached, view.nested_defs.len, false);
+        try growTo(allocator, &self.expr_marks, view.exprs.len, 0);
+
+        // An expression's reads keep one contiguous range: a later one moves
+        // the range to the end of the pool.
+        const reads = builder.root_value_reads.items;
+        while (self.ingested_value_reads < reads.len) : (self.ingested_value_reads += 1) {
+            const read = reads[self.ingested_value_reads];
+            const root = try self.intern(allocator, read.root);
+            const entry = try self.value_reads.getOrPut(allocator, read.expr);
+            const start = self.value_read_roots.items.len;
+            if (entry.found_existing) {
+                const previous = entry.value_ptr.*;
+                for (previous.start..previous.start + previous.len) |index_value| {
+                    try self.value_read_roots.append(allocator, self.value_read_roots.items[index_value]);
+                    try self.value_read_evaluated.append(allocator, self.value_read_evaluated.items[index_value]);
+                }
+            }
+            try self.value_read_roots.append(allocator, root);
+            try self.value_read_evaluated.append(allocator, read.evaluated);
+            entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(self.value_read_roots.items.len - start) };
+        }
+
+        const cached = builder.cached_fn_reads.items;
+        while (self.ingested_cached_fns < cached.len) : (self.ingested_cached_fns += 1) {
+            const entry = cached[self.ingested_cached_fns];
+            const start = self.cached_fn_read_roots.items.len;
+            for (entry.reads) |read| {
+                const read_view = builder.moduleForKeyBytes(read.module) orelse
+                    Common.invariant("object cache entry read a compile-time root of a module outside the lowering input");
+                try self.cached_fn_read_roots.append(allocator, try self.intern(allocator, .{ .module = read_view.key, .root = @fromBackingInt(read.root) }));
+            }
+            try self.cached_fn_reads.put(allocator, entry.fn_id, .{ .start = @intCast(start), .len = @intCast(self.cached_fn_read_roots.items.len - start) });
+        }
+
+        while (self.indexed_declared_roots < builder.declared_roots.items.len) : (self.indexed_declared_roots += 1) {
+            const root = builder.declared_roots.items[self.indexed_declared_roots];
+            const id = try self.intern(allocator, .{ .module = root.source_module, .root = root.request.compile_time_root.? });
+            const entry = try self.declared_by_root.getOrPut(allocator, id);
+            if (!entry.found_existing) entry.value_ptr.* = .empty;
+            try entry.value_ptr.append(allocator, @intCast(self.indexed_declared_roots));
+            try self.demanded.append(allocator, false);
+        }
+    }
+
+    fn growTo(allocator: Allocator, list: anytype, len: usize, value: anytype) Allocator.Error!void {
+        if (list.items.len < len) try list.appendNTimes(allocator, value, len - list.items.len);
+    }
+
+    fn summarySlot(self: *ComptimeDemandState, item: u32) *?Summary {
+        return if (item & nested_bit != 0) &self.nested_summaries.items[item & ~nested_bit] else &self.def_summaries.items[item];
+    }
+
+    fn itemMark(self: *ComptimeDemandState, item: u32) *u32 {
+        return if (item & nested_bit != 0) &self.nested_marks.items[item & ~nested_bit] else &self.def_marks.items[item];
+    }
+
+    fn itemReached(self: *ComptimeDemandState, item: u32) *bool {
+        return if (item & nested_bit != 0) &self.nested_reached.items[item & ~nested_bit] else &self.def_reached.items[item];
+    }
+
+    /// The definitions `item`'s body names and the roots it reads.
+    fn summary(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, item: u32) Allocator.Error!Summary {
+        const slot = self.summarySlot(item);
+        if (slot.*) |known| return known;
+        const body: ?Ast.ExprId = if (item & nested_bit != 0) view.nested_defs[item & ~nested_bit].body else switch (view.defs[item].body) {
+            .roc => |expr| expr,
+            .hosted => null,
+        };
+        const generation = self.nextGeneration();
+        const refs_start = self.summary_refs.items.len;
+        const reads_start = self.summary_reads.items.len;
+        self.summary_local = false;
+        self.visits.clearRetainingCapacity();
+        if (body) |expr| try self.visits.append(allocator, .{ .expr = expr });
+        if (item & nested_bit == 0) if (view.defs[item].fn_id) |fn_id| if (self.cached_fn_reads.get(fn_id)) |range| {
+            try self.summary_reads.appendSlice(allocator, self.cached_fn_read_roots.items[range.start..][0..range.len]);
+        };
+        while (self.visits.pop()) |visit| switch (visit) {
+            .stmt => |stmt| try self.visitStmt(allocator, view, stmt),
+            .expr => |expr| {
+                const raw = @backingInt(expr);
+                if (self.expr_marks.items[raw] == generation) continue;
+                self.expr_marks.items[raw] = generation;
+                if (self.value_reads.get(expr)) |range| {
+                    try self.summary_reads.appendSlice(allocator, self.value_read_roots.items[range.start..][0..range.len]);
+                    for (self.value_read_evaluated.items[range.start..][0..range.len]) |evaluated| {
+                        if (evaluated) self.summary_local = true;
+                    }
+                }
+                try self.visitExpr(allocator, view, view.exprs[raw].data);
+            },
+        };
+        const result: Summary = .{
+            .refs = .{ .start = @intCast(refs_start), .len = @intCast(self.summary_refs.items.len - refs_start) },
+            .reads = .{ .start = @intCast(reads_start), .len = @intCast(self.summary_reads.items.len - reads_start) },
+            .local = self.summary_local,
+        };
+        self.summarySlot(item).* = result;
+        return result;
+    }
+
+    fn pushExpr(self: *ComptimeDemandState, allocator: Allocator, expr: Ast.ExprId) Allocator.Error!void {
+        try self.visits.append(allocator, .{ .expr = expr });
+    }
+
+    fn pushExprs(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, span: Ast.Span(Ast.ExprId)) Allocator.Error!void {
+        for (view.expr_ids[span.start..][0..span.len]) |expr| try self.pushExpr(allocator, expr);
+    }
+
+    fn pushStmts(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, span: Ast.Span(Ast.StmtId)) Allocator.Error!void {
+        for (view.stmt_ids[span.start..][0..span.len]) |stmt| try self.visits.append(allocator, .{ .stmt = stmt });
+    }
+
+    fn refFn(self: *ComptimeDemandState, allocator: Allocator, fn_id: Ast.FnId) Allocator.Error!void {
+        const item = self.fn_items.items[@backingInt(fn_id)] orelse return;
+        try self.summary_refs.append(allocator, item);
+    }
+
+    fn visitStmt(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, stmt: Ast.StmtId) Allocator.Error!void {
+        switch (view.stmts[@backingInt(stmt)]) {
+            .uninitialized, .crash, .checked_error => {},
+            .let_ => |let_| try self.pushExpr(allocator, let_.value),
+            .expr, .expect, .dbg => |expr| try self.pushExpr(allocator, expr),
+            .return_ => |ret| try self.pushExpr(allocator, ret.value),
+        }
+    }
+
+    fn visitExpr(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, data: Ast.ExprData) Allocator.Error!void {
+        switch (data) {
+            .local,
+            .unit,
+            .@"unreachable",
+            .int_lit,
+            .frac_f32_lit,
+            .frac_f64_lit,
+            .dec_lit,
+            .str_lit,
+            .bytes_lit,
+            .uninitialized,
+            .uninitialized_payload,
+            .crash,
+            .checked_error,
+            .comptime_exhaustiveness_failed,
+            => {},
+            .static_data_candidate => |candidate| try self.pushExpr(allocator, candidate.runtime_expr),
+            .comptime_value => |read| {
+                const root = view.comptime_value_roots[@backingInt(read.root)];
+                switch (root.root) {
+                    .checked => |id| try self.summary_reads.append(allocator, try self.intern(allocator, .{ .module = root.module, .root = id })),
+                    // A literal root's definition runs wherever its read is
+                    // lowered, so its body is this body's code.
+                    .literal => |id| try self.summary_refs.append(allocator, defItem(view.literal_roots[@backingInt(id)].def)),
+                }
+            },
+            .typed_boundary => |boundary| try self.pushExpr(allocator, boundary.value),
+            .list, .tuple => |items| try self.pushExprs(allocator, view, items),
+            .record => |fields| for (view.field_exprs[fields.start..][0..fields.len]) |field| try self.pushExpr(allocator, field.value),
+            .record_update => |update| {
+                try self.pushExpr(allocator, update.base);
+                for (view.field_exprs[update.fields.start..][0..update.fields.len]) |field| try self.pushExpr(allocator, field.value);
+            },
+            .tag => |tag| try self.pushExprs(allocator, view, tag.payloads),
+            .nominal, .dbg, .expect => |expr| try self.pushExpr(allocator, expr),
+            .let_ => |let_| {
+                try self.pushExpr(allocator, let_.value);
+                try self.pushExpr(allocator, let_.rest);
+            },
+            .lambda => |lambda| {
+                try self.refFn(allocator, lambda.fn_id);
+                try self.pushExpr(allocator, lambda.body);
+            },
+            .def_ref => |def| try self.summary_refs.append(allocator, defItem(def)),
+            .fn_def => |value| {
+                try self.refFn(allocator, value.fn_id);
+                for (view.fn_def_captures[value.captures.start..][0..value.captures.len]) |capture| try self.pushExpr(allocator, capture.value);
+            },
+            .fn_ref => Common.invariant("Monotype demand walk reached a lifted function reference before lifting"),
+            .call_value => |call| {
+                try self.pushExpr(allocator, call.callee);
+                try self.pushExprs(allocator, view, call.args);
+            },
+            .call_proc => |call| {
+                switch (call.callee) {
+                    .func => |slot| switch (slot) {
+                        .local => |fn_id| try self.refFn(allocator, fn_id),
+                    },
+                    .lifted => Common.invariant("Monotype demand walk reached a lifted call before lifting"),
+                }
+                try self.pushExprs(allocator, view, call.args);
+                for (view.capture_operands[call.captures.start..][0..call.captures.len]) |operand| try self.pushExpr(allocator, operand.value);
+            },
+            .low_level => |call| try self.pushExprs(allocator, view, call.args),
+            .field_access => |access| try self.pushExpr(allocator, access.receiver),
+            .tuple_access => |access| try self.pushExpr(allocator, access.tuple),
+            .structural_eq => |eq| {
+                try self.pushExpr(allocator, eq.lhs);
+                try self.pushExpr(allocator, eq.rhs);
+            },
+            .structural_hash => |hash| {
+                try self.pushExpr(allocator, hash.value);
+                try self.pushExpr(allocator, hash.hasher);
+            },
+            .match_ => |match| {
+                try self.pushExpr(allocator, match.scrutinee);
+                for (view.branches[match.branches.start..][0..match.branches.len]) |branch| {
+                    try self.pushStmts(allocator, view, branch.bindings);
+                    if (branch.guard) |guard| try self.pushExpr(allocator, guard);
+                    try self.pushExpr(allocator, branch.body);
+                }
+            },
+            .if_ => |if_| {
+                for (view.if_branches[if_.branches.start..][0..if_.branches.len]) |branch| {
+                    try self.pushExpr(allocator, branch.cond);
+                    try self.pushExpr(allocator, branch.body);
+                }
+                try self.pushExpr(allocator, if_.final_else);
+            },
+            .if_initialized_payload => |switch_| {
+                try self.pushExpr(allocator, switch_.cond);
+                try self.pushExpr(allocator, switch_.initialized);
+                try self.pushExpr(allocator, switch_.uninitialized);
+            },
+            .try_sequence => |sequence| {
+                try self.pushExpr(allocator, sequence.try_expr);
+                try self.pushExpr(allocator, sequence.ok_body);
+            },
+            .try_record_sequence => |sequence| {
+                try self.pushExpr(allocator, sequence.try_expr);
+                try self.pushExpr(allocator, sequence.ok_body);
+            },
+            .block => |block| {
+                try self.pushStmts(allocator, view, block.statements);
+                try self.pushExpr(allocator, block.final_expr);
+            },
+            .loop_ => |loop| {
+                try self.pushExprs(allocator, view, loop.initial_values);
+                try self.pushExpr(allocator, loop.body);
+            },
+            .break_ => |value| if (value) |expr| try self.pushExpr(allocator, expr),
+            .continue_ => |continue_| try self.pushExprs(allocator, view, continue_.values),
+            .join_point => |join| {
+                try self.pushExpr(allocator, join.body);
+                try self.pushExpr(allocator, join.remainder);
+            },
+            .jump => |jump| {
+                try self.pushExprs(allocator, view, jump.args);
+                try self.pushExprs(allocator, view, jump.loop_values);
+            },
+            .return_ => |ret| try self.pushExpr(allocator, ret.value),
+            .comptime_branch_taken => |taken| try self.pushExpr(allocator, taken.body),
+            .expect_err => |err| try self.pushExpr(allocator, err.msg),
+            .literal_rejected => |rejected| try self.pushExpr(allocator, rejected.msg),
+        }
+    }
+
+    /// The roots read by the code reachable from `start`, each once, in
+    /// first-met order, and in `closure_local` whether any of that code
+    /// evaluates a root in place. Valid until the next closure.
+    fn rootReads(self: *ComptimeDemandState, allocator: Allocator, view: Ast.ProgramView, start: u32) Allocator.Error![]const u32 {
+        const generation = self.nextGeneration();
+        self.closure.clearRetainingCapacity();
+        self.closure_local = false;
+        self.items.clearRetainingCapacity();
+        self.itemMark(start).* = generation;
+        try self.items.append(allocator, start);
+        var cursor: usize = 0;
+        while (cursor < self.items.items.len) : (cursor += 1) {
+            const item_summary = try self.summary(allocator, view, self.items.items[cursor]);
+            if (item_summary.local) self.closure_local = true;
+            for (self.summary_reads.items[item_summary.reads.start..][0..item_summary.reads.len]) |root| {
+                if (self.root_marks.items[root] == generation) continue;
+                self.root_marks.items[root] = generation;
+                try self.closure.append(allocator, root);
+            }
+            for (self.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| {
+                const mark = self.itemMark(ref);
+                if (mark.* == generation) continue;
+                mark.* = generation;
+                try self.items.append(allocator, ref);
+            }
+        }
+        return self.closure.items;
+    }
+
+    /// Extend the reached code from `starts` and handle every root it reads:
+    /// a declared root is demanded, and its definition is entered once its
+    /// body is lowered; any other root's value was stored by an earlier
+    /// compilation, which recorded the roots that value's body read, and
+    /// those are handled in turn. Returns the declared roots newly demanded.
+    fn reach(
+        self: *ComptimeDemandState,
+        allocator: Allocator,
+        builder: *Builder,
+        view: Ast.ProgramView,
+        starts: []const u32,
+        newly_demanded: *std.ArrayList(u32),
+    ) Allocator.Error!void {
+        var frontier = std.ArrayList(u32).empty;
+        defer frontier.deinit(allocator);
+        for (starts) |item| {
+            const reached = self.itemReached(item);
+            if (reached.*) continue;
+            reached.* = true;
+            try frontier.append(allocator, item);
+        }
+        var roots = std.ArrayList(u32).empty;
+        defer roots.deinit(allocator);
+        while (frontier.pop()) |item| {
+            const item_summary = try self.summary(allocator, view, item);
+            try roots.appendSlice(allocator, self.summary_reads.items[item_summary.reads.start..][0..item_summary.reads.len]);
+            for (self.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| {
+                const reached = self.itemReached(ref);
+                if (reached.*) continue;
+                reached.* = true;
+                try frontier.append(allocator, ref);
+            }
+            while (roots.pop()) |root| {
+                if (self.root_handled.items[root]) continue;
+                self.root_handled.items[root] = true;
+                if (self.declared_by_root.get(root)) |indices| {
+                    for (indices.items) |declared| {
+                        if (self.demanded.items[declared]) continue;
+                        self.demanded.items[declared] = true;
+                        try newly_demanded.append(allocator, declared);
+                    }
+                    continue;
+                }
+                try self.stored_demanded.append(allocator, root);
+                const stored = self.roots.items[root];
+                for (builder.moduleForId(stored.module).compile_time_root_reads.readsOf(stored.root)) |ref| {
+                    const read_view = builder.moduleForKeyBytes(ref.module) orelse
+                        Common.invariant("stored compile-time root read a module outside the lowering input");
+                    try roots.append(allocator, try self.intern(allocator, .{ .module = read_view.key, .root = ref.root }));
+                }
+            }
+        }
+    }
+
+    fn storedRoots(self: *const ComptimeDemandState, allocator: Allocator) Allocator.Error![]EntryRoot {
+        const result = try allocator.alloc(EntryRoot, self.stored_demanded.items.len);
+        for (self.stored_demanded.items, result) |root, *slot| slot.* = self.roots.items[root];
+        return result;
+    }
+};
+
+/// What each object-cache specialization of a program reads of compile-time
+/// evaluation, by specialization key (design.md "Demand-Driven Compile-Time
+/// Evaluation"). The object cache offers a specialization only when its code
+/// evaluates no root in place, and records the roots it reads, which a
+/// program taking the entry demands. A key with no row reads nothing.
+pub const SpecComptimeReads = struct {
+    pub const Row = struct { start: u32, len: u32, local: bool };
+    pub const Lookup = struct { offerable: bool, reads: []const Common.ComptimeRootRead };
+
+    allocator: Allocator,
+    rows: std.AutoHashMapUnmanaged([32]u8, Row) = .empty,
+    reads: std.ArrayList(Common.ComptimeRootRead) = .empty,
+
+    pub fn get(self: *const SpecComptimeReads, key: [32]u8) Lookup {
+        const row = self.rows.get(key) orelse return .{ .offerable = true, .reads = &.{} };
+        return .{ .offerable = !row.local, .reads = self.reads.items[row.start..][0..row.len] };
+    }
+
+    pub fn clone(self: *const SpecComptimeReads, allocator: Allocator) Allocator.Error!SpecComptimeReads {
+        var result: SpecComptimeReads = .{ .allocator = allocator };
+        errdefer result.deinit();
+        result.rows = try self.rows.clone(allocator);
+        try result.reads.appendSlice(allocator, self.reads.items);
+        return result;
+    }
+
+    pub fn deinit(self: *SpecComptimeReads) void {
+        self.rows.deinit(self.allocator);
+        self.reads.deinit(self.allocator);
+        self.* = .{ .allocator = self.allocator };
+    }
+};
+
+/// A compile-time root declared before any body lowers: its entry template
+/// is reserved, so every read binds the root's real function id. With
+/// `Options.demand_driven_comptime_roots` its body waits until the program
+/// demands the root.
+const DeclaredRoot = struct {
+    request: checked.RootRequest,
+    source_module: checked.ModuleId,
+    def: Ast.DefId,
+    fn_id: Ast.FnId,
+};
+
+/// A committed expression that stands for a compile-time root's value
+/// without reading it through a slot: it restores the value an earlier
+/// compilation stored, or, in a program that does not evaluate the root,
+/// evaluates the root's body in place.
+const RootValueRead = struct {
+    expr: Ast.ExprId,
+    root: EntryRoot,
+    evaluated: bool,
 };
 
 /// Aggregate execution measurements for executor-backed Monotype work.
@@ -733,6 +1324,9 @@ pub fn run(
             try builder.lowerStaticDataRequest(request);
         }
         try builder.drainPendingSpecJobs();
+        // Every body is lowered, so the program's demand is known.
+        try builder.orderComptimeRoots();
+        try builder.recordSpecComptimeReads();
     }
 
     {
@@ -854,6 +1448,7 @@ const ModuleViewData = struct {
     const_templates: *const checked.ConstTemplateTable,
     const_store: *const checked.ConstStore,
     interface_capabilities: *const checked.ModuleInterfaceCapabilities,
+    compile_time_root_reads: *const checked.CompileTimeRootReadTable,
 };
 
 const ConstNode = struct {
@@ -4277,6 +4872,29 @@ const Builder = struct {
     literal_roots: bool,
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
+    demand_driven_comptime_roots: bool,
+    comptime_demand_out: ?*ComptimeDemand,
+    spec_comptime_reads_out: ?*SpecComptimeReads,
+    /// Every declared compile-time root, in request order.
+    declared_roots: std.ArrayList(DeclaredRoot) = .empty,
+    /// Reserved compile-time root bodies the program has not demanded yet,
+    /// by the root's reserved function. Coordinator-only.
+    parked_root_jobs: std.AutoHashMapUnmanaged(Ast.FnId, PendingSpecJob) = .empty,
+    /// Set while a lazily declared root's entry template is reserved: its
+    /// queued body is parked in `parked_root_job` instead of the queue.
+    parking_root_job: bool = false,
+    parked_root_job: ?PendingSpecJob = null,
+    /// With demand-driven roots, every other root waits here, so the program
+    /// lists its compile-time roots first: runtime consumers name their
+    /// roots by position after the compile-time ones.
+    deferred_roots: std.ArrayList(Ast.Root) = .empty,
+    /// Committed root values restored or evaluated in place. Coordinator-only.
+    root_value_reads: std.ArrayList(RootValueRead) = .empty,
+    /// The compile-time roots read by each procedure an object-cache entry
+    /// serves, recorded at reservation. Coordinator-only.
+    cached_fn_reads: std.ArrayList(CachedFnReads) = .empty,
+    /// What the committed program demands of compile-time evaluation so far.
+    comptime_demand: ComptimeDemandState = .{},
     post_check_executor: ?base.post_check_task_executor.Executor,
     timing: ?*Timing,
     /// Marks callbacks that must leave coordinator-owned stores unchanged.
@@ -4526,6 +5144,9 @@ const Builder = struct {
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
+            .demand_driven_comptime_roots = options.demand_driven_comptime_roots,
+            .comptime_demand_out = options.comptime_demand_out,
+            .spec_comptime_reads_out = options.spec_comptime_reads_out,
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
             .type_cache = std.AutoHashMap(CheckedTypeAddress, Type.TypeId).init(allocator),
@@ -4747,6 +5368,12 @@ const Builder = struct {
         self.source_file_ids.deinit();
         self.lowering_module_ids.deinit();
         self.declared_comptime_root_functions.deinit();
+        self.declared_roots.deinit(self.allocator);
+        self.parked_root_jobs.deinit(self.allocator);
+        self.deferred_roots.deinit(self.allocator);
+        self.root_value_reads.deinit(self.allocator);
+        self.cached_fn_reads.deinit(self.allocator);
+        self.comptime_demand.deinit(self.allocator);
         self.module_index.deinit();
         self.spec_job_task_buffers.deinit(self.allocator);
         if (self.spec_job_commit_domain) |*domain| domain.deinit();
@@ -5350,25 +5977,193 @@ const Builder = struct {
         else
             Common.invariant("root request reached Monotype without a checked procedure template or procedure source");
         try self.appendRuntimeSchemaRequestsForDef(def);
-        try self.program.addRoot(.{ .def = def, .request = request, .owner = self.loweringModuleId(source_module) });
+        try self.addProgramRoot(.{ .def = def, .request = request, .owner = self.loweringModuleId(source_module) });
+    }
+
+    /// Roots enter the program in request order, except that with
+    /// demand-driven compile-time roots the demanded compile-time roots come
+    /// first, once demand is known (`orderComptimeRoots`).
+    fn addProgramRoot(self: *Builder, root: Ast.Root) Allocator.Error!void {
+        if (self.demand_driven_comptime_roots) return self.deferred_roots.append(self.allocator, root);
+        try self.program.addRoot(root);
+    }
+
+    /// What the lowered program demands of compile-time evaluation, and the
+    /// program's roots in their final order: the compile-time roots it
+    /// demands, in request order, and then every other root. A declared root
+    /// whose body nothing demanded keeps its reserved declaration, whose body
+    /// crashes; nothing calls it, it is not a root, and reachability drops
+    /// it from every consumer.
+    fn orderComptimeRoots(self: *Builder) Allocator.Error!void {
+        if (!self.comptime_value_reads) return;
+        const state = &self.comptime_demand;
+        const view = self.program.view();
+        try state.index(self.allocator, self, view);
+        var output: ComptimeDemand = .{ .allocator = self.allocator };
+        errdefer output.deinit();
+        var root_reads = std.ArrayList(Common.Span(EntryRoot)).empty;
+        defer root_reads.deinit(self.allocator);
+        var reads = std.ArrayList(EntryRoot).empty;
+        defer reads.deinit(self.allocator);
+        for (self.declared_roots.items, 0..) |root, index| {
+            if (self.demand_driven_comptime_roots) {
+                // Only demand lowers a declared root's body, so the roots
+                // whose bodies lowered are exactly the demanded ones.
+                const parked = self.parked_root_jobs.contains(root.fn_id);
+                if (!state.demanded.items[index]) {
+                    if (!parked) Common.invariant("compile-time root body was lowered without demand");
+                    continue;
+                }
+                if (parked) Common.invariant("demanded compile-time root body was never lowered");
+            }
+            const start = reads.items.len;
+            for (try state.rootReads(self.allocator, view, ComptimeDemandState.defItem(root.def))) |read| try reads.append(self.allocator, state.roots.items[read]);
+            try root_reads.append(self.allocator, .{ .start = @intCast(start), .len = @intCast(reads.items.len - start) });
+            if (self.demand_driven_comptime_roots) {
+                try self.appendRuntimeSchemaRequestsForDef(root.def);
+                try self.program.addRoot(.{ .def = root.def, .request = root.request, .owner = self.loweringModuleId(root.source_module) });
+            }
+        }
+        if (self.demand_driven_comptime_roots) {
+            for (self.deferred_roots.items) |root| try self.program.addRoot(root);
+            self.deferred_roots.clearRetainingCapacity();
+            for (self.declared_roots.items) |root| {
+                const parked = self.parked_root_jobs.fetchRemove(root.fn_id) orelse continue;
+                try self.finishUndemandedRoot(parked.value);
+            }
+            if (self.parked_root_jobs.count() != 0) Common.invariant("parked compile-time root body belonged to no declared root");
+        }
+        output.root_reads = try root_reads.toOwnedSlice(self.allocator);
+        output.reads = try reads.toOwnedSlice(self.allocator);
+        output.stored = try state.storedRoots(self.allocator);
+        output.declared_root_count = self.declared_roots.items.len;
+        if (self.comptime_demand_out) |out| out.* = output else output.deinit();
+    }
+
+    /// What each object-cache specialization's code reads of compile-time
+    /// evaluation (`SpecComptimeReads`). Only code that reaches a read needs a
+    /// closure, so the definitions that reach one are found first by walking
+    /// references backwards from the definitions that read.
+    fn recordSpecComptimeReads(self: *Builder) Allocator.Error!void {
+        const out = self.spec_comptime_reads_out orelse return;
+        const state = &self.comptime_demand;
+        const view = self.program.view();
+        try state.index(self.allocator, self, view);
+        const def_count = view.defs.len;
+        const item_count = def_count + view.nested_defs.len;
+        const Dense = struct {
+            fn of(def_item: u32, defs: usize) usize {
+                return if (def_item & ComptimeDemandState.nested_bit != 0) defs + (def_item & ~ComptimeDemandState.nested_bit) else def_item;
+            }
+            fn item(index: usize, defs: usize) u32 {
+                return if (index < defs) @intCast(index) else @as(u32, @intCast(index - defs)) | ComptimeDemandState.nested_bit;
+            }
+        };
+        // Reverse references, as one flat list per referenced definition.
+        const counts = try self.allocator.alloc(u32, item_count + 1);
+        defer self.allocator.free(counts);
+        @memset(counts, 0);
+        for (0..item_count) |index| {
+            const item_summary = try state.summary(self.allocator, view, Dense.item(index, def_count));
+            for (state.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| counts[Dense.of(ref, def_count) + 1] += 1;
+        }
+        for (1..counts.len) |index| counts[index] += counts[index - 1];
+        const referrers = try self.allocator.alloc(u32, counts[item_count]);
+        defer self.allocator.free(referrers);
+        const cursor = try self.allocator.dupe(u32, counts[0..item_count]);
+        defer self.allocator.free(cursor);
+        for (0..item_count) |index| {
+            const item_summary = state.summarySlot(Dense.item(index, def_count)).*.?;
+            for (state.summary_refs.items[item_summary.refs.start..][0..item_summary.refs.len]) |ref| {
+                const target = Dense.of(ref, def_count);
+                referrers[cursor[target]] = @intCast(index);
+                cursor[target] += 1;
+            }
+        }
+        const reaches_read = try self.allocator.alloc(bool, item_count);
+        defer self.allocator.free(reaches_read);
+        @memset(reaches_read, false);
+        var pending = std.ArrayList(u32).empty;
+        defer pending.deinit(self.allocator);
+        for (0..item_count) |index| {
+            if (state.summarySlot(Dense.item(index, def_count)).*.?.reads.len == 0) continue;
+            reaches_read[index] = true;
+            try pending.append(self.allocator, @intCast(index));
+        }
+        while (pending.pop()) |index| {
+            for (referrers[counts[index]..counts[index + 1]]) |referrer| {
+                if (reaches_read[referrer]) continue;
+                reaches_read[referrer] = true;
+                try pending.append(self.allocator, referrer);
+            }
+        }
+
+        var result: SpecComptimeReads = .{ .allocator = self.allocator };
+        errdefer result.deinit();
+        for (view.fns, 0..) |fn_, raw| {
+            const key = fn_.source.spec_key orelse continue;
+            const item = state.fn_items.items[raw] orelse continue;
+            if (!reaches_read[Dense.of(item, def_count)]) continue;
+            const reads = try state.rootReads(self.allocator, view, item);
+            const entry = try result.rows.getOrPut(self.allocator, key.bytes);
+            // Specializations sharing a key are one specialization.
+            if (entry.found_existing) continue;
+            const start = result.reads.items.len;
+            for (reads) |read| {
+                const root = state.roots.items[read];
+                try result.reads.append(self.allocator, .{ .module = root.module.bytes, .root = @backingInt(root.root) });
+            }
+            entry.value_ptr.* = .{ .start = @intCast(start), .len = @intCast(result.reads.items.len - start), .local = state.closure_local };
+        }
+        out.* = result;
+    }
+
+    fn finishUndemandedRoot(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        const fn_data = self.programFunctionShape(job.fn_ty, "compile-time root entry template type was not a function");
+        const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
+        const body = try self.program.addExpr(.{
+            .ty = fn_data.ret,
+            .data = .{ .crash = try self.program.addStringLiteral("compile-time root was not demanded") },
+        });
+        self.program.setDef(job.reservation.def, .{
+            .symbol = job.reservation.symbol,
+            .fn_def = job.fn_template,
+            .fn_id = job.reservation.fn_id,
+            .args = args,
+            .body = .{ .roc = body },
+            .ret = fn_data.ret,
+        });
+        self.spec_store.markLowering(job.spec);
+        try self.markTemplateReady(job.reservation.fn_id, job.fn_ty);
     }
 
     /// Procedure-use runs are the only isolated roots without an ordered
     /// coordinator dependency; every other root kind remains a serial barrier.
-    fn lowerIsolatedRoots(self: *Builder, requests: []const checked.RootRequest, source_modules: []const checked.ModuleId) Allocator.Error!void {
-        if (source_modules.len != 0 and source_modules.len != requests.len) {
+    fn lowerIsolatedRoots(self: *Builder, all_requests: []const checked.RootRequest, all_source_modules: []const checked.ModuleId) Allocator.Error!void {
+        if (all_source_modules.len != 0 and all_source_modules.len != all_requests.len) {
             Common.invariant("root source module count differs from explicit request count");
         }
+        var demanded_later_requests = std.ArrayList(checked.RootRequest).empty;
+        defer demanded_later_requests.deinit(self.allocator);
+        var demanded_later_sources = std.ArrayList(checked.ModuleId).empty;
+        defer demanded_later_sources.deinit(self.allocator);
+        var requests = all_requests;
+        var source_modules = all_source_modules;
         if (self.comptime_value_reads) {
-            for (requests, 0..) |request, i| {
+            for (all_requests, 0..) |request, i| {
                 if (request.abi != .compile_time) continue;
                 const root_id = request.compile_time_root orelse
                     Common.invariant("shared compile-time request lacked its checked root identity");
-                const source_module = self.rootSourceModule(source_modules, i);
+                const source_module = self.rootSourceModule(all_source_modules, i);
                 const source_view = self.moduleForId(source_module);
                 const template = request.procedure_template orelse
                     Common.invariant("shared compile-time root lacked its declared entry template");
+                // A demand-driven root's queued body is parked until the
+                // program demands it (see `advanceComptimeDemand`).
+                self.parking_root_job = self.demand_driven_comptime_roots;
+                self.parked_root_job = null;
                 const def = try self.lowerTemplate(template, source_view, request.checked_type, request.root_evidence);
+                self.parking_root_job = false;
                 const key = EntryRoot{ .module = source_module, .root = root_id };
                 const entry = try self.declared_comptime_root_functions.getOrPut(key);
                 const fn_id = self.defFnId(def);
@@ -5376,6 +6171,23 @@ const Builder = struct {
                     Common.invariant("checked compile-time root reserved different functions for one declared root");
                 }
                 entry.value_ptr.* = fn_id;
+                try self.declared_roots.append(self.allocator, .{ .request = request, .source_module = source_module, .def = def, .fn_id = fn_id });
+                if (self.parked_root_job) |job| {
+                    try self.parked_root_jobs.put(self.allocator, fn_id, job);
+                    self.parked_root_job = null;
+                }
+            }
+            if (self.demand_driven_comptime_roots) {
+                // Declared compile-time roots become program roots once
+                // demand is known (`orderComptimeRoots`); everything else
+                // lowers now.
+                for (all_requests, 0..) |request, i| {
+                    if (request.abi == .compile_time) continue;
+                    try demanded_later_requests.append(self.allocator, request);
+                    try demanded_later_sources.append(self.allocator, self.rootSourceModule(all_source_modules, i));
+                }
+                requests = demanded_later_requests.items;
+                source_modules = demanded_later_sources.items;
             }
         }
         const executor = self.post_check_executor orelse {
@@ -5505,7 +6317,7 @@ const Builder = struct {
         for (contexts) |*context| {
             const def = try self.commitCompletedProcedureRootShard(&context.shard.?);
             try self.appendRuntimeSchemaRequestsForDef(def);
-            try self.program.addRoot(.{ .def = def, .request = context.request, .owner = self.loweringModuleId(context.source_module) });
+            try self.addProgramRoot(.{ .def = def, .request = context.request, .owner = self.loweringModuleId(context.source_module) });
             if (self.timing) |timing| timing.parallel.root_tasks_committed +%= 1;
             context.shard.?.deinit();
             context.shard = null;
@@ -5553,7 +6365,16 @@ const Builder = struct {
                 }
             }
             const const_node = self.constNode(request.const_locator, request.node);
-            break :body try self.restoreConstNodeAtTypeWithStaticRoot(const_node.module, type_view, const_node.id, ret_ty, request.const_locator);
+            const restored = try self.restoreConstNodeAtTypeWithStaticRoot(const_node.module, type_view, const_node.id, ret_ty, request.const_locator);
+            if (self.comptime_value_reads) {
+                const view = self.moduleForId(checked.constModuleId(request.const_locator));
+                const template = view.const_templates.get(request.const_locator);
+                switch (template.state) {
+                    .stored_const => |stored| try self.recordRestoredRootRead(restored, view.key, stored.root),
+                    .reserved, .eval_template, .unimplemented => Common.invariant("static data request restored a constant that was never stored"),
+                }
+            }
+            break :body restored;
         };
         const def = try self.program.addDef(.{
             .symbol = self.symbols.fresh(),
@@ -6044,12 +6865,16 @@ const Builder = struct {
         }
         const template = view.callable_eval_templates.templates[raw];
         const root = view.compile_time_roots.root(template.root);
-        return switch (root.payload) {
+        const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnExpr(view, fn_id, mono_fn_ty, null),
             .const_node => |node| try self.restoreConstNodeAtType(view, view, node, mono_fn_ty),
-            .pending => try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
+            // A program that does not evaluate a root no compilation
+            // evaluated yet computes the callable in place.
+            .pending, .unevaluated => return try self.lowerPendingCallableEvalBindingValue(view, template, root, mono_fn_ty),
             .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
+        try self.recordRestoredRootRead(restored, view.key, template.root);
+        return restored;
     }
 
     const CallableEvalUse = struct {
@@ -6550,6 +7375,9 @@ const Builder = struct {
                 },
                 .reserved => {
                     self.promoteFnSignatureRelation(hit.fn_id, signature_relation);
+                    // Another request for a parked root body needs that
+                    // body, whether or not anything demands the root.
+                    if (!self.parking_root_job) try self.unparkRootJob(hit.fn_id);
                     switch (body_scheduling) {
                         // A queued request reuses the reserved id; the body
                         // is already owned by the queue.
@@ -6562,6 +7390,7 @@ const Builder = struct {
                         .immediate => {
                             const job = self.pendingSpecJobFor(hit.fn_id) orelse
                                 Common.invariant("reserved Monotype specialization had no queued body to claim");
+                            if (self.parking_root_job) Common.invariant("compile-time root declaration claimed an immediate body");
                             self.spec_store.markLowering(job.spec);
                             try self.completeTemplateReservation(
                                 job.reservation,
@@ -6627,6 +7456,9 @@ const Builder = struct {
             const symbol = self.symbols.freshCoordinator();
             try self.registerProcDebugNameForTemplate(symbol, view, template_ref);
             const fn_id = try self.program.addFn(fn_template);
+            if (fn_template.cached) |hit| if (hit.comptime_root_reads.len != 0) {
+                try self.cached_fn_reads.append(self.allocator, .{ .fn_id = fn_id, .reads = hit.comptime_root_reads });
+            };
             self.promoteFnSignatureRelation(fn_id, signature_relation);
             // The definition fills once its body lowers; a recursive request
             // that reuses this entry meanwhile reads the requested template,
@@ -6676,9 +7508,8 @@ const Builder = struct {
                 if (retained_topology != null) {
                     Common.invariant("queued Monotype specialization request cannot carry a retained lexical topology");
                 }
-                const dispatch_index = self.next_spec_dispatch_index;
-                try self.pending_spec_jobs.append(self.allocator, .{
-                    .dispatch_index = dispatch_index,
+                const job = PendingSpecJob{
+                    .dispatch_index = self.next_spec_dispatch_index,
                     .spec = reserved.spec,
                     .reservation = reservation,
                     .fn_template = fn_template,
@@ -6692,10 +7523,15 @@ const Builder = struct {
                     .signature_relation = signature_relation,
                     .codec_contract = codec_contract,
                     .widened_result_row = widened_result_row,
-                });
-                self.next_spec_dispatch_index += 1;
-                self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
-                self.recordPendingSpecJobPeak();
+                };
+                if (self.parking_root_job) {
+                    // A demand-driven root's body waits until the program
+                    // demands the root; its dispatch index is assigned when
+                    // it enters the queue.
+                    self.parked_root_job = job;
+                    return reservation.def;
+                }
+                try self.enqueueSpecJob(job);
                 return reservation.def;
             },
         }
@@ -7300,6 +8136,67 @@ const Builder = struct {
         return null;
     }
 
+    fn enqueueSpecJob(self: *Builder, job: PendingSpecJob) Allocator.Error!void {
+        std.debug.assert(job.dispatch_index == self.next_spec_dispatch_index);
+        try self.pending_spec_jobs.append(self.allocator, job);
+        self.next_spec_dispatch_index += 1;
+        self.countCoordinatorBodyDiagnostic("spec_jobs_enqueued");
+        self.recordPendingSpecJobPeak();
+    }
+
+    /// Move a parked compile-time root body into the specialization queue,
+    /// under the next dispatch index.
+    fn unparkRootJob(self: *Builder, fn_id: Ast.FnId) Allocator.Error!void {
+        const parked = self.parked_root_jobs.fetchRemove(fn_id) orelse return;
+        var job = parked.value;
+        job.dispatch_index = self.next_spec_dispatch_index;
+        try self.enqueueSpecJob(job);
+    }
+
+    /// After a drain, extend the program's demand over the bodies that drain
+    /// committed (`ComptimeDemandState`), and move the body of every newly
+    /// demanded root into the queue. Reports whether the queue needs another
+    /// drain.
+    fn advanceComptimeDemand(self: *Builder) Allocator.Error!bool {
+        if (!self.demand_driven_comptime_roots) return false;
+        const state = &self.comptime_demand;
+        const view = self.program.view();
+        try state.index(self.allocator, self, view);
+        var starts = std.ArrayList(u32).empty;
+        defer starts.deinit(self.allocator);
+        while (state.walked_deferred_roots < self.deferred_roots.items.len) : (state.walked_deferred_roots += 1) {
+            try starts.append(self.allocator, ComptimeDemandState.defItem(self.deferred_roots.items[state.walked_deferred_roots].def));
+        }
+        while (state.walked_layout_requests < view.layout_requests.len) : (state.walked_layout_requests += 1) {
+            if (view.layout_requests[state.walked_layout_requests].def) |def| try starts.append(self.allocator, ComptimeDemandState.defItem(def));
+        }
+        // Evaluation runs every literal root the program registers.
+        while (state.walked_literal_roots < view.literal_roots.len) : (state.walked_literal_roots += 1) {
+            try starts.append(self.allocator, ComptimeDemandState.defItem(view.literal_roots[state.walked_literal_roots].def));
+        }
+        // The drain that just finished lowered every body that was queued.
+        for (state.awaiting_bodies.items) |declared| try starts.append(self.allocator, ComptimeDemandState.defItem(self.declared_roots.items[declared].def));
+        state.awaiting_bodies.clearRetainingCapacity();
+        var newly_demanded = std.ArrayList(u32).empty;
+        defer newly_demanded.deinit(self.allocator);
+        while (starts.items.len != 0) {
+            newly_demanded.clearRetainingCapacity();
+            try state.reach(self.allocator, self, view, starts.items, &newly_demanded);
+            starts.clearRetainingCapacity();
+            for (newly_demanded.items) |declared| {
+                const root = self.declared_roots.items[declared];
+                if (self.parked_root_jobs.contains(root.fn_id)) {
+                    try self.unparkRootJob(root.fn_id);
+                    try state.awaiting_bodies.append(self.allocator, declared);
+                } else {
+                    // Another root sharing its reserved body already lowered it.
+                    try starts.append(self.allocator, ComptimeDemandState.defItem(root.def));
+                }
+            }
+        }
+        return state.awaiting_bodies.items.len != 0;
+    }
+
     /// Whether a queued specialization completes on the coordinator instead
     /// of in a body shard. A hosted template reaches the host directly, a
     /// template the object cache holds keeps its declared shape with no body,
@@ -7325,7 +8222,16 @@ const Builder = struct {
     /// Execute queued specialization bodies in dispatch order until the wave
     /// drains. Bodies executed here may enqueue further requests; those join
     /// the same FIFO and are reached by this same loop, in enqueue order.
+    /// Drain the queue, then lower the bodies of the demand-driven roots the
+    /// reachable drained bodies read, until nothing demands another root.
     fn drainPendingSpecJobs(self: *Builder) Allocator.Error!void {
+        while (true) {
+            try self.drainPendingSpecJobsOnce();
+            if (!try self.advanceComptimeDemand()) return;
+        }
+    }
+
+    fn drainPendingSpecJobsOnce(self: *Builder) Allocator.Error!void {
         const executor = self.post_check_executor orelse return self.drainPendingSpecJobsSerial();
         if (executor.worker_count <= 1) return self.drainPendingSpecJobsSerial();
         if (self.pending_spec_jobs.len == 0) {
@@ -11618,6 +12524,9 @@ const Builder = struct {
             body_draft.exprs.items[reservation_index] = restored_expr;
             body_draft.expr_locs.items[reservation_index] = body_draft.expr_locs.items[restored_index];
             body_draft.expr_regions.items[reservation_index] = body_draft.expr_regions.items[restored_index];
+            // The reservation now stands for the restored value, so it reads
+            // the roots the restore read.
+            try body_draft.copyRootValueReads(restored, reservation);
             states[reservation_index] = .resolved;
         }
     }
@@ -11853,6 +12762,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = callable.ret };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
                 body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
@@ -11927,6 +12837,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
                 body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
@@ -11991,6 +12902,7 @@ const Builder = struct {
             }
             lowered_expr.ty = .{ .sealed = reserved_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.copyRootValueReads(lowered, boundary.expr);
             body_draft.expr_impossibility_proofs.items[@backingInt(boundary.expr)] =
                 body_draft.expr_impossibility_proofs.items[@backingInt(lowered)];
         }
@@ -12053,6 +12965,7 @@ const Builder = struct {
             var lowered_expr = body_draft.exprs.items[@backingInt(lowered)];
             lowered_expr.ty = .{ .sealed = ret_ty };
             body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+            try body_draft.copyRootValueReads(lowered, boundary.expr);
         }
         for (body_draft.deferred_inspects.items) |boundary| {
             if (body_draft.exprs.items[@backingInt(boundary.expr)].data == .pending_deferred) {
@@ -12130,6 +13043,7 @@ const Builder = struct {
         }
         lowered_expr.ty = .{ .sealed = ret_ty };
         body_draft.exprs.items[@backingInt(boundary.expr)] = lowered_expr;
+        try body_draft.copyRootValueReads(lowered, boundary.expr);
     }
 
     fn resolveDeferredTemplateSpecValueAtType(
@@ -12835,6 +13749,7 @@ const Builder = struct {
             commit_map.emit_nested_defs,
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
+        try self.commitDraftRootValueReads(body_draft, body_ids);
         const sealed_extra = if (extra_ty) |ty| blk: {
             break :blk try committed_types.sealType(ty);
         } else null;
@@ -12894,6 +13809,7 @@ const Builder = struct {
             commit_map.emit_nested_defs,
         );
         self.final_body_output_allowance.addDelta(output_before, FinalBodyOutputCounts.fromProgram(self.program));
+        try self.commitDraftRootValueReads(body_draft, body_ids);
         try self.markDraftNestedReady(body_draft, body_ids);
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
@@ -12913,6 +13829,21 @@ const Builder = struct {
             .root_fn = null,
             .core_maps = retained_core_maps,
         };
+    }
+
+    /// Keep the root-value reads whose expressions the commit retained.
+    fn commitDraftRootValueReads(self: *Builder, body_draft: *const BodyDraftStore, ids: FinalIdOffsets) Allocator.Error!void {
+        for (body_draft.root_value_reads.items) |read| {
+            if (!ids.retained(.exprs, @backingInt(read.expr))) continue;
+            try self.root_value_reads.append(self.allocator, .{ .expr = ids.expr(read.expr), .root = read.root, .evaluated = read.evaluated });
+        }
+    }
+
+    /// Record a coordinator-built expression that restores a root's stored
+    /// value.
+    fn recordRestoredRootRead(self: *Builder, expr: Ast.ExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+        if (self.spec_job_parallel_callback) Common.invariant("specialization worker restored a stored root outside its body draft");
+        try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = false });
     }
 
     fn markDraftNestedReady(
@@ -16562,6 +17493,17 @@ const DraftSpecReuse = struct {
     prefix_proof: ?RuntimeImpossibilityProofId,
 };
 
+const CachedFnReads = struct {
+    fn_id: Ast.FnId,
+    reads: []const Common.ComptimeRootRead,
+};
+
+const DraftRootValueRead = struct {
+    expr: DraftExprId,
+    root: EntryRoot,
+    evaluated: bool,
+};
+
 const DraftRoot = struct {
     def: DraftDefId,
     request: checked.RootRequest,
@@ -16803,6 +17745,9 @@ const BodyDraftStore = struct {
     /// Keep exact descriptors append-only until ordered commit; abandoned
     /// speculative expressions cannot invalidate ids held by surviving ones.
     comptime_value_roots: std.ArrayList(Common.ComptimeValueRoot),
+    /// Root values this draft restores or evaluates in place, committed with
+    /// the expressions that survive (`Builder.root_value_reads`).
+    root_value_reads: std.ArrayList(DraftRootValueRead),
     literal_roots: std.ArrayList(DraftLiteralRoot),
     /// These memoized TypeIds belong to this draft's graph, so their lifetime
     /// cannot exceed the body that owns that graph. Type-store entries are
@@ -16910,6 +17855,7 @@ const BodyDraftStore = struct {
             .static_data_requests = .empty,
             .static_data_request_ids = std.AutoHashMap(DraftStaticDataRequestAddress, DraftStaticDataId).init(allocator),
             .comptime_value_roots = .empty,
+            .root_value_reads = .empty,
             .literal_roots = .empty,
             .parse_result_ok_types = std.AutoHashMap(GeneratedParseResultOkTypeAddress, Type.TypeId).init(allocator),
             .generated_try_types = std.AutoHashMap(GeneratedTryTypeAddress, Type.TypeId).init(allocator),
@@ -17066,6 +18012,7 @@ const BodyDraftStore = struct {
         self.static_data_request_ids.deinit();
         self.static_data_requests.deinit(self.allocator);
         self.comptime_value_roots.deinit(self.allocator);
+        self.root_value_reads.deinit(self.allocator);
         self.literal_roots.deinit(self.allocator);
         self.static_data_candidate_exprs.deinit();
         self.stmt_regions.deinit(self.allocator);
@@ -17234,6 +18181,25 @@ const BodyDraftStore = struct {
         const read = try self.addComptimeValueRoot(.{ .module = module, .root = .{ .literal = position }, .const_locator = null });
         try self.literal_roots.append(self.allocator, .{ .def = def, .module = module, .site = site, .read = read });
         return read;
+    }
+
+    fn recordRestoredRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+        try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = false });
+    }
+
+    fn recordEvaluatedRootRead(self: *BodyDraftStore, expr: DraftExprId, module: checked.ModuleId, root: checked.ComptimeRootId) Allocator.Error!void {
+        try self.root_value_reads.append(self.allocator, .{ .expr = expr, .root = .{ .module = module, .root = root }, .evaluated = true });
+    }
+
+    /// `target` became a copy of `source`'s expression.
+    fn copyRootValueReads(self: *BodyDraftStore, source: DraftExprId, target: DraftExprId) Allocator.Error!void {
+        const count = self.root_value_reads.items.len;
+        for (0..count) |index| {
+            var read = self.root_value_reads.items[index];
+            if (read.expr != source) continue;
+            read.expr = target;
+            try self.root_value_reads.append(self.allocator, read);
+        }
     }
 
     fn addComptimeValueRoot(self: *BodyDraftStore, root: Common.ComptimeValueRoot) Allocator.Error!DraftComptimeValueRootId {
@@ -33884,7 +34850,7 @@ const BodyContext = struct {
                 defer self.builder.current_region = saved_region;
                 self.builder.current_loc = try self.sourceLocFor(source_region);
                 self.builder.current_region = source_region;
-                break :blk try self.restoredStaticDataCandidateNode(
+                const restored = try self.restoredStaticDataCandidateNode(
                     self.view,
                     self.view,
                     stored.node,
@@ -33893,6 +34859,8 @@ const BodyContext = struct {
                     entry.checked_type,
                     .disallow,
                 );
+                try self.draft.recordRestoredRootRead(restored, self.view.key, stored.root);
+                break :blk restored;
             },
             .eval_template => |eval| blk: {
                 try self.constrainTypeToMono(entry.checked_type, ty);
@@ -33920,7 +34888,7 @@ const BodyContext = struct {
                 defer self.builder.current_region = saved_region;
                 self.builder.current_loc = try self.sourceLocFor(source_region);
                 self.builder.current_region = source_region;
-                break :blk try self.restoredStaticDataCandidateNodeAtNode(
+                const restored = try self.restoredStaticDataCandidateNodeAtNode(
                     self.view,
                     self.view,
                     stored.node,
@@ -33929,6 +34897,8 @@ const BodyContext = struct {
                     entry.checked_type,
                     .disallow,
                 );
+                try self.draft.recordRestoredRootRead(restored, self.view.key, stored.root);
+                break :blk restored;
             },
             .eval_template => |eval| blk: {
                 try self.graph.unify(try self.instNode(entry.checked_type), request_node);
@@ -34623,12 +35593,16 @@ const BodyContext = struct {
         }
         const template = view.callable_eval_templates.templates[raw];
         const root = view.compile_time_roots.root(template.root);
-        return switch (root.payload) {
+        const restored = switch (root.payload) {
             .fn_value => |fn_id| try self.restoreConstFnAtNode(view, fn_id, request_fn_node),
             .const_node => |node| try self.restoreConstNodeAtNode(view, view, node, request_fn_node),
-            .pending => try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
+            // A program that does not evaluate a root no compilation
+            // evaluated yet computes the callable in place.
+            .pending, .unevaluated => return try self.lowerPendingCallableEvalBindingValueAtNode(view, template, root, request_fn_node),
             .discarded, .expect, .runtime => Common.invariant("callable eval binding root output a non-callable payload"),
         };
+        try self.draft.recordRestoredRootRead(restored, view.key, template.root);
+        return restored;
     }
 
     fn lowerPendingCallableEvalBindingValueAtNode(
@@ -34710,7 +35684,9 @@ const BodyContext = struct {
         }
         const local = try self.reserveCallableEvalBinding(view, root_id, request_fn_node);
         const lowered = try self.lowerComptimeRootExprAtCell(body_expr, request_cell);
-        return try self.finishCallableEvalBinding(view, root_id, request_cell, local, lowered);
+        const evaluated = try self.finishCallableEvalBinding(view, root_id, request_cell, local, lowered);
+        try self.draft.recordEvaluatedRootRead(evaluated, view.key, root_id);
+        return evaluated;
     }
 
     fn activeCallableEvalBindingExpr(
@@ -43074,13 +44050,14 @@ const BodyContext = struct {
         return true;
     }
 
-    fn copyActiveConstReservation(self: *BodyContext, reservation: DraftExprId, source: DraftExprId) void {
+    fn copyActiveConstReservation(self: *BodyContext, reservation: DraftExprId, source: DraftExprId) Allocator.Error!void {
         const reservation_index = @backingInt(reservation);
         const source_index = @backingInt(source);
         self.draft.exprs.items[reservation_index] = self.draft.exprs.items[source_index];
         self.draft.expr_locs.items[reservation_index] = self.draft.expr_locs.items[source_index];
         self.draft.expr_regions.items[reservation_index] = self.draft.expr_regions.items[source_index];
         self.draft.expr_impossibility_proofs.items[reservation_index] = self.draft.expr_impossibility_proofs.items[source_index];
+        try self.draft.copyRootValueReads(source, reservation);
     }
 
     fn finishActiveConstBinding(self: *BodyContext, active_id: ActiveConstBindingId, source: DraftExprId) Allocator.Error!DraftExprId {
@@ -43090,7 +44067,7 @@ const BodyContext = struct {
         }
         const reservation = self.draft.active_const_bindings.items[index].reservation;
         self.draft.active_const_bindings.items[index].restored_source = source;
-        self.copyActiveConstReservation(reservation, source);
+        try self.copyActiveConstReservation(reservation, source);
         try self.materializeActiveConstBinding(active_id);
         return reservation;
     }
@@ -43111,7 +44088,7 @@ const BodyContext = struct {
         self.builder.current_region = self.draft.expr_regions.items[@backingInt(source)];
 
         const wrapped = try self.wrapRecursiveConstLocalAtTypeCell(active.local, active.cell, source);
-        self.copyActiveConstReservation(active.reservation, wrapped);
+        try self.copyActiveConstReservation(active.reservation, wrapped);
         self.draft.expr_locs.items[@backingInt(active.reservation)] = self.draft.expr_locs.items[@backingInt(source)];
         self.draft.expr_regions.items[@backingInt(active.reservation)] = self.draft.expr_regions.items[@backingInt(source)];
         self.draft.expr_impossibility_proofs.items[@backingInt(active.reservation)] = self.draft.expr_impossibility_proofs.items[@backingInt(source)];
@@ -44011,6 +44988,7 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
+                try self.draft.recordRestoredRootRead(restored, store_view.key, stored.root);
                 if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
                 break :blk restored;
             },
@@ -44071,6 +45049,7 @@ const BodyContext = struct {
                     requested_ty,
                     .disallow,
                 );
+                try self.draft.recordRestoredRootRead(restored, store_view.key, stored.root);
                 if (has_active_const_binding) break :blk try self.finishActiveConstBinding(active_const_scope.active, restored);
                 break :blk restored;
             },
@@ -44247,12 +45226,13 @@ const BodyContext = struct {
         );
         try self.graph.unify(try body_ctx.instNode(body.checked_type), request_node);
 
-        const restored = try body_ctx.lowerComptimeRootExprAtCell(
+        const evaluated = try body_ctx.lowerComptimeRootExprAtCell(
             body.body_expr,
             DraftTypeCell.fromGraphNode(request_node),
         );
-        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, restored);
-        return restored;
+        try self.draft.recordEvaluatedRootRead(evaluated, store_view.key, body.root);
+        if (has_active_const_binding) return try body_ctx.finishActiveConstBinding(active_const_scope.active, evaluated);
+        return evaluated;
     }
 
     fn restoreConstNodeAtType(
@@ -48561,8 +49541,14 @@ const BodyContext = struct {
         const kind = root.literalConversionKind() orelse
             Common.invariant("literal conversion root link named a non-conversion root");
         switch (root.payload) {
-            .const_node => |node| return try self.restoreConstNodeAtNode(self.view, self.view, node, request_node),
-            .pending => {},
+            .const_node => |node| {
+                const restored = try self.restoreConstNodeAtNode(self.view, self.view, node, request_node);
+                try self.draft.recordRestoredRootRead(restored, self.view.key, root_id);
+                return restored;
+            },
+            // No compilation evaluated an unevaluated root yet; a program
+            // that does not evaluate it converts the literal in place.
+            .pending, .unevaluated => {},
             .fn_value, .discarded, .expect, .runtime => Common.invariant("literal conversion root stored a non-constant payload"),
         }
         if (self.builder.comptimeValueReadDeclared(self.view, root_id)) {
@@ -48579,6 +49565,7 @@ const BodyContext = struct {
         };
         if (site.kind != expected_kind) Common.invariant("literal conversion root kind differed from its literal");
         const value = try self.unwrapLiteralConversionAtNode(try_value, try_node, request_node, site);
+        try self.draft.recordEvaluatedRootRead(value, self.view.key, root_id);
         // A conversion root no evaluation requested (its type holds a
         // callable, so the checker left it specialization-owned) is still
         // hoisted, as a literal root of this program.
@@ -65792,6 +66779,7 @@ fn moduleViewData(view: checked.ImportedModuleView) ModuleViewData {
         .const_templates = view.const_templates,
         .const_store = view.const_store,
         .interface_capabilities = view.interface_capabilities,
+        .compile_time_root_reads = view.compile_time_root_reads,
     };
 }
 

@@ -1395,14 +1395,17 @@ Frontend workers must never wait for nested specialization work on their own
 occupied worker pool. Dependency completion and deterministic module/root
 replay order are explicit coordinator responsibilities. Successful compile-time
 `dbg` observations are durable checked output keyed by root id, with owned
-message bytes. Cache hits replay that output alongside newly evaluated roots,
-sorted by module and root id; they do not rerun cached expressions. Cache
+message bytes. Cache hits replay that output for the roots the compilation
+demands alongside newly evaluated roots, sorted by module and root id; they do
+not rerun cached expressions. Cache
 validation checks the recorded root ids and message ranges before replay.
 
-Compile-time evaluation must evaluate every checked top-level expression and
-every selected compile-time root that can be evaluated without effectful calls
-or runtime data. It must run `crash`, `dbg`, and `expect` during that
-evaluation and output their diagnostics during `roc check`.
+Checking must evaluate every checked top-level expression and every selected
+compile-time root that can be evaluated without effectful calls or runtime
+data. It must run `crash`, `dbg`, and `expect` during that evaluation and
+output their diagnostics during `roc check`. A build evaluates the subset of
+those roots its program demands (see "Demand-Driven Compile-Time
+Evaluation").
 
 A function-typed top-level binding whose entire checked right-hand side is one
 resolved procedure lookup already has its complete checked callable identity.
@@ -1454,10 +1457,10 @@ than introducing allocation calls or repeat loops; their explicit procedure
 role selects this construction-only lowering contract. Their compile-time root
 reads always name the completed slot directly, never a runtime accessor.
 
-Evaluation and static storage are separate checked outputs. Unreachable
-top-level values are still evaluated when eligible so their `crash`, `dbg`, and
-`expect` behavior is reported, but successfully evaluated unreachable data does
-not need to be stored in checked module data or target static data. Reachable
+Evaluation and static storage are separate checked outputs. Checking still
+evaluates unreachable top-level values when eligible so their `crash`, `dbg`,
+and `expect` behavior is reported, but successfully evaluated unreachable data
+does not need to be stored in checked module data or target static data. Reachable
 evaluated values that have a static representation should be stored once and
 shared. Records that contain static lists should point at shared static list
 bytes; equivalent named and inline constants should produce equivalent static
@@ -1502,8 +1505,10 @@ Unrequested callable bindings retain their ordinary checked body computation.
 Completed-value materialization requests are the intersection of that manifest
 and the shared program's explicit value reads, matched by module and root
 identity. Collection preserves manifest order without repeated scans of the
-read set. An unread root still evaluates for its diagnostics; absence of a
-materialization request never suppresses evaluation.
+read set. Demand, not materialization, decides whether a root evaluates:
+checking evaluates an unread root for its diagnostics, and a demand-driven
+build does not evaluate it at all. Absence of a materialization request never
+suppresses an evaluation that demand requires.
 
 A shared compile-time value slot has its root type's own layout. A read whose
 target stores that type boxed, such as a recursive payload field, reads the
@@ -1633,13 +1638,17 @@ without any merge. Checked loop mutation plans and Monotype state merges
 likewise never look inside expect bodies.
 
 Compile-time evaluation is a function of the checked program alone. Every
-command that finalizes checking evaluates the same roots, every checked
+command that finalizes checking specializes the same roots, every checked
 module's compile-time requests plus the platform entrypoints of the
 program's root module, taken from its checked `runtime_requests`, and the
 `test_expect` requests of every module `roc test` would run (the root
 package and the packages it reaches through filesystem paths), with every
 literal conversion those roots reach hoisted, at the host's width, with
-expects run (`compileTimeTarget`). Its Solved policy is that of the program
+expects run (`compileTimeTarget`). Checking, testing, and every compilation
+without an LSS runtime program evaluate every requested root; a build with an
+LSS runtime program evaluates the requested roots its program demands, a set
+that is itself a function of the checked program and the build's roots
+("Demand-Driven Compile-Time Evaluation"). Its Solved policy is that of the program
 being built, so evaluation runs inside that program's one specialization;
 with no runtime program, as in `roc check`, it is dev's. Inlining and
 SpecConstr preserve meaning, so the policy changes how evaluation's code is
@@ -1650,9 +1659,10 @@ it runs (under `comptime_closure_hits`) only when the entry names that
 procedure's own identity, and splices its cached code in place of compiling
 it; a cache entry is the procedure its key names, so the cache too changes
 only what evaluation compiles. `roc check` and `roc build` therefore
-evaluate the same roots to the same values and report the same compile-time
-errors: a build cannot report an error in the program that checking did not,
-and `--opt` never moves a computation between compile time and runtime. A
+compute the same value for every root both evaluate: a build cannot report an
+error in the program that checking did not, checking reports the errors of
+roots no build demands, and `--opt` never moves a computation between compile
+time and runtime. A
 dev build for the host reads the same packs for its runtime program and
 shares them with evaluation.
 
@@ -1736,9 +1746,9 @@ demand when they name the same concrete type: the structural type digest
 selects the candidate and exact representation equivalence, private backings
 and callable members included, confirms it. Neither a stage-local type id nor
 an agreeing layout is that proof. A root the program never
-reads materializes nothing: it is still evaluated, and reports its `crash`,
-`dbg` and `expect` behavior, but its value is retained only by the checked
-module data that asked for it.
+reads materializes nothing: when the compilation evaluates it (checking does),
+it reports its `crash`, `dbg` and `expect` behavior, but its value is retained
+only by the checked module data that asked for it.
 
 A producer program is released as soon as its last consumer stops reading it,
 which is when that consumer's LIR generation finishes rather than when its
@@ -1967,6 +1977,107 @@ stack rather than the compiler. An arbitrary depth budget in release
 would make a program's compile-time-evaluability depend on a compiler build
 constant rather than on the program itself, and would let Debug and release
 builds disagree about whether the same program compiles.
+
+### Demand-Driven Compile-Time Evaluation
+
+A build evaluates only the compile-time roots its program demands. A root is
+demanded when code that runs regardless of compile-time demand reads it, or
+when the body of a demanded root reads it. The code that runs regardless is
+the program's runtime roots, its static-data requests (provided data exports),
+and every literal root the specialization registers. A read is a slot read of
+a root this compilation evaluates, the restore of a value an earlier
+compilation stored, or one of the reads an object-cache entry records for the
+body it stands in for; each demands the root. The set is computed over the
+specialized program itself, so it is a function of the checked program and
+the build's roots, never of what any cache holds.
+
+Demand-driven evaluation applies to a compilation whose LSS runtime consumer
+continues the evaluation's specialization, that runs no tests, and whose
+checking left no static exhaustiveness diagnostic for compile-time evaluation
+to resolve. Every other compilation evaluates every root it requests:
+`roc check` and `roc test` for their diagnostics, a Boxy runtime program
+because it reads compile-time values from the constant stores without a
+shared specialization to discover demand, a test program because test roots
+are addressed by their position in the request list, and a program with such
+an exhaustiveness diagnostic because only evaluating every root decides
+whether that diagnostic is reported. Each exclusion is decided from the
+checked program and the command, never from cache state.
+
+Monotype declares every requested compile-time root up front: it reserves the
+root's entry template, so a read anywhere, including in a parallel worker's
+body draft, binds the root's real function id from the declaration table. A
+declared root's queued body is parked instead of entering the specialization
+queue. Demand is reachability over committed definitions: a definition
+references the definitions its body names and reads the roots its body reads,
+whether through a slot or as an expression standing for the root's value,
+and a slot read's initializer is representation evidence, not a call, so the
+walk does not follow it. After each drain of the queue, the walk extends from
+the program's entries, and from the definitions of demanded roots whose
+bodies that drain lowered, over the definitions the drain committed; every
+parked root a reachable definition reads moves into the queue, and the next
+drain lowers it. The rounds end when nothing reachable demands another root.
+A definition nothing reachable references demands nothing, though it was
+committed: an immediate claim, for one, lowers a callee's reserved body for a
+caller that keeps its own copy. The roots whose bodies lowered are exactly the
+demanded roots; that is an invariant. The program lists the demanded roots
+first, in request order, and every other root after them, so a
+consumer's root manifest names positions after the compile-time roots as
+before. A declared root nothing demanded keeps its reserved declaration with
+a body that crashes; nothing calls it, it is no root, and reachability drops
+it from every consumer. The reservation cannot be withdrawn, because worker
+drafts bound its function id before demand was known.
+
+An expression stands for a root's value without a slot read in two ways: it
+restores the value an earlier compilation stored, or, in a program that does
+not evaluate the root (one that is not finalizing it, such as a pack
+program), it evaluates the root's body in place. Monotype records both on the
+expression, and an expression that later becomes a copy of another, as a
+deferred constant use does when its restored value resolves, takes the
+copied expression's records.
+
+Each root a compilation evaluates records the checked roots its body reads,
+directly or through the code it reaches, in the module's
+`CompileTimeRootReadTable`, and each stored constant names the root that
+stored it (`StoredConstTemplate.root`). A compilation that restores a stored
+value therefore demands everything the value's own evaluation demanded,
+exactly as if it had lowered the root's body. `dbg` observations replay for
+the demanded roots only, whether this compilation evaluated them or restored
+their values, so a build reports the same observations with or without a
+cache and whatever an earlier command evaluated.
+
+The object cache composes with demand the way it composes with an app's
+platform requirements: an entry carries what its skipped body would have told
+the program that links it. For each specialization a program may write to
+the object cache, Monotype records the roots its code reads, through every
+procedure it reaches. An entry whose code evaluates a root in place is
+withheld: it would compute the root whenever it runs, in a program that
+evaluates that root at compile time. Any other entry's code holds the values
+it read, completed or restored, and is offered with the roots it read
+(`SpecCacheHit.comptime_root_reads`); a program that takes the entry when
+Monotype reserves the specialization demands those roots exactly as if it had
+lowered the body. A pack's contents may therefore depend
+on which roots were evaluated when it was written, but what a program
+evaluates, observes, and computes never depends on the pack.
+
+A checked module cache entry records every requested root it did not evaluate
+with the explicit `unevaluated` payload; its constant template keeps its
+`eval_template` state and the constant store holds nothing for it. When a
+compilation loads a finalized checked module with unevaluated requests, it
+reopens that module before evaluation: the evaluation columns move into
+storage the module owns, every unevaluated root returns to `pending`, and the
+module joins finalization with the compilation's other modules. Finalization
+requests only the pending roots of the modules it finalizes, so the reopened
+module's evaluated roots are restored from its store like any other module's,
+and its demanded pending roots evaluate against the same checked module data
+through the same declared root functions an uncached compilation uses.
+Afterwards every requested root still pending is `unevaluated` again, and the
+module is written to the checked module cache again only when this
+compilation evaluated a root it lacked. A module is cached only when it has no reports, so an entry never
+holds a diagnostic that a later compilation's evaluation could contradict.
+
+A build reports the compile-time failures of the roots it evaluates. A
+failure in a root no build demands is reported by `roc check`, which
+evaluates every root, including those a cache entry left unevaluated.
 
 ## Backend Builtins
 
@@ -3867,7 +3978,10 @@ selected, or how checked compile-time values are serialized, the checked module
 cache format or the specific checked-data selection version must be bumped. A
 cache hit with a matching key and version is consumed as already-checked output;
 the compiler must not pay an extra pass to rediscover whether the cached output
-is complete for the checked module.
+is complete for the checked module. Which requested compile-time roots an entry
+evaluated is explicit in it: each root it did not evaluate carries the
+`unevaluated` payload, and a compilation that demands such a root evaluates it
+against the cached checked module ("Demand-Driven Compile-Time Evaluation").
 
 ## Def Checking Order
 

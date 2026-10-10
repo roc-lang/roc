@@ -538,7 +538,7 @@ fn resolveCallableEvalTemplate(
     const root = module.compile_time_roots.root(callable_template.root);
     return switch (root.payload) {
         .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
-        .pending => boxyLowerInvariant("pending callable eval root reached runtime boxy worker resolution before compile-time finalization"),
+        .pending, .unevaluated => boxyLowerInvariant("unevaluated callable eval root reached runtime boxy worker resolution"),
         .const_node => |node| switch (module.const_store.get(node)) {
             .fn_value => |fn_id| resolveConstFnValue(modules, worker, module, fn_id),
             .crash, .checked_error => .{
@@ -21063,6 +21063,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } } },
             .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, quote.plan, "invalid string literal", next),
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -21371,6 +21372,7 @@ const ProcBodyBuilder = struct {
                 .next = next,
             } } },
             .pending => try self.beginRuntimeStringConversion(target, expr_id, checked_ty, maybe_plan, "invalid numeric literal", next),
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -45486,7 +45488,7 @@ fn expectBoxyTopLevelConstLookup(kind: ConstLookupExprKind, stored: ConstLookupS
         },
     };
     const root_type = try checked_module.const_store.type_store.append(.{ .primitive = .u64 });
-    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root_type = root_type });
+    checked_module.const_templates.fillStoredConst(const_ref, .{ .node = const_node, .root = @fromBackingInt(@intCast(fixtureTableIndex(0))), .root_type = root_type });
     var compile_time_roots = [_]checked.CompileTimeRoot{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
         .module_idx = 0,

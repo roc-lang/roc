@@ -8609,6 +8609,7 @@ fn compileModulePack(
 
     var config = checkedRuntimeLoweringConfig(.linked_output, args.opt, specialization_strategy, target_usize, true);
     config.target.post_check_executor = build_env.postCheckExecutor();
+    config.target.spec_comptime_reads = true;
     var lowered = try lir.PackProgram.lowerPackProgram(ctx.gpa, artifact, imports.items, relations, roots, config.target);
     errdefer lowered.deinit();
 
@@ -8757,9 +8758,23 @@ fn packFileBytes(
     }
     var closure = try SpliceClosure.init(allocator, set);
     defer closure.deinit();
+    const comptime_reads = if (lowered.spec_comptime_reads) |*reads| reads else {
+        if (builtin.mode == .debug) std.debug.panic("a program written to the object cache recorded no compile-time reads", .{});
+        unreachable;
+    };
     for (lowered.lir_result.spec_procs.items) |spec_proc| {
         const proc = procs[@backingInt(spec_proc.proc)];
         const artifact = artifact_by_identity.get(proc.identity) orelse continue;
+        // An entry whose code evaluates a compile-time root in place would
+        // compute that root whenever it runs in a program that evaluates the
+        // root itself, so it is not offered. Any other entry carries the
+        // roots it reads, which a linking program demands (design.md
+        // "Demand-Driven Compile-Time Evaluation").
+        const entry_reads = comptime_reads.get(spec_proc.key);
+        if (!entry_reads.offerable) {
+            withheld += 1;
+            continue;
+        }
         // A linking program calls an entry at its base signature and cannot
         // emit the ownership variants its callers would demand from the
         // body, so an entry that admits such demands is not offered.
@@ -8798,6 +8813,7 @@ fn packFileBytes(
             .key = spec_proc.key,
             .artifact = artifact,
             .platform_requirement_relation = spec_proc.platform_requirement_relation,
+            .comptime_root_reads = entry_reads.reads,
             .rc_borrowed_params = proc.rc_borrowed_params,
             .rc_ret_borrowed = proc.rc_ret_borrowed,
             .rc_ret_lenders = proc.rc_ret_lenders,
@@ -10959,6 +10975,8 @@ fn rocBuildNative(ctx: *CliCtx, args: cli_args.BuildArgs) CliMainError!BuildResu
         runtime_lowering.target.spec_cache = packs.specCacheLookup();
     }
     runtime_lowering.target.code_provision = nativeObjectCodeProvision(target, args.opt, loaded_packs != null);
+    // This program's specializations go into packs.
+    runtime_lowering.target.spec_comptime_reads = object_store != null or std.c.getenv("ROC_DEV_PACK_OBJECTS") != null;
     build_env.setRuntimeLowering(runtime_lowering);
     build_env.setValidateTargetFilesForSelectedTarget(true);
     build_env.setDetailedLoweringTiming(args.timings);
@@ -17405,6 +17423,12 @@ fn finishFrontEndPhase(reporter: *progress.Reporter, timing: anytype) void {
             .{ .min = compile_time.mem_min, .max = compile_time.mem_max },
             measuredSubTimings(&subs_buf, &compileTimeEvaluationBreakdown(compile_time)),
         );
+    }
+    if (compile_time.roots_declared != 0) {
+        reporter.recordCounters("Compile-time roots", &.{
+            .{ .name = "Declared", .count = compile_time.roots_declared },
+            .{ .name = "Evaluated", .count = compile_time.roots_evaluated },
+        });
     }
     const counters = timing.compile_time_counters;
     if (!std.meta.eql(counters.lowering, lir.CheckedPipeline.TimingSnapshot{})) {

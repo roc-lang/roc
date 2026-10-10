@@ -294,7 +294,9 @@ pub const Constants = struct {
     ///      crashes as a valueless binding.
     /// 135: Canonicalization warns on redundant returns recorded by parsing.
     /// 136: Folded dispatch relations carry explicit target substitutions.
-    pub const CACHE_VERSION = 136;
+    /// 137: Checked modules publish compile-time roots no compilation
+    ///      demanded as unevaluated, with every evaluated root's reads.
+    pub const CACHE_VERSION = 137;
 };
 
 /// Configuration for the Roc cache system.

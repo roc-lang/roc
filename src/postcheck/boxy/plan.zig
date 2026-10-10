@@ -6404,6 +6404,7 @@ const Builder = struct {
                 try self.recordLiteralSite(view, expr_id, plan_id);
                 try actions.append(self.allocator, dispatch_action);
             },
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -6459,6 +6460,7 @@ const Builder = struct {
                     boxyPlanInvariant("pending custom numeral omitted its conversion plan"));
                 try actions.append(self.allocator, .{ .dispatch_call_target = .{ .view = view, .call_expr = expr_id, .plan = maybe_plan } });
             },
+            .unevaluated,
             .fn_value,
             .discarded,
             .expect,
@@ -19494,7 +19496,7 @@ const Builder = struct {
         const root_id = self.callableEvalTemplate(view, template_id).root;
         switch (view.compile_time_roots.root(root_id).payload) {
             .pending => {},
-            .fn_value, .const_node, .discarded, .expect, .runtime => return null,
+            .unevaluated, .fn_value, .const_node, .discarded, .expect, .runtime => return null,
         }
         for (view.entry_wrappers.wrappers.items) |wrapper| {
             if (wrapper.root == root_id) return .{ .view = view, .wrapper = wrapper };
@@ -19620,7 +19622,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| self.constFnValueBody(view, fn_id),
-            .pending => boxyPlanInvariant("pending callable eval root reached runtime boxy body type planning before compile-time finalization"),
+            .pending, .unevaluated => boxyPlanInvariant("unevaluated callable eval root reached runtime boxy body type planning"),
             .const_node => |node| blk: {
                 const store = view.const_store orelse
                     boxyPlanInvariant("callable eval binding constant had no checked ConstStore");
@@ -20495,7 +20497,7 @@ const Builder = struct {
                             );
                         },
                         .pending => .{ .root_expr = .{ .view = view, .expr = root.expr } },
-                        .const_node, .discarded, .expect, .runtime => return self.procedureUseFallback(fallback),
+                        .unevaluated, .const_node, .discarded, .expect, .runtime => return self.procedureUseFallback(fallback),
                     };
                 },
             };
@@ -20604,7 +20606,7 @@ const Builder = struct {
         const root = view.compile_time_roots.root(template.root);
         return switch (root.payload) {
             .fn_value => |fn_id| .{ .module = view.key, .fn_id = fn_id },
-            .pending, .const_node, .discarded, .expect, .runtime => null,
+            .pending, .unevaluated, .const_node, .discarded, .expect, .runtime => null,
         };
     }
 

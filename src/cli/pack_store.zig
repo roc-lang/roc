@@ -488,6 +488,7 @@ pub const LoadedPacks = struct {
                 if (!gop.found_existing) gop.value_ptr.* = .{
                     .identity = identity.bytes,
                     .platform_requirement_relation = spec.platform_requirement_relation,
+                    .comptime_root_reads = spec.comptime_root_reads,
                     .rc_borrowed_params = spec.rc_borrowed_params,
                     .rc_ret_borrowed = spec.rc_ret_borrowed,
                     .rc_ret_lenders = spec.rc_ret_lenders,
