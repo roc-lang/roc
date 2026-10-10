@@ -31,15 +31,24 @@ A second batch of projects came out of the 2026-07 comparative review of
 the post-check pipeline against the cor `lss` prototype it was
 productionized from (stage-by-stage divergence review; no shipped
 miscompile found, but several unstated load-bearing invariants, one
-termination hazard, and one verification coverage gap):
+termination hazard, and one verification coverage gap). All of them have
+landed and had their docs removed.
 
-- [small/spec-constr-specialization-limits.md](small/spec-constr-specialization-limits.md)—
-  termination budgets for call-pattern specialization (compile-time
-  divergence is reachable today).
-
-(`spec-constr-specialization-limits` used to be paired here with
-`spec-constr-static-match-soundness` and `pin-lambda-solved-invariants`,
-which have since landed and had their docs removed.)
+The last of them, SpecConstr specialization limits, had mostly landed before
+its turn came: a per-source-function worker budget of three and a body-size
+admission threshold already bounded the specialization drain, and shape
+derivation already spent explicit proof fuel, so the match-and-rebuild-deeper
+program the doc described compiles and runs under `--opt=speed` (the budget
+binds on it). No separate shape-depth cap was added, since the worker budget
+alone makes termination structural. What remained was the selection defect:
+a call accepted by several workers now binds to the most specific one (most
+constructor nodes, ties in admission order) instead of the first admitted,
+and the `--timings` SpecConstr breakdown now counts emitted workers and
+worker-budget refusals. design.md records the budget rule and why it is not a
+compile-time-evaluation limit. A separate ARC certification failure surfaced
+while writing the regression program: a recursive consumer of
+`[Leaf, Node(Tree, U64)]` (recursive payload first) fails ARC in dev and
+speed builds, independent of SpecConstr.
 
 The Monotype machinery hardening project has landed, mostly by finding its
 targets already gone. Every verification-only type-equality check in

@@ -245,6 +245,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/list_prefetched_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_fusion_test.zig"));
     std.testing.refAllDecls(@import("test/parallel_spec_constr_test.zig"));
+    std.testing.refAllDecls(@import("test/spec_constr_limits_test.zig"));
     std.testing.refAllDecls(@import("test/native_artifact_parallel_test.zig"));
     std.testing.refAllDecls(@import("test/match_corpus_test.zig"));
     std.testing.refAllDecls(@import("test/url_package_test.zig"));

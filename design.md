@@ -7885,6 +7885,38 @@ specialization decisions. Consequently an opaque binder use still resolves to
 its active cloned local, but that lexical resolution cannot authorize inlining
 or constructor specialization.
 
+Worker admission is a code-generation budget with a structural termination
+proof. Each original source function admits call-pattern workers only while
+its sealed source body is within the body-size threshold and it holds fewer
+than `spec_constr_specialization_count` (three) workers. Every path that
+records a pattern (syntactic collection, coordinator admission of discovery
+requests, and patterns found while cloning a worker) first deduplicates
+against the exact recorded patterns and then consults that one admission
+rule, in deterministic coordinator order. A refused pattern leaves the call as
+its ordinary direct call, which is always a correct lowering. Cloning a worker
+can discover new patterns (a body that rebuilds its argument one constructor
+deeper on each recursive call yields a strictly deeper pattern every round,
+and the active inline stack that stops infinite inlining sends exactly that
+call down the residual path), so the specialization drain terminates because
+the total number of workers is at most three per original function, not
+because the shape lattice is finite. The budget is not a limit on
+compile-time evaluation in the sense of "Release builds of the compiler must
+never impose artificial resource limits": it never decides whether a program
+compiles or what it computes, only how many specialized copies of a function
+are emitted, and it is the same constant in every build mode.
+`ParallelMetrics.spec_count_denials` counts refusals by the worker budget and
+`workers_written` counts emitted workers, so the `--timings` breakdown shows
+how often the budget binds.
+
+When several admitted workers accept a call's argument values, the call binds
+to the most specific: workers are tried in descending order of their pattern's
+constructor-node count, ties in admission order. All patterns that accept one
+call's values generalize a common value, so a pattern that refines another
+always has strictly more constructor nodes, and the selected worker is never
+strictly less specialized than another accepting worker. Both the clone-time
+call decision and the in-place redirection of calls in emitted workers use
+this order.
+
 Analysis exhaustion is explicit. A bounded query returns `proven`,
 `disproven`, or `unknown_budget_exhausted`; only `proven` authorizes a rewrite.
 Hard generated-code limits may decline proven work, but they never change a
