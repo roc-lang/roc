@@ -12450,7 +12450,8 @@ const Builder = struct {
     fn directCallCallableDerivedSubstitution(self: *Builder, direct: DirectCallPlan) Allocator.Error!?Span {
         const site_view = self.moduleForId(direct.call.module);
         const call_expr = site_view.checked_bodies.expr(direct.call.expr);
-        if (call_expr.data == .call) return null;
+        // An ordinary call and a producer call at a lookup are not dispatches.
+        if (call_expr.data == .call or isLookupExpr(call_expr.data)) return null;
         const dispatch_plan = directCallDispatchPlan(call_expr);
         if (dispatchResolutionIsStructural(site_view, dispatch_plan)) return null;
         const node = site_view.static_dispatch_plans.evidenceNode(directDispatchEvidenceNode(site_view, dispatch_plan));
