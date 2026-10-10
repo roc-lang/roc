@@ -18485,7 +18485,9 @@ const ProcBodyBuilder = struct {
                 self.parent.result.store.getLocal(target).boxy_desc != null)
             {
                 const materialization = try self.descriptorMaterializationForConstructedRep(rep_id);
-                if (rep.descriptor == null and materialization.captures.len == 0) {
+                if (rep.descriptor == null and materialization.captures.len == 0 and
+                    self.parent.result.store.getLocal(target).boxy_desc == null)
+                {
                     target_desc_ref = materialization.desc;
                 } else {
                     const target_desc_info = try self.descriptorForConstructedTargetMaterialization(target, materialization);
@@ -19685,6 +19687,7 @@ const ProcBodyBuilder = struct {
         // Stage 0 lowers the final else; then each branch, from the last, lowers
         // its body (odd stages) and its condition (even stages).
         if (stage == 0) {
+            try self.reserveTagJoinResultDescriptor(task.target, self.repForType(task.if_ty));
             task.done = self.freshJoinPointId();
             task.index = task.branches.len;
             return .{ .child = .{ .expected = .{ .target = task.target, .expected_ty = task.if_ty, .expr_id = task.final_else, .next = try self.joinJump(task.done) } } };
@@ -27783,6 +27786,7 @@ const ProcBodyBuilder = struct {
             if (self.listMapCanReuseMatchBody(task.cond, task.branches)) |body| {
                 return .{ .tail = .{ .expected = .{ .target = task.target, .expected_ty = task.match_ty, .expr_id = body, .next = task.next } } };
             }
+            try self.reserveTagJoinResultDescriptor(task.target, self.repForType(task.match_ty));
             const cond_expr = self.module.checked_bodies.expr(task.cond);
             task.cond_rep = self.matchConditionRep(task.cond, self.repForType(cond_expr.ty));
             try self.reserveMatchBranchRepresentativeBindings(task.branches, task.cond_rep);
@@ -33067,6 +33071,23 @@ const ProcBodyBuilder = struct {
     /// release them.
     fn fieldLocalMayCarryDescriptor(self: *const ProcBodyBuilder, field_local: LIR.LocalId) bool {
         return self.parent.layoutNeedsNestedBoxyDesc(self.parent.result.store.getLocal(field_local).layout_idx);
+    }
+
+    /// A tag constructor carrying an aggregate payload materializes a descriptor
+    /// even for concrete types. Reserve the shared result before any arm so all
+    /// variants, including zero-sized ones, initialize the same join parameter.
+    fn reserveTagJoinResultDescriptor(self: *ProcBodyBuilder, target: LIR.LocalId, rep_id: Plan.TypeRepId) Allocator.Error!void {
+        if (self.parent.result.store.getLocal(target).boxy_desc != null) return;
+        const identity = self.descriptorStorageRep(rep_id);
+        const rep = self.parent.plan.representations.items[@backingInt(identity)];
+        if (rep.kind != .tag_union) return;
+        for (self.parent.plan.childSlice(rep.children)) |child| {
+            if (child.role != .tag_payload) continue;
+            const payload_layout = self.workerRuntimeLayoutForRep(child.rep).layoutIdx();
+            if (!self.parent.layoutNeedsNestedBoxyDesc(payload_layout)) continue;
+            self.parent.result.store.setLocalBoxyDesc(target, .{ .local = try self.addFrameLocal(.opaque_ptr) });
+            return;
+        }
     }
 
     fn aggregateFieldsMayCarryDescriptor(
