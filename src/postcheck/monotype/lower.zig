@@ -7521,11 +7521,7 @@ const Builder = struct {
             switch (types.get(ty)) {
                 .primitive, .zst, .erased => {},
                 .named => |named| {
-                    if (demand.nominalReaches(
-                        self.program.names.moduleIdentityBytes(named.def.module),
-                        self.program.names.typeNameText(named.def.type_name),
-                        named.def.source_decl,
-                    )) return true;
+                    if (demand.nominalReaches(self.program.names.moduleIdentityBytes(named.def.module))) return true;
                     for (types.span(named.args)) |arg| try pending.append(self.allocator, arg);
                     if (named.backing) |backing| try pending.append(self.allocator, backing.ty);
                 },

@@ -421,6 +421,7 @@ const CustomCase = enum {
     native_build_pack_objects,
     native_build_pack_hits,
     early_ctfe_cache,
+    check_compile_time_pack,
     literal_root_rejected_every_build,
     issue_11673_callable_cache,
     issue_11678_recursive_callback_cache,
@@ -2747,6 +2748,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "issue 11627: cached procedure keeps its own constant after the app is edited", .timeout_ms = 600_000, .body = .{ .custom = .issue_11627_static_data_names_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build native dev serves closed specializations from a previous build's packs", .timeout_ms = 600_000, .body = .{ .custom = .native_build_pack_hits } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build early CTFE cache skips Monotype bodies on an app-only rebuild", .timeout_ms = 600_000, .body = .{ .custom = .early_ctfe_cache } },
+    .{ .id = 0, .suite = .subcommands, .name = "roc check reuses the compile-time pack an earlier check published", .timeout_ms = 600_000, .body = .{ .custom = .check_compile_time_pack } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a specialization's rejected literal on every build, cached or not", .timeout_ms = 600_000, .body = .{ .custom = .literal_root_rejected_every_build } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build reports a rejected literal whose type holds a callable", .body = .{ .command = .{ .args = &.{ "build", "--no-cache" }, .roc_file = "test/cli/literal_root_rejected/CallableLiteral.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "invalid string" }}, .occurrences = &.{.{ .stream = .stderr, .text = "invalid string", .count = 1 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "invariant violated" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc build macOS output basename does not affect bytes", .body = .{ .custom = .macos_output_basename_reproducible } },
@@ -4579,6 +4581,7 @@ fn runCustomCase(
         .issue_11627_static_data_names_cache => customIssue11627StaticDataNamesCache(io, allocator, &env, &timer, timeout_ms),
         .native_build_pack_hits => customNativeBuildPackHits(io, allocator, &env, &timer, timeout_ms),
         .early_ctfe_cache => customEarlyCtfeCache(io, allocator, &env, &timer, timeout_ms),
+        .check_compile_time_pack => customCheckCompileTimePack(io, allocator, &env, &timer, timeout_ms),
         .literal_root_rejected_every_build => customLiteralRootRejectedEveryBuild(io, allocator, &env, &timer, timeout_ms),
         .issue_10733_wasm_boxy_dev_sealed_object => customIssue10733WasmBoxyDevSealedObject(io, allocator, &env, &timer, timeout_ms),
         .issue_12029_wasm_boxy_tail_calls => customIssue12029WasmBoxyTailCalls(io, allocator, &env, &timer, timeout_ms),
@@ -8398,6 +8401,81 @@ const EditableApp = struct {
 
 /// Copies an app into the case's work directory, with its platform path
 /// pointing back at the repository, so the case can edit it between builds.
+/// `roc check` publishes the code its compile-time evaluation compiled. A
+/// later check that must evaluate the app's roots again, after an app-only
+/// edit and with no build ever run, splices that code: its Monotype skips the
+/// cached bodies, and both checks report the same compile-time debug output.
+fn customCheckCompileTimePack(
+    io: std.Io,
+    allocator: Allocator,
+    env: *const CaseEnv,
+    timer: *harness.Timer,
+    timeout_ms: u64,
+) ?TestResult {
+    var app: []const u8 = undefined;
+    if (stageEditableApp(io, allocator, env, timer, .{
+        .dir_name = "check_compile_time_pack",
+        .platform = "test/fx/platform/main.roc",
+        .platform_spelling = "../../fx/platform/main.roc",
+        .sources = &.{ "test/cli/pack_comptime/Shapes.roc", "test/cli/pack_comptime/PackComptime.roc" },
+        .app_name = "PackComptime.roc",
+    }, &app)) |failure| return failure;
+    const source = std.Io.Dir.cwd().readFileAlloc(io, app, allocator, .limited(1024 * 1024)) catch |err|
+        return customInfraFailure(allocator, timer, "failed to read CTFE app: {}", .{err});
+    const with_debug = std.fmt.allocPrint(
+        allocator,
+        "{s}\nreplayed = {{\n    dbg \"check pack replay\"\n    hexagon_sides\n}}\nexpect replayed == hexagon_sides\n",
+        .{source},
+    ) catch |err| return customInfraFailure(allocator, timer, "failed to allocate CTFE app: {}", .{err});
+    std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = with_debug }) catch |err|
+        return customInfraFailure(allocator, timer, "failed to write CTFE app: {}", .{err});
+
+    var trace_env = CaseEnv{
+        .dirs = env.dirs,
+        .env_map = env.env_map.clone(allocator) catch |err|
+            return customInfraFailure(allocator, timer, "failed to clone the pack trace environment: {}", .{err}),
+    };
+    defer trace_env.env_map.deinit();
+    trace_env.env_map.put("ROC_PACK_TRACE", "1") catch |err|
+        return customInfraFailure(allocator, timer, "failed to enable the pack trace: {}", .{err});
+
+    var cold_body_contexts: u64 = 0;
+    for (0..2) |index| {
+        if (index == 1) {
+            const edited = std.fmt.allocPrint(allocator, "{s}\n# Edited between checks, so this check evaluates the app again.\n", .{with_debug}) catch |err|
+                return customInfraFailure(allocator, timer, "failed to allocate the edited app: {}", .{err});
+            std.Io.Dir.cwd().writeFile(io, .{ .sub_path = app, .data = edited }) catch |err|
+                return customInfraFailure(allocator, timer, "failed to write {s}: {}", .{ app, err });
+        }
+        const check_timeout = childCommandTimeoutMs(timer, timeout_ms) orelse
+            return timeoutFailure(allocator, timer, .run, "case timeout exhausted before a check");
+        const checked = runRocInEnv(io, allocator, &trace_env, &.{ "check", "--timings" }, app, .relative, &.{}, null, check_timeout) catch |err|
+            return customInfraFailure(allocator, timer, "check spawn error: {}", .{err});
+        if (!processSucceeded(checked.term) or std.mem.find(u8, checked.stderr, "panic") != null) {
+            return failureFromRun(allocator, timer, checked, "check did not succeed");
+        }
+        if (std.mem.count(u8, checked.stderr, "[dbg] \"check pack replay\"") != 1) {
+            return failureFromRun(allocator, timer, checked, "compile-time debug output was not reported exactly once");
+        }
+        const contexts = timingCounter(checked.stderr, "Shared Monotype body + dispatch", "Body contexts created") orelse
+            return failureFromRun(allocator, timer, checked, "check did not report Monotype body work");
+        const hits = timingCounter(checked.stderr, "Shared Monotype specialization", "Object specialization cache hits") orelse
+            return failureFromRun(allocator, timer, checked, "check did not report Monotype object-cache hits");
+        if (index == 0) {
+            if (std.mem.find(u8, checked.stderr, "compile-time pack ") == null) {
+                return failureFromRun(allocator, timer, checked, "the first check published no compile-time pack");
+            }
+            cold_body_contexts = contexts;
+            continue;
+        }
+        if (hits == 0) return failureFromRun(allocator, timer, checked, "the second check served no specialization from the compile-time pack");
+        if (cold_body_contexts == 0 or contexts >= cold_body_contexts) {
+            return failureFromRun(allocator, timer, checked, "the compile-time pack did not reduce Monotype body work");
+        }
+    }
+    return null;
+}
+
 fn stageEditableApp(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, app: EditableApp, staged_app: *[]const u8) ?TestResult {
     const staged_dir = std.fs.path.join(allocator, &.{ env.dirs.work_dir, app.dir_name }) catch |err|
         return customInfraFailure(allocator, timer, "failed to allocate staged app dir: {}", .{err});

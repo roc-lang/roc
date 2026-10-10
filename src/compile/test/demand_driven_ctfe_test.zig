@@ -44,16 +44,16 @@ const platform_files = [_]SourceFile{
 
 /// A module with a substantial runtime helper and no literal conversion.
 const helper_module: SourceFile = .{ .path = "Crunch.roc", .source =
-\\Crunch := [].{
-\\    crunch : List(U64) -> U64
-\\    crunch = |items| {
-\\        var $total = 0
-\\        for item in items {
-\\            $total = $total + (if item % 2 == 0 item // 2 else 3 * item + 1)
-\\        }
-\\        $total
-\\    }
-\\}
+    \\Crunch := [].{
+    \\    crunch : List(U64) -> U64
+    \\    crunch = |items| {
+    \\        var $total = 0
+    \\        for item in items {
+    \\            $total = $total + (if item % 2 == 0 item // 2 else 3 * item + 1)
+    \\        }
+    \\        $total
+    \\    }
+    \\}
 };
 
 /// A quote-converting type whose conversion rejects the literal `"bad"`.
@@ -166,7 +166,7 @@ test "checking validates a runtime function's closed conversion without the unre
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
         \\import Crunch
-++ "\n" ++ word_type ++ "\n" ++
+    ++ "\n" ++ word_type ++ "\n" ++
         \\greeting : U64 -> Str
         \\greeting = |n| {
         \\    word : Word
@@ -180,12 +180,12 @@ test "checking validates a runtime function's closed conversion without the unre
     , &.{helper_module}, null);
     defer checked.deinit();
     try checked.expectErrors(false);
+    // The conversion is closed, so checking evaluates it as its own root and
+    // specializes no runtime body at all.
     const demand = checked.demand();
-    // The app names a custom literal type, so its runtime root is lowered
-    // for discovery, and the helper's specialization is parked.
-    try std.testing.expect(demand.discovery_roots != 0);
-    try std.testing.expect(demand.monotype.parked != 0);
-    try std.testing.expectEqual(demand.monotype.parked, demand.monotype.stubs + demand.monotype.unparked);
+    try std.testing.expect(demand.program_roots != 0);
+    try std.testing.expectEqual(@as(u64, 0), demand.discovery_roots);
+    try std.testing.expectEqual(@as(u64, 0), demand.monotype.discovery_bodies);
 }
 
 test "checking reports a closed conversion rejected inside a runtime function" {
@@ -193,7 +193,7 @@ test "checking reports a closed conversion rejected inside a runtime function" {
     var checked = try checkApp(std.testing.allocator,
         \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
         \\import pf.Echo
-++ "\n" ++ word_type ++ "\n" ++
+    ++ "\n" ++ word_type ++ "\n" ++
         \\greeting : {} -> Str
         \\greeting = |{}| {
         \\    word : Word
@@ -235,7 +235,13 @@ test "checking evaluates a generic function's conversion at its concrete runtime
     var checked = try checkApp(std.testing.allocator, genericLabelApp("good"), &.{helper_module}, null);
     defer checked.deinit();
     try checked.expectErrors(false);
-    try std.testing.expect(checked.demand().discovery_roots != 0);
+    // The generic function's literal depends on its instance, so the app's
+    // runtime root is lowered for discovery; the unrelated helper's
+    // specialization is parked and never lowered.
+    const demand = checked.demand();
+    try std.testing.expect(demand.discovery_roots != 0);
+    try std.testing.expect(demand.monotype.parked != 0);
+    try std.testing.expectEqual(demand.monotype.parked, demand.monotype.stubs + demand.monotype.unparked);
 }
 
 test "checking reports a generic function's conversion rejected at its concrete runtime instance" {
@@ -265,4 +271,83 @@ test "a build continues the evaluation's program with every runtime body" {
     var runtime = try session.takeRuntime(std.testing.allocator, session.runtime_roots, target);
     defer runtime.deinit();
     try std.testing.expectEqual(session.runtime_roots.requests.len, runtime.lir_result.root_procs.items.len);
+}
+
+/// A compile-time root whose helper converts literals both directly and
+/// through a generic function, and captures a callable constant.
+fn nestedHelperApp(comptime literal: []const u8) []const u8 {
+    return
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    ++ "\n" ++ word_type ++ "\n" ++
+        \\label : a -> a where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\label = |_| "
+    ++ literal ++
+        \\"
+        \\twice : U64 -> U64
+        \\twice = |n| n * 2
+        \\describe : (U64 -> U64) -> Str
+        \\describe = |f| {
+        \\    direct : Word
+        \\    direct = "direct"
+        \\    generic : Word
+        \\    generic = label(direct)
+        \\    Str.concat(Str.concat(direct.show(), generic.show()), Str.inspect(f(21)))
+        \\}
+        \\summary = describe(twice)
+        \\main! = |_args| {
+        \\    Echo.line!(summary)
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "a compile-time root's helper evaluates nested and generic conversions with a captured callable" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, nestedHelperApp("good"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+}
+
+test "a compile-time root's helper reports its generic conversion's rejection" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, nestedHelperApp("bad"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(true);
+}
+
+/// A recursive generic function converting a literal at each step, reached
+/// only through a callable value a runtime function builds.
+fn recursiveCallableApp(comptime literal: []const u8) []const u8 {
+    return
+    \\app [main!] { pf: platform "./.roc_echo_platform/main.roc" }
+    \\import pf.Echo
+    ++ "\n" ++ word_type ++ "\n" ++
+        \\repeat_label : a, U64 -> List(a) where [a.from_quote : Str -> Try(a, [BadQuotedBytes(Str)])]
+        \\repeat_label = |seed, n| if n == 0 [] else List.append(repeat_label(seed, n - 1), "
+    ++ literal ++
+        \\")
+        \\labeller : {} -> (Word, U64 -> List(Word))
+        \\labeller = |{}| repeat_label
+        \\main! = |args| {
+        \\    make = labeller({})
+        \\    words = make(Word.{ text: "x" }, List.len(args))
+        \\    Echo.line!(Str.inspect(List.len(words)))
+        \\    Ok({})
+        \\}
+    ;
+}
+
+test "checking evaluates a recursive generic conversion reached through a callable value" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, recursiveCallableApp("good"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(false);
+}
+
+test "checking reports a recursive generic conversion's rejection reached through a callable value" {
+    if (is_freestanding) return error.SkipZigTest;
+    var checked = try checkApp(std.testing.allocator, recursiveCallableApp("bad"), &.{}, null);
+    defer checked.deinit();
+    try checked.expectErrors(true);
 }

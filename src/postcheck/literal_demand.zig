@@ -11,20 +11,21 @@
 //! The answer is computed from explicit checked data, per checked module:
 //!
 //! - A module is a *source* when one of its checked expressions is a custom
-//!   interpolation, or a literal whose conversion root no evaluation of this
-//!   compilation requests and whose payload is not stored, or when one of its
-//!   checked types names a custom literal type: a nominal with its own
-//!   `from_numeral` or `from_quote` method.
+//!   interpolation; or a literal whose conversion root no evaluation of this
+//!   compilation requests and whose payload is not stored; or a numeral
+//!   (quote) whose conversion depends on its instance, when the program has a
+//!   custom numeral (quote) type: a nominal with a `from_numeral`
+//!   (`from_quote`) method of its own. Every other literal converts at a
+//!   builtin type directly at every instance.
 //! - A module *reaches* a literal root when it is a source, or calls into a
 //!   module that reaches one: through an import, or through a platform
 //!   requirement the app fills.
 //!
 //! A specialization of a procedure whose module reaches no literal root, at
-//! types that name no custom literal type and no nominal of a reaching
-//! module, and with dispatch evidence that selects no procedure of a reaching
-//! module, reaches no literal root either: every body it would lower belongs
-//! to a non-reaching module and instantiates dependent conversions only at
-//! types without a custom conversion, which convert their literals directly.
+//! types that name no nominal of a reaching module, with dispatch evidence
+//! that selects no procedure of a reaching module, reaches no literal root
+//! either: every body it would lower belongs to a non-reaching module, and so
+//! has no literal that registers one at any instance.
 
 const std = @import("std");
 const check = @import("check");
@@ -102,7 +103,11 @@ pub const LiteralDemand = struct {
     reaching_keys: std.AutoHashMapUnmanaged(checked.ModuleId, void) = .empty,
     /// Reaching modules, by declaring-module content identity, for types.
     reaching_identities: std.AutoHashMapUnmanaged([32]u8, void) = .empty,
+    /// Nominals with their own `from_numeral` or `from_quote` method.
     custom_types: NominalKeySet = .empty,
+    /// Whether any custom type converts numerals, and quotes.
+    custom_numerals: bool = false,
+    custom_quotes: bool = false,
     counters: Counters = .{},
 
     pub fn deinit(self: *LiteralDemand) void {
@@ -119,12 +124,11 @@ pub const LiteralDemand = struct {
     }
 
     /// Whether a nominal, named by its declaring module's content identity,
-    /// its declared name, and its declaring statement, makes a specialization
-    /// at it reach a literal root: it converts literals with its own method,
-    /// or its methods belong to a reaching module.
-    pub fn nominalReaches(self: *const LiteralDemand, module: *const [32]u8, name: []const u8, source_decl: ?u32) bool {
-        if (self.reaching_identities.contains(module.*)) return true;
-        return self.custom_types.containsContext(.{ .module = module.*, .name = name, .source_decl = source_decl }, .{});
+    /// makes a specialization at it reach a literal root: its methods belong
+    /// to a reaching module, so dispatch the specialization derives from its
+    /// types can select one.
+    pub fn nominalReaches(self: *const LiteralDemand, module: *const [32]u8) bool {
+        return self.reaching_identities.contains(module.*);
     }
 
     /// Whether a checked type names a nominal that `nominalReaches`.
@@ -154,7 +158,7 @@ pub const LiteralDemand = struct {
                 },
                 .tuple => |elems| try pending.appendSlice(allocator, elems),
                 .nominal => |nominal| {
-                    if (self.nominalReaches(names.moduleIdentityBytes(nominal.origin_module), names.typeNameText(nominal.name), nominal.source_decl)) return true;
+                    if (self.nominalReaches(names.moduleIdentityBytes(nominal.origin_module))) return true;
                     try pending.appendSlice(allocator, nominal.args);
                     try pending.appendSlice(allocator, nominal.padding_field_types);
                 },
@@ -241,7 +245,11 @@ pub fn compute(
                 .builtin => continue,
             };
             const method = names.methodNameText(entry.key.method);
-            if (!std.mem.eql(u8, method, "from_numeral") and !std.mem.eql(u8, method, "from_quote")) continue;
+            if (std.mem.eql(u8, method, "from_numeral")) {
+                demand.custom_numerals = true;
+            } else if (std.mem.eql(u8, method, "from_quote")) {
+                demand.custom_quotes = true;
+            } else continue;
             try demand.custom_types.putContext(allocator, .{
                 .module = names.moduleIdentityBytes(nominal.module).*,
                 .name = names.typeNameText(nominal.type_name),
@@ -342,35 +350,26 @@ fn isSource(
 ) Allocator.Error!bool {
     const plans = view.static_dispatch_plans;
     for (view.checked_bodies.stored_exprs) |expr| {
-        const plan_id, const conversion_root = switch (expr.data) {
-            .numeral => |numeral| .{ numeral.plan, numeral.conversion_root },
-            .str_from_quote => |quote| .{ quote.plan, quote.conversion_root },
-            .interpolation => |interpolation| .{ interpolation.plan, null },
+        const plan_id, const conversion_root, const custom_kind = switch (expr.data) {
+            .numeral => |numeral| .{ numeral.plan, numeral.conversion_root, demand.custom_numerals },
+            .str_from_quote => |quote| .{ quote.plan, quote.conversion_root, demand.custom_quotes },
+            .interpolation => |interpolation| .{ interpolation.plan, null, true },
             else => continue,
         };
         const plan = plan_id orelse continue;
         if (plans.plans[@backingInt(plan)].resolution == .checked_error) continue;
         if (expr.data == .interpolation) return true;
-        // A conversion with no root of its own depends on its instance; the
-        // instance's types decide it.
-        const root_id = conversion_root orelse continue;
+        // A conversion with no root of its own depends on its instance, and
+        // registers a literal root only at a type converting its own literals.
+        const root_id = conversion_root orelse {
+            if (custom_kind) return true;
+            continue;
+        };
         const root = view.compile_time_roots.root(root_id);
         switch (root.payload) {
             .pending => if (!declared.contains(.{ .module = view.key, .root = root_id })) return true,
             .const_node, .fn_value, .discarded, .expect, .runtime => {},
         }
-    }
-    const names = view.canonical_names;
-    for (view.checked_types.stored_payloads) |payload| {
-        const nominal = switch (payload) {
-            .nominal => |nominal| nominal,
-            else => continue,
-        };
-        if (demand.custom_types.containsContext(.{
-            .module = names.moduleIdentityBytes(nominal.origin_module).*,
-            .name = names.typeNameText(nominal.name),
-            .source_decl = nominal.source_decl,
-        }, .{})) return true;
     }
     return false;
 }
