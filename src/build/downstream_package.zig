@@ -27,6 +27,11 @@ pub fn create(b: *std.Build, host_tool_target: std.Build.ResolvedTarget) *std.Bu
     prepare.addDirectoryArg(source.getDirectory());
     prepare.addDirectoryArg(fixture.getDirectory().path(b, "consumer"));
     const output = prepare.addOutputDirectoryArg("downstream-package");
+    // The consumer is compiled on one machine and may run on another, so it is
+    // built for the same explicit CPU as the compiler's own host tools rather
+    // than the one `zig build` would detect where the helper happens to run.
+    prepare.addArg(b.fmt("-Dtarget={s}", .{host_tool_target.query.zigTriple(b.allocator) catch @panic("OOM")}));
+    prepare.addArg(b.fmt("-Dcpu={s}", .{host_tool_target.query.serializeCpuAlloc(b.allocator) catch @panic("OOM")}));
     const build_step = b.step("build-test-downstream-package", "Fetch Roc as a Zig package and build a separate compiler driver");
     build_step.dependOn(&prepare.step);
 
@@ -43,7 +48,9 @@ pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
     const io = init.io;
     const args = try init.minimal.args.toSlice(arena);
-    if (args.len != 6) return error.ExpectedPackageArguments;
+    if (args.len != 8) return error.ExpectedPackageArguments;
+    const target_option = args[6];
+    const cpu_option = args[7];
     // The build runner may pass paths relative to its own working directory
     // (the global cache included, when ZIG_GLOBAL_CACHE_DIR is relative), while
     // the consumer's `zig fetch --save-exact` and `zig build` run inside the
@@ -85,7 +92,7 @@ pub fn main(init: std.process.Init) !void {
     _ = try command(init, &.{ zig, "fetch", "--save-exact=roc", archive }, consumer);
     const prefix = try std.fs.path.join(arena, &.{ output, "prefix" });
     const cache = try std.fs.path.join(arena, &.{ output, "consumer-cache" });
-    _ = try command(init, &.{ zig, "build", "--cache-dir", cache, "--prefix", prefix }, consumer);
+    _ = try command(init, &.{ zig, "build", "--cache-dir", cache, "--prefix", prefix, target_option, cpu_option }, consumer);
 }
 
 fn command(init: std.process.Init, argv: []const []const u8, cwd: ?[]const u8) ![]const u8 {
