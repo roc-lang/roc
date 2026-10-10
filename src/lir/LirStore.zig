@@ -1748,6 +1748,25 @@ pub fn getCFStmt(self: *const Self, id: CFStmtId) CFStmt {
     return self.cf_stmts.get(index);
 }
 
+/// A read-only pointer to the stored statement for the given id, which stays
+/// valid until a statement is next added or a rewrite next materializes. A
+/// caller that only switches on the statement reads it through this instead of
+/// copying the whole statement union out with `getCFStmt`.
+pub fn getCFStmtImmediate(self: *const Self, id: CFStmtId) *const CFStmt {
+    self.verifyCFStmtId(id);
+    const index = @backingInt(id);
+    if (self.proc_rewrite) |*rewrite| {
+        if (rewrite.cf_stmts.keys.lookup(index)) |private| {
+            if (rewrite.cf_stmts.owned(private)) return rewrite.cf_stmts.data.rows.getPtrConstImmediate(private);
+        }
+    }
+    if (self.body_coordinator) |coordinator| {
+        if (index < self.body_prefix.cf_stmts) return coordinator.getCFStmtImmediate(id);
+        return self.cf_stmts.getPtrConstImmediate(index - self.body_prefix.cf_stmts);
+    }
+    return self.cf_stmts.getPtrConstImmediate(index);
+}
+
 /// Returns a mutable pointer to the stored statement for the given id.
 pub fn getCFStmtPtr(self: *Self, id: CFStmtId) *CFStmt {
     self.verifyCFStmtId(id);

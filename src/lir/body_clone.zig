@@ -243,7 +243,7 @@ pub fn appendSuccessors(
     stmt_id: CFStmtId,
     allocator: Allocator,
 ) Allocator.Error!void {
-    switch (store.getCFStmt(stmt_id)) {
+    switch (store.getCFStmtImmediate(stmt_id).*) {
         inline .assign_ref,
         .assign_literal,
         .init_uninitialized,
@@ -845,7 +845,7 @@ fn noteDefinition(defined: anytype, local: LocalId) void {
 }
 
 fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: CFStmtId) void {
-    switch (store.getCFStmt(stmt_id)) {
+    switch (store.getCFStmtImmediate(stmt_id).*) {
         inline .init_uninitialized,
         .assign_ref,
         .assign_literal,

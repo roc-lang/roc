@@ -889,7 +889,7 @@ const FutureFields = struct {
         var read_it = reads.constIterator();
         while (read_it.next()) |read| {
             if (read.value_ptr.consuming) {
-                _ = try self.node(gpa, store.getCFStmt(read.key_ptr.*).assign_ref.next);
+                _ = try self.node(gpa, store.getCFStmtImmediate(read.key_ptr.*).assign_ref.next);
             }
         }
         var successors = std.ArrayList(LIR.CFStmtId).empty;
@@ -903,7 +903,7 @@ const FutureFields = struct {
             // loop back edge, every read observes the next iteration's value.
             if (redefinition) |def_stmt| if (cursor == def_stmt) continue;
             if (reads.get(cursor)) |read| try self.observe(gpa, index, read.bit);
-            switch (store.getCFStmt(cursor)) {
+            switch (store.getCFStmtImmediate(cursor).*) {
                 .set_local => |stmt| {
                     if (stmt.target != local) try self.edge(gpa, index, stmt.next, ~@as(u64, 0));
                 },
@@ -1005,7 +1005,7 @@ fn fieldObservedAfter(
         if (reads.get(cursor)) |read| {
             if (read.bit & bit != 0) return true;
         }
-        switch (store.getCFStmt(cursor)) {
+        switch (store.getCFStmtImmediate(cursor).*) {
             .set_local => |stmt| {
                 if (stmt.target != local) try work.append(gpa, stmt.next);
             },
@@ -1439,7 +1439,7 @@ fn restoredFieldMaskForDefault(
     restorations: []const FieldRestitution,
     switch_stmt: LIR.CFStmtId,
 ) u64 {
-    const branches = store.getCFSwitchBranches(store.getCFStmt(switch_stmt).switch_stmt.branches);
+    const branches = store.getCFSwitchBranches(store.getCFStmtImmediate(switch_stmt).switch_stmt.branches);
     var restored: u64 = 0;
     for (restorations) |receipt| {
         if (receipt.switch_stmt != switch_stmt) continue;
@@ -2332,7 +2332,7 @@ pub fn compute(
         const spine_start: LIR.CFStmtId = if (candidate.join_starts.items.len != 0)
             candidate.join_starts.items[0]
         else if (candidate.def_count == 1)
-            switch (store.getCFStmt(candidate.def_stmt)) {
+            switch (store.getCFStmtImmediate(candidate.def_stmt).*) {
                 inline .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_low_level, .assign_list, .assign_struct, .assign_tag => |stmt| stmt.next,
                 .assign_ref => |stmt| if (union_root != null or analysis.projected_root[@backingInt(local)] != no_index) stmt.next else continue :candidates,
                 .set_local => continue :candidates,
@@ -2535,7 +2535,7 @@ pub fn compute(
         for (candidate.reads.items) |read| {
             const kind = read_kinds.getPtr(read.stmt) orelse continue;
             if (!kind.consuming) continue;
-            const definition = store.getCFStmt(read.stmt).assign_ref;
+            const definition = store.getCFStmtImmediate(read.stmt).assign_ref;
             if (future_fields.observed(definition.next) & kind.bit != 0) {
                 kind.consuming = false;
             }
@@ -2588,7 +2588,7 @@ pub fn compute(
                         poison |= state.may & kind.bit;
                     }
                 }
-                switch (store.getCFStmt(cursor)) {
+                switch (store.getCFStmtImmediate(cursor).*) {
                     inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
