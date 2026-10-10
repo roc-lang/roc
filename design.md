@@ -14984,10 +14984,29 @@ The solver:
 - treats references to lifted function symbols as singleton lambda sets
 - unifies callable slots through value flow and calls
 - propagates erased callable requirements through the same type graph
-- generalizes and instantiates polymorphic definitions
-- solves recursive groups as groups, not by accidental declaration order
 - verifies each lifted jump is lexically scoped and unifies its arguments with
   the corresponding join-point parameter types
+
+Solving is monomorphic. Every lifted function's type is registered before any
+body is solved, and all of a function's call sites unify with those same type
+nodes; there is no generalization, per-use instantiation, or recursive-group
+ordering, and definitions are published in `FnId` order because consumers
+reach functions only through explicit references. Monotype specialization
+shares one `FnId` among every call site that reaches a callable at the same
+closed type, so those sites' lambda sets become their union. The union is
+sound: a finite callable value carries the tag of the member it was built
+from, and a call dispatches on that tag. Lambda sets key members by lambda
+symbol, so every lifted function must have its own symbol.
+
+A lambda-set member is born only when a lifted function's type is registered,
+with that function's one capture span. Every member naming a lambda therefore
+carries the same span, and merging two sets never relates capture lists; a
+lambda that reaches a merge with two different spans is a compiler invariant
+violation. Merges append new members in encounter order so a growing set can
+extend in place at the end of the member pool. When solving ends, every
+lambda set and erased callable is republished with its members in ascending
+lambda-symbol order, so every consumer that numbers callable variants by
+position sees one order for a given member set.
 
 Explicit return boundaries preserve the source value's tag rows and the
 function's destination rows independently. Lambda Solved infers the returned
@@ -15065,9 +15084,9 @@ step function's type reaches the next step function's type through
 `Iter`'s step field. The deferred link is written only when both endpoints are
 still the roots the pair was processed with. Otherwise the pair unifies again
 with the current roots of both sides. Merged lambda sets, erased callables,
-and tag unions are written when their pair is processed, before their capture
-or payload pairs, so a nested unification extends the merged content instead
-of being overwritten by a merge computed from earlier contents. Lambda Mono
+and tag unions are written when their pair is processed, before their payload
+pairs, so a nested unification extends the merged content instead of being
+overwritten by a merge computed from earlier contents. Lambda Mono
 specializes each member of a lambda set once per solved function-type class,
 so a split class multiplies specializations: N generated step functions
 sharing one lambda set across N classes produce N² specializations.
@@ -15113,6 +15132,14 @@ The producers are:
   or glue, when that metadata explicitly names erased callable slots
 - a Monotype iterator type explicitly marked `forced_dynamic`, whose recursive
   step callable crosses the dynamic representation boundary
+
+Inside Lambda Solved, the boundaries that mark every callable they reach as
+erased are hosted function signatures and platform or hosted root signatures,
+layout requests (including constants the const store materializes), runtime
+schema requests, `Box.box` and `Box.unbox` operands, and forced-dynamic
+iterator types. After solving, debug builds walk every one of those boundaries
+again and assert that each function value reached has an erased callable
+slot.
 
 Monotype lowering carries boundary requirements as typed annotations into
 Lambda Solved IR. Lambda solving also consumes the explicit iterator

@@ -36,14 +36,10 @@ termination hazard, and one verification coverage gap):
 - [small/spec-constr-specialization-limits.md](small/spec-constr-specialization-limits.md)—
   termination budgets for call-pattern specialization (compile-time
   divergence is reachable today).
-- [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)—
-  state, assert, and test the four invariants that make monomorphic
-  lambda-set solving sound.
 
-Within this batch the projects are independent.
 (`spec-constr-specialization-limits` used to be paired here with
-`spec-constr-static-match-soundness`, which has since landed and had its
-doc removed.)
+`spec-constr-static-match-soundness` and `pin-lambda-solved-invariants`,
+which have since landed and had their docs removed.)
 
 The Monotype machinery hardening project has landed, mostly by finding its
 targets already gone. Every verification-only type-equality check in
@@ -88,6 +84,19 @@ remaining `test/` apps) found the yield, by then broadened to any proven
 uninhabited type, linking only identical uninhabited records. Lambda Solved
 now unifies uninhabited types structurally, and an empty row meeting a
 populated one is an invariant violation, so no provenance set is needed.
+
+The Lambda Solved invariants project has landed, with corrections. FnId
+granularity was not a soundness invariant: specialization no longer keys on
+the checked source type, and a shared `FnId`'s unioned lambda set is sound
+because calls dispatch on the value's member tag, so the stage instead
+asserts that lifted function symbols are distinct and pins shared-closure
+dispatch end to end. Capture lists were never matched positionally in
+practice: every member of a lambda carries the one capture span its function
+type created, so merges now assert span identity instead of unifying capture
+lists. Member order is canonicalized by one sort at the end of solving rather
+than at every merge, which keeps in-place set growth linear. A Debug sweep
+re-walks every erasure boundary (box operands included) after solving, and
+the return-target type comparison is Debug-only.
 
 A third batch came out of a whole-codebase competing-sources-of-truth
 audit (2026-07-18): a sweep of every subsystem for the same fact
