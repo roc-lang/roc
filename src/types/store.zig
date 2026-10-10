@@ -1128,11 +1128,6 @@ pub const Store = struct {
     /// or add a member (and the design.md declaration it cites) in the same
     /// change. "It makes a test pass" is not a rule.
     pub const RedirectRule = enum {
-        /// (ii) design.md "Hosted Try Question Widening": `?` on a direct call
-        /// of a hosted function widens the condition's closed error row to the
-        /// enclosing annotated return's error row when every visible error is
-        /// included, keeping the hosted callee's declared closed row intact.
-        hosted_try_question_widening,
         /// (ii) design.md "Polarity" / Rewrite Inventory
         /// `closeTagRowsForDerivation`: a polarity marker rigid in tag-ext
         /// position (the alias-declaration-body deferral, which stands for
@@ -2458,12 +2453,12 @@ test "declared redirects preserve destination checked identity and structural ba
     var store = try Store.init(gpa);
     defer store.deinit();
 
+    const destination = try store.freshFromContent(.{ .structure = .empty_tag_union });
     const a = try store.fresh();
     const b = try store.fresh();
-    try store.union_(a, b, .{ .content = .err, .rank = Rank.outermost });
+    try store.union_(a, b, .{ .content = try store.mkTagUnion(&.{}, destination), .rank = Rank.outermost });
 
-    const destination = try store.freshFromContent(.{ .structure = .empty_record });
-    try store.dangerousSetVarRedirect(.hosted_try_question_widening, b, destination);
+    try store.dangerousSetVarRedirect(.row_union_normalization, b, destination);
 
     const storage = store.resolveStorageRoot(a);
     try std.testing.expectEqual(@as(u8, 1), store.getUnionRank(storage.storage_var));
@@ -2471,7 +2466,7 @@ test "declared redirects preserve destination checked identity and structural ba
     try std.testing.expectEqual(destination, store.resolveVar(b).var_);
     try std.testing.expectEqual(destination, store.resolveVar(destination).var_);
     try std.testing.expect(store.resolveVar(destination).is_root);
-    try std.testing.expectEqual(Content{ .structure = .empty_record }, storage.desc.content);
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, storage.desc.content);
 }
 
 test "mismatch poisoning detaches an occurrence from its shared binding" {

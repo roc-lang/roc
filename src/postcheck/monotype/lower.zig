@@ -2116,18 +2116,6 @@ const HostedTryAdapterCapability = struct {
     err_type_arg_index: usize,
 };
 
-const GraphHostedTryInfo = struct {
-    ok: NodeId,
-    err: NodeId,
-};
-
-const GraphHostedTryWidening = struct {
-    public_try: GraphHostedTryInfo,
-    request_try: GraphHostedTryInfo,
-    public_err: []const InstTag,
-    request_err: []const InstTag,
-};
-
 fn graphTagByName(
     tags: []const InstTag,
     name: names.TagNameId,
@@ -2136,137 +2124,6 @@ fn graphTagByName(
         if (tag.name == name) return tag;
     }
     return null;
-}
-
-/// Graph-side counterpart of `Builder.hostedTryNamedOrNull`: cross transparent
-/// alias layers before matching the capability's def.
-///
-/// This crossing is symmetry with the Monotype side rather than a path a
-/// fixture reaches. `test/fx-open/hosted_alias_try_question.roc` declares its
-/// hosted result through an alias and still arrives here as the bare `Try`
-/// nominal: instantiating the checked root into the graph resolves the alias,
-/// while `lowerType` keeps it. It is kept so the two sides cannot answer
-/// differently if that ever stops holding.
-fn graphHostedTryInfoOrNull(
-    graph: *InstGraph,
-    capability: HostedTryAdapterCapability,
-    node: NodeId,
-) Allocator.Error!?GraphHostedTryInfo {
-    var current = node;
-    // Bounded by the graph's node count, the bound `InstGraph`'s own chain
-    // walks use. A one-step self-check would still spin on a backing cycle
-    // through two or more nodes, and a hang is the worst outcome for a guard
-    // whose only job is termination. `compilerBug`, not `invariant`: an
-    // `unreachable` outside Debug turns the hang into undefined behavior
-    // instead of a diagnostic.
-    var remaining = graph.nodes.items.len;
-    const named = while (remaining > 0) : (remaining -= 1) {
-        const probe = switch ((try graph.content(current))) {
-            .named => |probe| probe,
-            .redirect, .leaf, .unresolved, .primitive, .list, .box, .tuple, .func, .tag_union, .record, .empty_tag_union, .empty_record, .erased, .zst => return null,
-        };
-        if (sameTypeDef(probe.def, capability.def)) break probe;
-        if (probe.kind != .alias) return null;
-        const backing = probe.backing orelse return null;
-        current = backing.node;
-    } else Common.compilerBug("transparent alias backing chain was cyclic");
-    if (capability.ok_type_arg_index >= named.args.len or
-        capability.err_type_arg_index >= named.args.len)
-    {
-        Common.invariant("hosted Try capability referenced a missing type argument");
-    }
-    return .{
-        .ok = named.args[capability.ok_type_arg_index],
-        .err = named.args[capability.err_type_arg_index],
-    };
-}
-
-fn graphHostedTryWideningOrNull(
-    graph: *InstGraph,
-    capability: HostedTryAdapterCapability,
-    public_ret: NodeId,
-    request_ret: NodeId,
-) Allocator.Error!?GraphHostedTryWidening {
-    const public_try = (try graphHostedTryInfoOrNull(graph, capability, public_ret)) orelse return null;
-    const request_try = (try graphHostedTryInfoOrNull(graph, capability, request_ret)) orelse return null;
-    const public_err = (try graph.tagRowNodesOrNull(public_try.err)) orelse return null;
-    const request_err = (try graph.tagRowNodesOrNull(request_try.err)) orelse return null;
-
-    // A declared label the request dropped, or a payload arity it changed,
-    // would make the adapter re-tag into a layout the caller does not read.
-    if (request_err.tags.len < public_err.tags.len) {
-        Common.compilerBug("hosted Try request removed a declared error label");
-    }
-    for (public_err.tags) |public_tag| {
-        const request_tag = graphTagByName(request_err.tags, public_tag.name) orelse
-            Common.compilerBug("hosted Try request removed a declared error label");
-        if (public_tag.payloads.len != request_tag.payloads.len) {
-            Common.compilerBug("hosted Try request changed a declared error payload arity");
-        }
-    }
-    return .{
-        .public_try = public_try,
-        .request_try = request_try,
-        .public_err = public_err.tags,
-        .request_err = request_err.tags,
-    };
-}
-
-/// Relate a hosted request whose `Try` result has additional error labels.
-/// Declared labels and every non-row component remain exact graph relations;
-/// only the request's extra error labels stay outside the checked public row.
-fn relateHostedTryWidening(
-    graph: *InstGraph,
-    capability: HostedTryAdapterCapability,
-    public_fn: NodeId,
-    request_fn: NodeId,
-) Allocator.Error!bool {
-    const public = try graph.functionNodes(public_fn);
-    const request = try graph.functionNodes(request_fn);
-    if (public.args.len != request.args.len) {
-        Common.invariant("hosted function request changed arity from its checked interface");
-    }
-    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request.ret) orelse return false;
-    if (widening.request_err.len == widening.public_err.len) return false;
-
-    for (public.args, request.args) |public_arg, request_arg| {
-        try relateRequestComponent(graph, public_arg, request_arg);
-    }
-    try relateRequestComponent(graph, widening.public_try.ok, widening.request_try.ok);
-    for (widening.public_err) |public_tag| {
-        const request_tag = graphTagByName(widening.request_err, public_tag.name) orelse unreachable;
-        for (public_tag.payloads, request_tag.payloads) |public_payload, request_payload| {
-            try relateRequestComponent(graph, public_payload, request_payload);
-        }
-    }
-    return true;
-}
-
-fn hostedTryWideningRequestHasAdditionalErrors(
-    graph: *InstGraph,
-    capability: HostedTryAdapterCapability,
-    public_fn: NodeId,
-    request_ret: NodeId,
-) Allocator.Error!bool {
-    const public = try graph.functionNodes(public_fn);
-    const widening = try graphHostedTryWideningOrNull(graph, capability, public.ret, request_ret) orelse return false;
-    return widening.request_err.len > widening.public_err.len;
-}
-
-/// Returns whether the hosted `Try` widening claimed the request, which is the
-/// answer hosted template completion consumes: the adapter keeps the extern
-/// boundary at the declared host ABI and re-tags into the requested error row.
-fn relateHostedFunctionRequestInterface(
-    graph: *InstGraph,
-    capability: ?HostedTryAdapterCapability,
-    public_fn: NodeId,
-    request_fn: NodeId,
-) Allocator.Error!bool {
-    if (capability) |hosted_try| {
-        if (try relateHostedTryWidening(graph, hosted_try, public_fn, request_fn)) return true;
-    }
-    try relateFunctionRequestInterface(graph, public_fn, request_fn);
-    return false;
 }
 
 /// A public/request node pair this relation still owes a graph relation.
@@ -7152,11 +7009,8 @@ const Builder = struct {
         // a row that includes it (design.md "Result-Row Widening Adapter").
         // Such a request is served by specializing the template at its
         // declared row and generating an adapter at the requested row that
-        // calls it and re-tags the result. Hosted templates are the instance
-        // where the declared row is the host ABI: a use site widens the
-        // (closed) hosted error row through `?`, and the adapter keeps the
-        // extern boundary at its declared type instead of emitting a hosted
-        // spec whose layout would not match the host ABI.
+        // calls it and re-tags the result. The inner hosted specialization,
+        // when selected by generic dispatch, retains its declared ABI.
         if (try self.resultRowWideningAdapterOrNull(
             view,
             template,
@@ -7186,8 +7040,8 @@ const Builder = struct {
 
                 // The host is compiled against the declared hosted signature,
                 // so that exact type is the only one the extern boundary may
-                // use. `requireHostedExternAtDeclaredAbi` holds that boundary
-                // for every request the widening adapter above did not claim.
+                // use. `requireHostedExternAtDeclaredAbi` checks every hosted
+                // request against that boundary.
                 const declared_source_fn_ty = template.checked_fn_root;
                 const declared_source_fn_key = view.types.rootKey(declared_source_fn_ty);
                 const declared_mono_fn_ty = try self.lowerType(view, declared_source_fn_ty);
@@ -8521,9 +8375,8 @@ const Builder = struct {
         // A request whose result row includes this template's closed checked
         // row keeps its extra labels: the rows are related component-wise and
         // the adapter is generated when the specialization completes
-        // (design.md "Result-Row Widening Adapter"). Hosted templates take
-        // their own capability-driven relation below, where the declared row
-        // is the host ABI.
+        // (design.md "Result-Row Widening Adapter"). This also serves hosted
+        // implementations selected by an admitted generic dispatch request.
         //
         // A caller-owned (local-context-dependent) specialization has no such
         // completion: it lowers its body inline at `root_node` below and
@@ -8531,16 +8384,14 @@ const Builder = struct {
         // ever be generated and the caller would call the narrow body through
         // its wide request. Declining here leaves the ordinary relation—and
         // its loud rejection of a widened closed row—in charge.
-        const closed_row_widened = template.target != .hosted and
-            try relateClosedResultRowRequestInterface(
-                source_ctx.graph,
-                view,
-                template.checked_fn_root,
-                root_node,
-                request_fn_node,
-                if (local_context_dependent) .no_adapter else .adapter_reachable,
-            );
-        var hosted_widened = false;
+        const closed_row_widened = try relateClosedResultRowRequestInterface(
+            source_ctx.graph,
+            view,
+            template.checked_fn_root,
+            root_node,
+            request_fn_node,
+            if (local_context_dependent) .no_adapter else .adapter_reachable,
+        );
         if (closed_row_widened) {
             // Every component was related above; joining the two function
             // interfaces here would unify the rows this relation kept apart.
@@ -8553,15 +8404,7 @@ const Builder = struct {
             try relateConstructionFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
         } else {
             if (template.target == .hosted) {
-                // Hosted Try Question Widening is the instance of the rule
-                // where the declared row is the host ABI; the adapter keeps the
-                // extern boundary at the declared type.
-                hosted_widened = try relateHostedFunctionRequestInterface(
-                    source_ctx.graph,
-                    try self.hostedTryAdapterCapability(view, template.hosted_try_adapter),
-                    root_node,
-                    request_fn_node,
-                );
+                try relateFunctionRequestInterface(source_ctx.graph, root_node, request_fn_node);
             } else if (try source_ctx.graph.containsGeneratedPrivate(request_fn_node)) {
                 if (source_ctx.graph.requestSourceInterface(request_fn_node)) |source_fn_node| {
                     try relateFunctionRequestInterface(source_ctx.graph, root_node, source_fn_node);
@@ -8576,7 +8419,7 @@ const Builder = struct {
         // says the relation declined to unify the two rows, instead of deriving
         // a second answer from the checked root (design.md "Result-Row Widening
         // Adapter").
-        const widened_result_row = closed_row_widened or hosted_widened;
+        const widened_result_row = closed_row_widened;
         source_ctx.draft.template_specs.items[spec_index].widened_result_row = widened_result_row;
         if (!widened_result_row and
             !local_context_dependent and
@@ -25425,16 +25268,7 @@ const BodyContext = struct {
         callee_ctx.evidence = rootEvidenceWithSubstitution(template_ref, templateSchemaIn(callee_view, &template), edge);
         try callee_ctx.seedSubstitution(callee_ctx.evidence.schema.?, edge.subst);
         const root_node = try callee_ctx.instNode(template.checked_fn_root);
-        if (template.target == .hosted) {
-            // The replayed summary shapes the request; the specialization this
-            // request later reaches records the widening for completion.
-            _ = try relateHostedFunctionRequestInterface(
-                self.graph,
-                try self.builder.hostedTryAdapterCapability(callee_view, template.hosted_try_adapter),
-                root_node,
-                roots[0],
-            );
-        } else if (!try relateClosedResultRowRequestInterface(
+        if (!try relateClosedResultRowRequestInterface(
             self.graph,
             callee_view,
             template.checked_fn_root,
@@ -25444,7 +25278,11 @@ const BodyContext = struct {
             // served by a procedure template specialization.
             .adapter_reachable,
         )) {
-            try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
+            if (template.target == .hosted) {
+                try relateFunctionRequestInterface(self.graph, root_node, roots[0]);
+            } else {
+                try relateConstructionFunctionRequestInterface(self.graph, root_node, roots[0]);
+            }
         }
         try callee_ctx.relateMaterializedEvidenceConstraints(callee_ctx, callee_ctx.evidence.schema.?, edge.vector);
         if (templateInterfaceIsClosed(callee_view, &template)) {
@@ -27429,7 +27267,6 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         checked_args: []const checked.CheckedExprId,
         expected_ret_node: ?NodeId,
-        hosted_try_capability: ?HostedTryAdapterCapability,
         capture_constructor_argument_evidence: bool,
         /// The callee is a value of the caller's: an indirect call.
         callee_value: bool = false,
@@ -28173,7 +28010,6 @@ const BodyContext = struct {
                 .checked_ret_ty = checked_ret_ty,
                 .checked_args = call.args,
                 .expected_ret_node = if (expected_ret_ty) |expected| try self.activeNodeFromType(expected) else null,
-                .hosted_try_capability = null,
                 .capture_constructor_argument_evidence = false,
             } });
         }
@@ -28256,7 +28092,6 @@ const BodyContext = struct {
             .checked_ret_ty = task.checked_ret_ty,
             .checked_args = call.args,
             .expected_ret_node = task.expected_ret_node,
-            .hosted_try_capability = try self.hostedTryCapabilityForResolvedTarget(call.direct_target.?),
             .capture_constructor_argument_evidence = try self.iteratorCallNeedsConstructorArgumentEvidence(
                 self.iteratorProcedureForResolvedTarget(call.direct_target.?),
                 call.args,
@@ -28320,12 +28155,7 @@ const BodyContext = struct {
         const fn_node = task.fn_node;
         const request_args = task.request_args;
         const checked_ret_ty = task.checked_ret_ty;
-        if (task.expected_ret_node) |expected| {
-            if (task.hosted_try_capability) |capability| {
-                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, expected)) |request_fn| {
-                    return .{ .ret = .{ .node = request_fn } };
-                }
-            }
+        if (task.expected_ret_node != null) {
             // An explicit request owns the call's exact result evidence. Keep
             // the checked result as a fresh public interface: its cached cell
             // may already contain private evidence from another occurrence.
@@ -28333,11 +28163,6 @@ const BodyContext = struct {
             try relateRequestComponent(self.graph, task.ret_node, public_ret);
         } else {
             const caller_ret = try caller.instNode(checked_ret_ty);
-            if (task.hosted_try_capability) |capability| {
-                if (try self.hostedTryWidenedRequestNode(capability, fn_node, request_args, caller_ret)) |request_fn| {
-                    return .{ .ret = .{ .node = request_fn } };
-                }
-            }
             if (try self.graph.containsGeneratedPrivate(caller_ret)) {
                 // A prior occurrence may already have refined this cached cell
                 // to a private producer representation. Preserve its public
@@ -28368,7 +28193,7 @@ const BodyContext = struct {
     /// entirely; the call uses the caller's instance directly. An explicit
     /// result request keeps the fresh instance that owns its exact result.
     fn calleeValueInstance(self: *BodyContext, task: *InstantiateCallTask) Allocator.Error!?NodeId {
-        if (!task.callee_value or task.expected_ret_node != null or task.hosted_try_capability != null) return null;
+        if (!task.callee_value or task.expected_ret_node != null) return null;
         if (!try self.checkedTypeRepresentationFixed(task.source_fn_ty)) return null;
         const node = try task.caller.instNode(task.source_fn_ty);
         if (try self.graph.containsGeneratedPrivate(node)) return null;
@@ -28809,18 +28634,13 @@ const BodyContext = struct {
             self.directCallInstantiationSourceFnType(target, call.source_fn_ty_payload)
         else
             call.source_fn_ty_payload;
-        const hosted_try_capability = if (call.direct_target) |target|
-            try self.hostedTryCapabilityForResolvedTarget(target)
-        else
-            null;
         frame.cursor = 3;
         return evidenceCall(call_ctx, .{ .instantiate_call = .{
             .source_fn_ty = source_fn_ty,
             .caller = self,
             .checked_ret_ty = checked_ret_ty,
             .checked_args = call.args,
-            .expected_ret_node = if (hosted_try_capability != null) task.expected_node else null,
-            .hosted_try_capability = hosted_try_capability,
+            .expected_ret_node = null,
             .capture_constructor_argument_evidence = if (call.direct_target) |target|
                 try self.iteratorCallNeedsConstructorArgumentEvidence(
                     self.iteratorProcedureForResolvedTarget(target),
@@ -33607,7 +33427,6 @@ const BodyContext = struct {
                     checked_ret_ty,
                     call.args,
                     expected_ret_node,
-                    null,
                     false,
                 );
                 const fn_nodes = try self.graph.functionNodes(fn_node);
@@ -41861,37 +41680,6 @@ const BodyContext = struct {
         };
     }
 
-    fn hostedTryCapabilityForResolvedTarget(
-        self: *BodyContext,
-        target: checked.ResolvedValueId,
-    ) Allocator.Error!?HostedTryAdapterCapability {
-        return switch (self.finalDirectTarget(target).record.ref) {
-            .top_level_proc,
-            .imported_proc,
-            .hosted_proc,
-            .promoted_top_level_proc,
-            => |proc| try self.hostedTryCapabilityForProcedureUse(proc),
-            .platform_required_proc => |proc| try self.hostedTryCapabilityForProcedureUse(proc.procedure),
-            .local_param, .local_value, .local_mutable_version, .pattern_binder, .local_proc, .selected_hoisted_const, .top_level_const, .imported_const, .platform_required_declaration, .platform_required_checked_error, .platform_required_const => null,
-        };
-    }
-
-    fn hostedTryCapabilityForProcedureUse(
-        self: *BodyContext,
-        proc: checked.ProcedureUseTemplate,
-    ) Allocator.Error!?HostedTryAdapterCapability {
-        const hosted = switch (proc.binding) {
-            .hosted => |hosted| hosted,
-            .top_level, .imported, .platform_required => return null,
-        };
-        const view = self.builder.moduleForId(checked.hostedProcedureTemplateModuleId(hosted));
-        const template = view.templates.get(hosted.template.template);
-        if (template.target != .hosted) {
-            Common.invariant("hosted procedure use referenced a non-hosted template");
-        }
-        return try self.builder.hostedTryAdapterCapability(view, template.hosted_try_adapter);
-    }
-
     /// A call whose callee or argument diverges never reaches the callee:
     /// the first divergent operand, whose effect the call lowers to.
     fn divergentCallOperand(self: *BodyContext, call: anytype) ?checked.CheckedExprId {
@@ -41932,31 +41720,9 @@ const BodyContext = struct {
         checked_ret_ty: checked.CheckedTypeId,
         checked_args: []const checked.CheckedExprId,
         expected_ret_node: ?NodeId,
-        hosted_try_capability: ?HostedTryAdapterCapability,
         capture_constructor_argument_evidence: bool,
     ) Allocator.Error!NodeId {
-        return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .hosted_try_capability = hosted_try_capability, .capture_constructor_argument_evidence = capture_constructor_argument_evidence, .callee_value = true } })).nodeValue();
-    }
-
-    fn hostedTryWidenedRequestNode(
-        self: *BodyContext,
-        capability: HostedTryAdapterCapability,
-        source_fn: NodeId,
-        request_args: []const NodeId,
-        request_ret: NodeId,
-    ) Allocator.Error!?NodeId {
-        if (!try hostedTryWideningRequestHasAdditionalErrors(self.graph, capability, source_fn, request_ret)) {
-            return null;
-        }
-        const request_fn = try self.graph.newNode(.{ .func = .{
-            .args = try self.graph.arena().dupe(NodeId, request_args),
-            .ret = request_ret,
-        } });
-        if (!try relateHostedTryWidening(self.graph, capability, source_fn, request_fn)) {
-            Common.invariant("hosted Try widening request lost its additional error labels");
-        }
-        try self.graph.registerRequestSourceInterface(request_fn, source_fn);
-        return request_fn;
+        return (try self.runEvidence(.{ .instantiate_call = .{ .source_fn_ty = source_fn_ty, .caller = caller, .checked_ret_ty = checked_ret_ty, .checked_args = checked_args, .expected_ret_node = expected_ret_node, .capture_constructor_argument_evidence = capture_constructor_argument_evidence, .callee_value = true } })).nodeValue();
     }
 
     fn instantiateCallableDispatchPlanCallNodeFromCaller(
@@ -42360,8 +42126,7 @@ const BodyContext = struct {
     /// instantiation would. Requests whose interface depends on the read
     /// itself are never shared: an iterator procedure's request may be
     /// replaced by a generated private interface chosen from the argument
-    /// evidence, a hosted `Try` request may be widened by the expected
-    /// result's error labels, and an expected cell carrying generated-private
+    /// evidence, and an expected cell carrying generated-private
     /// evidence becomes the request's own result.
     fn directCallRequestNode(
         self: *BodyContext,
@@ -42381,7 +42146,6 @@ const BodyContext = struct {
         expected_ret_node: ?NodeId,
     ) Allocator.Error!bool {
         if (self.iteratorProcedureForResolvedTarget(target) != null) return false;
-        if (try self.hostedTryCapabilityForResolvedTarget(target) != null) return false;
         if (expected_ret_node) |expected| {
             if (try self.graph.containsGeneratedPrivate(expected)) return false;
         }
@@ -67059,95 +66823,6 @@ test "hosted Try info accepts alias-wrapped nominal arguments over unwrapped bac
     const source_err_tags = builder.tagUnionTags(source_try.err_ty);
     try std.testing.expectEqual(@as(usize, 1), source_err_tags.len);
     try std.testing.expectEqual(host_err, GuardedList.at(source_err_tags, 0).name);
-}
-
-test "hosted Try graph walk crosses transparent alias layers to the Try nominal" {
-    // `graphHostedTryInfoOrNull` is the relation side of the same recognition
-    // `Builder.hostedTryNamedOrNull` performs while lowering, and the two must
-    // agree. No end-to-end fixture reaches the crossing—instantiating a
-    // checked root resolves alias layers, so even a hosted result declared as
-    // `IoResult(Str)` arrives as the bare `Try` nominal
-    // (test/fx-open/hosted_alias_try_question.roc)—so the alias chain is
-    // built here directly, including a two-layer chain no single-step guard
-    // would walk.
-    const gpa = std.testing.allocator;
-
-    var type_store = Type.Store.init(gpa);
-    defer type_store.deinit();
-
-    var name_store = names.NameStore.init(gpa);
-    defer name_store.deinit();
-
-    const graph = try InstGraph.create(gpa, &type_store, &name_store);
-    defer graph.destroy();
-
-    const module_identity = try name_store.internModuleIdentity(&(@as([32]u8, @splat(0xC4))));
-    const try_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("Try") };
-    const alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("IoResult") };
-    const outer_alias_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("OuterResult") };
-    const impostor_def: Type.TypeDef = .{ .module = module_identity, .type_name = try name_store.internTypeName("UserResult") };
-    const try_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(1)) };
-    const alias_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(2)) };
-    const outer_alias_named: Type.NamedType = .{ .module = .{}, .ty = @fromBackingInt(@intCast(3)) };
-
-    const ok_node = try graph.newNode(.{ .primitive = .str });
-    const err_node = try graph.newNode(.empty_tag_union);
-    const try_node = try graph.newNode(try graph.namedContent(.{
-        .named_type = try_named,
-        .def = try_def,
-        .kind = .nominal,
-        .builtin_owner = null,
-        .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
-        .backing = .{ .node = try graph.newNode(.empty_tag_union), .use = .inspectable },
-    }));
-    const alias_node = try graph.newNode(try graph.namedContent(.{
-        .named_type = alias_named,
-        .def = alias_def,
-        .kind = .alias,
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{ .node = try_node, .use = .inspectable },
-    }));
-    const outer_alias_node = try graph.newNode(try graph.namedContent(.{
-        .named_type = outer_alias_named,
-        .def = outer_alias_def,
-        .kind = .alias,
-        .builtin_owner = null,
-        .args = try graph.arena().alloc(NodeId, 0),
-        .backing = .{ .node = alias_node, .use = .inspectable },
-    }));
-
-    const capability = HostedTryAdapterCapability{
-        .def = try_def,
-        .ok_tag = try name_store.internTagLabel("Ok"),
-        .err_tag = try name_store.internTagLabel("Err"),
-        .ok_type_arg_index = 0,
-        .err_type_arg_index = try_error_type_arg_index,
-    };
-
-    const direct = (try graphHostedTryInfoOrNull(graph, capability, try_node)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(ok_node, direct.ok);
-    try std.testing.expectEqual(err_node, direct.err);
-
-    const one_layer = (try graphHostedTryInfoOrNull(graph, capability, alias_node)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(ok_node, one_layer.ok);
-    try std.testing.expectEqual(err_node, one_layer.err);
-
-    const two_layers = (try graphHostedTryInfoOrNull(graph, capability, outer_alias_node)) orelse return error.TestExpectedEqual;
-    try std.testing.expectEqual(ok_node, two_layers.ok);
-    try std.testing.expectEqual(err_node, two_layers.err);
-
-    // A nominal that is not the capability's `Try` is not crossed into: only a
-    // transparent alias layer is followed.
-    const impostor_node = try graph.newNode(try graph.namedContent(.{
-        .named_type = alias_named,
-        .def = impostor_def,
-        .kind = .nominal,
-        .builtin_owner = null,
-        .args = try graph.arena().dupe(NodeId, &.{ ok_node, err_node }),
-        .backing = .{ .node = try_node, .use = .inspectable },
-    }));
-    try std.testing.expect((try graphHostedTryInfoOrNull(graph, capability, impostor_node)) == null);
 }
 
 test "hosted extern boundary admits only the declared host ABI type" {
