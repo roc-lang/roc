@@ -12026,6 +12026,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
 
     try self.closeWeakValueImplicitOpenExts(&env);
     try self.closeTopLevelValueRows(&env);
+    try self.recordClosedResultBindings();
 
     try self.pruneSelectedHoistedRootsAfterSolving();
     try self.withdrawProblemsOfVoidRelations();
@@ -20207,8 +20208,8 @@ fn widenedRowCopy(self: *Self, row: Var, env: *Env, region: Region) std.mem.Allo
 }
 
 /// The type a use of an annotated function relates to when the function's
-/// body closed a result row its annotation leaves open (design.md "Deferred:
-/// Row Subsumption"): the instantiated function type with each such closed
+/// body closed a result row its annotation leaves open (design.md "Row
+/// Subsumption"): the instantiated function type with each such closed
 /// row in its result re-opened, its arguments and every still-open row shared.
 /// A forwarder's argument and result rows can be one class, so only the
 /// result's spine down to a re-opened row is copied, and the argument stays
@@ -20242,7 +20243,7 @@ fn widenedFunctionResultUseVar(self: *Self, fn_var: Var, env: *Env, region: Regi
 
 /// The type the immediate callee of a call relates to when it names an
 /// annotated function whose body closed a result row its annotation leaves open
-/// (design.md "Deferred: Row Subsumption"): the function's type with that row
+/// (design.md "Row Subsumption"): the function's type with that row
 /// re-opened in the result (`widenedFunctionResultUseVar`). Checking records
 /// the function's own type and result for the call (`ModuleEnv.RowCoercedCallee`),
 /// which checked-body construction lowers at that type and widens by a row
@@ -20258,6 +20259,13 @@ fn widenedCalleeUseVar(
     if (!self.instantiation_is_immediate_callee) return null;
     if (processing_def.status != .processed) return null;
     if (!try self.defClosedAnnotatedResultRow(processing_def.def_idx)) return null;
+    return try self.widenRecordedCalleeResult(expr_idx, fn_var, env, region);
+}
+
+/// Re-open the closed result rows of the callee `expr_idx`'s function type
+/// `fn_var` and record the call for checked-body construction
+/// (`ModuleEnv.RowCoercedCallee`).
+fn widenRecordedCalleeResult(self: *Self, expr_idx: CIR.Expr.Idx, fn_var: Var, env: *Env, region: Region) std.mem.Allocator.Error!?Var {
     const widened = try self.widenedFunctionResultUseVar(fn_var, env, region) orelse return null;
     const ret = switch (self.types.resolveVar(fn_var).desc.content) {
         .structure => |flat| switch (flat) {
@@ -20672,6 +20680,18 @@ fn definitionBodyExpr(self: *const Self, rhs: CIR.Expr.Idx) CIR.Expr.Idx {
 /// Every entry point runs this AFTER `runLateImplicitOpenExtAudit`, for the
 /// reason stated there: grounding an extension empties it, and the late audit
 /// only reads extensions that still carry tags.
+/// Publish every top-level function definition whose body closed an annotated
+/// open result row (`ModuleEnv.ClosedResultBinding`), so an importer's call of
+/// it widens the result too.
+fn recordClosedResultBindings(self: *Self) std.mem.Allocator.Error!void {
+    for (0..self.cir.all_defs.span.len) |def_offset| {
+        const def_idx = self.cir.store.defAt(self.cir.all_defs, def_offset);
+        if (try self.defClosedAnnotatedResultRow(def_idx)) {
+            try self.cir.recordClosedResultBinding(ModuleEnv.nodeIdxFrom(def_idx));
+        }
+    }
+}
+
 /// Close every still-open row a top-level value's type reaches through the
 /// row coercion, annotated or not: the value is evaluated once, at the type
 /// its definition produces (design.md "Value Rows: Local Values Share,
@@ -26285,7 +26305,7 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                 const instantiated = try self.instantiateBindingVar(pat_var, env, .use_last_var, .{ .value_use = expr_idx });
                 // A use of an annotated function whose body closed a result
                 // row its annotation leaves open re-opens that row in its own
-                // copy (design.md "Deferred: Row Subsumption").
+                // copy (design.md "Row Subsumption").
                 const widened_fn = if (mb_processing_def) |processing_def|
                     try self.widenedCalleeUseVar(expr_idx, processing_def, instantiated, env, expr_region)
                 else
@@ -26382,8 +26402,22 @@ fn checkLeafExpr(self: *Self, frame: *ExprCheckFrame, expected: Expected, env: *
                     // At Each Use"); a scheme's instantiation already has
                     // fresh rows.
                     const is_value = !ext_ref.other_cir.nodeIsBindingScheme(ext_ref.other_cir_node_idx);
-                    const widened_use_var = if (is_value) try self.widenedValueUseVar(ext_instantiated_var, env, expr_region) else null;
-                    if (widened_use_var) |widened| {
+                    // A call of an imported function whose body closed an
+                    // annotated open result row widens its result as a call in
+                    // the defining module does (design.md "Deferred: Row
+                    // Subsumption").
+                    const widened_callee_var = if (self.instantiation_is_immediate_callee and
+                        ext_ref.other_cir.nodeIsClosedResultBinding(ext_ref.other_cir_node_idx))
+                        try self.widenRecordedCalleeResult(expr_idx, ext_instantiated_var, env, expr_region)
+                    else
+                        null;
+                    const widened_use_var = if (widened_callee_var == null and is_value and !self.isFunctionTypeVar(ext_instantiated_var))
+                        try self.widenedValueUseVar(ext_instantiated_var, env, expr_region)
+                    else
+                        null;
+                    if (widened_callee_var) |widened| {
+                        _ = try self.unify(expr_var, widened, env);
+                    } else if (widened_use_var) |widened| {
                         _ = try self.unify(expr_var, widened, env);
                         try self.cir.recordRowCoercedUse(ModuleEnv.nodeIdxFrom(expr_idx), ext_instantiated_var);
                     } else {

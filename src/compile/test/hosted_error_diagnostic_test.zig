@@ -10,6 +10,13 @@ const DiagnosticTestError = compile_build.InitError ||
     std.Io.Writer.Error ||
     error{ TestUnexpectedResult, TestExpectedEqual };
 
+test "a wrapper forwarding a host error is widened at its caller's call" {
+    // The wrapper declares the host's own row, so its body closes the row its
+    // annotation leaves open; the app's call uses the result at a wider union
+    // (design.md "Row Subsumption").
+    try checkWrapperDiagnostic("line! = |s| Host.stdout_line!(s)", "[StdoutErr(Str)]", .accepted);
+}
+
 test "host error diagnostic follows imported function aliases" {
     try checkHostErrorDiagnostic("line! = Host.stdout_line!", .hosted);
 }
@@ -83,7 +90,14 @@ test "host error diagnostic does not blame an unrelated host call" {
 
 const Expected = enum { hosted, ordinary, accepted };
 
+/// Each wrapper declares an error row wider than the host's, so the wrapper's
+/// own body forwards the host's closed row into it: a direct forward is never
+/// widened, and its mismatch is what these diagnostics describe.
 fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticTestError!void {
+    return checkWrapperDiagnostic(wrapper, "[StdoutErr(Str), Closed]", expected);
+}
+
+fn checkWrapperDiagnostic(wrapper: []const u8, wrapper_row: []const u8, expected: Expected) DiagnosticTestError!void {
     const gpa = std.testing.allocator;
     const io = std.testing.io;
     var tmp = std.testing.tmpDir(.{});
@@ -93,7 +107,7 @@ fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticT
             "app.roc",
             \\app [main!] { pf: platform "./platform.roc" }
             \\import pf.Stdout
-            \\main! : List(Str) => Try({}, [Exit(I32), StdoutErr(Str)])
+            \\main! : List(Str) => Try({}, [Closed, Exit(I32), StdoutErr(Str)])
             \\main! = |_args| {
             \\    Stdout.line!("Hello,World!")?
             \\    Ok({})
@@ -127,10 +141,10 @@ fn checkHostErrorDiagnostic(wrapper: []const u8, expected: Expected) DiagnosticT
     const stdout_source = try std.fmt.allocPrint(gpa,
         \\import Host
         \\Stdout := [].{{
-        \\    line! : Str => Try({{}}, [StdoutErr(Str)])
+        \\    line! : Str => Try({{}}, {s})
         \\    {s}
         \\}}
-    , .{wrapper});
+    , .{ wrapper_row, wrapper });
     defer gpa.free(stdout_source);
     try tmp.dir.writeFile(io, .{ .sub_path = "Stdout.roc", .data = stdout_source });
 

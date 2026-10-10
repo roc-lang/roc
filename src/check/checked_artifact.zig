@@ -16171,7 +16171,7 @@ const CheckedBodyPayloadCopier = struct {
     /// (`ModuleEnv.RowCoercedCallee`), a row coercion of the call made at the
     /// function's own type: the inner call's result is the function's own
     /// result, and the coercion's type is this expression's wider one
-    /// (design.md "Deferred: Row Subsumption").
+    /// (design.md "Row Subsumption").
     fn copyCallData(self: *@This(), expr_idx: CIR.Expr.Idx, call: @FieldType(CIR.Expr, "e_call")) Allocator.Error!CheckedExprData {
         const callee = self.module.moduleEnvConst().rowCoercedCallee(ModuleEnv.nodeIdxFrom(call.func));
         const call_data: CheckedExprData = .{ .call = .{
