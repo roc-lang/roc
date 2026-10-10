@@ -1804,7 +1804,20 @@ specialization it requested for discovery, so no body evaluation can run
 calls a parked one. After every body has lowered, each still-parked
 specialization is completed as a `crash` at its requested signature. Only
 discovery bodies reference these, and the compile-time consumer's root
-manifest names no discovery root, so none is ever lowered to LIR or run.
+manifest names no discovery root, so evaluation never runs one (a discovery
+procedure reaches that consumer's LIR only as a member of a callable set an
+evaluation never selects). A
+specialization's Monotype identity includes the method scope that requested
+it, but its procedure identity does not, and Direct LIR shares one
+procedure among specializations of equal procedure identity. So every
+procedure a discovery body commits, and every stub, is marked as discovery
+in its source template: the mark is part of its procedure identity and
+removes its object-cache key, so a discovery body, whose requests may name
+stubs, never stands in for the evaluation procedure of the same template and
+types. Commit can also merge a body lowered inside a draft into an equal
+committed specialization; that merge is a request like any other, upgrading
+the committed specialization when the draft evaluates and recorded as a
+discovery request otherwise.
 Literal roots registered in discovery bodies are evaluated exactly as before,
 so `roc check` reports every rejected or crashing conversion a build reports.
 
