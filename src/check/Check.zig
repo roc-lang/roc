@@ -20202,6 +20202,11 @@ const WidenedUseRow = struct {
     value_row: Var,
     /// The use's copy of it.
     use_row: Var,
+    /// Set once the copy needs nothing more: the use's type was found not to
+    /// admit a tag of the value's row (that mismatch is reported), or the copy
+    /// is no longer a tag row because the use related it to a nominal type,
+    /// whose declared backing that relation already checked.
+    settled: bool = false,
 };
 
 /// Add to every use's widened copy each tag its value's row gained after the
@@ -20212,31 +20217,74 @@ const WidenedUseRow = struct {
 /// a tag, since unifying one can introduce constraints of its own.
 fn propagateValueRowsToWidenedUses(self: *Self, env: *Env) std.mem.Allocator.Error!bool {
     var changed = false;
+    var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
+    defer missing.deinit(self.gpa);
     var index: usize = 0;
     while (index < self.widened_use_rows.items.len) : (index += 1) {
         const pair = self.widened_use_rows.items[index];
-        const tags_start = self.widened_use_tags.items.len;
-        defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
-        try self.appendRowTags(pair.value_row);
-        const value_end = self.widened_use_tags.items.len;
-        try self.appendRowTags(pair.use_row);
-        const value_tags = self.widened_use_tags.items[tags_start..value_end];
-        const use_tags = self.widened_use_tags.items[value_end..];
-        var missing: std.ArrayListUnmanaged(types_mod.Tag) = .empty;
-        defer missing.deinit(self.gpa);
-        for (value_tags) |value_tag| {
-            for (use_tags) |use_tag| {
-                if (value_tag.name.eql(use_tag.name)) break;
-            } else try missing.append(self.gpa, value_tag);
+        if (pair.settled) continue;
+        if (!self.varIsTagRow(pair.use_row)) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
         }
+        try self.collectTagsMissingFromUse(pair, &missing);
         if (missing.items.len == 0) continue;
-        changed = true;
         const region = self.getRegionAt(pair.use_row);
         const ext = try self.freshFromContent(.{ .flex = Flex.init() }, env, region);
         const extra = try self.freshFromContent(try self.types.mkTagUnion(missing.items, ext), env, region);
-        _ = try self.unify(self.tagRowTail(pair.use_row), extra, env);
+        // A relation that fails reports its mismatch at the use and settles
+        // the pair. One that succeeds gives the copy every missing tag, which
+        // a second look confirms; a copy the relation did not extend settles
+        // too, so this loop always ends.
+        if ((try self.unify(self.tagRowTail(pair.use_row), extra, env)).isProblem()) {
+            self.widened_use_rows.items[index].settled = true;
+            continue;
+        }
+        try self.collectTagsMissingFromUse(pair, &missing);
+        if (missing.items.len == 0) {
+            changed = true;
+        } else {
+            self.widened_use_rows.items[index].settled = true;
+        }
     }
     return changed;
+}
+
+/// The tags of `pair`'s value row that its use's copy does not list, into
+/// `missing`.
+fn collectTagsMissingFromUse(self: *Self, pair: WidenedUseRow, missing: *std.ArrayListUnmanaged(types_mod.Tag)) std.mem.Allocator.Error!void {
+    missing.clearRetainingCapacity();
+    const tags_start = self.widened_use_tags.items.len;
+    defer self.widened_use_tags.shrinkRetainingCapacity(tags_start);
+    try self.appendRowTags(pair.value_row);
+    const value_end = self.widened_use_tags.items.len;
+    try self.appendRowTags(pair.use_row);
+    const value_tags = self.widened_use_tags.items[tags_start..value_end];
+    const use_tags = self.widened_use_tags.items[value_end..];
+    for (value_tags) |value_tag| {
+        for (use_tags) |use_tag| {
+            if (value_tag.name.eql(use_tag.name)) break;
+        } else try missing.append(self.gpa, value_tag);
+    }
+}
+
+/// Whether `var_`'s extension chain is made of tag unions (through aliases),
+/// ending in an open or empty tail.
+fn varIsTagRow(self: *const Self, var_: Var) bool {
+    var current = var_;
+    while (true) {
+        const resolved = self.types.resolveVar(current);
+        switch (resolved.desc.content) {
+            .alias => |alias| current = self.types.getAliasBackingVar(alias),
+            .structure => |flat| switch (flat) {
+                .tag_union => |union_| current = union_.ext,
+                .empty_tag_union => return true,
+                .record, .tuple, .nominal_type, .fn_pure, .fn_effectful, .fn_unbound, .empty_record => return false,
+            },
+            .flex => return true,
+            .rigid, .field_presence, .err => return false,
+        }
+    }
 }
 
 /// Append every tag on `row`'s extension chain to `widened_use_tags`.
