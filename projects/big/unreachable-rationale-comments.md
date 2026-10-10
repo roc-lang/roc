@@ -264,7 +264,7 @@ functions' release output is unaffected (the `invariantFailed` shape at
 
 ## Related projects
 
-- [../small/rceffect-conformance.md](../small/rceffect-conformance.md)—
+- RcEffect conformance (landed; doc removed)—
   the same philosophy (a hand-written claim that nothing checks becomes a
   silent miscompile) applied to the ownership table; this doc is the
   control-flow instance.

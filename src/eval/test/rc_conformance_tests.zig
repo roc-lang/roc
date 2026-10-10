@@ -1102,7 +1102,6 @@ const cases = [_]Case{
 /// that removes it from this table.
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
-    .{ .op = .list_prefetched, .reason = "never executed: LIR lowering splits it into list_prefetch and an alias of the list" },
     .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
     .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
     .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
@@ -1112,7 +1111,6 @@ const exemptions = [_]Exemption{
     .{ .op = .list_split_first, .reason = "no producer: List.split_first is written in Roc" },
     .{ .op = .list_split_last, .reason = "no producer: List.split_last is written in Roc" },
     .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
-    .{ .op = .list_prefetched, .reason = "replaced: LIR lowering splits List.prefetched into list_prefetch and an alias of the list" },
 };
 
 /// Loaded once and kept for the life of the test binary: publishing the
@@ -1325,9 +1323,9 @@ test "rc effect conformance: the #10023 row fails against the real builtin" {
 
     const allocator = base.defaultGpa();
 
-    // `Str.drop_prefix` returns a slice of its argument's allocation. Before PR
-    // roc-lang/roc#10023 its row also claimed `result_unique`, so ARC counted a
-    // birth on top of the link to the lender and every call leaked one
+    // `Str.drop_prefix` returns a slice of its argument's allocation. A row that
+    // also claims `result_unique` (the roc-lang/roc#10023 shape) makes ARC count
+    // a birth on top of the link to the lender, so every call leaks one
     // reference to the input string.
     var reintroduced = RcEffect.retainsSharingArgs(1);
     reintroduced.result_unique = true;

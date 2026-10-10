@@ -314,9 +314,14 @@ order. The rest are independent.
 
 ### Start here—enforcement layers, cheap and load-bearing
 
-1. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
-   comptime validity plus a per-op refcount conformance harness for the
-   central ownership table (the PR 10023 bug class).
+RcEffect table conformance has landed, and had already been built when
+its doc was picked up: `base/rc_effect_rules.zig` rejects self-contradicting
+rows at comptime (with `run-test-rc-effect-rejected-row` requiring the
+#10023 row to fail compilation), and `run-test-zig-rc-conformance` runs every
+nontrivial row through the interpreter, failing on any uncovered op.
+Correction: mask-versus-arity is checked where an op meets its real
+arguments (the ARC certifier and the observer), not at comptime, since no
+arity table exists to check against.
 
 The divergence-classification parity suite has landed. Divergence is one
 classification, `checkedExprDivergence` in `checked_artifact.zig`; Monotype's
@@ -432,7 +437,4 @@ choice is shared across backends via `base.LowLevelBuiltins`.
 
 ### Suggested overall sequence
 
-If one person or agent works through everything serially, this order
-front-loads leverage and keeps prerequisites satisfied:
-
-1. `small/rceffect-conformance.md`
+Every project in the serial sequence this section listed has landed.
