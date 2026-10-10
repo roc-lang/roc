@@ -5441,6 +5441,36 @@ const Subst = struct {
     }
 };
 
+/// Empty frame stacks kept for reuse by `Cloner.runClone`.
+const CloneFramePool = struct {
+    stacks: [max_stacks]std.ArrayList(Cloner.CloneFrame) = undefined,
+    len: usize = 0,
+
+    const max_stacks = 8;
+
+    fn take(self: *CloneFramePool) std.ArrayList(Cloner.CloneFrame) {
+        if (self.len == 0) return .empty;
+        self.len -= 1;
+        return self.stacks[self.len];
+    }
+
+    /// Keep `frames` empty for the next run, or free it when the pool is full.
+    fn give(self: *CloneFramePool, allocator: Allocator, frames: *std.ArrayList(Cloner.CloneFrame)) void {
+        if (self.len == max_stacks) {
+            frames.deinit(allocator);
+            return;
+        }
+        frames.clearRetainingCapacity();
+        self.stacks[self.len] = frames.*;
+        self.len += 1;
+    }
+
+    fn deinit(self: *CloneFramePool, allocator: Allocator) void {
+        for (self.stacks[0..self.len]) |*frames| frames.deinit(allocator);
+        self.len = 0;
+    }
+};
+
 /// The containers of one `Cloner`, kept with their capacity on the pass after
 /// the cloner finishes so the next clone the pass runs starts from the
 /// capacity the last one reached rather than from empty tables.
@@ -5461,6 +5491,10 @@ const ClonerScratch = struct {
     rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
     inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    /// Frame stacks of finished `Cloner.runClone` calls, kept empty with their
+    /// capacity for the next run. A fixed number are kept so returning one
+    /// never allocates.
+    spare_clone_frames: CloneFramePool,
 
     fn fresh(allocator: Allocator) ClonerScratch {
         return .{
@@ -5480,6 +5514,7 @@ const ClonerScratch = struct {
             .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(allocator),
             .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
             .rebased_inline_scope_changes = .empty,
+            .spare_clone_frames = .{},
         };
     }
 
@@ -5520,6 +5555,7 @@ const ClonerScratch = struct {
         self.rebased_inline_scopes.deinit();
         self.inline_scope_origins.deinit();
         self.rebased_inline_scope_changes.deinit(allocator);
+        self.spare_clone_frames.deinit(allocator);
         self.subst.deinit();
         self.arena.deinit();
     }
@@ -5596,6 +5632,7 @@ const Cloner = struct {
     /// Insertions into the two inline-scope maps, in order, for rejected loop
     /// attempt rollback. Accepted entries remain useful for the rest of the clone.
     rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+    spare_clone_frames: CloneFramePool,
     /// Depth of the wrapper-strip recursion in the static value matchers
     /// (`bindPatToValue`/`bindPatToMatchValue`/`bindPatToFlowValue`), counting
     /// each `runtime_anchor.structure`/`nominal.backing`/
@@ -5680,6 +5717,7 @@ const Cloner = struct {
             .rebased_inline_scopes = scratch.rebased_inline_scopes,
             .inline_scope_origins = scratch.inline_scope_origins,
             .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
+            .spare_clone_frames = scratch.spare_clone_frames,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5721,6 +5759,7 @@ const Cloner = struct {
             .rebased_inline_scopes = scratch.rebased_inline_scopes,
             .inline_scope_origins = scratch.inline_scope_origins,
             .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
+            .spare_clone_frames = scratch.spare_clone_frames,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5769,6 +5808,7 @@ const Cloner = struct {
             .rebased_inline_scopes = self.rebased_inline_scopes,
             .inline_scope_origins = self.inline_scope_origins,
             .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
+            .spare_clone_frames = self.spare_clone_frames,
         };
         self.pass.returnClonerScratch(&scratch);
     }
@@ -5887,8 +5927,8 @@ const Cloner = struct {
 
     /// Run a cloning computation to completion on an explicit frame stack.
     fn runClone(self: *Cloner, root: CloneTask) Common.LowerError!CloneResult {
-        var frames: std.ArrayList(CloneFrame) = .empty;
-        defer frames.deinit(self.pass.allocator);
+        var frames = self.spare_clone_frames.take();
+        defer self.spare_clone_frames.give(self.pass.allocator, &frames);
         errdefer for (frames.items) |*frame| self.releaseCloneFrame(frame);
         try frames.append(self.pass.allocator, .{ .task = root });
         var input: ?CloneResult = null;
