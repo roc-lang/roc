@@ -82,25 +82,10 @@ cd "$repo_root"
 # variable, ten instructions per eight bytes instead of nine, and the setup and
 # tail are laid out differently, 94 to 100. The loop is still load, load,
 # compare, advance with the `from_le_bytes` bounds test as its termination.
-# The list allocation builtins then gained overflow guards on their size
-# arithmetic: a `capacity * element_width (+ header)` that overflows `usize`
-# now crashes deterministically instead of wrapping to a tiny allocation and
-# letting the next write run off the heap buffer (a primitive reachable from
-# pure Roc code the compiler also evaluates at compile time). Both counts are
-# unchanged by them. The guards are written as comparisons rather than
-# `@mulWithOverflow` precisely so they can fold away wherever the sizes are
-# known, which is everywhere in this fixture; see `checkedByteCount` for why
-# the intrinsic's shape survives the optimizer instead. Written with the
-# intrinsics they left ten dead instructions on x64musl and six on arm64musl
-# inside the one-time `List.repeat` setup -- a flag stored to the stack and a
-# branch on a constant zero -- plus the cold crash-helper call each branch
-# targets, none of which did any work.
-# x64musl then dropped from 98 to 97 when this check stopped counting the int3
-# padding between the entrypoint and the next symbol. That padding tracks the
-# procedure's size modulo its alignment rather than its code, so it could move
-# the count without any code changing and could equally hide a change that did.
-# No code changed with it. arm64musl has always been measured by symbol size
-# and so never included it.
+# The allocation size overflow guards leave both counts unchanged: they are
+# comparisons, which fold away here because the sizes are known.
+# x64musl dropped from 98 to 97 when this check stopped counting the int3
+# padding after the entrypoint, which tracks alignment rather than code.
 # List.repeat allocation setup calls the runtime allocator symbol directly, so
 # no adapter address is materialized and no allocator callback is loaded. The
 # compare, byte-tail, and fill loops keep their load, load, compare, advance
@@ -124,8 +109,6 @@ expectations=(
 failed=0
 
 # Prints the entrypoint symbol's start address and size, both hexadecimal.
-# Both counters work from this: the symbol's extent is what separates the
-# procedure's own code from the alignment padding that follows it.
 roc_main_extent() {
     objdump -t "$1" | awk '
         $NF ~ /^_?roc_main$/ {
@@ -159,15 +142,7 @@ count_objdump_instructions() {
     start_bytes=$((16#$start_hex))
     stop_bytes=$((start_bytes + 16#$size_hex))
 
-    # Disassembling the whole section runs past the procedure's last
-    # instruction into the int3 bytes that pad it out to the next symbol's
-    # alignment. Those disassemble as instructions, so counting them would tie
-    # this number to the procedure's size modulo that alignment rather than to
-    # its code: a one-instruction change that happens to cross an alignment
-    # boundary would move the count by far more, and a real change could hide
-    # by shifting the padding the other way. Bounding the disassembly by the
-    # symbol's own extent counts what the AArch64 counter below counts -- the
-    # procedure, and nothing after it.
+    # Stop at the symbol's end so int3 alignment padding is not counted.
     objdump -d --no-show-raw-insn \
         --start-address="$start_bytes" --stop-address="$stop_bytes" "$1" | awk '
         /^[[:space:]]+[0-9a-f]+:/ { count++ }

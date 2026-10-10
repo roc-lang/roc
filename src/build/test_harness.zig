@@ -47,20 +47,8 @@ pub const Timer = struct {
     }
 };
 
-/// Returns a monotonic timestamp in nanoseconds.
-///
-/// Time the machine spent suspended must not count here. Every deadline in
-/// this file is a difference of two of these readings, so a clock that keeps
-/// running across suspend charges a laptop's sleep to whichever tests happened
-/// to be in flight: they wake already past their timeout and are killed as
-/// hangs, having done nothing wrong. It also makes the durations printed
-/// beside them disagree with the ones `minici` prints for the same step.
-///
-/// macOS `CLOCK_MONOTONIC` does keep running across suspend, so ask for
-/// `CLOCK_UPTIME_RAW` there -- the same clock `minici` measures its steps
-/// with, by way of `std.Io`'s `.awake`. Linux's `CLOCK_MONOTONIC` already
-/// excludes suspended time (`CLOCK_BOOTTIME` is the one that does not), so it
-/// stays as it was, and so do the other platforms' branches below.
+/// Returns a monotonic timestamp in nanoseconds, excluding time suspended so
+/// a laptop's sleep is not charged to in-flight tests as a hang.
 pub fn monotonicNs() u64 {
     if (builtin.os.tag == .linux) {
         var ts: std.os.linux.timespec = undefined;
@@ -168,16 +156,14 @@ pub fn milliTimestamp() i64 {
         // divide freq down first so the multiplication can't blow.
         return @divTrunc(counter, @divTrunc(freq, 1000));
     }
-    // POSIX (macOS, BSD, etc.) via libc. See `monotonicNs` for why this asks
-    // for a clock that stops while the machine is suspended.
+    // POSIX (macOS, BSD, etc.) via libc.
     var ts: std.c.timespec = undefined;
     _ = std.c.clock_gettime(awake_clock_id, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
 
-/// The libc clock to measure test time with. macOS is the platform whose
-/// `CLOCK_MONOTONIC` is known to run across suspend, so only it is redirected;
-/// everything else keeps the clock it already used. See `monotonicNs`.
+/// macOS `CLOCK_MONOTONIC` runs across suspend; `UPTIME_RAW` matches minici's
+/// `std.Io` `.awake` clock.
 const awake_clock_id: std.c.CLOCK = if (builtin.os.tag == .macos) .UPTIME_RAW else .MONOTONIC;
 
 /// pipe: returns [2]fd_t or error. Only defined where fork-based pools
@@ -847,13 +833,7 @@ test "harness clock excludes time the machine spent suspended" {
     const now = milliTimestamp();
     try std.testing.expect(@abs(now - awake_ms) < 1000);
 
-    // These two clocks differ by however long the machine has been suspended
-    // since boot. Where they have diverged, reading the boot one is the bug
-    // this guards: a suspend would be charged to whichever tests were in
-    // flight, and they would wake up already past their timeout and be killed
-    // as hangs. A machine that has never slept (or a platform where both are
-    // the same clock) cannot tell the two apart, so there is nothing to assert
-    // there.
+    // Only distinguishable once the machine has been suspended since boot.
     if (boot_ms - awake_ms > 2000) {
         try std.testing.expect(now < boot_ms - 1000);
     }

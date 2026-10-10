@@ -1474,14 +1474,7 @@ pub fn strJoinWith(
         const ptr = @as([*]RocStr, @ptrCast(list.list_elements));
         const slice: []RocStr = ptr[0..len];
 
-        // determine the size of the result
-        var total_size: usize = 0;
-        for (slice) |substr| {
-            total_size += substr.len();
-        }
-
-        // include size of the separator
-        total_size += separator.len() * (len - 1);
+        const total_size = joinedLength(slice, separator.len());
 
         var result = RocStr.allocate(total_size, roc_ops);
         const result_ptr = result.asU8ptrMut();
@@ -1500,6 +1493,15 @@ pub fn strJoinWith(
 
         return result;
     }
+}
+
+/// Byte length of `strs` joined by a separator. Saturates so an impossible
+/// size reaches the allocation guard instead of wrapping to a buffer the
+/// copies overrun. `strs` must not be empty.
+fn joinedLength(strs: []const RocStr, separator_len: usize) usize {
+    var total: usize = 0;
+    for (strs) |str| total +|= str.len();
+    return total +| separator_len *| (strs.len - 1);
 }
 
 /// Str.toUtf8 - converts a string to a list of UTF-8 bytes.
@@ -2651,10 +2653,7 @@ pub fn reserveC(
     update_mode: UpdateMode,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    // Make sure on 32-bit targets we don't accidentally wrap when we cast our
-    // U64 spare down to U32. Clamping loses nothing: a spare that does not fit
-    // in `usize` cannot be satisfied on this target either way, and `reserve`
-    // carries it down to the allocation guard, which crashes on it.
+    // Clamp rather than wrap on 32-bit targets; the allocation guard rejects it.
     const spare: usize = @intCast(@min(spare_u64, @as(u64, std.math.maxInt(usize))));
     return reserve(string, spare, update_mode, roc_ops);
 }
@@ -2668,11 +2667,8 @@ pub fn reserve(
 ) RocStr {
     const old_length = string.len();
 
-    // `spare` is Roc-controlled, so `old_length + spare` can overflow `usize`.
-    // A wrapped sum is always below the current capacity, which would silently
-    // turn the reserve into a no-op; saturating instead carries the impossible
-    // request into `reallocate`, whose allocation guard crashes on it. This
-    // mirrors `listReserve`.
+    // Saturate so an impossible request reaches the allocation guard instead
+    // of wrapping below the capacity and becoming a no-op.
     const desired_length = old_length +| spare;
 
     if (string.getCapacity() >= desired_length) {
@@ -2762,7 +2758,8 @@ pub fn withCapacityC(
     capacity: u64,
     roc_ops: *RocOps,
 ) callconv(.c) RocStr {
-    var str = RocStr.allocate(@intCast(capacity), roc_ops);
+    // Clamp rather than wrap on 32-bit targets; the allocation guard rejects it.
+    var str = RocStr.allocate(@intCast(@min(capacity, @as(u64, std.math.maxInt(usize)))), roc_ops);
     str.setLen(0);
     return str;
 }
@@ -3929,6 +3926,16 @@ test "RocStr.joinWith: result is big" {
     defer result.decref(test_env.getOps());
 
     try std.testing.expect(roc_result.eql(result));
+}
+
+test "joinedLength saturates instead of wrapping" {
+    const max = std.math.maxInt(usize);
+    const huge = RocStr{ .bytes = null, .length = max / 4 + 1, .capacity_or_alloc_ptr = 0 };
+    const small = RocStr.fromSliceSmall("abc");
+
+    try std.testing.expectEqual(@as(usize, 8), joinedLength(&.{ small, small }, 2));
+    try std.testing.expectEqual(@as(usize, max), joinedLength(&.{ huge, huge, huge, huge }, 0));
+    try std.testing.expectEqual(@as(usize, max), joinedLength(&.{ small, small, small }, max / 2 + 1));
 }
 
 test "strJoinWithC: consuming a unique heap List(Str) frees its element strings" {
