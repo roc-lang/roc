@@ -17036,6 +17036,19 @@ The debug verifier checks at least these explicit decisions:
 - root, layout, runtime-schema, const-plan, and requested-layout outputs name
   the same checked ids and Lambda Mono types
 
+The materializer re-derives every decision it is compared on, with exactly one
+copied input: the direct path's choice to fold a statically-impossible
+`List.map` reuse match, which depends on committed layouts the materializer
+does not have. Each fold is recorded as a `FoldedMatch`, and the materializer
+re-derives the site's shape and selected branch at replay and asserts that the
+record names a `List.map` reuse site resolved to its constant-0 branch
+(`FoldedMatch.isResolutionOf`). A new kind of fold extends that predicate and
+its contract together. The materializer also asserts that every source of a
+local's type—signature argument, pattern, expression, loop parameter, payload
+local—lowers to the same Lambda Mono type, so a Lambda Solved local whose type
+sources stop sharing one root fails at that local instead of making the
+reference tree depend on traversal order.
+
 The verifier may also lower the materialized Lambda Mono tree with the legacy
 Lambda Mono-to-LIR builder and compare that LIR to the direct LIR result. This
 comparison is a debug assertion only. A mismatch is a compiler bug. The compiler

@@ -298,8 +298,8 @@ sharing.
   the god-structs that make helpers uncopyable-without-copying; the
   `Builder`/`BodyContext` inspect double is removed there or here,
   whichever lands first.
-- [../small/lambda-mono-oracle-fidelity.md](../small/lambda-mono-oracle-fidelity.md)—
-  the differential-oracle pattern step 7 generalizes.
+- design.md's "Debug Lambda Mono Verification"—the differential-oracle
+  pattern step 7 generalizes.
 - The landed divergence parity suite (`checkedExprDivergence` and the
   "checked divergence parity" tests in src/check/checked_artifact.zig)—the
   parity-suite discipline this project applies across strategies.

@@ -156,6 +156,7 @@ test "compile tests" {
     std.testing.refAllDecls(@import("test/issue_10842_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10848_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10849_test.zig"));
+    std.testing.refAllDecls(@import("test/list_map_folded_match_replay_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10865_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10870_test.zig"));
     std.testing.refAllDecls(@import("test/issue_10893_test.zig"));

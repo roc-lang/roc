@@ -56,7 +56,7 @@ pub fn run(
     solved: Solved.Program,
     /// Match sites the direct lowerer statically resolved; replayed here so
     /// both derivations demand the same set of functions.
-    folded_matches: []const Lifted.Program.FoldedMatch,
+    folded_matches: []const Lifted.FoldedMatch,
     options: Options,
 ) Common.LowerError!Ast.Program {
     var owned = solved;
@@ -913,6 +913,13 @@ const Lowerer = struct {
             },
             .match_ => |match| {
                 if (self.folded_matches.get(match.scrutinee)) |folded_body| {
+                    // Only the layout-dependent choice to fold is copied from
+                    // the direct path; the site shape and the selected branch
+                    // are re-derived here.
+                    const folded: Lifted.FoldedMatch = .{ .scrutinee = match.scrutinee, .body = folded_body };
+                    if (!folded.isResolutionOf(self.solved.lifted, match.branches)) {
+                        Common.invariant("Lambda Mono replayed a folded match that is not a List.map reuse site resolved to its constant-0 branch");
+                    }
                     plan.add(.{ .expr = folded_body });
                 } else {
                     plan.add(.{ .expr = match.scrutinee });
@@ -1303,12 +1310,7 @@ const Lowerer = struct {
             .pats => |span| out.add(.{ .pat = GuardedList.at(lifted.patSpan(span), index) }),
             .stmts => |span| out.add(.{ .stmt = GuardedList.at(lifted.stmtSpan(span), index) }),
             .typed_locals => |span| {
-                const item = GuardedList.at(lifted.typedLocalSpan(span), index);
-                if (self.local_map[@backingInt(item.local)]) |mapped| {
-                    out.add(.{ .local_at = .{ .local = item.local, .ty = self.program.getLocal(mapped).ty } });
-                } else {
-                    out.add(.{ .local = item.local });
-                }
+                out.add(.{ .local = GuardedList.at(lifted.typedLocalSpan(span), index).local });
             },
             .destructs => |span| out.add(.{ .pat = GuardedList.at(lifted.recordDestructSpan(span), index).pattern }),
             .branches => |span| {
@@ -2095,7 +2097,16 @@ const Lowerer = struct {
 
     fn localFor(self: *Lowerer, local: Lifted.LocalId, ty: Type.TypeId) Allocator.Error!Ast.LocalId {
         const index = @backingInt(local);
-        if (self.local_map[index]) |existing| return existing;
+        if (self.local_map[index]) |existing| {
+            // Every source of a local's type (signature argument, pattern,
+            // expression, loop parameter, payload local) resolves to one
+            // Lambda Solved root, and `type_map` lowers each root once, so
+            // agreement is identity of the lowered type.
+            if (self.program.getLocal(existing).ty != ty) {
+                Common.invariant("Lambda Mono local reached with a type that disagrees with its first lowering");
+            }
+            return existing;
+        }
         const lifted_local = self.solved.lifted.locals[index];
         const lowered = try self.program.addLocalWithBinder(lifted_local.symbol, ty, lifted_local.binder);
         try self.program.setLocalName(lowered, self.solved.lifted.localName(@fromBackingInt(@intCast(index))));

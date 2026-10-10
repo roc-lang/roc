@@ -39,9 +39,6 @@ termination hazard, and one verification coverage gap):
 - [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)—
   state, assert, and test the four invariants that make monomorphic
   lambda-set solving sound.
-- [small/lambda-mono-oracle-fidelity.md](small/lambda-mono-oracle-fidelity.md)—
-  agreement asserts and contract pins for the Debug Lambda Mono oracle;
-  delete its dead Queue.
 - [small/monotype-machinery-hardening.md](small/monotype-machinery-hardening.md)—
   release-gate verification-only type checks; measure-first fixes for
   digest depth fallback, unify memo, spec duplication, cross-store reuse.
@@ -53,6 +50,15 @@ Within this batch the projects are independent.
 (`spec-constr-specialization-limits` used to be paired here with
 `spec-constr-static-match-soundness`, which has since landed and had its
 doc removed.)
+
+The Lambda Mono oracle-fidelity project has landed. Its dead `Queue` had
+already been deleted. The materializer now asserts that every type source of
+a local lowers to one Lambda Mono type (including the typed-local sequence
+path, which had reused the cached type instead of checking it), and it
+re-derives each replayed `List.map` fold through `FoldedMatch.isResolutionOf`
+instead of trusting the recorded body. The negative controls test that
+predicate directly, because invariants panic and the test suite has no
+harness for observing a panic.
 
 The empty-tag-union yield project has landed, by deletion rather than by
 carrying provenance. Sealing unresolved Monotype rows before publication had

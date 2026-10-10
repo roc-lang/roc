@@ -475,7 +475,7 @@ const CompletedFnBodyShard = struct {
     join_point_count: u32,
     features: WorkerBodyFeatures,
     discovered_fns: []Type.FnId,
-    folded_map_matches: []Lifted.Program.FoldedMatch,
+    folded_map_matches: []Lifted.FoldedMatch,
     erased_arg_layouts: std.ArrayList(layout.Idx),
 
     fn deinit(self: *CompletedFnBodyShard) void {
@@ -793,7 +793,7 @@ const Lowerer = struct {
     layout_request_const_plans: bool,
     /// Match sites whose `list_map_can_reuse` branch `matchStep` resolved statically,
     /// recorded (Debug only) so the Lambda Mono verifier replays them.
-    folded_map_matches: std.ArrayList(Lifted.Program.FoldedMatch),
+    folded_map_matches: std.ArrayList(Lifted.FoldedMatch),
     /// Source functions indexed by their stage-stable symbols.
     source_symbols: std.AutoHashMap(Common.Symbol, Lifted.FnId),
     /// Type digests shared by every procedure identity rendering; see
@@ -15379,7 +15379,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
     solved = inferred;
 
     const Attempt = struct {
-        fn run(failing: std.mem.Allocator, original: *const Solved.Program, folded: Lifted.Program.FoldedMatch) std.mem.Allocator.Error!void {
+        fn run(failing: std.mem.Allocator, original: *const Solved.Program, folded: Lifted.FoldedMatch) std.mem.Allocator.Error!void {
             const copy = try cloneSolvedProgram(failing, original);
             // run consumes the clone on success AND failure; no clone errdefer.
             var result = try LambdaMonoLower.run(failing, copy, &.{folded}, .{});
@@ -15387,7 +15387,7 @@ test "compact comptime root descriptors survive solved teardown and direct LIR l
         }
     };
     var deterministic = base.DeterministicAllocator.init(allocator);
-    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.Program.FoldedMatch{ .scrutinee = produced, .body = read } });
+    try std.testing.checkAllAllocationFailures(deterministic.allocator(), Attempt.run, .{ &solved, Lifted.FoldedMatch{ .scrutinee = produced, .body = read } });
     const Verify = struct {
         fn run(failing: std.mem.Allocator, original: *const Solved.Program) Common.LowerError!void {
             var lowerer = try Lowerer.init(failing, .u64, original, .{});
