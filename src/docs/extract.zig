@@ -2551,10 +2551,8 @@ fn extractDocTypeInner(
                 gpa.free(display.type_name);
             };
 
-            // Only the declared arguments are written; the hidden ones are
-            // the declaration's own (`sliceAliasDeclaredArgs`).
-            const declared_args = types.sliceAliasDeclaredArgs(alias);
-            if (declared_args.len > 0) {
+            var args_iter = types.iterAliasArgs(alias);
+            if (args_iter.count() > 0) {
                 // Type application
                 const constructor = try allocDocType(gpa, .{ .type_ref = .{
                     .module_path = display.module_path,
@@ -2569,7 +2567,7 @@ fn extractDocTypeInner(
                 var args = std.ArrayList(*const DocType).empty;
                 defer args.deinit(gpa);
 
-                for (declared_args) |arg_var| {
+                while (args_iter.next()) |arg_var| {
                     const arg_type = try extractDocTypeInner(ctx, arg_var) orelse
                         try allocDocType(gpa, .@"error");
                     try args.append(gpa, arg_type);

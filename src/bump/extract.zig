@@ -289,7 +289,7 @@ const Extractor = struct {
         if (payload == .alias) {
             const alias = payload.alias;
             return .{ .alias = .{
-                .arity = @intCast(alias.declared_arity),
+                .arity = @intCast(alias.args.len),
                 .target = try self.convertType(view, names, alias.backing, &memo),
             } };
         }
@@ -356,7 +356,7 @@ const Extractor = struct {
                     alias.source_decl,
                     names.typeNameText(alias.name),
                     alias.builtin_origin,
-                    alias.declaredArgs(),
+                    alias.args,
                     memo,
                 );
                 try memo.put(self.gpa, id, api_id);

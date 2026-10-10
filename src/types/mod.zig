@@ -19,7 +19,6 @@ pub const debug = @import("debug.zig");
 pub const TypeWriter = @import("TypeWriter.zig");
 
 pub const Alias = types.Alias;
-pub const AliasSpine = types.AliasSpine;
 pub const Flex = types.Flex;
 pub const Rigid = types.Rigid;
 pub const RecursionVar = types.RecursionVar;

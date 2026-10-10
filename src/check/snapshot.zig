@@ -567,7 +567,7 @@ pub const Store = struct {
                     .fill = fill,
                     .ident = alias.ident,
                     .backing = store.getAliasBackingVar(alias),
-                    .args = store.sliceAliasDeclaredArgs(alias),
+                    .args = store.sliceAliasArgs(alias),
                 } });
                 return false;
             },

@@ -1,12 +1,10 @@
 platform ""
     requires {} { main! : List(Str) => Try({}, [Exit(I32), ..]) }
-    exposes [FallibleWiden, Stdout]
+    exposes [FallibleWiden]
     packages {}
     provides { "roc_main": main_for_host! }
     hosted {
-        "roc_fallible_not_found": FallibleNotFound.not_found!,
         "roc_fallible_str_ok": FallibleHost.str_ok!,
-        "roc_stdout_line": Stdout.line!,
     }
     targets: {
         inputs_dir: "targets/",
@@ -21,9 +19,7 @@ platform ""
     }
 
 import FallibleHost
-import FallibleNotFound
 import FallibleWiden
-import Stdout
 
 main_for_host! : List(Str) => I32
 main_for_host! = |args|
