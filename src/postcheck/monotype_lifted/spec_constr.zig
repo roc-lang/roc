@@ -1308,6 +1308,9 @@ const InlineScopeRebasePair = struct {
 };
 
 const Pass = struct {
+    /// Containers of finished cloners, kept for the next clone (see
+    /// `ClonerScratch`).
+    spare_cloner_scratch: std.ArrayList(ClonerScratch) = .empty,
     allocator: Allocator,
     arena: collections.SingleThreadArena,
     program: *Ast.Program,
@@ -1899,7 +1902,20 @@ const Pass = struct {
         return contents;
     }
 
+    /// Empty cloner containers, reusing a finished cloner's when one is spare.
+    fn takeClonerScratch(self: *Pass) ClonerScratch {
+        return self.spare_cloner_scratch.pop() orelse ClonerScratch.fresh(self.allocator);
+    }
+
+    /// Keep a finished cloner's containers for the next clone.
+    fn returnClonerScratch(self: *Pass, scratch: *ClonerScratch) void {
+        scratch.clear();
+        self.spare_cloner_scratch.append(self.allocator, scratch.*) catch scratch.deinit(self.allocator);
+    }
+
     fn deinit(self: *Pass) void {
+        for (self.spare_cloner_scratch.items) |*scratch| scratch.deinit(self.allocator);
+        self.spare_cloner_scratch.deinit(self.allocator);
         self.loop_body_contents.deinit(self.allocator);
         self.static_data_structure.deinit();
         self.callable_sources.deinit();
@@ -5156,6 +5172,15 @@ const Subst = struct {
         self.exact.deinit();
     }
 
+    /// Forget every substitution while keeping the tables' capacity.
+    fn clearRetainingCapacity(self: *Subst) void {
+        self.changes.clearRetainingCapacity();
+        self.loop_carried_binders.clearRetainingCapacity();
+        self.binder_aliases.clearRetainingCapacity();
+        self.binder_subst.clearRetainingCapacity();
+        self.exact.clearRetainingCapacity();
+    }
+
     /// Identity a local's binder-scoped substitution is keyed by: the pattern
     /// binder together with the digest of the local's monomorphic type. Two
     /// locals that share a binder but were monomorphized at different types are
@@ -5396,6 +5421,88 @@ const Subst = struct {
     }
 };
 
+/// The containers of one `Cloner`, kept with their capacity on the pass after
+/// the cloner finishes so the next clone the pass runs starts from the
+/// capacity the last one reached rather than from empty tables.
+const ClonerScratch = struct {
+    arena: collections.SingleThreadArena,
+    subst: Subst,
+    inline_stack: std.ArrayList(InlineFrame),
+    loop_stack: std.ArrayList(LoopPattern),
+    loop_exit_stack: std.ArrayList(?LoopExitSelection),
+    exit_tuple_items: collections.DenseMap(Ast.LocalId, []?Ast.ExprId),
+    join_stack: std.ArrayList(ActiveJoinClone),
+    let_case_builds: std.ArrayList(*LetCaseBuild),
+    clone_templates: std.ArrayList(ExprIdRange),
+    arm_values: collections.DenseMap(Ast.ExprId, []const Value),
+    block_tail_values: collections.DenseMap(Ast.ExprId, Value),
+    recorded_value_keys: std.ArrayList(RecordedValueKey),
+    active_recursive_value_locals: collections.DenseMap(Ast.LocalId, void),
+    rebased_inline_scopes: std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId),
+    inline_scope_origins: collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId),
+    rebased_inline_scope_changes: std.ArrayList(InlineScopeRebasePair),
+
+    fn fresh(allocator: Allocator) ClonerScratch {
+        return .{
+            .arena = collections.SingleThreadArena.init(allocator),
+            .subst = Subst.init(allocator),
+            .inline_stack = .empty,
+            .loop_stack = .empty,
+            .loop_exit_stack = .empty,
+            .exit_tuple_items = .init(allocator),
+            .join_stack = .empty,
+            .let_case_builds = .empty,
+            .clone_templates = .empty,
+            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(allocator),
+            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(allocator),
+            .recorded_value_keys = .empty,
+            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(allocator),
+            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(allocator),
+            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(allocator),
+            .rebased_inline_scope_changes = .empty,
+        };
+    }
+
+    /// Empty every container, keeping its capacity.
+    fn clear(self: *ClonerScratch) void {
+        _ = self.arena.reset(.retain_capacity);
+        self.subst.clearRetainingCapacity();
+        self.inline_stack.clearRetainingCapacity();
+        self.loop_stack.clearRetainingCapacity();
+        self.loop_exit_stack.clearRetainingCapacity();
+        self.exit_tuple_items.clearRetainingCapacity();
+        self.join_stack.clearRetainingCapacity();
+        self.let_case_builds.clearRetainingCapacity();
+        self.clone_templates.clearRetainingCapacity();
+        self.arm_values.clearRetainingCapacity();
+        self.block_tail_values.clearRetainingCapacity();
+        self.recorded_value_keys.clearRetainingCapacity();
+        self.active_recursive_value_locals.clearRetainingCapacity();
+        self.rebased_inline_scopes.clearRetainingCapacity();
+        self.inline_scope_origins.clearRetainingCapacity();
+        self.rebased_inline_scope_changes.clearRetainingCapacity();
+    }
+
+    fn deinit(self: *ClonerScratch, allocator: Allocator) void {
+        self.inline_stack.deinit(allocator);
+        self.loop_stack.deinit(allocator);
+        self.loop_exit_stack.deinit(allocator);
+        self.exit_tuple_items.deinit();
+        self.join_stack.deinit(allocator);
+        self.let_case_builds.deinit(allocator);
+        self.clone_templates.deinit(allocator);
+        self.arm_values.deinit();
+        self.block_tail_values.deinit();
+        self.recorded_value_keys.deinit(allocator);
+        self.active_recursive_value_locals.deinit();
+        self.rebased_inline_scopes.deinit();
+        self.inline_scope_origins.deinit();
+        self.rebased_inline_scope_changes.deinit(allocator);
+        self.subst.deinit();
+        self.arena.deinit();
+    }
+};
+
 const Cloner = struct {
     pass: *Pass,
     purpose: ClonePurpose,
@@ -5526,30 +5633,31 @@ const Cloner = struct {
     };
 
     fn init(pass: *Pass, source_fn: Ast.FnId, pattern: CallPattern) Cloner {
+        const scratch = pass.takeClonerScratch();
         return .{
             .pass = pass,
             .purpose = .specialization,
             .source_reuse = .none,
-            .arena = collections.SingleThreadArena.init(pass.allocator),
+            .arena = scratch.arena,
             .source_fn = source_fn,
             .pattern = pattern,
-            .subst = Subst.init(pass.allocator),
-            .inline_stack = .empty,
-            .loop_stack = .empty,
-            .loop_exit_stack = .empty,
-            .exit_tuple_items = .init(pass.allocator),
-            .join_stack = .empty,
+            .subst = scratch.subst,
+            .inline_stack = scratch.inline_stack,
+            .loop_stack = scratch.loop_stack,
+            .loop_exit_stack = scratch.loop_exit_stack,
+            .exit_tuple_items = scratch.exit_tuple_items,
+            .join_stack = scratch.join_stack,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
-            .let_case_builds = .empty,
+            .let_case_builds = scratch.let_case_builds,
             .output_start = pass.program.exprCount(),
-            .clone_templates = .empty,
-            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
-            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
-            .recorded_value_keys = .empty,
-            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
-            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
-            .rebased_inline_scope_changes = .empty,
+            .clone_templates = scratch.clone_templates,
+            .arm_values = scratch.arm_values,
+            .block_tail_values = scratch.block_tail_values,
+            .recorded_value_keys = scratch.recorded_value_keys,
+            .active_recursive_value_locals = scratch.active_recursive_value_locals,
+            .rebased_inline_scopes = scratch.rebased_inline_scopes,
+            .inline_scope_origins = scratch.inline_scope_origins,
+            .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5566,30 +5674,31 @@ const Cloner = struct {
     }
 
     fn initForRewrite(pass: *Pass) Cloner {
+        const scratch = pass.takeClonerScratch();
         return .{
             .pass = pass,
             .purpose = .rewrite,
             .source_reuse = .none,
-            .arena = collections.SingleThreadArena.init(pass.allocator),
+            .arena = scratch.arena,
             .source_fn = undefined, // initForRewrite never calls buildArgs, which is the only reader.
             .pattern = .{ .args = &.{} },
-            .subst = Subst.init(pass.allocator),
-            .inline_stack = .empty,
-            .loop_stack = .empty,
-            .loop_exit_stack = .empty,
-            .exit_tuple_items = .init(pass.allocator),
-            .join_stack = .empty,
+            .subst = scratch.subst,
+            .inline_stack = scratch.inline_stack,
+            .loop_stack = scratch.loop_stack,
+            .loop_exit_stack = scratch.loop_exit_stack,
+            .exit_tuple_items = scratch.exit_tuple_items,
+            .join_stack = scratch.join_stack,
             .let_case_shape_growth = .init(let_case_shape_arm_budget),
-            .let_case_builds = .empty,
+            .let_case_builds = scratch.let_case_builds,
             .output_start = pass.program.exprCount(),
-            .clone_templates = .empty,
-            .arm_values = collections.DenseMap(Ast.ExprId, []const Value).init(pass.allocator),
-            .block_tail_values = collections.DenseMap(Ast.ExprId, Value).init(pass.allocator),
-            .recorded_value_keys = .empty,
-            .active_recursive_value_locals = collections.DenseMap(Ast.LocalId, void).init(pass.allocator),
-            .rebased_inline_scopes = std.AutoHashMap(InlineScopeRebasePair, Ast.InlineScopeId).init(pass.allocator),
-            .inline_scope_origins = collections.DenseMap(Ast.InlineScopeId, Ast.InlineScopeId).init(pass.allocator),
-            .rebased_inline_scope_changes = .empty,
+            .clone_templates = scratch.clone_templates,
+            .arm_values = scratch.arm_values,
+            .block_tail_values = scratch.block_tail_values,
+            .recorded_value_keys = scratch.recorded_value_keys,
+            .active_recursive_value_locals = scratch.active_recursive_value_locals,
+            .rebased_inline_scopes = scratch.rebased_inline_scopes,
+            .inline_scope_origins = scratch.inline_scope_origins,
+            .rebased_inline_scope_changes = scratch.rebased_inline_scope_changes,
             .wrapper_strip_depth = 0,
             .materialize_strip_depth = 0,
             .inline_calls = .all,
@@ -5621,22 +5730,25 @@ const Cloner = struct {
     }
 
     fn deinit(self: *Cloner) void {
-        self.inline_stack.deinit(self.pass.allocator);
-        self.loop_stack.deinit(self.pass.allocator);
-        self.loop_exit_stack.deinit(self.pass.allocator);
-        self.exit_tuple_items.deinit();
-        self.join_stack.deinit(self.pass.allocator);
-        self.let_case_builds.deinit(self.pass.allocator);
-        self.clone_templates.deinit(self.pass.allocator);
-        self.arm_values.deinit();
-        self.block_tail_values.deinit();
-        self.recorded_value_keys.deinit(self.pass.allocator);
-        self.active_recursive_value_locals.deinit();
-        self.rebased_inline_scopes.deinit();
-        self.inline_scope_origins.deinit();
-        self.rebased_inline_scope_changes.deinit(self.pass.allocator);
-        self.subst.deinit();
-        self.arena.deinit();
+        var scratch: ClonerScratch = .{
+            .arena = self.arena,
+            .subst = self.subst,
+            .inline_stack = self.inline_stack,
+            .loop_stack = self.loop_stack,
+            .loop_exit_stack = self.loop_exit_stack,
+            .exit_tuple_items = self.exit_tuple_items,
+            .join_stack = self.join_stack,
+            .let_case_builds = self.let_case_builds,
+            .clone_templates = self.clone_templates,
+            .arm_values = self.arm_values,
+            .block_tail_values = self.block_tail_values,
+            .recorded_value_keys = self.recorded_value_keys,
+            .active_recursive_value_locals = self.active_recursive_value_locals,
+            .rebased_inline_scopes = self.rebased_inline_scopes,
+            .inline_scope_origins = self.inline_scope_origins,
+            .rebased_inline_scope_changes = self.rebased_inline_scope_changes,
+        };
+        self.pass.returnClonerScratch(&scratch);
     }
 
     /// Debug validator for the clone-source invariant described on
