@@ -32,6 +32,7 @@ const base = @import("base");
 const TestPackFile = @import("backend").dev.PackFile;
 const bytebox = @import("bytebox");
 const builtins = @import("builtins");
+const msvc_runtime = @import("msvc_runtime");
 const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 const shim_symbols = builtins.shim_symbols;
 
@@ -3285,7 +3286,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "integer SIMD runtime smoke passes (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .not_contains = &.{ .{ .stream = .stderr, .text = "Mismatch" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build reaches the linker without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .not_panic, .contains_any = &.{.{ .needles = &.{ .{ .stream = .stdout, .text = "successfully building" }, .{ .stream = .stderr, .text = "WindowsSDKNotFound" } } }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "integer SIMD Windows cross-build links without an LLVM panic", .backend = .speed, .body = .{ .command = .{ .args = &.{ "build", "--opt=speed", "--no-cache", "--target=x64win" }, .roc_file = "test/cli/runtime_simd_smoke.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "successfully building" }}, .not_contains = &.{ .{ .stream = .stderr, .text = "reached unreachable code" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "match extension fixture runs (LLVM speed)", .backend = .speed, .body = .{ .command = .{ .args = &.{ "--opt=speed", "--no-cache" }, .roc_file = "test/cli/match_extension_codegen.roc", .exit = .success, .not_contains = &.{.{ .stream = .stderr, .text = "panic" }} } } },
@@ -3420,7 +3421,7 @@ const subcommand_cases = [_]CliCase{
     .{ .id = 0, .suite = .subcommands, .name = "roc test list replace retains its element (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "test", "--opt=interpreter", "--no-cache" }, .roc_file = "test/cli/RcListReplace.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "passed" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc test issue 9392 numeric utility expects are deterministic with no cache", .body = .{ .custom = .issue_9392_deterministic_no_cache } },
     .{ .id = 0, .suite = .subcommands, .name = "issue 10987: optimized affine-cipher expects pass on every run", .backend = .speed, .timeout_ms = 600_000, .body = .{ .custom = .issue_10987_optimized_affine_cipher } },
-    .{ .id = 0, .suite = .subcommands, .name = "hosted try question widening rejects a non-included error row", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "hosted question rejects an error omitted from the return row", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_try_question_not_included.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "type mismatch" }, .{ .stream = .stderr, .text = "FallibleReject.roc" } }, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // Repro for https://github.com/roc-lang/roc/issues/11726: the from_quote
     // implementation rejects the "bad" literal, and the accepted "good" literal
     // then allocates (repeat(10)) enough to reuse the freed region. The
@@ -3448,10 +3449,10 @@ const subcommand_cases = [_]CliCase{
     // is a type error, never an extern emitted at the wider row (design.md
     // "Host Symbol ABI"). The three mismatches are the annotated binding, the
     // argument position, and the record field.
-    .{ .id = 0, .suite = .subcommands, .name = "hosted widening channels other than ? are rejected", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "FallibleWiden.roc" }, .{ .stream = .stderr, .text = "3 errors" } }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 3 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "hosted result forwarding cannot widen a closed error row", .body = .{ .command = .{ .args = &.{ "check", "--no-cache" }, .roc_file = "test/fx-open/hosted_widening_channels.roc", .exit = .failure, .stderr_min_len = 1, .contains = &.{ .{ .stream = .stderr, .text = "FallibleWiden.roc" }, .{ .stream = .stderr, .text = "3 errors" } }, .occurrences = &.{.{ .stream = .stderr, .text = "type mismatch", .count = 3 }}, .not_contains = &.{ .{ .stream = .stderr, .text = "panic" }, .{ .stream = .stderr, .text = "[ROC CRASHED]" } } } } },
     // The #9966 failure mode, pinned by what the app receives: the host always
-    // returns Ok, and a use site that widened the hosted row must not turn that
-    // into Err. Run at both native and interpreter execution, since each reaches
+    // returns Ok, and explicit error reconstruction in the Roc wrapper must
+    // not turn that into Err. Run at both native and interpreter execution, since each reaches
     // the host through its own boundary.
     .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives a widened use site (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/issue_9963_hosted_try_question_mark.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "match ok: ok" }, .{ .stream = .stdout, .text = "question ok: ok" } }, .not_contains = &.{.{ .stream = .stderr, .text = "exited with other error" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives a widened use site (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/issue_9963_hosted_try_question_mark.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "match ok: ok" }, .{ .stream = .stdout, .text = "question ok: ok" } }, .not_contains = &.{.{ .stream = .stderr, .text = "exited with other error" }} } } },
@@ -3476,13 +3477,10 @@ const subcommand_cases = [_]CliCase{
     // The non-`?` channels that do typecheck keep the extern declared-typed, so
     // each channel delivers the host's Ok rather than a misread Err.
     .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives every accepted non-? channel (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_channels_declared.roc", .exit = .success, .contains = &.{ .{ .stream = .stdout, .text = "annotation: ok" }, .{ .stream = .stdout, .text = "argument: ok" }, .{ .stream = .stdout, .text = "record field: ok" }, .{ .stream = .stdout, .text = "closed wider: ok" }, .{ .stream = .stdout, .text = "retag: ok" } }, .not_contains = &.{.{ .stream = .stdout, .text = "misread" }} } } },
-    // The same `?` widening reached through a transparent alias: the hosted
-    // result is declared IoResult(Str) (platform/FallibleHostAlias.roc), which
-    // Monotype lowering keeps as an alias node, so building the adapter crosses
-    // it to reach the `Try` it re-tags. Running it is what proves the re-tagged
-    // value is still the host's Ok rather than a misread Err.
-    .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives a widened use site through an alias (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_alias_try_question.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "alias closed wider: ok" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
-    .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives a widened use site through an alias (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_alias_try_question.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "alias closed wider: ok" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    // Explicit reconstruction of an alias-wrapped hosted result must preserve
+    // the host's Ok value while constructing a wider Roc-owned error row.
+    .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives explicit error reconstruction through an alias (dev)", .backend = .dev, .body = .{ .command = .{ .args = &.{ "--opt=dev", "--no-cache" }, .roc_file = "test/fx-open/hosted_alias_try_question.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "alias closed wider: ok" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
+    .{ .id = 0, .suite = .subcommands, .name = "hosted Ok survives explicit error reconstruction through an alias (interpreter)", .backend = .interpreter, .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/hosted_alias_try_question.roc", .exit = .success, .contains = &.{.{ .stream = .stdout, .text = "alias closed wider: ok" }}, .not_contains = &.{ .{ .stream = .stdout, .text = "misread" }, .{ .stream = .stderr, .text = "instantiation widened a closed tag union" }, .{ .stream = .stderr, .text = "compiler bug" }, .{ .stream = .stderr, .text = "postcheck invariant violated" }, .{ .stream = .stderr, .text = "panic" } } } } },
     .{ .id = 0, .suite = .subcommands, .name = "roc issue 9208 open union tag before Exit matches wildcard", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_bar_error.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: Bar" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "fx-open Exit and custom tag in different branches routes custom tag to error branch", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/app_with_custom_error.roc", .exit = .{ .code = 1 }, .contains = &.{.{ .stream = .stderr, .text = "exited with other error: CustomError" }} } } },
     .{ .id = 0, .suite = .subcommands, .name = "fx-open closed union Exit payload maps to process exit code", .body = .{ .command = .{ .args = &.{ "--opt=interpreter", "--no-cache" }, .roc_file = "test/fx-open/test_closed_union.roc", .exit = .{ .code = 1 } } } },
@@ -5747,7 +5745,19 @@ fn copyNativeMuslTargetFile(
     filename: []const u8,
     dest_dir: []const u8,
 ) CliRunnerError!void {
-    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", target.roc_target, filename });
+    return copyFxTargetFile(io, allocator, target.roc_target, filename, dest_dir);
+}
+
+/// Copies one of the fx platform's link inputs for `roc_target` into
+/// `dest_dir`, for a staged platform that declares the same input.
+fn copyFxTargetFile(
+    io: std.Io,
+    allocator: Allocator,
+    roc_target: []const u8,
+    filename: []const u8,
+    dest_dir: []const u8,
+) CliRunnerError!void {
+    const src = try std.fs.path.join(allocator, &.{ project_root_path, "test", "fx", "platform", "targets", roc_target, filename });
     defer allocator.free(src);
     const dest = try std.fs.path.join(allocator, &.{ dest_dir, filename });
     defer allocator.free(dest);
@@ -9878,8 +9888,8 @@ fn customGlibcTargetNonLinux(io: std.Io, allocator: Allocator, env: *const CaseE
 
 /// Shared output on COFF: link the dylib test app and its host into one DLL.
 /// lld-link resolves the app/host symbol references in a single pass, the
-/// same as the ELF and Mach-O shared-library links. Windows-only: the link
-/// needs the native Windows SDK.
+/// same as the ELF and Mach-O shared-library links. Windows-only: it builds
+/// for the native target.
 fn customWindowsSharedLibrary(io: std.Io, allocator: Allocator, env: *const CaseEnv, timer: *harness.Timer, timeout_ms: u64) ?TestResult {
     if (builtin.os.tag != .windows) return null;
 
@@ -12667,6 +12677,15 @@ fn runGlueRuntimeCase(
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime crt1.o: {}", .{err}), env.dirs.work_dir);
                 copyNativeMuslTargetFile(io, allocator, musl_target, "libc.a", target_dir) catch |err|
                     return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime libc.a: {}", .{err}), env.dirs.work_dir);
+            }
+            if (target.kind == .windows) {
+                // An MSVC link uses only the inputs the platform declares, so
+                // the startup archive and import libraries the build prepared
+                // for fx sit beside the host library built below.
+                for (msvc_runtime.files) |filename| {
+                    copyFxTargetFile(io, allocator, target.roc_target, filename, target_dir) catch |err|
+                        return addPreservedWorkDirMessage(allocator, customInfraFailure(allocator, &timer, "failed to copy glue runtime {s}: {}", .{ filename, err }), env.dirs.work_dir);
+                }
             }
         },
         .wasm32 => {},

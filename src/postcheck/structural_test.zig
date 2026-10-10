@@ -1462,10 +1462,10 @@ test "Monotype generated-private call requests retain separate request nodes" {
 
 test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     const lower_source = @embedFile("monotype/lower.zig");
-    const graph_relation = sourceSliceBetween(
+    const nominal_provenance = sourceSliceBetween(
         lower_source,
-        "fn graphHostedTryInfoOrNull(",
-        "const Builder = struct",
+        "fn hostedTryNamedOrNull(",
+        "fn hostedTryTypeLike(",
     );
     // The hosted `Try` adapter is now one instance of the general result-row
     // widening adapter (design.md "Result-Row Widening Adapter"), so the two
@@ -1481,9 +1481,9 @@ test "hosted Try adaptation consumes checker-recorded nominal provenance" {
     );
     try std.testing.expect(@hasField(check.CheckedModule.CheckedProcedureTemplate, "hosted_try_adapter"));
     try expectContains(lower_source, "template.hosted_try_adapter");
-    try expectContains(graph_relation, "capability.def");
-    try expectContains(graph_relation, "capability.ok_type_arg_index");
-    try expectContains(graph_relation, "capability.err_type_arg_index");
+    try expectContains(nominal_provenance, "capability.def");
+    try expectContains(nominal_provenance, "capability.ok_type_arg_index");
+    try expectContains(nominal_provenance, "capability.err_type_arg_index");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, requested.ret)");
     try expectContains(adapter_source, "self.hostedTryInfoOrNull(try_capability, declared.ret)");
     try expectContains(lower_source, "sameTypeDef(named.def, capability.def)");

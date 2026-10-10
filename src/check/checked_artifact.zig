@@ -22671,10 +22671,10 @@ pub const ProcTarget = union(enum) {
     comptime_only,
 };
 
-/// Checker-owned capability for adapting a hosted function whose exact
-/// `Builtin.Try` result has a closed structural error row and is requested with
-/// a wider error row. The nominal, tags, and type argument positions are
-/// explicit so postcheck never recognizes Try by names or backing shape.
+/// Checker-owned capability for a closed `Builtin.Try` result row. General
+/// dispatch adapters use it to retag results, including hosted selections;
+/// hosted ABI validation also uses it. The nominal, tags, and type argument positions
+/// are explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
     ok_tag: canonical.TagLabelId,

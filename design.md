@@ -4151,8 +4151,8 @@ binding that introduces a type variable, named (`a`, `_a`) or an anonymous
 - A where clause constrains a variable the annotation introduces, so a value
   annotation with one is rejected through that variable.
 - An implicitly opened row extension (an extensionless tag union in an output
-  position, Polarity) is not written, so it is not rejected: on a weak value it
-  is the one weak row the Polarity table's VALUE row describes. An explicit
+  position, Polarity) is not written, so it is not rejected: on a value it is
+  the row the Polarity table's VALUE rows describe. An explicit
   `..` is written. In an output position it means exactly what its absence
   means, so on a value binding it can only ask for a quantified row; it is
   rejected, and the report says to remove it.
@@ -4204,7 +4204,9 @@ listed above, `...` and `crash` stubs (with their dedicated hint), and a
 rejected binding used at two types (a list, a function value called at two
 types, a local, and a top-level binding used from two functions), each with
 exactly one error; an unannotated weak value used at two types is an ordinary
-mismatch.
+mismatch. Using a top-level value at two wider tag unions is not two types:
+the value keeps its one type, and each use widens it (Value Rows: Local
+Values Share, Top-Level Values Widen At Each Use).
 `test/echo/value_annotation_not_polymorphic.roc` runs a program past its
 unreached rejected bindings until it reaches one and crashes there, and
 `test/echo/issue_12016_stored_branch_lambdas.roc` runs the stored lambdas.
@@ -8208,13 +8210,14 @@ rules:
 | Annotated thing | The opened extension | What a use may do |
 | --- | --- | --- |
 | A FUNCTION signature | A quantified flex in the generalized scheme, instantiated fresh at every call | Each caller may use the result at a wider union, independently of every other caller |
-| A VALUE binding | ONE weak flex shared by every use in the module, grounded to `[]` after the module solves (`Check.closeWeakValueImplicitOpenExts`) | Uses may widen the shared row, and what accumulates is what every later use sees |
+| A LOCAL VALUE binding | ONE weak flex shared by every use in the enclosing body | Uses may widen the shared row, and what accumulates is what every use sees |
+| A TOP-LEVEL VALUE binding | None after the definition: the row is closed at the definition, at exactly the tags the definition produces | Each use may use the value at a wider union, independently of every other use, through a widening conversion (Value Rows: Local Values Share, Top-Level Values Widen At Each Use) |
 | A HOST-BOUNDARY annotation (a hosted lambda, a `provides` def, a platform `requires` type) | None: the row is generated exactly as written (`AnnotationGenCtx.opening = .as_written`) | Nothing |
 
 A value binding generalizes only when its right-hand side does (Value
 Bindings Generalize By Expression), so a FUNCTION row covers functions and
-value aliases and the VALUE row covers every other value binding; an
-annotation never moves a binding between the two. A host boundary opts out
+value aliases and the two VALUE rows cover every other value binding; an
+annotation never moves a binding between them. A host boundary opts out
 because the host is a fixed ABI rather than a Roc producer participating in
 unification.
 
@@ -8234,9 +8237,10 @@ keeps its annotated type. That type is also exactly what its predeclared
 scheme says, which method dispatch and early references instantiate, so every
 use of the definition relates to one signature. Instantiation never copies the
 bound, so uses widen their own copies freely. A definition whose type
-generalizes keeps its rows bounded for the rest of checking; a weak value
-binding's row is shared by every use, so its bound ends with its right-hand
-side. A platform relates a required definition as a caller does, so that
+generalizes keeps its rows bounded for the rest of checking, and so does a
+top-level value binding, whose uses widen copies rather than its own row; a
+local value binding's row is shared by every use, so its bound ends with its
+right-hand side. A platform relates a required definition as a caller does, so that
 definition's bound ends before its requirement relation. Rows of different
 definitions can share one class, so `Check.bounded_row_marks` records each
 mark with the annotation that owns it, and ending one bound re-applies every
@@ -8250,8 +8254,8 @@ generated codec its body introduced: a derived parser or encoder is often
 validated only once `finalizeGeneratedCodecConstraintsToQuiescence` resolves
 it, and its validation adds error tags to the codec's error row (Derived
 Parser Required-Field Error Composition). For a definition that generalizes,
-the bound refuses that relation and codec validation reports it. For a weak
-value binding, each extension is kept, stamped with the source region of its
+the bound refuses that relation and codec validation reports it. For a value
+binding whose row is still open when its body is checked, each extension is kept, stamped with the source region of its
 binding's right-hand side (`Check.LateImplicitOpenExtAudit.owner_rhs`) and that
 right-hand side itself (`owner_expr`), which a report retires. Each codec
 validation records, with the region of the expression that introduced the
@@ -8261,8 +8265,8 @@ parser's error tags, and any tag the validation added to the row by relating it
 to a format method. After finalize, `Check.runLateImplicitOpenExtAudit` reports
 every demanded tag that lies in the extension of a binding whose right-hand side
 contains the demanding expression and whose row the demand shares (the two rows
-end in the same extension variable), before `closeWeakValueImplicitOpenExts`
-grounds the leftovers to `[]`.
+end in the same extension variable), before a top-level value's rows close at
+its definition.
 
 Provenance is exact, so neither timing nor type-graph reachability decides who
 widened a row. A caller that widens the same row with other tags is not
@@ -8296,14 +8300,10 @@ identically. The first reconstructs the hosted error with a `match`, so the
 is never bound, and the function's row stays open. The second forwards the
 hosted error with `?`; the host's row is closed, so unifying it into the
 annotation's extension would bind that extension to `[]` and close the row.
-Hosted Try Question Widening covers exactly that forwarding, so the fixture is
-GREEN: a `?` on a direct hosted call does not decline the rule merely
-because ordinary unification could relate the pair by GROUNDING the
-annotation's own still-open extension.
-Closing-by-body itself is unchanged, and row subsumption is still what
-replaces it: Hosted Try Question Widening is gated on a direct hosted call, so
-a NON-hosted forwarder's row still closes behind an identical open
-annotation.
+With the hosted widening exception removed, that forwarding closes the row.
+The fixture remains an acceptance witness for the deferred subsumption design,
+but its question-forwarding case is expected to expose the removed exception's
+compatibility cost. The match-reconstructing case keeps its open row.
 
 An anonymous `..` in a positive position of an opening annotation means
 exactly what absence means there and is generated the same way (a recorded
@@ -8333,18 +8333,14 @@ positions, shared across its sequential files and paths and released at invocati
 exit. Standalone formatting owns the same data for that call; independent
 workers never share mutable analysis state.
 
-The VALUE row above is the pre-polarity behaviour of an inferred value
-(`x = Boom`) extended to annotated ones: the value's body is bounded by the
-audit, and a later annotated use listing fewer tags than the shared row has
-accumulated is rejected by its own audit. Writing `..` on a weak value is
-rejected (Value Bindings Generalize By Expression): a value cannot quantify a
-row. Grounding those extensions is safe because
-nothing in the module can widen them further, and the closed row is exactly
-what the annotation produced before polarity, so importers and Monotype's
-stored constants see the type they always did (an extension that meanwhile
-joined a generalized scheme is left alone). Local value bindings are not
-grounded: their rows behave like inferred local rows and are sealed by
-Monotype's row defaults.
+The two VALUE rows treat an inferred value (`x = Boom`) and an annotated one
+alike: the value's body is bounded by the audit, and writing `..` on a value
+is rejected (Value Bindings Generalize By Expression), because a value cannot
+quantify a row. A local value's shared row behaves like any inferred local
+row and is sealed by Monotype's row defaults. A top-level value's row closes
+at its definition, and its uses widen; Value Rows: Local Values Share,
+Top-Level Values Widen At Each Use states that rule and why each alternative
+was rejected.
 
 An ALIAS carries its implicit row variables as hidden ordinary rigid
 parameters. `MyResult(a) : Try(a, [MyError])` has an additional internal
@@ -8643,118 +8639,198 @@ That adapter is wired to template completion for dispatch plans, so the one
 open question is whether a value coerced inside an ordinary body needs a
 re-tag it does not reach there.
 
-Subsumption deletes the CHECKER half of Hosted Try Question Widening: the
-use-site redirect that widens a `?` condition, together with the guard that
-keeps that redirect's decline shortcut from grounding the expected row's own
-extension. The LOWERING half is permanent, because the host ABI is fixed by
-something other than typing—a widened request at a host boundary is always
-served by a generated adapter that calls the declared-type boundary and
-re-tags its result, never by specializing the boundary at the widened layout.
-The two halves cannot be deferred together: `..` is rejected at host
-boundaries by rule, so a host error row is closed BY DECLARATION rather than
-by inference, and "a closed row meets a caller who wants it wider" arises at
-every host boundary rather than in rare corners.
-
-Two things bound what may be left unrepaired while the deferral stands, and
-both are about mistaking general machinery for scaffolding. First, a rule may
-be declined early by a shortcut only where taking the shortcut is
-observationally the same as applying the rule. Ordinary unification relating
-the two rows is not such a case: on the exact pair Hosted Try Question
-Widening exists for, it relates them only by GROUNDING the annotation's own
-still-open extension, which is a different outcome. A shortcut narrower than
-the rule it guards is an accident rather than a declared boundary, and
-removing one removes an exclusion rather than adding a host-specific special
-case—so it is not work subsumption later undoes, and it comes out with the
-checker half in the same sweep. Second, the widening machinery is not
-host-specific scaffolding awaiting deletion: the Result-Row Widening Adapter
-serves a CLOSED checked result row at a wider requested row with no host in
-the picture (`test/cli/WidenClosedImpl.roc` and its siblings), and the host
-case is one instance of it.
+The host-specific checker rewrite has been removed before subsumption is
+implemented (Hosted Try Question Widening Removed). Roc wrappers must explicitly
+reconstruct hosted errors when composing direct calls with wider error rows.
+The general adapter remains for admitted generic dispatch requests, including
+those selecting hosted implementations, and for non-hosted closed implementations
+(`test/cli/WidenClosedImpl.roc` and its siblings).
 
 Two questions are settled in the same pass, because each asks what a closed
 row means at a boundary. A bounded row refuses exactly the relations that
 would add a tag to it, so a coercion that changes when an extension gains tags
 changes what the bound refuses with it.
-`Check.closeWeakValueImplicitOpenExts` grounds a top-level weak value's
-still-open extensions to `[]`, and cross-module widening of annotated weak
-values waits on this same coercion rather than on a lowering default.
+A top-level value's uses, in its own module and in every importer, widen
+through this same coercion applied to a value rather than to a call result
+(Value Rows: Local Values Share, Top-Level Values Widen At Each Use).
 
-The acceptance bar is that no fixture is edited: a program this design says
-should typecheck must typecheck as written. The hosted instance already meets
-it (`test/fx-open/issue_9963_hosted_try_question_mark.roc`). No corpus program
-spells a NON-hosted closed forwarder, so subsumption needs a fixture of its
-own.
+Future subsumption must accept closed forwarders without requiring source
+reconstruction. The direct hosted forwarding rejection in
+`src/compile/test/hosted_error_diagnostic_test.zig` pins the current limitation;
+non-hosted closed forwarding needs its own subsumption fixture.
 
-### Hosted Try Question Widening
+### Value Rows: Local Values Share, Top-Level Values Widen At Each Use
 
-`?` unwraps a `Try` condition and re-raises its error row into the enclosing
-function's return row. When the callee's error row is closed and the
-enclosing annotated return's row is open (a rigid extension), ordinary
-unification rejects the pair, and that mismatch is a type error by design: a
-closed error row is not widened into an open annotated row at use sites
-(issue #9798's program is rejected). Under polarity a non-hosted callee's
-annotated error row is itself implicitly open, but until row subsumption
-replaces closing-by-body (see Deferred: Row Subsumption) a body that forwards
-a closed value still leaves the row closed, so the pairing is not confined to
-host rows.
-At a host boundary it is GUARANTEED: `..` is rejected there by rule, so a host
-error row is closed by declaration rather than by inference, and every hosted
-call whose caller wants a wider row meets it.
+A value binding (one that does not generalize; Value Bindings Generalize By
+Expression) has exactly one type and is evaluated once. What differs between
+local and top-level values is how its uses relate to an implicitly open tag
+row in that type: `e = Boom`, `e : [Boom]`, `cfg = { mode: Fast }`.
 
-The one declared exception is a direct call of a hosted function. A hosted
-function's boundary type is an ABI contract keyed by its declared closed row
-(see Host Symbol ABI), so the hosted callee cannot adopt the caller's wider
-row, and requiring callers to re-tag hosted errors by hand would make hosted
-functions unusable with `?`. When the `?` condition is a direct call of a
-hosted function—the call's function expression resolves statically to an
-`e_hosted_lambda` def; dispatch calls and value-carried functions never
-qualify—and every visible error in the callee's row is included in the
-expected row (same tag names, mutually usable payloads), the checker widens
-the condition at the use site: the condition's root is redirected to a fresh
-`Try` at the expected row (`widenTryConditionForExpectedReturn`, cited as
-`RedirectRule.hosted_try_question_widening`), leaving the hosted callee's own
-declared type untouched. Monotype lowering gives a widened hosted
-specialization request a generated Roc adapter at the requested type that
-calls the declared-type boundary and re-tags the error into the wider row,
-so the extern boundary itself is always emitted at the declared row.
+- A LOCAL value's open row is one weak flex shared by every use in the
+  enclosing body. Uses that need wider unions widen the shared row, and the
+  union that accumulates is the value's one type. Two uses that need
+  different CLOSED unions (`pastel : [Purple, Mauve] -> Str` and
+  `vibrant : [Purple, Orange] -> Str` both applied to `color = Purple`) are a
+  type mismatch, exactly as Roc RFC 0010 specifies for this program.
+- A TOP-LEVEL value's type is its annotation when it has one, and otherwise
+  the type its right-hand side produces, with every still-open row closed at
+  the definition: `e = Boom` is `[Boom]`, `e = if c A else B` is `[A, B]`.
+  The value is evaluated once, at that type, at compile time. EVERY use,
+  including uses in the defining module, may use it at a wider union: the use
+  relates to its own copy of the value's type, in which each widenable row
+  has a fresh extension, and records that it is a widening of the
+  definition's value. Lowering reads the one evaluated value and converts it
+  to the use's union (`row_widen`). Because the value is a compile-time
+  constant, each widened copy is itself a compile-time constant, produced
+  once per (value, target type) by a pure generated conversion.
 
-This rule decides which programs typecheck, and that is all it decides. It is
-not what keeps the host ABI intact: the extern boundary is pinned by the
-producer-side check in Monotype lowering (see Host Symbol ABI), which admits
-only the declared type no matter what a use site's type turned out to be. So
-the rule can be tightened, loosened, or replaced on typing grounds alone.
+The conversion is the coercion Roc RFC 0011 ("Union Refinement") describes:
+unpack each tag and repack it in the wider union, the transformation a user
+would otherwise write by hand as a `match` that rebuilds each tag. When the
+source and target unions have the same runtime representation, the
+conversion is the identity and emits nothing. It is the value form of the
+coercion Deferred: Row Subsumption describes for call results, and its first
+instance, the Result-Row Widening Adapter, re-tags the same way.
 
-The rule has two halves with different lifetimes. The LOWERING half (a widened
-request is served by a generated adapter that calls the declared-type
-boundary and re-tags its result, never by specializing the boundary at the
-widened layout) is PERMANENT, because the host ABI is fixed by something other
-than typing. Hosted Try Question Widening is the instance of Result-Row
-Widening Adapter in which the declared row is the host ABI. The CHECKER half
-is exactly what general row subsumption subsumes, and is the part to delete
-once subsumption lands. It is the use-site redirect that widens the `?`
-condition, plus the roughly fifty lines that keep that redirect's decline
-shortcut from grounding the expected row's own extension
-(`tryErrorRowEndsOpen` and the guard on `tryErrorRowNeedsUseSiteWidening`'s
-early return, both in `Check.zig`); the two come out in one sweep. The two
-halves cannot be deferred together:
-because `..` is rejected at host boundaries, a host error row is closed BY
-RULE rather than by inference, so "a closed row meets a caller who wants it
-wider" arises at every host boundary and the general mechanism cannot be
-half-built.
+Widening never makes a value polymorphic. Only tag rows widen; a value whose
+type has any other weak variable (`empty = []`) still has that variable
+decided once, by the module's uses, and the value is still computed once.
+Converting a value is not re-evaluating it, so nothing in its definition
+(`dbg`, `expect`, `crash`, or work) runs once per use or once per type.
 
-Both sides are pinned by tests: accepted—
-test/fx-open/issue_9963_hosted_try_question_mark.roc (a direct hosted `?`
-inside an open-row platform function builds and the host's Ok is observed as
-Ok) and test/cli/SpecConstrInlineScopeRebaseGrowth.roc (the same forwarding
-one level deeper, through a second wrapper); both were red under the decline
-shortcut described above and are green since 2026-09-16;
-rejected—test/fx-open/hosted_try_question_not_included.roc (a direct
-hosted `?` whose enclosing annotation omits the hosted error is a type
-error). The non-hosted side of issue #9798 is superseded by polarity: a
-non-hosted callee's annotated error row is implicitly open, so `?` flows it
-into the enclosing row through ordinary unification, and the enclosing
-annotation's audit rejects an error it does not list (pinned by the
-"polarity - try" tests in src/check/test/type_checking_integration.zig).
+#### Why top-level uses widen
+
+Without widening, a top-level value's row must be shared by its module's uses
+and closed when the module finishes checking. That rule has four defects, and
+widening at each use removes all of them:
+
+- The value's type depends on how its own module happens to use it. Adding or
+  deleting an unrelated use inside the module changes the type every importer
+  sees, and with it whether importers type-check.
+- The value's type depends on checking order. A consumer that inspects the
+  row before a later use widens it (a match checked for exhaustiveness, a
+  dispatch resolution) observes a different type from one that inspects it
+  afterwards.
+- An importer can never widen the value. It sees whatever the defining module
+  accumulated, so a constant its module never uses is exported as a single-tag
+  union, which is almost never what an importer can use.
+- The module and its importers disagree about one value's type: the module
+  sees an open shared row while it is checked, importers a closed one.
+
+With widening, a top-level value's type is fixed by its definition alone, the
+same in its module and in every importer, independent of use order; each use
+widens independently; and the value is still computed exactly once.
+
+Uses in the defining module widen too, rather than sharing a row as local
+uses do. If they shared a row, the value's type would again depend on how its
+own module uses it, and importers would see that accumulated type instead of
+the type the definition produces.
+
+#### Why local values share
+
+Every use of a local value is in one body, visible to the checker at once, and
+the value's type never reaches another module: it leaves the body only
+through the function's own result or a capture, whose types the function
+decides. A shared row therefore has none of the top-level defects, and uses
+that widen it keep tag constants useful (`e = Boom` is never stuck as
+`[Boom]`). The one program sharing rejects that widening would accept is two
+uses needing different closed unions; RFC 0010 judges that rare and accepts
+the type error, whose fix is to write the tag at each use. Sharing needs no
+conversion, so a local value never pays a runtime conversion, including for
+rows inside a `List`. A definition moved from a body to the top level keeps
+type-checking; one moved the other way can stop type-checking only in that
+two-closed-uses case.
+
+#### Rejected alternatives
+
+- Generalizing a top-level value over its implicitly opened rows and
+  evaluating it at compile time once per concrete specialization. Each use
+  type would get its own evaluation of the value's body: duplicated work, and
+  `dbg`, `expect`, and compile-time failures observed once per type, which
+  then need deduplication rules; a specialization needed by more than one
+  finalization program evaluates more than once; and a use inside a stored
+  closure's runtime body recomputes the value on every call. Roc RFC 0010
+  rejects generalizing values precisely because a value's computation must
+  not multiply with its uses. Converting one value gives every use the type it
+  needs with none of these costs.
+- Closing an unannotated value's row at its definition and giving uses no way
+  to widen it. `e = Boom` would be `[Boom]` everywhere, and single-tag unions
+  are almost useless, so tags would be unusable as constants without
+  annotations.
+- Requiring an annotation on a value other modules can import. Roc never
+  requires an annotation on any declaration other than a platform-host
+  boundary.
+- Widening local values at each use as well. Sharing already serves every
+  local use but the accepted two-closed-uses case, without a conversion.
+
+#### Widenable positions
+
+The set of positions a use may widen stays equal to the set lowering can
+convert, by construction (Result-Row Widening Adapter states the same
+invariant for call results). Where a row nested in other structure may
+widen is not yet decided. A record field, tuple item, or tag payload converts
+by rebuilding that one level. A row inside a container (`List`, `Box`, `Dict`)
+converts by rebuilding the whole container, which for a top-level value is
+compile-time work producing another constant, not runtime work. Roc RFC 0011
+refines only the outermost level of a union and never descends under a
+recursion point.
+
+NOT YET IMPLEMENTED. Today a top-level value's row is shared by its module's
+uses and closed when the module finishes checking
+(`Check.closeWeakValueImplicitOpenExts`), so every defect listed above is
+present. The implementation replaces that closing with the per-use widening
+above and deletes `closeWeakValueImplicitOpenExts` and
+`weak_value_implicit_open_ext_ranges`.
+
+### Hosted Try Question Widening Removed
+
+The checker no longer has a special widening rule for `?` on direct hosted
+calls. A hosted result keeps its declared closed error row, and `?` relates
+that row to the enclosing return through ordinary return-row composition and
+unification. Matching rows can still relate; a wider incompatible row is a
+type error. Forwarding into an implicitly open annotation may close that row,
+just as forwarding any other closed value does until row subsumption exists.
+
+This removes the use-site redirect and its subset/payload probes. There is no
+`RedirectRule` for hosted question widening. Hosted error provenance remains
+purely diagnostic and does not affect acceptance.
+
+Hosted lowering has no host-specific widening graph relation or expected-result
+request rewrite. The general Result-Row Widening Adapter remains for generic
+dispatch, including requests that select hosted implementations. Such requests
+are admitted by the ordinary where-method use rules; the adapter calls an inner
+hosted specialization at its declared ABI. The declared host ABI checks remain
+independently in force. Rejecting only widened hosted selections in the checker
+would require carrying individual body-use row requirements through generic
+constraints and imports; the bounded where requirement alone does not record
+those widened uses.
+
+Roc wrappers that combine hosted errors with a wider return row must explicitly
+match and reconstruct each error variant (or wrap the error in a new tag).
+Forwarding `Err(err)` does not reconstruct the inner error union. The accepted
+side is pinned by explicit reconstruction in the host diagnostic tests,
+`FallibleChannels.roc`, `FallibleAlias.roc`, issue #11286 on both specialization
+strategies, and the wasm32 host ABI fixture. The rejected side is pinned by
+`host error diagnostic rejects implicit widening through a direct hosted question`.
+
+### Hosted Error Diagnostics
+
+Hosted error provenance in a `?` mismatch is diagnostic-only. Checking records
+the original condition for each generated `Err` return occurrence, including
+projected return contributions. On a mismatch, reporting context follows exact
+CIR references through function aliases and unchanged result forwarding to a
+hosted declaration. Plain `?` contributes its unchanged error origin to the
+owning lambda; an error handler does not. Each module stores definition-indexed
+origin names in its serialized diagnostic column, so imported aliases consume
+producer-authored origins without accessing private transitive imports.
+Constructing a new error ends that path. A known host origin adds its name and fixed-ABI explanation to the closed-row widening hint;
+ordinary closed rows keep that same hint without host attribution. This evidence
+never controls unification or permits a host result to widen. The final module
+summary pass memoizes both known and absent origins by expression and whether
+the expression is being called, so shared forwarding chains are walked once.
+Earlier diagnostic walks do not reuse this cache while lambda summaries are
+still changing. Local declaration indexing records completion even for an empty
+index, so modules without local bindings do not repeatedly scan their CIR.
 
 ### Try Return-Row Composition
 
@@ -8890,9 +8966,9 @@ adds nothing to that function unless the function returns the closure's
 result. Pinned by `src/check/test/issue_11640_test.zig`.
 
 The rule is confined to deferred returns carrying the explicit `try_suffix`
-return context emitted by canonicalization. Annotated returns retain the Hosted
-Try Question Widening policy above, including its ordinary non-hosted
-closed-to-open rejection; composition does not widen a condition type. The
+return context emitted by canonicalization. Annotated returns reject incompatible
+closed-to-open relations, including hosted errors; composition does not widen
+a condition type. The
 checker records distinct checked types for the propagated value and the
 function return; post-check lowering consumes its existing explicit return
 boundary and must not reconstruct or widen either type.
@@ -8953,9 +9029,10 @@ a row that INCLUDES it—the same tags with usable payloads, plus others.
 The request is related component-wise WITHOUT unifying the two rows, the
 template is specialized at its own declared row, and a generated
 `.checked_generated` adapter at the requested row calls that specialization
-and re-tags its result. Hosted Try Question Widening is the instance of this
-rule where the declared row is the host ABI; the extern boundary is still
-emitted at the declared row, as Host Symbol ABI requires.
+and re-tags its result. This also supports hosted implementations selected by
+generic dispatch: the adapter keeps the inner hosted call at its declared ABI.
+This lowering facility does not itself make a source-level widening typecheck
+and does not widen a direct hosted call based on its expected result.
 
 Only two positions are adapted: the template's DIRECT result row, and the
 ERROR row of a `Try` result. A `Try`'s ok row is not adapted—the adapter
@@ -9418,9 +9495,9 @@ default (the checked variable records this with
 polymorphic. A top-level value is computed once, at one type, so once the
 module solves, each open row in its data whose tail carries only these
 constraints is grounded to the empty row by unifying the tail with it
-(`Check.closeValueRowTailsCarryingDerivations`), as a value binding's implicit
-open row is (`Check.closeWeakValueImplicitOpenExts` likewise grounds a weak
-tail carrying only these constraints). A function's tail is left open: it
+(`Check.closeValueRowTailsCarryingDerivations`), as every row of a top-level
+value closes at its definition (Value Rows: Local Values Share, Top-Level
+Values Widen At Each Use). A function's tail is left open: it
 generalizes, and each instantiation supplies its row. Displayed in an output position, such a tail is implicit openness
 like an unconstrained one.
 
@@ -11116,8 +11193,6 @@ site to any family below must classify it here.
 `dangerousSetVarRedirect` call sites (all in src/check/Check.zig; the
 `RedirectRule` member at each site is the citation):
 
-- `widenTryConditionForExpectedReturn`—policy: Hosted Try Question
-  Widening (above).
 - `closeTagRowsForDerivationHelp`'s marker arm
   (`RedirectRule.derivation_marker_ext_closure`)—policy: Polarity /
   `closeTagRowsForDerivation` (below). A polarity marker rigid in tag-ext
@@ -11445,9 +11520,7 @@ at their definitions): `staticDispatchConstraintAcceptsCandidate` states the
 method-acceptance rule of static dispatch, with accepted/missing-method/
 signature-mismatch branches each pinned by tests;
 `numeralCandidateStructurallyRefuted` implements no rule of its own and is
-witness-asserted against the probe it pre-filters in safety builds;
-`probeCanUseAs`/`tryErrorRowNeedsUseSiteWidening` are the gating probes for
-Hosted Try Question Widening.
+witness-asserted against the probe it pre-filters in safety builds.
 
 ## Runtime Lowering Strategy
 
@@ -14309,8 +14382,7 @@ type the lowered call produces. A read that carries an expected result cell
 relates it to the shared request the way a fresh instantiation would. Requests
 whose interface depends on the read itself are never shared: an iterator
 procedure's request may be replaced by a generated private interface chosen
-from its argument evidence, a hosted `Try` request may be widened by the
-expected result's error labels, and an expected cell carrying generated-private
+from its argument evidence, and an expected cell carrying generated-private
 evidence becomes the request's own result.
 
 Every expression's result type is likewise instantiated once per lowered body
@@ -15794,7 +15866,11 @@ instead of double-boxed. `list_map_can_reuse` also carries its compile-time
 layout decision at LIR lowering: the lowerer computes the per-pointer-width
 interchangeability bits from committed item layouts and emits either a
 constant false value or an `assign_low_level` with explicit
-`interchangeable` metadata.
+`interchangeable` metadata. The same statement carries the committed output
+item layout that the lowerer used for that decision. ARC emission and body
+cloning preserve it, so downstream LIR consumers with their own storage
+representations read it there and never reconstruct the transform's return
+type to recover it.
 
 A low-level operation whose checked result type is the builtin `Try` (the
 typed numeric `*_from_str` parsers, the checked numeric `*_try` conversions,
@@ -21324,19 +21400,29 @@ triple, builtin objects, platform-input directory, and final link. It never
 classifies a COFF input as MSVC or MinGW from its container format, symbols,
 or linker failures.
 
-An MSVC target uses the Windows SDK and MSVC runtime discovered for that
-target. A MinGW target does not discover or add MSVC inputs. It uses LLD's
-MinGW mode and links only the startup objects, runtime archives, and import
-libraries declared explicitly by the platform target, together with Roc's
-generated objects. This lets a platform provide a cgo host and its matching
-MinGW runtime without either the compiler or linker reconstructing the host's
-ABI from the archive.
+Neither Windows ABI discovers anything on the machine running the link. Both
+pass `/nodefaultlib` and link only the startup code, runtime archives, and
+import libraries declared explicitly by the platform target, together with
+Roc's generated objects; a `/defaultlib` directive embedded in an input is
+ignored. An MSVC target does not locate Visual Studio or a Windows SDK, so it
+links identically on a machine that has neither and when cross-compiling. A
+MinGW target additionally selects LLD's MinGW mode. This lets a platform
+provide a cgo host and its matching runtime without either the compiler or
+linker reconstructing the host's ABI from the archive.
 
-The synthetic default platform declares MinGW startup and library inputs from
-the same inventory used to embed the vendored runtime in the compiler. Default
-app staging writes those files into the selected target's platform directory;
-the linker consumes them as ordinary explicit platform inputs. Baseline CPU
-targets use the same runtime bytes as their matching architecture and ABI.
+A Windows platform target therefore declares the symbol LLD infers as the
+image entry (`mainCRTStartup`, or `_DllMainCRTStartup` for a `Shared` output),
+whatever C runtime its host needs, and import libraries for `kernel32` and
+`ntdll`, which Roc's own runtime objects import from.
+
+The synthetic default platform declares its Windows startup and library
+inputs from the same inventories used to embed those runtimes in the
+compiler: the vendored MinGW runtime, and for MSVC a startup archive built
+from `src/default_platform/msvc_runtime/` beside the same import libraries.
+Default app staging writes those files into the selected target's platform
+directory; the linker consumes them as ordinary explicit platform inputs.
+Baseline CPU targets use the same runtime bytes as their matching
+architecture and ABI.
 
 ```text
 targets: {
@@ -21668,10 +21754,11 @@ requirement solutions (see Platform/App Relation)—the one sanctioned
 transformation. The compiler never emits a hosted extern at any other type: not
 at a caller's widened error row, not at a narrowed one, and not at a
 producer-selected representation that differs from the declared one. A use site
-whose own type legitimately differs gets a generated Roc adapter at the
-requested type that calls the declared-type boundary and converts around it, so
-the boundary itself stays declared-typed; the Hosted Try Question Widening
-rule's adapter is one such generated caller.
+of a direct hosted call that needs a wider error row must explicitly reconstruct
+the error in Roc. Generic dispatch uses the general Result-Row Widening Adapter
+when its checked request requires a wider result; the inner extern still uses
+the declared type. Representation conversions for generic hosted variable slots
+follow the separate rules below.
 
 Every type reachable from a hosted or provided signature must have closed
 record and tag-union rows and must contain no runtime-optional (`?:`) record

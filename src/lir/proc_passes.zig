@@ -138,7 +138,13 @@ const TaskContext = struct {
             .prune_join_params => try PruneJoinParams.runProc(&shard, self.proc, scratch_allocator),
             .scalarize => try ScalarizeJoins.runProc(&shard, self.layouts, self.proc, scratch_allocator),
             .loop_append => try LoopAppendPromote.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
-            .range => try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
+            .range => {
+                var joins = BodyClone.JoinParamIndex.init(scratch_allocator);
+                defer joins.deinit();
+                joins.next_join_point = self.first_fresh_join;
+                try RangeProve.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?, &joins);
+                self.fresh_join_count = joins.next_join_point - self.first_fresh_join;
+            },
             .box_reuse => try BoxReuse.runProcWithScratch(&shard, self.layouts, self.proc, scratch_allocator, analysis.?),
         }
         self.changed = shard.procRewriteChanged();
@@ -190,8 +196,8 @@ pub fn run(
     // Only the coordinator scans the phase's identity domain. Workers reserve
     // fresh joins above this boundary; ordered commit rebases only those IDs.
     const first_fresh_join = switch (phase) {
-        .forwarding_join, .tag_fusion => BodyClone.firstFreshJoinPoint(store),
-        .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .range, .box_reuse => 0,
+        .forwarding_join, .tag_fusion, .range => BodyClone.firstFreshJoinPoint(store),
+        .branch_expectation, .trmc, .prune_join_params, .scalarize, .loop_append, .box_reuse => 0,
     };
     for (contexts.items) |*context| context.first_fresh_join = first_fresh_join;
     const prefix = store.captureBodyPrefix();

@@ -22,6 +22,21 @@ Roc can be embedded in another Zig program to compile and run `.roc` files in-pr
 
 The embedding API is stable in shape; implementation details may change between releases.
 
+### Using Roc as a Zig dependency
+
+Pin a Roc commit in your package manifest with
+`zig fetch --save=roc 'git+https://github.com/roc-lang/roc.git#<full-commit-sha>'`.
+In your build, resolve `b.dependency("roc", .{ .target = target, .optimize = optimize })`
+and import its named modules with `exe.root_module.addImport("compile", roc.module("compile"))`.
+The same interface exports `lir`, `eval`, `check`, `base`, `ctx`, `builtins`,
+`roc_target`, and `build_options`, including their transitive dependencies and
+generated builtins. The consumer's executable must link libc.
+
+[`test/downstream-compiler`](../../test/downstream-compiler/README.md) is a complete
+standalone driver exercised against a fetched package by
+`zig build run-test-downstream-package`. Updating a downstream dependency means
+updating the pinned commit and package hash, without copying compiler sources.
+
 ### Canonical sequence
 
 ```zig
@@ -30,6 +45,7 @@ const lir = @import("lir");
 const eval = @import("eval");
 const check = @import("check");
 const base = @import("base");
+const CoreCtx = @import("ctx").CoreCtx;
 
 // 1. Builtins + Coordinator
 var builtins = try eval.BuiltinModules.init(gpa);
@@ -38,10 +54,10 @@ defer builtins.deinit();
 var coord = try compile.coordinator.Coordinator.init(
     gpa, .single_threaded, 1,
     target, &builtins, version, null,
+    CoreCtx.default(gpa, arena, my_io),
 );
 defer coord.deinit();
 coord.enable_hosted_transform = true;  // if you have host functions
-coord.setIo(my_io);                     // optional: virtualise the filesystem
 
 // 2. Discover + compile
 try coord.start();
@@ -50,7 +66,7 @@ try coord.coordinatorLoop();
 
 // 3. Finalize executable artifacts. User diagnostics are represented by
 //    explicit checked-error/crash facts and never prevent publication.
-try coord.finalizeExecutableArtifacts();
+try coord.finishCheckedProgram(.executable_artifacts);
 
 // 4. Render or collect diagnostics. Embedders may use these to choose a
 //    command status or presentation, but must not use them to gate lowering.
@@ -89,7 +105,6 @@ try lir.LirImage.fillHeaderInBuffer(
     runtime_buffer.ptr,    // start of the contiguous backing buffer
     runtime_fba.end_index, // bytes used so far
     &lowered.lir_result,
-    lowered.target_usize,
     entrypoints,
 );
 var view = try lir.LirImage.viewMappedImage(
@@ -104,10 +119,11 @@ defer view.deinit();
 //    value the interpreter returns, since big strings point into it.
 var static_strings = try eval.LirInterpreter.buildStaticStrings(gpa, &view.store);
 defer static_strings.deinit();
-var interp = try eval.LirInterpreter.init(
+var interp = try eval.LirInterpreter.initWithBoxyTables(
     gpa,
     &view.store,
     &view.layouts,
+    eval.LirInterpreter.BoxyTables.fromImageView(&view),
     static_strings.view(),
     &my_roc_ops,
 );
