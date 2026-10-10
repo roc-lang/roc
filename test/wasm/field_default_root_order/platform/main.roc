@@ -21,7 +21,7 @@ import_memory = Zeroed
 minimum_memory = 65536
 maximum_memory = 65536
 initial_stack_size = 14752
-global_base = 6592
+global_base = 16384
 
 Config := { retries : U8 ?? 3 }
 
