@@ -8,6 +8,7 @@ const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
 const testing = std.testing;
 const base = @import("base");
+const state_discipline = base.state_discipline;
 const collections = @import("collections");
 const parse = @import("parse");
 const NumericLiteral = parse.NumericLiteral;
@@ -374,8 +375,6 @@ type_anno_owner_path_stack: std.ArrayListUnmanaged(?AST.DeclIndex.TypePathIdx) =
 scratch_vars: base.Scratch(TypeVar),
 /// Scratch ident
 scratch_idents: base.Scratch(Ident.Idx),
-/// Scratch type variable identifiers for underscore validation
-scratch_type_var_validation: base.Scratch(Ident.Idx),
 /// Scratch bytes for short-lived name and literal construction.
 scratch_bytes: base.Scratch(u8),
 /// Scratch bytes used only while interning qualified identifiers.
@@ -392,8 +391,6 @@ scratch_seen_tags: SeenLabels,
 scratch_expr_ids: base.Scratch(Expr.Idx),
 /// Scratch pattern ids for short-lived dynamic lists.
 scratch_pattern_ids: base.Scratch(Pattern.Idx),
-/// Scratch tags
-scratch_tags: base.Scratch(types.Tag),
 /// Scratch free variables
 scratch_free_vars: base.Scratch(Pattern.Idx),
 /// Scratch captures (free variables being collected)
@@ -427,8 +424,6 @@ scratch_block_local_defs: base.Scratch(BlockLocalDef),
 scratch_local_type_decls: std.ArrayList(CIR.Statement.Idx),
 /// Module-global value definitions produced by canonicalization.
 scratch_global_value_defs: std.ArrayList(CIR.Def.Idx),
-/// Counter for generating unique anonymous open extension rigid var names
-anon_open_ext_count: u32 = 0,
 /// Counter for generating unique closure tag names (e.g., "Closure_addX_1", "Closure_addX_2")
 closure_counter: u32 = 0,
 /// Current loop depth for validating break statements
@@ -484,6 +479,116 @@ enclosing_lambda: ?Expr.Idx = null,
 /// I/O for file operations (e.g., file imports).
 /// Required—callers must provide a real CoreCtx (use a testing one if file imports are not needed).
 roc_ctx: CoreCtx,
+
+/// The frame discipline of every field above (design.md "Frame-Partitioned
+/// Phase State"). A field missing from this table, or a name that is not a
+/// field, is a compile error.
+pub const state_inventory = state_discipline.inventory(Self, .{
+    .env = .input,
+    .parse_ir = .input,
+    .in_statement_position = .lexical,
+    .expect_context = .lexical,
+    .expect_scope_floor = .lexical,
+    .scopes = .lexical,
+    .scope_exit_oom = .settled,
+    .decl_scope_stack = .frame_stack,
+    .active_decl_values = .lexical,
+    .active_decl_value_entries = .frame_partitioned,
+    .value_forward_references = .boundary,
+    .adopting_forward_decl = .lexical,
+    .active_decl_scopes = .lexical,
+    .active_decl_types = .lexical,
+    .active_decl_type_entries = .frame_partitioned,
+    .active_decl_import_aliases = .lexical,
+    .active_decl_import_alias_entries = .frame_partitioned,
+    .forward_prepared_import_aliases = .fact,
+    .type_var_scopes = .frame_stack,
+    .exposed_idents = .fact,
+    .exposed_types = .fact,
+    .exposed_ident_texts = .settled,
+    .exposed_type_idents = .settled,
+    .exposed_qualified_type_idents = .fact,
+    .header_exposed_modules = .fact,
+    .compiler_version = .input,
+    .validation = .input,
+    .is_entry_module = .input,
+    .pending_provides_entries = .settled,
+    .method_registrations = .fact,
+    .used_patterns = .fact,
+    .globally_resolvable_patterns = .fact,
+    .builtin_auto_imported_types = .input,
+    .import_indices = .fact,
+    .parser_type_decl_states = .fact,
+    .forward_prepared_type_decls = .fact,
+    .forward_type_scope_eligibility = .fact,
+    .type_decl_statements = .fact,
+    .alias_cycle_references = .fact,
+    .alias_cycle_scopes = .fact,
+    .assoc_value_patterns = .fact,
+    .assoc_forward_references = .boundary,
+    .assoc_forward_pattern_keys = .fact,
+    .assoc_local_statement_placeholders = .boundary,
+    .type_decl_paths = .fact,
+    .type_path_names = .fact,
+    .type_anno_owner_path_stack = .frame_stack,
+    .scratch_vars = .scratch,
+    .scratch_idents = .scratch,
+    .scratch_bytes = .scratch,
+    .qualified_ident_bytes = .scratch,
+    .scratch_type_paths = .scratch,
+    .scratch_assoc_alias_sinks = .scratch,
+    .scratch_seen_record_fields = .scratch,
+    .scratch_seen_tags = .scratch,
+    .scratch_expr_ids = .scratch,
+    .scratch_pattern_ids = .scratch,
+    .scratch_free_vars = .scratch,
+    .scratch_captures = .scratch,
+    .scratch_bound_vars = .scratch,
+    .scratch_defining_bound_vars = .frame_partitioned,
+    .scratch_reassign_targets = .scratch,
+    .scratch_local_function_patterns = .frame_partitioned,
+    .scratch_block_local_defs = .frame_partitioned,
+    .scratch_local_type_decls = .fact,
+    .scratch_global_value_defs = .fact,
+    .closure_counter = .fact,
+    .loop_depth = .lexical,
+    .defining_bound_vars = .lexical,
+    .defining_assoc_alias = .lexical,
+    .current_local_def_ident = .lexical,
+    .current_local_def_index = .lexical,
+    .interp_tmp_counter = .fact,
+    .allow_pattern_var_reuse = .lexical,
+    .pattern_binders = .frame_partitioned,
+    .pattern_binder_group_start = .lexical,
+    .pattern_reused_existing_var = .lexical,
+    .enclosing_lambda = .lexical,
+    .roc_ctx = .input,
+});
+
+comptime {
+    _ = state_inventory;
+}
+
+/// The first `frame_stack` or `frame_partitioned` field that still holds
+/// entries. Canonicalizing a file closes every frame it opens, and closing a
+/// frame consumes its own entries.
+fn openFrameState(self: *const Self) ?struct { field: []const u8, len: usize } {
+    inline for (comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned })) |field_name| {
+        const len = state_discipline.entryCount(@field(self, field_name));
+        if (len != 0) return .{ .field = field_name, .len = len };
+    }
+    return null;
+}
+
+/// A leaked frame is caught where the canonicalization that opened it
+/// finishes, naming the field it was left in.
+fn debugAssertFramesBalanced(self: *const Self) void {
+    if (!std.debug.runtime_safety) return;
+    if (self.openFrameState()) |open| {
+        base.invariant("canonicalization invariant violated: frame-owned `{s}` still holds {d} entries after canonicalizing the file", .{ open.field, open.len });
+    }
+}
+
 const Ident = base.Ident;
 const Region = base.Region;
 
@@ -830,7 +935,6 @@ pub fn deinit(
     self.type_anno_owner_path_stack.deinit(gpa);
     self.scratch_vars.deinit();
     self.scratch_idents.deinit();
-    self.scratch_type_var_validation.deinit();
     self.scratch_bytes.deinit();
     self.qualified_ident_bytes.deinit();
     self.scratch_type_paths.deinit();
@@ -840,7 +944,6 @@ pub fn deinit(
     self.scratch_expr_ids.deinit();
     self.scratch_pattern_ids.deinit();
     self.import_indices.deinit(gpa);
-    self.scratch_tags.deinit();
     self.scratch_free_vars.deinit();
     self.scratch_captures.deinit();
     self.scratch_bound_vars.deinit();
@@ -905,7 +1008,6 @@ fn initInternal(
         .type_decl_paths = std.AutoHashMapUnmanaged(Statement.Idx, AST.DeclIndex.TypePathIdx){},
         .scratch_vars = try base.Scratch(TypeVar).init(gpa),
         .scratch_idents = try base.Scratch(Ident.Idx).init(gpa),
-        .scratch_type_var_validation = try base.Scratch(Ident.Idx).init(gpa),
         .scratch_bytes = try base.Scratch(u8).init(gpa),
         .qualified_ident_bytes = try base.Scratch(u8).init(gpa),
         .scratch_type_paths = try base.Scratch(AST.DeclIndex.TypePathIdx).init(gpa),
@@ -915,7 +1017,6 @@ fn initInternal(
         .scratch_expr_ids = try base.Scratch(Expr.Idx).init(gpa),
         .scratch_pattern_ids = try base.Scratch(Pattern.Idx).init(gpa),
         .type_var_scopes = .{},
-        .scratch_tags = try base.Scratch(types.Tag).init(gpa),
         .scratch_free_vars = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_captures = try base.Scratch(Pattern.Idx).init(gpa),
         .scratch_bound_vars = try base.Scratch(Pattern.Idx).init(gpa),
@@ -1747,6 +1848,7 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     const type_entry_start = self.active_decl_type_entries.items.len;
     const import_alias_entry_start = self.active_decl_import_alias_entries.items.len;
 
+    std.debug.assert(!self.active_decl_scopes.contains(scope_idx));
     try self.active_decl_scopes.put(self.env.gpa, scope_idx, active_binding);
 
     var value_iter = parser_scope.value_decls.iterator();
@@ -1804,8 +1906,12 @@ fn declScopeEnter(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) std.mem.Alloca
     });
 }
 
-fn declScopeExit(self: *Self) void {
-    const active_scope = self.decl_scope_stack.pop().?;
+fn declScopeExit(self: *Self, scope_idx: AST.DeclIndex.ScopeIdx) void {
+    const active_scope = self.decl_scope_stack.pop() orelse
+        base.invariant("canonicalization invariant violated: exiting declaration scope {d} but no declaration scope is open", .{@backingInt(scope_idx)});
+    if (active_scope.binding.parser_scope != scope_idx) {
+        base.invariant("canonicalization invariant violated: exiting declaration scope {d} but the innermost declaration scope is {d}", .{ @backingInt(scope_idx), @backingInt(active_scope.binding.parser_scope) });
+    }
     _ = self.active_decl_scopes.remove(active_scope.binding.parser_scope);
     while (self.active_decl_import_alias_entries.items.len > active_scope.import_alias_entry_start) {
         const entry = self.active_decl_import_alias_entries.pop().?;
@@ -3433,7 +3539,7 @@ fn enterAssociatedBlockState(
     try self.scopeEnter(self.env.gpa, false);
     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     try self.declScopeEnter(work.scope);
-    errdefer self.declScopeExit();
+    errdefer self.declScopeExit(work.scope);
 
     const current_scope_idx = self.scopes.items.len - 1;
     self.scopes.items[current_scope_idx].associated_type_name = work.type_name;
@@ -3449,7 +3555,7 @@ fn enterAssociatedBlockState(
 
 fn exitAssociatedBlockState(self: *Self, state: *AssociatedItemsState) void {
     const work = state.work;
-    self.declScopeExit();
+    self.declScopeExit(work.scope);
     self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
     if (work.owns_alias_sinks) {
         self.env.gpa.free(work.alias_sinks);
@@ -3662,17 +3768,17 @@ fn rebindPlaceholderPatternIdent(
 /// pattern's `assign` binder for `ident` at `region`. The placeholder keeps its
 /// index, so the earlier references resolve to the binder, and it is already
 /// in the declaration's scope.
-fn adoptForwardBinder(self: *Self, ident: Ident.Idx, region: Region) ?Pattern.Idx {
+fn adoptForwardBinder(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
     const decl_idx = self.adopting_forward_decl orelse return null;
-    const placeholder = self.takeValueForwardReference(decl_idx, ident) orelse return null;
+    const placeholder = (try self.takeValueForwardReference(decl_idx, ident)) orelse return null;
     self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), region);
     return placeholder;
 }
 
 /// Like `adoptForwardBinder`, for an `as` binder: the placeholder node becomes
 /// the `as` pattern over `inner_pattern`.
-fn adoptForwardAsBinder(self: *Self, ident: Ident.Idx, inner_pattern: Pattern.Idx, region: Region) ?Pattern.Idx {
-    const placeholder = self.adoptForwardBinder(ident, region) orelse return null;
+fn adoptForwardAsBinder(self: *Self, ident: Ident.Idx, inner_pattern: Pattern.Idx, region: Region) std.mem.Allocator.Error!?Pattern.Idx {
+    const placeholder = (try self.adoptForwardBinder(ident, region)) orelse return null;
     const node_idx = ModuleEnv.nodeIdxFrom(placeholder);
     var node = self.env.store.nodes.get(node_idx);
     node.tag = .pattern_as;
@@ -4755,8 +4861,10 @@ pub fn canonicalizeFile(
         _ = try self.canonicalizeAutoImport(auto_imp.module_name, region);
     }
 
+    var file_completed = false;
+    defer if (file_completed) self.debugAssertFramesBalanced();
     try self.declScopeEnter(file.scope);
-    defer self.declScopeExit();
+    defer self.declScopeExit(file.scope);
 
     if (header == .platform) {
         for (self.parse_ir.store.statementSlice(file.statements)) |stmt_id| {
@@ -5166,6 +5274,7 @@ pub fn canonicalizeFile(
     // A scope-exit `defer` cannot propagate an allocation failure, so it records
     // it here; re-raise it now rather than letting the OOM be swallowed.
     if (self.scope_exit_oom) return error.OutOfMemory;
+    file_completed = true;
 }
 
 fn poisonRecursiveNonFunctionDefs(
@@ -5421,7 +5530,7 @@ fn createAnnotationDef(
     // A declaration referenced ahead of itself adopts the placeholder those
     // references created instead of introducing a fresh pattern.
     const value_forward_pattern = if (parser_decl_idx) |decl_idx|
-        self.takeValueForwardReference(decl_idx, ident)
+        try self.takeValueForwardReference(decl_idx, ident)
     else
         null;
     const pattern_idx = if (value_forward_pattern) |forward_pattern| blk: {
@@ -5896,7 +6005,7 @@ fn destructuredLiteralPatternBindsName(self: *Self, root: AST.Pattern.Idx, name:
 /// binder introduced into scope like a punned record field's.
 fn bindDestructuredName(self: *Self, ident: Ident.Idx, region: Region) std.mem.Allocator.Error!Pattern.Idx {
     if (try self.claimPatternBinder(ident, region)) |duplicate| return duplicate;
-    if (self.adoptForwardBinder(ident, region)) |placeholder| {
+    if (try self.adoptForwardBinder(ident, region)) |placeholder| {
         try self.warnAboutBindingName(ident, region, .immutable);
         return placeholder;
     }
@@ -6093,6 +6202,14 @@ fn beginDefiningBoundVars(self: *Self, pattern_idx: Pattern.Idx, reassign_target
 /// set is always the topmost frame.
 fn endDefiningBoundVars(self: *Self, saved: ?DataSpan) void {
     if (self.defining_bound_vars) |cur| {
+        if (cur.start + cur.len != self.scratch_defining_bound_vars.top()) {
+            base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} but the innermost set ends at {d}", .{ cur.start, cur.start + cur.len, self.scratch_defining_bound_vars.top() });
+        }
+        if (saved) |outer| {
+            if (outer.start + outer.len > cur.start) {
+                base.invariant("canonicalization invariant violated: closing the defining bound-var set at {d}..{d} would release the enclosing set at {d}..{d}", .{ cur.start, cur.start + cur.len, outer.start, outer.start + outer.len });
+            }
+        }
         self.scratch_defining_bound_vars.clearFrom(cur.start);
     }
     self.defining_bound_vars = saved;
@@ -7891,7 +8008,7 @@ fn canonicalizeDeclWithAnnotation(
     // placeholder. Nested patterns with the same spelling are separate binders.
     const reassign_targets_start = self.scratch_reassign_targets.top();
     const forward_pattern = if (parser_decl_idx) |decl_idx|
-        self.adoptValueForwardReference(decl_idx, decl.pattern)
+        try self.adoptValueForwardReference(decl_idx, decl.pattern)
     else
         null;
     const pattern_idx = if (forward_pattern) |pattern| pattern else blk: {
@@ -9396,7 +9513,7 @@ fn finishBlockState(
     maybe_final_expr: ?CanonicalizedExpr,
 ) std.mem.Allocator.Error!CanonicalizedExpr {
     defer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
-    defer self.declScopeExit();
+    defer self.declScopeExit(block.decl_scope);
     defer self.endDefiningBoundVars(block.saved_defining_bound_vars);
     defer self.in_statement_position = block.saved_stmt_pos;
     defer self.scratch_bound_vars.clearFrom(block.bound_vars_top);
@@ -12087,7 +12204,7 @@ fn runExprKernel(
                     try self.scopeEnter(self.env.gpa, false);
                     errdefer self.scopeExit(self.env.gpa) catch |err| self.recordScopeExitError(err);
                     try self.declScopeEnter(e.scope);
-                    errdefer self.declScopeExit();
+                    errdefer self.declScopeExit(e.scope);
 
                     const saved_defining_bound_vars = self.defining_bound_vars;
 
@@ -12109,6 +12226,7 @@ fn runExprKernel(
                     const work = try block_state_allocator.create(BlockStateData);
                     work.* = .{
                         .block_region = block_region,
+                        .decl_scope = e.scope,
                         .stmt_idxs = ast_stmt_idxs,
                         .stmt_start = stmt_start,
                         .captures_top = captures_top,
@@ -16227,13 +16345,13 @@ fn adoptValueForwardReference(
     self: *Self,
     parser_decl_idx: AST.DeclIndex.DeclIdx,
     ast_pattern_idx: AST.Pattern.Idx,
-) ?Pattern.Idx {
+) std.mem.Allocator.Error!?Pattern.Idx {
     const parser_decl = self.parse_ir.decl_index.decls.items[@backingInt(parser_decl_idx)];
     std.debug.assert(parser_decl.pattern == @backingInt(ast_pattern_idx));
     const ast_pattern = self.parse_ir.store.getPattern(ast_pattern_idx);
     if (ast_pattern != .ident) return null;
     const ident = self.parse_ir.tokens.resolveIdentifier(ast_pattern.ident.ident_tok) orelse unreachable;
-    const placeholder = self.takeValueForwardReference(parser_decl_idx, ident) orelse return null;
+    const placeholder = (try self.takeValueForwardReference(parser_decl_idx, ident)) orelse return null;
     self.env.store.setRegionAt(ModuleEnv.nodeIdxFrom(placeholder), self.parse_ir.tokenizedRegionToRegion(ast_pattern.ident.region));
     return placeholder;
 }
@@ -16242,7 +16360,7 @@ fn takeValueForwardReference(
     self: *Self,
     parser_decl_idx: AST.DeclIndex.DeclIdx,
     ident: Ident.Idx,
-) ?Pattern.Idx {
+) std.mem.Allocator.Error!?Pattern.Idx {
     const kv = self.value_forward_references.fetchRemove(.{ .decl_idx = parser_decl_idx, .ident = ident }) orelse return null;
     var reference_regions = kv.value.reference_regions;
     reference_regions.deinit(self.env.gpa);
@@ -16252,7 +16370,7 @@ fn takeValueForwardReference(
 
     if (self.active_decl_scopes.get(parser_decl.scope)) |active_owner| {
         const owner_scope = &self.scopes.items[active_owner.canonical_scope];
-        owner_scope.idents.put(self.env.gpa, ident, kv.value.pattern_idx) catch {};
+        try owner_scope.idents.put(self.env.gpa, ident, kv.value.pattern_idx);
     }
     return kv.value.pattern_idx;
 }
@@ -18048,6 +18166,8 @@ const BlockState = *BlockStateData;
 
 const BlockStateData = struct {
     block_region: Region,
+    /// The parser declaration scope the block entered.
+    decl_scope: AST.DeclIndex.ScopeIdx,
     stmt_idxs: []const AST.Statement.Idx,
     stmt_start: u32,
     captures_top: u32,
@@ -18103,7 +18223,7 @@ fn canonicalizePatternInGroup(
                             last_pattern = duplicate;
                             continue :patternkernel_loop .dispatch;
                         }
-                        if (self.adoptForwardBinder(ident_idx, region)) |placeholder| {
+                        if (try self.adoptForwardBinder(ident_idx, region)) |placeholder| {
                             try self.warnAboutBindingName(ident_idx, region, .immutable);
                             last_pattern = placeholder;
                             continue :patternkernel_loop .dispatch;
@@ -18480,7 +18600,7 @@ fn canonicalizePatternInGroup(
             } else {
                 // Simple case: Create the RecordDestruct for this field
                 const duplicate_binder = try self.claimPatternBinder(field_name_ident, field_region);
-                const adopted_binder = if (duplicate_binder == null) self.adoptForwardBinder(field_name_ident, field_region) else null;
+                const adopted_binder = if (duplicate_binder == null) try self.adoptForwardBinder(field_name_ident, field_region) else null;
                 const assign_pattern_idx = duplicate_binder orelse adopted_binder orelse
                     try self.env.addPattern(Pattern{ .assign = .{ .ident = field_name_ident } }, field_region);
                 if (adopted_binder != null) {
@@ -18665,7 +18785,7 @@ fn canonicalizePatternInGroup(
                             current_rest_pattern = duplicate;
                             break :list_rest_name;
                         }
-                        const adopted_binder = self.adoptForwardBinder(ident_idx, name_region);
+                        const adopted_binder = try self.adoptForwardBinder(ident_idx, name_region);
                         const assign_idx = adopted_binder orelse try self.env.addPattern(Pattern{ .assign = .{
                             .ident = ident_idx,
                         } }, name_region);
@@ -18780,7 +18900,7 @@ fn canonicalizePatternInGroup(
                     continue :patternkernel_loop .dispatch;
                 }
                 // Create the as pattern
-                const adopted_binder = self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
+                const adopted_binder = try self.adoptForwardAsBinder(ident_idx, inner_pattern, state.region);
                 const pattern_idx = adopted_binder orelse try self.env.addPattern(Pattern{
                     .as = .{
                         .pattern = inner_pattern,
@@ -19474,7 +19594,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     };
                     switch (self.scopeLookupTypeVar(name_ident)) {
                         .found => |found_anno_idx| {
-                            try self.scratch_type_var_validation.append(name_ident);
                             last = try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
                                 .ref = found_anno_idx,
                             } }, region);
@@ -19482,7 +19601,6 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                         .not_found => {
                             if (type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored)) {
                                 try self.warnAboutDollarTypeVar(name_ident, region);
-                                try self.scratch_type_var_validation.append(name_ident);
                                 const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                                     .name = name_ident,
                                 } }, region);
@@ -19514,14 +19632,12 @@ fn runTypeAnnoKernel(self: *Self, anno_idx: AST.TypeAnno.Idx, type_anno_ctx: *Ty
                     };
                     switch (self.scopeLookupTypeVar(name_ident)) {
                         .found => |found_anno_idx| {
-                            try self.scratch_type_var_validation.append(name_ident);
                             last = try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
                                 .ref = found_anno_idx,
                             } }, region);
                         },
                         .not_found => {
                             if (type_anno_ctx.canIntroduceTypeVar(name_ident.attributes.ignored)) {
-                                try self.scratch_type_var_validation.append(name_ident);
                                 const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                                     .name = name_ident,
                                 } }, region);
@@ -21002,6 +21118,11 @@ const TypeVarScopes = struct {
     changes: std.ArrayListUnmanaged(Ident.Idx) = .empty,
     depth: usize = 0,
 
+    /// The number of type-variable scopes currently open.
+    pub fn count(self: *const TypeVarScopes) usize {
+        return self.depth;
+    }
+
     fn deinit(self: *TypeVarScopes, gpa: std.mem.Allocator) void {
         self.active.deinit(gpa);
         self.changes.deinit(gpa);
@@ -22042,7 +22163,6 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 switch (self.scopeLookupTypeVar(var_ident)) {
                     .found => |found_anno_idx| blk: {
                         // Track this type variable for underscore validation
-                        try self.scratch_type_var_validation.append(var_ident);
 
                         break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
                             .ref = found_anno_idx,
@@ -22054,7 +22174,6 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                             // into the scope
                             .local_anno => {
                                 // Track this type variable for underscore validation
-                                try self.scratch_type_var_validation.append(var_ident);
 
                                 const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                                     .name = var_ident,
@@ -22115,7 +22234,6 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                 switch (self.scopeLookupTypeVar(var_ident)) {
                     .found => |found_anno_idx| blk: {
                         // Track this type variable for underscore validation
-                        try self.scratch_type_var_validation.append(var_ident);
 
                         break :blk try self.env.addTypeAnno(.{ .rigid_var_lookup = .{
                             .ref = found_anno_idx,
@@ -22127,7 +22245,6 @@ fn canonicalizeWhereClause(self: *Self, ast_where_idx: AST.WhereClause.Idx, type
                             // into the scope
                             .local_anno => {
                                 // Track this type variable for underscore validation
-                                try self.scratch_type_var_validation.append(var_ident);
 
                                 const new_anno_idx = try self.env.addTypeAnno(.{ .rigid_var = .{
                                     .name = var_ident,
@@ -22521,4 +22638,35 @@ test "min_i128_negated is actually the minimum i128, negated" {
     defer std.testing.allocator.free(negated_str);
 
     try std.testing.expectEqualStrings(min_i128_str, negated_str);
+}
+
+test "a frame left open in canonicalizer state is named by the frame-balance check" {
+    const CanTestEnv = @import("test/TestEnv.zig");
+    var test_env = try CanTestEnv.init("1");
+    defer test_env.deinit();
+    const can = test_env.can;
+    try std.testing.expect(can.openFrameState() == null);
+
+    const type_var_scope = can.type_var_scopes.enter();
+    const leaked_type_var_scope = can.openFrameState().?;
+    try std.testing.expectEqualStrings("type_var_scopes", leaked_type_var_scope.field);
+    try std.testing.expectEqual(@as(usize, 1), leaked_type_var_scope.len);
+    can.type_var_scopes.exit(type_var_scope);
+    try std.testing.expect(can.openFrameState() == null);
+
+    const path_stack_len = can.type_anno_owner_path_stack.items.len;
+    try can.type_anno_owner_path_stack.append(std.testing.allocator, null);
+    try std.testing.expectEqualStrings("type_anno_owner_path_stack", can.openFrameState().?.field);
+    can.restoreTypeAnnoOwnerPathStack(path_stack_len);
+    try std.testing.expect(can.openFrameState() == null);
+}
+
+test "every canonicalizer frame stack is checked for balance" {
+    const frame_owned = comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned });
+    inline for (.{ "decl_scope_stack", "type_var_scopes", "type_anno_owner_path_stack", "scratch_defining_bound_vars", "pattern_binders" }) |expected| {
+        const found = for (frame_owned) |name| {
+            if (std.mem.eql(u8, name, expected)) break true;
+        } else false;
+        try std.testing.expect(found);
+    }
 }

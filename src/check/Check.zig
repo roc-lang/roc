@@ -6,6 +6,7 @@ const std = @import("std");
 const TypeDigestHasher = @import("base").TypeDigestHasher;
 const builtin = @import("builtin");
 const base = @import("base");
+const state_discipline = base.state_discipline;
 const tracy = @import("tracy");
 const collections = @import("collections");
 const types_mod = @import("types");
@@ -167,8 +168,6 @@ seen_annos: collections.ScopedBitSet,
 env_pool: EnvPool,
 /// wrapper around generalization, contains some internal state used to do it's work
 generalizer: Generalizer,
-/// A list of generated recursive/cross-definition constraints with solving deferred.
-constraints: Constraint.SafeList,
 /// Return-flow constraints (`return` and `?`) owned by the lambda that produced them.
 return_constraints: std.ArrayListUnmanaged(ReturnConstraint),
 /// Diagnostic provenance: a generated `Err` return's original `?` operand.
@@ -186,15 +185,9 @@ return_constraint_frames: std.ArrayListUnmanaged(ReturnConstraintFrame),
 try_return_rows: TryReturnRows,
 /// Frames whose results other expressions still reach monomorphically,
 /// innermost last (design.md "Try Return-Row Composition"): every binding
-/// group frame, and every local function declaration's own frame.
+/// group frame, and every local function declaration's own frame. Each frame
+/// owns its open links and its deferred contributions.
 try_row_fixpoints: std.ArrayListUnmanaged(TryRowFixpoint) = .empty,
-/// The vars whose results are still open in some fixpoint: the vars that
-/// monomorphic references to an unannotated function member link to, and the
-/// callables of dispatch obligations waiting for their target's scheme.
-try_row_fixpoint_links: std.ArrayListUnmanaged(TryRowFixpointLink) = .empty,
-/// Error-row contributions whose source is still open in a fixpoint, waiting
-/// for that fixpoint's boundary.
-deferred_try_row_edges: std.ArrayListUnmanaged(DeferredTryRowEdge) = .empty,
 /// Scratch for resolving one fixpoint's deferred contributions.
 try_row_fixpoint_scratch: TryRowFixpointScratch = .{},
 /// Scratch: residual tail root of every row open below some fixpoint limit,
@@ -1238,7 +1231,16 @@ undetermined_type_reported: std.AutoHashMapUnmanaged(Var, void) = .empty,
 /// Tuple field accesses whose receiver was still unresolved when checked.
 /// A later call-site or annotation may resolve the receiver to a concrete tuple;
 /// otherwise the final sweep reports that the tuple arity needs an annotation.
+/// Judged at every generalization boundary that would generalize an access's
+/// result (`judgeTupleAccessesAtBoundary`): the access's result is a function
+/// of its receiver, so it is related to the receiver's element before it is
+/// quantified, or held at the receiver's rank while the receiver is still open
+/// in an enclosing frame.
 pending_tuple_accesses: std.ArrayListUnmanaged(PendingTupleAccess),
+/// Tuple accesses a generalization boundary rejected. Their expressions are
+/// retired by the settled sweep in `resolvePendingTupleAccesses`, since a
+/// boundary runs while enclosing expression frames still hold the subtree.
+rejected_tuple_accesses: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty,
 /// Scratch for the ambiguity judgment: the pinnable set (every resolved var
 /// some caller can still pin) of one judgment event. Init-allocated; cleared
 /// and rebuilt per event.
@@ -1273,11 +1275,6 @@ boundary_reachable_vars: collections.DenseMap(Var, void),
 /// literal's constraint signatures, intersected with
 /// `boundary_reachable_vars` to detect interface leaks.
 boundary_leak_vars: collections.DenseMap(Var, void),
-/// Reusable per-call buffer of the module's `.eql` constraint edges, so the
-/// generalization-boundary fixpoint iterates just the edges instead of
-/// re-scanning the whole constraint list each round. Front-loaded; cleared and
-/// refilled per call.
-boundary_eql_edges: std.ArrayListUnmanaged(@FieldType(Constraint, "eql")),
 // Literal-defaulting scratch (front-loaded; cleared per round/use). Reused across
 // the per-def/finalize defaulting passes—see runLiteralDefaultingRounds. Safe as
 // shared fields despite that function's cascade reentrancy: every buffer is cleared
@@ -1350,6 +1347,398 @@ commit_probe_active: bool = false,
 /// destructive side-table transition and is forbidden while any probe can
 /// still roll the type store back.
 probe_depth: u32 = 0,
+/// The frame discipline of every field above (design.md "Frame-Partitioned
+/// Phase State"). A field missing from this table, or a name that is not a
+/// field, is a compile error.
+pub const state_inventory = state_discipline.inventory(Self, .{
+    .gpa = .input,
+    .types = .input,
+    .cir = .input,
+    .regions = .input,
+    .imported_modules = .input,
+    .owner_modules = .input,
+    .owner_envs_by_identity = .fact,
+    .builtin_origin_identity = .input,
+    .auto_imported_types = .input,
+    .builtin_ctx = .input,
+    .snapshots = .input,
+    .problems = .input,
+    .import_mapping = .input,
+    .unify_scratch = .scratch,
+    .occurs_scratch = .scratch,
+    .seen_annos = .scratch,
+    .env_pool = .input,
+    .generalizer = .input,
+    .return_constraints = .frame_partitioned,
+    .try_return_conditions = .fact,
+    .try_lambda_host_origins = .fact,
+    .return_value_exprs = .frame_partitioned,
+    .return_constraint_frames = .frame_stack,
+    .try_return_rows = .scratch,
+    .try_row_fixpoints = .frame_stack,
+    .try_row_fixpoint_scratch = .scratch,
+    .try_row_open_tails = .scratch,
+    .var_map = .scratch,
+    .ground_expected_backups = .fact,
+    .ground_polarized_instances = .fact,
+    .polarized_instance_subtrees = .fact,
+    .snapshot_ground_copies = .fact,
+    .snapshot_ground_epoch = .fact,
+    .var_set = .scratch,
+    .inspect_type_visits = .scratch,
+    .type_visit_stack = .scratch,
+    .alias_row_frames = .scratch,
+    .alias_row_names = .scratch,
+    .alias_row_name_set = .scratch,
+    .rigid_var_substitutions = .scratch,
+    .type_decl_rigid_vars = .lexical,
+    .pending_default_checks = .settled,
+    .optional_field_accesses = .boundary,
+    .literal_field_kinds = .settled,
+    .record_constructions = .settled,
+    .literal_field_kind_watermark = .fact,
+    .pending_record_updates = .boundary,
+    .pending_record_destructs = .boundary,
+    .pending_default_seen = .fact,
+    .predeclaring_annotation = .lexical,
+    .type_decl_generation_states = .fact,
+    .type_decl_dense_indices = .fact,
+    .type_decl_statements = .fact,
+    .type_decl_invalid = .fact,
+    .type_decl_dependencies = .fact,
+    .type_decl_validity_final = .fact,
+    .scratch_vars = .scratch,
+    .scratch_default_param_vars = .scratch,
+    .scratch_tags = .scratch,
+    .scratch_record_fields = .scratch,
+    .scratch_record_field_vars = .scratch,
+    .scratch_static_dispatch_constraints = .scratch,
+    .scratch_deferred_static_dispatch_constraints = .scratch,
+    .final_codec_dispatch_constraints = .settled,
+    .final_codec_dispatch_constraint_fns = .fact,
+    .scheme_deferred_codec_constraint_fns = .fact,
+    .checking_final_codec_dispatch_constraints = .lexical,
+    .constraining_boundary_codecs = .lexical,
+    .settling_codec_method_requirements_depth = .lexical,
+    .boundary_codec_derivations = .settled,
+    .boundary_codec_calls = .settled,
+    .imported_schemes = .fact,
+    .imported_scheme_by_source = .fact,
+    .associated_lookup_cache = .fact,
+    .bool_var = .input,
+    .str_var = .input,
+    .u64_var = .input,
+    .builtin_types_copied = .input,
+    .ident_to_var_map = .scratch,
+    .checked_interpolation_part_constraints = .fact,
+    .int_unbound_vars = .fact,
+    .reported_constraint_errors = .fact,
+    .expect_effect_slots = .settled,
+    .expect_dispatch_effect_watchers = .settled,
+    .successful_dispatch_fn_vars = .settled,
+    .current_expect_effect_slot = .lexical,
+    .top_level_ptrns = .fact,
+    .platform_requirements = .input,
+    .validation = .input,
+    .platform_required_defs = .fact,
+    .platform_requirement_solutions = .fact,
+    .local_processing_ptrns = .lexical,
+    .local_value_processing_ptrns = .lexical,
+    .local_binding_roots = .settled,
+    .enclosing_func_name = .lexical,
+    .type_writer = .input,
+    .canonical_key_writer = .input,
+    .check_order = .input,
+    .def_group = .fact,
+    .group_states = .fact,
+    .group_dependency_walk = .scratch,
+    .group_dependency_collected = .scratch,
+    .group_dependency_checks = .frame_partitioned,
+    .group_stack = .frame_stack,
+    .group_frame_positions = .frame_stack,
+    .pending_dispatch_targets = .frame_partitioned,
+    .pending_predeclared_scheme_uses = .frame_partitioned,
+    .type_schemes = .boundary,
+    .retired_binding_scheme_codec_requirements = .fact,
+    .type_scheme_by_var = .fact,
+    .binding_scheme_nodes = .fact,
+    .synthetic_binding_schemes = .fact,
+    .binding_scheme_classification_seen = .scratch,
+    .binding_scheme_classification_stack = .scratch,
+    .settled_static_dispatch_constraint_fns = .fact,
+    .waiting_obligations = .fact,
+    .draining_numeric_default_pass = .lexical,
+    .waiting_context_epoch = .fact,
+    .waiting_trigger_log = .fact,
+    .waiting_trigger_generation = .fact,
+    .settled_static_dispatch_failure_exprs = .fact,
+    .scratch_scheme_owned_codec_fns = .scratch,
+    .scheme_requirement_candidates = .frame_partitioned,
+    .scheme_requirement_candidate_indices_by_owner = .frame_partitioned,
+    .active_scheme_root = .lexical,
+    .predeclared_scheme_vars = .fact,
+    .predeclared_slots = .fact,
+    .predeclared_slot_vars = .fact,
+    .predeclared_use_fresh_vars = .fact,
+    .waiting_predeclared_dispatch_uses = .boundary,
+    .pending_predeclared_use_relations = .boundary,
+    .predeclared_relation_vars = .fact,
+    .predeclared_local_annotations = .lexical,
+    .hole_shared_schemes = .fact,
+    .suppress_generalize_expr = .lexical,
+    .checking_call_arg = .lexical,
+    .checking_immediate_callee = .lexical,
+    .checking_forwarded_result = .lexical,
+    .direct_callee_expr = .lexical,
+    .derived_method_callee = .lexical,
+    .delayed_dependency_depth = .lexical,
+    .checking_executable_root = .lexical,
+    .checking_binding_rhs = .lexical,
+    .checking_binding_rhs_pattern = .lexical,
+    .discarded_binding_rhs_expr = .lexical,
+    .exhaustiveness_context = .lexical,
+    .value_lookup_tracking = .settled,
+    .nonlocal_value_lookups = .settled,
+    .erroneous_value_exprs = .settled,
+    .erroneous_statements = .settled,
+    .rejected_destructure_defs = .settled,
+    .call_operand_type_error_exprs = .fact,
+    .retired_operand_sequences = .fact,
+    .retired_operand_pool = .fact,
+    .host_boundary_annotations = .input,
+    .implicit_open_exts = .fact,
+    .bounding_annotation = .lexical,
+    .bounded_row_marks = .fact,
+    .alias_hidden_exts = .lexical,
+    .nominal_positions = .fact,
+    .annotation_implicit_open_exts = .fact,
+    .weak_value_implicit_open_ext_ranges = .settled,
+    .late_implicit_open_ext_audits = .settled,
+    .codec_row_demands = .settled,
+    .codec_row_demand_tags = .settled,
+    .active_codec_owner_region = .lexical,
+    .implicit_parse_mode = .lexical,
+    .implicit_parse_requests = .frame_partitioned,
+    .erroneous_value_patterns = .settled,
+    .binder_source_exprs = .fact,
+    .binder_source_path = .scratch,
+    .relation_owner = .lexical,
+    .problem_owners = .fact,
+    .relation_operands = .fact,
+    .relation_operand_pool = .fact,
+    .erroneous_causes = .fact,
+    .rejected_value_annotations = .fact,
+    .rejected_default_exprs = .settled,
+    .accepted_nominal_constructor_backings = .settled,
+    .hoist_frames = .frame_stack,
+    .hoist_expr_candidates = .frame_partitioned,
+    .hoist_iterator_source_memo = .fact,
+    .hoist_deferred_roots = .frame_partitioned,
+    .hoist_binding_candidates = .lexical,
+    .hoist_binding_scope_patterns = .lexical,
+    .hoist_known_values = .lexical,
+    .hoist_known_value_scope_patterns = .lexical,
+    .hoist_contextual_bindings = .lexical,
+    .hoist_contextual_binding_scope_patterns = .lexical,
+    .hoist_selected_bindings = .fact,
+    .hoist_selected_exprs = .fact,
+    .hoist_selected_pattern_validations = .fact,
+    .hoist_invalidated_exprs = .fact,
+    .hoist_retired_binders = .fact,
+    .rejected_instantiation_exprs = .fact,
+    .hoist_guarded_exprs = .fact,
+    .selected_hoisted_roots = .fact,
+    .local_procedure_candidates = .settled,
+    .local_procedure_candidate_stack = .frame_stack,
+    .rigid_var_candidate_depths = .fact,
+    .module_type_decls = .fact,
+    .local_pattern_candidate_depths = .fact,
+    .local_procedure_outer_refs = .settled,
+    .promoted_local_procedures = .fact,
+    .promoted_local_procedure_patterns = .fact,
+    .contextual_local_dispatch_fn_vars = .fact,
+    .contextual_local_dispatch_exprs = .fact,
+    .executable_root_defs = .input,
+    .compile_time_executable_roots = .input,
+    .last_hoist_result = .lexical,
+    .hoist_promotion_dependencies = .fact,
+    .pending_comptime_conditions = .settled,
+    .has_can_diagnostics = .input,
+    .instantiation_dispatchers = .fact,
+    .instantiation_dispatchers_checked = .fact,
+    .pending_scheme_requirement_dispatchers = .boundary,
+    .ambiguity_candidates = .boundary,
+    .ambiguity_candidate_by_key = .fact,
+    .ambiguity_escalation_journal = .frame_partitioned,
+    .ambiguity_candidates_def_start = .lexical,
+    .ambiguity_candidates_residual_checked = .fact,
+    .ambiguity_verdicts = .settled,
+    .default_materializations = .settled,
+    .checked_lambda_params_def_start = .lexical,
+    .open_literal_vars_def_start = .lexical,
+    .instantiation_source_expr = .lexical,
+    .instantiation_is_immediate_callee = .lexical,
+    .dispatch_target_instantiations = .fact,
+    .dispatch_target_instantiation_by_fn_var = .fact,
+    .dispatch_replay_sources = .fact,
+    .dispatch_replay_shapes = .fact,
+    .dispatch_replay_frozen_pairs = .fact,
+    .dispatch_replay_trees = .fact,
+    .scratch_freeze_map = .scratch,
+    .scratch_freeze_order = .scratch,
+    .scratch_freeze_vars = .scratch,
+    .dispatch_replay_bindings = .fact,
+    .pending_replay_shape_edge = .lexical,
+    .pending_replay_shape = .lexical,
+    .pending_replay_shape_hash = .lexical,
+    .pending_replay_scheme_use = .lexical,
+    .dispatch_replay_candidates = .fact,
+    .scratch_replay_shape = .scratch,
+    .scratch_replay_shape_vars = .scratch,
+    .dispatch_replay_ready = .fact,
+    .dispatch_replayed_edges = .fact,
+    .use_instances = .fact,
+    .use_owned_fns = .fact,
+    .use_instance_by_fn_var = .fact,
+    .reach_free_schemes = .fact,
+    .use_deferred_callables = .fact,
+    .use_saved_copies = .fact,
+    .uses_with_deferred_callables = .boundary,
+    .scratch_deferred_callables = .scratch,
+    .scratch_deferred_placeholders = .scratch,
+    .scratch_deferred_slots = .scratch,
+    .scratch_replay_matches = .scratch,
+    .link_var_map = .scratch,
+    .link_scratch_pairs = .scratch,
+    .link_scratch_owned = .scratch,
+    .link_new_copies = .scratch,
+    .probe_links = .frame_partitioned,
+    .probe_link_copies = .frame_partitioned,
+    .use_replayable_schemes = .fact,
+    .use_replay_sources = .fact,
+    .use_replay_shapes = .fact,
+    .use_replay_trees = .fact,
+    .use_settled_entries = .scratch,
+    .settling_use = .lexical,
+    .scratch_use_owned = .scratch,
+    .scratch_ground_vars = .scratch,
+    .scratch_ground_seen = .scratch,
+    .scratch_replay_sources = .scratch,
+    .scratch_replay_pairs = .scratch,
+    .scratch_replay_nodes = .scratch,
+    .scratch_replay_grafts = .scratch,
+    .scratch_replay_walk = .scratch,
+    .scratch_replay_walked = .scratch,
+    .where_method_use_record_by_fn_var = .fact,
+    .dispatch_derivations = .fact,
+    .dispatch_derivation_by_child_fn_var = .fact,
+    .method_name_mints = .fact,
+    .scheme_mint_names = .fact,
+    .method_mint_names = .fact,
+    .method_binding_envs = .fact,
+    .scratch_method_mint_evidence = .scratch,
+    .scratch_method_mint_params = .scratch,
+    .scratch_method_mint_requirements = .scratch,
+    .scratch_scheme_mint_names = .scratch,
+    .component_derivations = .fact,
+    .component_derivation_by_child_fn_var = .fact,
+    .module_declares_local_methods = .fact,
+    .local_method_names = .fact,
+    .dispatch_candidate_frames = .fact,
+    .dispatch_candidate_frame_patterns = .fact,
+    .local_type_context_depths = .fact,
+    .type_decl_generation_frames = .frame_stack,
+    .local_decl_expr_by_pattern = .fact,
+    .local_decl_exprs_indexed = .fact,
+    .scratch_embed_active_pairs = .scratch,
+    .scratch_embed_memo = .scratch,
+    .scratch_embed_cut_count = .scratch,
+    .scratch_evidence_pairs = .scratch,
+    .scratch_evidence_pairs_sorted = .scratch,
+    .scratch_generated_codec_calls = .scratch,
+    .open_literal_vars = .settled,
+    .instantiated_literal_conversion_uses = .fact,
+    .open_numeral_literals = .settled,
+    .instantiated_interpolation_owners = .fact,
+    .row_extension_derivations = .fact,
+    .interpolation_part_numerals = .fact,
+    .retired_literal_dispatch_plans = .fact,
+    .conflicted_default_literal_vars = .frame_partitioned,
+    .default_decided_records = .fact,
+    .undetermined_type_reported = .fact,
+    .pending_tuple_accesses = .boundary,
+    .rejected_tuple_accesses = .settled,
+    .pinnable_vars = .scratch,
+    .reported_dispatch_vars = .fact,
+    .ambiguity_verdict_vars = .scratch,
+    .external_pinnable = .scratch,
+    .scheme_relation_reachability = .scratch,
+    .scheme_relation_reachable_vars = .scratch,
+    .boundary_reachable_vars = .scratch,
+    .boundary_leak_vars = .scratch,
+    .literal_defaulting_open_roots = .scratch,
+    .literal_defaulting_seen_roots = .scratch,
+    .literal_defaulting_component_parent = .scratch,
+    .literal_defaulting_is_driver = .scratch,
+    .literal_defaulting_footprint_owner = .scratch,
+    .literal_defaulting_footprint = .scratch,
+    .literal_defaulting_group_drivers = .scratch,
+    .literal_defaulting_group_warnings = .scratch,
+    .literal_defaulting_constraint_ranges = .scratch,
+    .literal_defaulting_kinds = .scratch,
+    .literal_defaulting_candidate_vars = .scratch,
+    .alt_pattern_baseline = .scratch,
+    .alt_pattern_bindings = .scratch,
+    .alt_pattern_current = .scratch,
+    .collected_constructed_tags = .scratch,
+    .payload_vars_to_close = .scratch,
+    .known_empty_payload_vars_destructure = .scratch,
+    .known_empty_payload_vars_match = .scratch,
+    .bench_probe_attempts = .fact,
+    .bench_probe_refuted = .fact,
+    .bench_conflicted_default_records = .fact,
+    .checked_lambda_params = .fact,
+    .effectful_lambda_bodies = .fact,
+    .pending_function_effect_dependencies = .frame_partitioned,
+    .function_effect_dependency_frame_starts = .frame_stack,
+    .function_effect_dependency_scope_start = .lexical,
+    .function_effect_resolution = .scratch,
+    .probe_var_pool_lens = .scratch,
+    .commit_probe_active = .lexical,
+    .probe_depth = .lexical,
+});
+
+comptime {
+    _ = state_inventory;
+}
+
+/// A frame-owned field left holding entries when a check entry point returns.
+const OpenFrameState = struct {
+    field: []const u8,
+    len: usize,
+};
+
+/// The first `frame_stack` or `frame_partitioned` field that still holds
+/// entries. Every frame a check entry point opens is closed before it
+/// returns, and closing a frame consumes its own entries, so this is null
+/// whenever no entry point is running.
+fn openFrameState(self: *const Self) ?OpenFrameState {
+    inline for (comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned })) |field_name| {
+        const len = state_discipline.entryCount(@field(self, field_name));
+        if (len != 0) return .{ .field = field_name, .len = len };
+    }
+    return null;
+}
+
+/// A leaked frame is caught where the entry point that opened it returns,
+/// naming the field it was left in.
+fn debugAssertFramesBalanced(self: *const Self) void {
+    if (!std.debug.runtime_safety) return;
+    if (self.openFrameState()) |open| {
+        base.invariant("type checker invariant violated: frame-owned `{s}` still holds {d} entries after checking returned", .{ open.field, open.len });
+    }
+}
+
 /// A def + processing data
 const DefProcessed = struct {
     def_idx: CIR.Def.Idx,
@@ -3246,19 +3635,25 @@ const TryRowFixpoint = struct {
     /// keeps its destination's residual tail at this rank, so no frame nested
     /// inside it generalizes that tail first.
     rank: Rank,
-};
+    /// The function-typed vars whose results stay open until this frame's
+    /// boundary: the vars that monomorphic references to an unannotated
+    /// function member link to, and the callables of dispatch obligations
+    /// waiting for their target's scheme.
+    links: std.ArrayListUnmanaged(Var) = .empty,
+    /// Error-row contributions whose source is still open in this frame,
+    /// waiting for its boundary.
+    edges: std.ArrayListUnmanaged(DeferredTryRowEdge) = .empty,
 
-/// A function-typed var whose result stays open until `owner`'s boundary.
-const TryRowFixpointLink = struct {
-    owner: u32,
-    var_: Var,
+    fn deinit(self: *TryRowFixpoint, gpa: Allocator) void {
+        self.links.deinit(gpa);
+        self.edges.deinit(gpa);
+    }
 };
 
 /// One `?` or body error-row contribution whose source row was still open in
-/// a fixpoint when its lambda composed its result.
+/// a fixpoint when its lambda composed its result. The fixpoint whose
+/// `edges` hold it relates it at its boundary.
 const DeferredTryRowEdge = struct {
-    /// Index of the fixpoint in `try_row_fixpoints` whose boundary relates it.
-    owner: u32,
     /// The composed `Try` result of the lambda that owns the contribution,
     /// and that result's error row.
     composed: Var,
@@ -3274,7 +3669,7 @@ const DeferredTryRowEdge = struct {
 const TryRowFixpointScratch = struct {
     const no_node = std.math.maxInt(u32);
 
-    /// Indices into `deferred_try_row_edges` owned by the fixpoint.
+    /// Indices into the fixpoint's own `edges`.
     edges: std.ArrayListUnmanaged(u32) = .empty,
     /// Per owned edge: its destination node and the node its source ends in.
     edge_nodes: std.ArrayListUnmanaged(u32) = .empty,
@@ -3341,20 +3736,6 @@ const ReturnConstraintFrame = struct {
     body_result: Var,
     /// The result supplied by an annotation or another explicit function expectation.
     expected_result: ?Var,
-};
-
-/// A constraint generated during type checking, to be checked at the end
-///
-/// In most cases, we don't defer constraint checking and unify things
-/// immediately. However, there are some cases where it's necessary.
-const Constraint = union(enum) {
-    eql: struct {
-        expected: Var,
-        actual: Var,
-        ctx: problem.Context,
-    },
-
-    pub const SafeList = MkSafeList(@This());
 };
 
 /// Context for type checking: module identity, builtin type references, and the Builtin module itself.
@@ -3639,7 +4020,6 @@ fn initAssumePrepared(
         .var_map = collections.DenseMap(Var, Var).init(gpa),
         .method_name_mints = collections.DenseMap(MethodNameId, []const MethodNameId).init(gpa),
         .method_mint_names = canonical_names.CanonicalNameStore.init(gpa),
-        .constraints = try Constraint.SafeList.initCapacity(gpa, 32),
         .return_constraints = .empty,
         .try_return_conditions = collections.DenseMap(Var, CIR.Expr.Idx).init(gpa),
         .try_lambda_host_origins = collections.DenseMap(CIR.Expr.Idx, Ident.Idx).init(gpa),
@@ -3773,7 +4153,6 @@ fn initAssumePrepared(
         .scheme_relation_reachable_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_reachable_vars = collections.DenseMap(Var, void).init(gpa),
         .boundary_leak_vars = collections.DenseMap(Var, void).init(gpa),
-        .boundary_eql_edges = .empty,
         .literal_defaulting_open_roots = .empty,
         .literal_defaulting_seen_roots = collections.DenseMap(Var, void).init(gpa),
         .literal_defaulting_component_parent = .empty,
@@ -3941,16 +4320,14 @@ pub fn deinit(self: *Self) void {
     while (subtree_entries.next()) |entry| self.gpa.free(entry.*);
     self.polarized_instance_subtrees.deinit(self.gpa);
     self.snapshot_ground_copies.deinit(self.gpa);
-    self.constraints.deinit(self.gpa);
     self.return_constraints.deinit(self.gpa);
     self.try_return_conditions.deinit();
     self.try_lambda_host_origins.deinit();
     self.return_value_exprs.deinit(self.gpa);
     self.return_constraint_frames.deinit(self.gpa);
     self.try_return_rows.deinit(self.gpa);
+    for (self.try_row_fixpoints.items) |*fixpoint| fixpoint.deinit(self.gpa);
     self.try_row_fixpoints.deinit(self.gpa);
-    self.try_row_fixpoint_links.deinit(self.gpa);
-    self.deferred_try_row_edges.deinit(self.gpa);
     self.try_row_fixpoint_scratch.deinit(self.gpa);
     self.try_row_open_tails.deinit(self.gpa);
     self.var_set.deinit();
@@ -4109,6 +4486,7 @@ pub fn deinit(self: *Self) void {
     self.default_decided_records.deinit(self.gpa);
     self.undetermined_type_reported.deinit(self.gpa);
     self.pending_tuple_accesses.deinit(self.gpa);
+    self.rejected_tuple_accesses.deinit(self.gpa);
     self.pinnable_vars.deinit();
     self.reported_dispatch_vars.deinit();
     self.ambiguity_verdict_vars.deinit();
@@ -4117,7 +4495,6 @@ pub fn deinit(self: *Self) void {
     self.scheme_relation_reachable_vars.deinit();
     self.boundary_reachable_vars.deinit();
     self.boundary_leak_vars.deinit();
-    self.boundary_eql_edges.deinit(self.gpa);
     self.literal_defaulting_open_roots.deinit(self.gpa);
     self.literal_defaulting_seen_roots.deinit();
     self.literal_defaulting_component_parent.deinit(self.gpa);
@@ -4669,11 +5046,11 @@ fn beginHoistFrame(self: *Self, expr: CIR.Expr.Idx, binding_rhs: bool, hoist_pos
 
 fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
     if (self.hoist_frames.items.len == 0) {
-        base.invariant("check invariant violated: missing hoist frame during abort", .{});
+        base.invariant("check invariant violated: aborting the hoist frame of expression {d} but no hoist frame is open", .{@backingInt(expr)});
     }
     const frame = self.hoist_frames.items[self.hoist_frames.items.len - 1];
     if (frame.expr != expr) {
-        base.invariant("check invariant violated: aborting non-top hoist frame", .{});
+        base.invariant("check invariant violated: aborting the hoist frame of expression {d} but the innermost hoist frame belongs to expression {d}", .{ @backingInt(expr), @backingInt(frame.expr) });
     }
     _ = self.hoist_frames.pop();
     self.hoist_expr_candidates.shrinkRetainingCapacity(frame.candidate_start);
@@ -4683,11 +5060,13 @@ fn abortHoistFrame(self: *Self, expr: CIR.Expr.Idx) void {
 
 fn finishHoistFrame(self: *Self, expr: CIR.Expr.Idx, does_fx: bool) Allocator.Error!void {
     if (self.hoist_frames.items.len == 0) {
-        base.invariant("check invariant violated: missing hoist frame", .{});
+        base.invariant("check invariant violated: finishing the hoist frame of expression {d} but no hoist frame is open", .{@backingInt(expr)});
     }
     const frame_index = self.hoist_frames.items.len - 1;
     var frame = self.hoist_frames.items[frame_index];
-    std.debug.assert(frame.expr == expr);
+    if (frame.expr != expr) {
+        base.invariant("check invariant violated: finishing the hoist frame of expression {d} but the innermost hoist frame belongs to expression {d}", .{ @backingInt(expr), @backingInt(frame.expr) });
+    }
     if (does_fx) frame.has_observable_effect = true;
 
     const semantically_eligible = frame.eligible();
@@ -8611,6 +8990,52 @@ fn resolvePendingTupleAccess(
     }
 }
 
+/// Judge the pending tuple accesses whose result this generalization boundary
+/// is about to quantify. An access whose receiver resolved is related to the
+/// receiver's element now, so the scheme carries the element type; one whose
+/// receiver is still open in an enclosing frame keeps its result at the
+/// receiver's rank, so no frame nested inside the receiver's quantifies it
+/// first. An access whose receiver generalizes with it stays pending for the
+/// settled sweep, which reports that its arity needs an annotation.
+fn judgeTupleAccessesAtBoundary(self: *Self, env: *Env) Allocator.Error!void {
+    std.debug.assert(self.probe_depth == 0);
+    const boundary_rank = env.rank();
+    var write_i: usize = 0;
+    var read_i: usize = 0;
+    while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
+        const pending = self.pending_tuple_accesses.items[read_i];
+        const result = self.types.resolveVar(pending.result_var);
+        const owned = result.desc.rank != .generalized and
+            @backingInt(result.desc.rank) >= @backingInt(boundary_rank);
+        const resolution: TupleAccessResolution = if (!owned or self.hoistExprInvalidated(pending.expr) or self.cir.store.getExpr(pending.expr) == .e_runtime_error) .pending else resolution: {
+            var receiver = self.types.resolveVar(pending.tuple_var);
+            while (receiver.desc.content == .alias) {
+                receiver = self.types.resolveVar(self.types.getAliasBackingVar(receiver.desc.content.alias));
+            }
+            switch (receiver.desc.content) {
+                .flex, .rigid => {
+                    if (receiver.desc.rank != .generalized and @backingInt(receiver.desc.rank) < @backingInt(boundary_rank)) {
+                        try self.pinVarAtRank(pending.result_var, receiver.desc.rank, env);
+                    }
+                    break :resolution .pending;
+                },
+                else => break :resolution try self.resolvePendingTupleAccess(pending, env, false),
+            }
+        };
+        switch (resolution) {
+            .resolved => continue,
+            .rejected => {
+                try self.rejected_tuple_accesses.append(self.gpa, pending.expr);
+                continue;
+            },
+            .pending => {},
+        }
+        self.pending_tuple_accesses.items[write_i] = pending;
+        write_i += 1;
+    }
+    self.pending_tuple_accesses.shrinkRetainingCapacity(write_i);
+}
+
 fn resolvePendingTupleAccesses(
     self: *Self,
     env: *Env,
@@ -8618,6 +9043,8 @@ fn resolvePendingTupleAccesses(
 ) Allocator.Error!void {
     var rejected: std.ArrayListUnmanaged(CIR.Expr.Idx) = .empty;
     defer rejected.deinit(self.gpa);
+    try rejected.appendSlice(self.gpa, self.rejected_tuple_accesses.items);
+    self.rejected_tuple_accesses.clearRetainingCapacity();
     var write_i: usize = 0;
     var read_i: usize = 0;
     while (read_i < self.pending_tuple_accesses.items.len) : (read_i += 1) {
@@ -11965,6 +12392,7 @@ fn checkFileInternal(self: *Self, skip_numeric_defaults: bool) std.mem.Allocator
     try self.withdrawSupersededLiteralDefaultWarnings();
 
     self.debugAssertNominalDeclTableComplete();
+    self.debugAssertFramesBalanced();
 }
 
 /// A literal default that a later requirement rejects is reported once, as
@@ -16820,6 +17248,7 @@ pub fn checkExprRepl(self: *Self, expr_idx: CIR.Expr.Idx) std.mem.Allocator.Erro
     try self.finishDispatchReplayFreezes();
 
     self.debugAssertNominalDeclTableComplete();
+    self.debugAssertFramesBalanced();
 }
 
 // defs //
@@ -17326,7 +17755,12 @@ fn predeclareAnnotationSchemeHelp(
         self.predeclaring_annotation = saved_predeclaring;
         self.active_scheme_root = saved_active_scheme_root;
     }
+    // An annotation checks no expression or pattern, so it records no field
+    // kind or tuple access judgment of its own; every pending one belongs to
+    // an enclosing frame and is judged at that frame's boundary, never here.
+    const pending_judgments_before = self.pendingAccessJudgmentCounts();
     try self.generateAnnotationType(annotation_idx, env);
+    std.debug.assert(std.meta.eql(pending_judgments_before, self.pendingAccessJudgmentCounts()));
 
     // For a hole-sharing predeclaration, collect the live hole vars first: the
     // orphan copy below SHARES them (the scheme references the live vars), and
@@ -17362,7 +17796,6 @@ fn predeclareAnnotationSchemeHelp(
             try self.types.setDescRank(resolved_hole.desc_idx, hr);
         }
     }
-    try self.judgeFieldKindsAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -18459,7 +18892,7 @@ fn finishRecursiveGroupBoundary(self: *Self, defs: []const CIR.Def.Idx, member_r
             try self.checkEffectfulFunctionName(member_def.pattern, member_def.expr);
         }
     }
-    try self.judgeFieldKindsAtBoundary(env);
+    try self.judgePendingAccessesAtBoundary(env);
     self.unify_scratch.clearPersistentOpenings();
     try self.linkDeferredUsesFrom(env.rank());
     try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -18490,9 +18923,8 @@ fn finishGroup(self: *Self, state: *GroupActivity, env: *Env) std.mem.Allocator.
         self.group_stack.items[self.group_stack.items.len - 1].pending_targets_top);
     std.debug.assert(self.pending_predeclared_scheme_uses.items.len ==
         self.group_stack.items[self.group_stack.items.len - 1].pending_predeclared_uses_top);
-    std.debug.assert(self.try_row_fixpoints.items.len == state.try_row_fixpoint + 1);
-    try self.popTryRowFixpoint(env);
-    try self.popGroupFrame();
+    try self.popTryRowFixpoint(state.try_row_fixpoint, env);
+    try self.popGroupFrame(state.group_index);
     self.group_states.items[state.group_index] = .checked;
     self.active_scheme_root = state.saved_active_scheme_root;
     return checkActivityDone(.none);
@@ -18657,7 +19089,14 @@ fn pushGroupFrame(self: *Self, frame: GroupFrame) std.mem.Allocator.Error!void {
     try self.logGroupFrameChange(self.group_stack.items.len - 1, frame.group_index);
 }
 
-fn popGroupFrame(self: *Self) Allocator.Error!void {
+fn popGroupFrame(self: *Self, group_index: u32) Allocator.Error!void {
+    if (self.group_stack.items.len == 0) {
+        base.invariant("type checker invariant violated: closing group {d} but no group frame is open", .{group_index});
+    }
+    const innermost = self.group_stack.items[self.group_stack.items.len - 1].group_index;
+    if (innermost != group_index) {
+        base.invariant("type checker invariant violated: closing group {d} but the innermost group frame is group {d}", .{ group_index, innermost });
+    }
     self.waiting_context_epoch +%= 1;
     try self.logGroupFrameChange(self.group_stack.items.len - 1, self.group_stack.items[self.group_stack.items.len - 1].group_index);
     const frame = self.group_stack.pop().?;
@@ -20956,8 +21395,11 @@ fn runTypeGen(self: *Self, root: TypeGenRequest, env: *Env) std.mem.Allocator.Er
 /// an enclosing function's type variable records the shallowest such depth,
 /// which every later reference to it carries.
 fn finishTypeDeclGeneration(self: *Self, decl_idx: CIR.Statement.Idx) Allocator.Error!void {
-    const frame = self.type_decl_generation_frames.pop().?;
-    std.debug.assert(frame.decl == decl_idx);
+    const frame = self.type_decl_generation_frames.pop() orelse
+        base.invariant("type checker invariant violated: finishing type declaration {d} but no generation frame is open", .{@backingInt(decl_idx)});
+    if (frame.decl != decl_idx) {
+        base.invariant("type checker invariant violated: finishing type declaration {d} but the innermost generation frame is declaration {d}", .{ @backingInt(decl_idx), @backingInt(frame.decl) });
+    }
     const depth = frame.context_depth orelse return;
     if (try self.isModuleTypeDecl(decl_idx)) return;
     try self.local_type_context_depths.put(self.gpa, decl_idx, depth);
@@ -21086,7 +21528,11 @@ fn releaseTypeGenFrame(self: *Self, frame: *TypeGenFrame) void {
         .decl => |*decl| {
             if (decl.mode == .ensure) self.setTypeDeclGenerationState(decl.decl_idx, .not_generated);
             self.restoreDeclGenScope(decl);
-            _ = self.type_decl_generation_frames.pop();
+            const popped = self.type_decl_generation_frames.pop() orelse
+                base.invariant("type checker invariant violated: releasing type declaration {d} but no generation frame is open", .{@backingInt(decl.decl_idx)});
+            if (popped.decl != decl.decl_idx) {
+                base.invariant("type checker invariant violated: releasing type declaration {d} but the innermost generation frame is declaration {d}", .{ @backingInt(decl.decl_idx), @backingInt(popped.decl) });
+            }
         },
         .owners => {},
     }
@@ -24734,7 +25180,7 @@ const ExprCheckFrame = struct {
     fn generalize(self: *ExprCheckFrame) std.mem.Allocator.Error!void {
         const checker = self.checker;
         const env = self.env;
-        try checker.judgeFieldKindsAtBoundary(env);
+        try checker.judgePendingAccessesAtBoundary(env);
         checker.unify_scratch.clearPersistentOpenings();
         try checker.linkDeferredUsesFrom(env.rank());
         try checker.generalizer.generalize(checker.gpa, &env.var_pool, env.rank());
@@ -26825,10 +27271,14 @@ const StatementCheck = struct {
 
 const DeclStatementCheck = struct {
     is_local_procedure_candidate: bool,
-    local_procedure_candidate_pushed: bool = false,
+    /// The binding pattern this declaration pushed on
+    /// `local_procedure_candidate_stack`, if it pushed one.
+    local_procedure_candidate_pushed: ?CIR.Pattern.Idx = null,
     decl_is_fn: bool,
     decl_predeclared: bool,
     decl_fn_frame: bool,
+    /// The declaration's own try-row fixpoint, open while `decl_fn_frame`.
+    try_row_fixpoint: ?u32 = null,
     saved_func_name: ?Ident.Idx = null,
     func_name_saved: bool = false,
     expectation: Expected = undefined,
@@ -26922,8 +27372,12 @@ fn abortBlockStatements(self: *Self, state: *BlockStatementsCheck, _: *Env) void
 /// right-hand side is checked.
 fn releaseDeclStatement(self: *Self, decl: DeclStatementCheck) void {
     if (decl.func_name_saved) self.enclosing_func_name = decl.saved_func_name;
-    if (decl.local_procedure_candidate_pushed) {
-        _ = self.local_procedure_candidate_stack.pop();
+    if (decl.local_procedure_candidate_pushed) |pattern| {
+        const popped = self.local_procedure_candidate_stack.pop() orelse
+            base.invariant("type checker invariant violated: closing local procedure candidate {d} but no candidate is open", .{@backingInt(pattern)});
+        if (popped != pattern) {
+            base.invariant("type checker invariant violated: closing local procedure candidate {d} but the innermost candidate is {d}", .{ @backingInt(pattern), @backingInt(popped) });
+        }
     }
 }
 
@@ -26996,7 +27450,9 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             const decl_pattern_var: Var = ModuleEnv.varFrom(decl_stmt.pattern);
             if (decl.decl_fn_frame) {
                 try env.var_pool.pushRank();
-                try self.addTryRowFixpointLink(try self.pushTryRowFixpoint(env.rank()), decl_pattern_var);
+                const fixpoint = try self.pushTryRowFixpoint(env.rank());
+                decl.try_row_fixpoint = fixpoint;
+                try self.addTryRowFixpointLink(fixpoint, decl_pattern_var);
             }
 
             const decl_pattern_ctx: PatternCtx = .{ .row_openness = if (try self.patternNeedsExhaustiveness(decl_stmt.pattern)) .open else .closed, .failure_owner = ModuleEnv.nodeIdxFrom(stmt_idx) };
@@ -27044,7 +27500,7 @@ fn startStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *S
             // candidate is pushed once it is bound.
             if (is_local_procedure_candidate) {
                 try self.local_procedure_candidate_stack.append(self.gpa, decl_stmt.pattern);
-                decl.local_procedure_candidate_pushed = true;
+                decl.local_procedure_candidate_pushed = decl_stmt.pattern;
             }
             self.checking_binding_rhs = true;
             self.checking_binding_rhs_pattern = decl_stmt.pattern;
@@ -27292,7 +27748,8 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
             if (decl.decl_fn_frame) {
                 // The pattern carries its RHS, so the def's result row is
                 // known to every contribution that reached it.
-                try self.popTryRowFixpoint(env);
+                try self.popTryRowFixpoint(decl.try_row_fixpoint.?, env);
+                decl.try_row_fixpoint = null;
 
                 // This statement's binding-group boundary: the pattern and
                 // any recursive links generalize together, then the frame
@@ -27309,7 +27766,7 @@ fn resumeStatement(self: *Self, block_state: *BlockStatementsCheck, statement: *
                 try self.checkStaticDispatchConstraints(env, false);
                 try self.judgeRecordDestructBinds(env);
                 try self.defaultLiteralsAtGeneralizationBoundary(.{ .owner = decl_pattern_var, .interface = decl_pattern_var }, env);
-                try self.judgeFieldKindsAtBoundary(env);
+                try self.judgePendingAccessesAtBoundary(env);
                 self.unify_scratch.clearPersistentOpenings();
                 try self.linkDeferredUsesFrom(env.rank());
                 try self.generalizer.generalize(self.gpa, &env.var_pool, env.rank());
@@ -27768,8 +28225,7 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
         // where it crashes. The result is then whatever the function's other
         // returns, its annotation, and its uses make it.
         if (self.branchValueIsErroneous(lambda.body)) {
-            const return_frame = &self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
-            std.debug.assert(return_frame.lambda == expr_idx);
+            const return_frame = &self.return_constraint_frames.items[self.innermostReturnFrameIndex(expr_idx)];
             return_frame.body_result = try self.fresh(env, expr_region);
         }
 
@@ -28003,7 +28459,11 @@ fn resumeLambdaCheck(self: *Self, task: *ExprTask, state: *LambdaCheck, env: *En
 /// reverse order it was acquired.
 fn releaseLambdaCheck(self: *Self, state: *LambdaCheck) void {
     if (state.effect_dependencies_start) |effect_dependencies_start| {
-        _ = self.function_effect_dependency_frame_starts.pop();
+        const popped = self.function_effect_dependency_frame_starts.pop() orelse
+            base.invariant("type checker invariant violated: closing the function-effect frame starting at {d} but no function-effect frame is open", .{effect_dependencies_start});
+        if (popped != effect_dependencies_start) {
+            base.invariant("type checker invariant violated: closing the function-effect frame starting at {d} but the innermost function-effect frame starts at {d}", .{ effect_dependencies_start, popped });
+        }
         self.pending_function_effect_dependencies.shrinkRetainingCapacity(effect_dependencies_start);
         state.effect_dependencies_start = null;
     }
@@ -30814,9 +31274,7 @@ fn closeAbsentConstructedPayloadVarsForLambda(
     body_expr: CIR.Expr.Idx,
     target_var: Var,
 ) Allocator.Error!void {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
-    std.debug.assert(frame.lambda == lambda_idx);
+    const frame = self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)];
 
     self.collected_constructed_tags.clearRetainingCapacity();
     if (!try self.collectConstructedTagsForExpr(body_expr, &self.collected_constructed_tags)) return;
@@ -33441,16 +33899,12 @@ fn checkNominalTypeUsage(
 
 // validate constraints //
 
-/// Drive ordinary constraints and every runnable static-dispatch relation to
-/// quiescence. A semantic judgment can ground a dispatch receiver without
-/// adding an ordinary constraint (record-destructure binder judgment is one
-/// example), so the ordinary queue alone cannot decide whether this fixpoint
-/// has work left.
+/// Drive every runnable static-dispatch relation to quiescence.
 ///
 /// `anyDeferredDispatchReceiverResolved` keeps inert flex receivers parked:
 /// we only pay for a dispatch pass when at least one queued relation can make
-/// progress. Static dispatch can add ordinary constraints, and checking those
-/// constraints can ground more dispatch receivers, hence the joint loop.
+/// progress. Checking one relation can ground more dispatch receivers, hence
+/// the loop.
 fn quiesceConstraints(
     self: *Self,
     env: *Env,
@@ -33459,12 +33913,7 @@ fn quiesceConstraints(
     const trace = tracy.trace(@src());
     defer trace.end();
 
-    while (true) {
-        if (self.constraints.items.items.len > 0) {
-            try self.checkConstraints(env);
-        }
-
-        if (!try self.anyDeferredDispatchReceiverResolved(env)) return;
+    while (try self.anyDeferredDispatchReceiverResolved(env)) {
         try self.checkStaticDispatchConstraints(env, is_numeric_default_pass);
     }
 }
@@ -34577,6 +35026,29 @@ fn judgeFieldKindsAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!voi
     try self.judgeOptionalFieldAccesses(env);
     try self.judgeRecordUpdates(env);
     try self.judgeRecordDestructBinds(env);
+}
+
+const PendingAccessJudgmentCounts = struct {
+    optional_field_accesses: usize,
+    record_updates: usize,
+    record_destructs: usize,
+    tuple_accesses: usize,
+};
+
+fn pendingAccessJudgmentCounts(self: *const Self) PendingAccessJudgmentCounts {
+    return .{
+        .optional_field_accesses = self.optional_field_accesses.items.len,
+        .record_updates = self.pending_record_updates.items.len,
+        .record_destructs = self.pending_record_destructs.items.len,
+        .tuple_accesses = self.pending_tuple_accesses.items.len,
+    };
+}
+
+/// The judgments every value generalization boundary runs before it
+/// generalizes: field kinds, then the tuple accesses whose results it owns.
+fn judgePendingAccessesAtBoundary(self: *Self, env: *Env) std.mem.Allocator.Error!void {
+    try self.judgeFieldKindsAtBoundary(env);
+    try self.judgeTupleAccessesAtBoundary(env);
 }
 
 fn judgeRecordUpdates(self: *Self, env: *Env) std.mem.Allocator.Error!void {
@@ -38322,20 +38794,6 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         return;
     }
 
-    // Collect the module's `.eql` edges once so the recursive-def pass and the
-    // fixpoint below iterate just the edges, not the whole constraint list.
-    // Safe to snapshot here: nothing between this point and the fixpoint adds an
-    // `.eql` constraint (the passes only collect reachable vars).
-    self.boundary_eql_edges.clearRetainingCapacity();
-    {
-        var edge_iter = self.constraints.iterIndices();
-        while (edge_iter.next()) |constraint_idx| {
-            switch (self.constraints.get(constraint_idx).*) {
-                .eql => |eql| try self.boundary_eql_edges.append(self.gpa, eql),
-            }
-        }
-    }
-
     // The reachable closure of every def root at this boundary (recursing into
     // `where`-constraint signatures). A recursive group generalizes as one
     // unit, so all members' roots seed the same protection set. Recursive
@@ -38348,24 +38806,6 @@ fn defaultLiteralsAtGeneralizationBoundaryMultiRoot(
         try self.collectReachableVars(root.interface, &self.boundary_reachable_vars);
     }
     try self.addSchemeDispatchRequirementsToBoundaryReachability(roots);
-
-    // Pending `eql` constraints are recursive-group cross-reference edges; a
-    // literal awaiting unification with the def's type through one is NOT
-    // ambiguous. Close the set over them—when one side of an edge is in,
-    // collect both sides—to fixpoint, since collecting one edge can make
-    // another edge's side reachable.
-    var changed = true;
-    while (changed) {
-        changed = false;
-        for (self.boundary_eql_edges.items) |eql| {
-            const expected_in = self.boundaryReachableIncludingRelations(eql.expected);
-            const actual_in = self.boundaryReachableIncludingRelations(eql.actual);
-            if (expected_in == actual_in) continue;
-            try self.collectReachableVars(eql.expected, &self.boundary_reachable_vars);
-            try self.collectReachableVars(eql.actual, &self.boundary_reachable_vars);
-            changed = true;
-        }
-    }
 
     // Every plain walk into the boundary set is done; fold in the
     // receiver-excluded relation overlay for the membership-only consumers
@@ -39752,18 +40192,27 @@ fn pushReturnConstraintFrame(
     });
 }
 
+/// The index of the innermost return frame, which must belong to
+/// `lambda_idx`: a lambda reads, records into, and drains only its own frame.
+fn innermostReturnFrameIndex(self: *const Self, lambda_idx: CIR.Expr.Idx) usize {
+    const frames = self.return_constraint_frames.items;
+    if (frames.len == 0) {
+        base.invariant("type checker invariant violated: lambda {d} reached its return frame but no return frame is open", .{@backingInt(lambda_idx)});
+    }
+    const frame_idx = frames.len - 1;
+    if (frames[frame_idx].lambda != lambda_idx) {
+        base.invariant("type checker invariant violated: lambda {d} reached its return frame but the innermost return frame belongs to lambda {d}", .{ @backingInt(lambda_idx), @backingInt(frames[frame_idx].lambda) });
+    }
+    return frame_idx;
+}
+
 fn expectedReturnResultFor(self: *const Self, lambda_idx: CIR.Expr.Idx) ?Var {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
-    std.debug.assert(frame.lambda == lambda_idx);
-    return frame.expected_result;
+    return self.return_constraint_frames.items[self.innermostReturnFrameIndex(lambda_idx)].expected_result;
 }
 
 fn discardReturnConstraintFrame(self: *Self, lambda_idx: CIR.Expr.Idx) void {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    const frame_idx = self.return_constraint_frames.items.len - 1;
+    const frame_idx = self.innermostReturnFrameIndex(lambda_idx);
     const frame = self.return_constraint_frames.items[frame_idx];
-    std.debug.assert(frame.lambda == lambda_idx);
     self.return_constraints.shrinkRetainingCapacity(frame.start);
     self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
     self.return_constraint_frames.shrinkRetainingCapacity(frame_idx);
@@ -39777,8 +40226,7 @@ fn recordReturnValueExpr(
     lambda_idx: CIR.Expr.Idx,
     actual_expr: CIR.Expr.Idx,
 ) std.mem.Allocator.Error!void {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    std.debug.assert(self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1].lambda == lambda_idx);
+    _ = self.innermostReturnFrameIndex(lambda_idx);
     try self.return_value_exprs.append(self.gpa, actual_expr);
 }
 
@@ -39788,9 +40236,7 @@ fn appendReturnConstraint(
     actual_expr: CIR.Expr.Idx,
     kind: ReturnConstraintKind,
 ) std.mem.Allocator.Error!void {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    const frame = self.return_constraint_frames.items[self.return_constraint_frames.items.len - 1];
-    std.debug.assert(frame.lambda == lambda_idx);
+    _ = self.innermostReturnFrameIndex(lambda_idx);
     try self.return_constraints.append(self.gpa, .{
         .actual_expr = actual_expr,
         .kind = kind,
@@ -40165,10 +40611,8 @@ fn noteComposedBodyRelation(self: *Self, result: unifier.Result, body_expr: CIR.
 /// every `?` contribution compose (design.md "Inferred Try Return-Row
 /// Composition").
 fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, anno_context: problem.Context) std.mem.Allocator.Error!Var {
-    std.debug.assert(self.return_constraint_frames.items.len > 0);
-    const frame_idx = self.return_constraint_frames.items.len - 1;
+    const frame_idx = self.innermostReturnFrameIndex(lambda_idx);
     const frame = self.return_constraint_frames.items[frame_idx];
-    std.debug.assert(frame.lambda == lambda_idx);
     defer {
         self.return_constraints.shrinkRetainingCapacity(frame.start);
         self.return_value_exprs.shrinkRetainingCapacity(frame.returns_start);
@@ -40442,8 +40886,7 @@ fn processReturnConstraints(self: *Self, env: *Env, lambda_idx: CIR.Expr.Idx, an
         for (rows.plans.items) |plan| {
             const owner = plan.deferred_owner orelse continue;
             try self.pinVarAtRank(residual, self.try_row_fixpoints.items[owner].rank, env);
-            try self.deferred_try_row_edges.append(self.gpa, .{
-                .owner = owner,
+            try self.try_row_fixpoints.items[owner].edges.append(self.gpa, .{
                 .composed = composed_var,
                 .composed_err = composed.err,
                 .plan = plan,
@@ -40465,23 +40908,24 @@ fn pushTryRowFixpoint(self: *Self, rank: Rank) Allocator.Error!u32 {
 /// boundary.
 fn addTryRowFixpointLink(self: *Self, owner: u32, link_var: Var) Allocator.Error!void {
     std.debug.assert(owner < self.try_row_fixpoints.items.len);
-    try self.try_row_fixpoint_links.append(self.gpa, .{ .owner = owner, .var_ = link_var });
+    try self.try_row_fixpoints.items[owner].links.append(self.gpa, link_var);
 }
 
-/// Close the innermost fixpoint: relate what is still deferred to it, then
-/// drop it and its links.
-fn popTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!void {
-    std.debug.assert(self.try_row_fixpoints.items.len > 0);
-    const fixpoint_idx: u32 = @intCast(self.try_row_fixpoints.items.len - 1);
+/// Close the innermost fixpoint, which must be `fixpoint_idx`: relate what is
+/// still deferred to it, then drop it with its links.
+fn popTryRowFixpoint(self: *Self, fixpoint_idx: u32, env: *Env) Allocator.Error!void {
+    self.assertInnermostTryRowFixpoint(fixpoint_idx);
     _ = try self.relateTryRowFixpoint(env);
-    var write: usize = 0;
-    for (self.try_row_fixpoint_links.items) |link| {
-        if (link.owner == fixpoint_idx) continue;
-        self.try_row_fixpoint_links.items[write] = link;
-        write += 1;
+    var fixpoint = self.try_row_fixpoints.pop().?;
+    std.debug.assert(fixpoint.edges.items.len == 0);
+    fixpoint.deinit(self.gpa);
+}
+
+fn assertInnermostTryRowFixpoint(self: *const Self, fixpoint_idx: u32) void {
+    const depth = self.try_row_fixpoints.items.len;
+    if (depth == 0 or depth - 1 != fixpoint_idx) {
+        base.invariant("type checker invariant violated: closing try-row fixpoint {d} but the innermost open fixpoint is {d} of depth {d}", .{ fixpoint_idx, @as(i64, @intCast(depth)) - 1, depth });
     }
-    self.try_row_fixpoint_links.shrinkRetainingCapacity(write);
-    _ = self.try_row_fixpoints.pop();
 }
 
 /// The residual tail of the result error row a link var carries, once
@@ -40542,14 +40986,15 @@ fn tryBackingErrPayload(self: *Self, union_var: Var) ?Var {
 fn collectOpenTryRowTails(self: *Self, limit: usize) Allocator.Error!void {
     const open_tails = &self.try_row_open_tails;
     open_tails.clearRetainingCapacity();
-    for (self.try_row_fixpoint_links.items) |link| {
-        if (link.owner >= limit) continue;
-        const tail = self.tryRowFixpointMemberTail(link.var_) orelse continue;
-        try self.noteOpenTryRowTail(tail, link.owner);
-    }
-    for (self.deferred_try_row_edges.items) |edge| {
-        if (edge.owner >= limit) continue;
-        try self.noteOpenTryRowTail(self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_, edge.owner);
+    for (self.try_row_fixpoints.items[0..limit], 0..) |fixpoint, owner_idx| {
+        const owner: u32 = @intCast(owner_idx);
+        for (fixpoint.links.items) |link_var| {
+            const tail = self.tryRowFixpointMemberTail(link_var) orelse continue;
+            try self.noteOpenTryRowTail(tail, owner);
+        }
+        for (fixpoint.edges.items) |edge| {
+            try self.noteOpenTryRowTail(self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_, owner);
+        }
     }
 }
 
@@ -40584,35 +41029,40 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
 
     const scratch = &self.try_row_fixpoint_scratch;
     scratch.clear();
-    var any_owned = false;
-    for (self.deferred_try_row_edges.items) |edge| {
-        if (edge.owner == fixpoint_idx) any_owned = true;
-    }
-    if (!any_owned) return false;
+    if (self.try_row_fixpoints.items[fixpoint_idx].edges.items.len == 0) return false;
     try self.collectOpenTryRowTails(fixpoint_idx);
-    for (self.deferred_try_row_edges.items, 0..) |*edge, edge_idx| {
-        if (edge.owner != fixpoint_idx) continue;
+    // A contribution whose source is still open in an enclosing fixpoint
+    // moves to that fixpoint's own edges; the rest stay, compacted, as the
+    // edges this boundary relates.
+    var kept: usize = 0;
+    var edge_idx: usize = 0;
+    while (edge_idx < self.try_row_fixpoints.items[fixpoint_idx].edges.items.len) : (edge_idx += 1) {
+        const edge = self.try_row_fixpoints.items[fixpoint_idx].edges.items[edge_idx];
         if (self.openTryRowTailOwner(self.tryReturnErrorTail(edge.plan.err))) |outer| {
-            edge.owner = outer;
+            std.debug.assert(outer < fixpoint_idx);
+            try self.try_row_fixpoints.items[outer].edges.append(self.gpa, edge);
             const destination_tail = self.tryReturnErrorTail(edge.composed_err);
             try self.pinVarAtRank(destination_tail, self.try_row_fixpoints.items[outer].rank, env);
             try self.noteOpenTryRowTail(self.types.resolveVar(destination_tail).var_, outer);
             continue;
         }
-        try scratch.edges.append(self.gpa, @intCast(edge_idx));
+        self.try_row_fixpoints.items[fixpoint_idx].edges.items[kept] = edge;
+        try scratch.edges.append(self.gpa, @intCast(kept));
+        kept += 1;
     }
+    self.try_row_fixpoints.items[fixpoint_idx].edges.shrinkRetainingCapacity(kept);
     if (scratch.edges.items.len == 0) return false;
 
     // Nodes and edges.
-    for (scratch.edges.items) |edge_idx| {
-        const edge = self.deferred_try_row_edges.items[edge_idx];
+    for (scratch.edges.items) |owned_edge_idx| {
+        const edge = self.try_row_fixpoints.items[fixpoint_idx].edges.items[owned_edge_idx];
         const key = self.types.resolveVar(self.tryReturnErrorTail(edge.composed_err)).var_;
         const entry = try scratch.node_keys.getOrPut(self.gpa, key);
         if (!entry.found_existing) entry.value_ptr.* = @intCast(scratch.node_keys.count() - 1);
         try scratch.edge_nodes.append(self.gpa, entry.value_ptr.*);
     }
-    for (scratch.edges.items) |edge_idx| {
-        const edge = self.deferred_try_row_edges.items[edge_idx];
+    for (scratch.edges.items) |owned_edge_idx| {
+        const edge = self.try_row_fixpoints.items[fixpoint_idx].edges.items[owned_edge_idx];
         const source_tail = self.types.resolveVar(self.tryReturnErrorTail(edge.plan.err)).var_;
         try scratch.edge_targets.append(self.gpa, scratch.node_keys.get(source_tail) orelse TryRowFixpointScratch.no_node);
     }
@@ -40641,25 +41091,19 @@ fn relateTryRowFixpoint(self: *Self, env: *Env) Allocator.Error!bool {
                 const target = scratch.edge_targets.items[owned_idx];
                 if (target == TryRowFixpointScratch.no_node) continue;
                 if (scratch.component.items[target] != component_idx) continue;
-                try self.collapseTryRowEdge(self.deferred_try_row_edges.items[scratch.edges.items[owned_idx]], env);
+                try self.collapseTryRowEdge(self.try_row_fixpoints.items[fixpoint_idx].edges.items[scratch.edges.items[owned_idx]], env);
             }
         }
         for (members) |node| {
             for (scratch.out_edges.items[scratch.out_start.items[node]..scratch.out_start.items[node + 1]]) |owned_idx| {
                 const target = scratch.edge_targets.items[owned_idx];
                 if (target != TryRowFixpointScratch.no_node and scratch.component.items[target] == component_idx) continue;
-                try self.relateDeferredTryRowEdge(self.deferred_try_row_edges.items[scratch.edges.items[owned_idx]], env);
+                try self.relateDeferredTryRowEdge(self.try_row_fixpoints.items[fixpoint_idx].edges.items[scratch.edges.items[owned_idx]], env);
             }
         }
     }
 
-    var write: usize = 0;
-    for (self.deferred_try_row_edges.items) |edge| {
-        if (edge.owner == fixpoint_idx) continue;
-        self.deferred_try_row_edges.items[write] = edge;
-        write += 1;
-    }
-    self.deferred_try_row_edges.shrinkRetainingCapacity(write);
+    self.try_row_fixpoints.items[fixpoint_idx].edges.clearRetainingCapacity();
     return true;
 }
 
@@ -40843,31 +41287,6 @@ fn includeTryRowDirected(self: *Self, edge: DeferredTryRowEdge, env: *Env) Alloc
     if ((try self.unifyReturnContribution(self.tryReturnErrorTail(edge.composed_err), gathered.tail, env, edge.ctx)).isProblem()) {
         try self.markErroneousValueExpr(plan.expr);
     }
-}
-
-/// Resolve one `eql` constraint.
-fn resolveEqlConstraint(self: *Self, eql: anytype, env: *Env) std.mem.Allocator.Error!void {
-    _ = try self.unifyInContext(eql.expected, eql.actual, env, eql.ctx);
-}
-
-/// Check any accumulated constraints
-fn checkConstraints(self: *Self, env: *Env) std.mem.Allocator.Error!void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
-    // A queued constraint belongs to no relation the running check owns.
-    const previous_relation = try self.enterRelation(.none);
-    var iter = self.constraints.iterIndices();
-    while (iter.next()) |idx| {
-        const constraint = self.constraints.get(idx);
-        switch (constraint.*) {
-            .eql => |eql| {
-                try self.resolveEqlConstraint(eql, env);
-            },
-        }
-    }
-    self.constraints.items.clearRetainingCapacity();
-    try self.leaveRelation(previous_relation);
 }
 
 /// Check static dispatch constraints
@@ -55323,5 +55742,90 @@ test "issue 11393: imported codec methods instantiate independently and reject u
         , "Browser", &imported_source);
         defer rejected.deinit();
         try std.testing.expect((try rejected.typeProblemCount()) > 0);
+    }
+}
+
+test "closing a nested return frame drains only that frame's return-flow entries" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("ReturnFrames", "1.I64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    try std.testing.expect(checker.openFrameState() == null);
+
+    const outer_lambda: CIR.Expr.Idx = @fromBackingInt(1);
+    const inner_lambda: CIR.Expr.Idx = @fromBackingInt(2);
+    const outer_return: CIR.Expr.Idx = @fromBackingInt(3);
+    const inner_return: CIR.Expr.Idx = @fromBackingInt(4);
+
+    try checker.pushReturnConstraintFrame(outer_lambda, ModuleEnv.varFrom(outer_lambda), null);
+    try checker.appendReturnConstraint(outer_lambda, outer_return, .return_expr);
+    try checker.recordReturnValueExpr(outer_lambda, outer_return);
+
+    try checker.pushReturnConstraintFrame(inner_lambda, ModuleEnv.varFrom(inner_lambda), null);
+    try checker.appendReturnConstraint(inner_lambda, inner_return, .try_suffix);
+    try checker.recordReturnValueExpr(inner_lambda, inner_return);
+    try std.testing.expect(checker.returnFrameHasTrySuffix());
+
+    checker.discardReturnConstraintFrame(inner_lambda);
+    try std.testing.expectEqual(@as(usize, 1), checker.return_constraint_frames.items.len);
+    try std.testing.expectEqual(@as(usize, 1), checker.return_constraints.items.len);
+    try std.testing.expectEqual(outer_return, checker.return_constraints.items[0].actual_expr);
+    try std.testing.expectEqual(@as(usize, 1), checker.return_value_exprs.items.len);
+    try std.testing.expect(!checker.returnFrameHasTrySuffix());
+
+    const leaked = checker.openFrameState().?;
+    try std.testing.expectEqualStrings("return_constraints", leaked.field);
+
+    checker.discardReturnConstraintFrame(outer_lambda);
+    try std.testing.expect(checker.openFrameState() == null);
+}
+
+test "closing a nested try-row fixpoint drops only that fixpoint's links" {
+    const TestEnv = @import("test/TestEnv.zig");
+    var test_env = try TestEnv.initExpr("TryRowFixpoints", "1.I64");
+    defer test_env.deinit();
+    const checker = &test_env.checker;
+    var env = try checker.env_pool.acquire();
+    defer checker.env_pool.release(env);
+
+    const outer_link: Var = ModuleEnv.varFrom(@as(CIR.Expr.Idx, @fromBackingInt(1)));
+    const inner_link: Var = ModuleEnv.varFrom(@as(CIR.Expr.Idx, @fromBackingInt(2)));
+
+    const outer = try checker.pushTryRowFixpoint(.outermost);
+    try checker.addTryRowFixpointLink(outer, outer_link);
+    const inner = try checker.pushTryRowFixpoint(Rank.outermost.next());
+    try checker.addTryRowFixpointLink(inner, inner_link);
+    // A link may belong to an enclosing fixpoint while a nested one is open.
+    try checker.addTryRowFixpointLink(outer, inner_link);
+
+    try std.testing.expectEqualStrings("try_row_fixpoints", checker.openFrameState().?.field);
+
+    try checker.popTryRowFixpoint(inner, &env);
+    try std.testing.expectEqual(@as(usize, 1), checker.try_row_fixpoints.items.len);
+    try std.testing.expectEqualSlices(Var, &.{ outer_link, inner_link }, checker.try_row_fixpoints.items[outer].links.items);
+
+    try checker.popTryRowFixpoint(outer, &env);
+    try std.testing.expect(checker.openFrameState() == null);
+}
+
+test "every checker frame stack and frame's own storage is checked for balance" {
+    const frame_owned = comptime state_discipline.fieldsWith(Self, state_inventory, &.{ .frame_stack, .frame_partitioned });
+    inline for (.{
+        "return_constraint_frames",
+        "return_constraints",
+        "return_value_exprs",
+        "try_row_fixpoints",
+        "group_stack",
+        "pending_dispatch_targets",
+        "hoist_frames",
+        "function_effect_dependency_frame_starts",
+        "pending_function_effect_dependencies",
+        "local_procedure_candidate_stack",
+        "type_decl_generation_frames",
+    }) |expected| {
+        const found = for (frame_owned) |name| {
+            if (std.mem.eql(u8, name, expected)) break true;
+        } else false;
+        try std.testing.expect(found);
     }
 }
