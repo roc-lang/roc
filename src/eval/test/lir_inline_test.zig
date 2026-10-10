@@ -207,7 +207,7 @@ fn lowerModuleWithOptions(
             .inline_mode = inline_mode,
             .inline_expects = options.inline_expects,
             .proc_debug_names = options.proc_debug_names,
-            .promote_loop_appends = options.promote_loop_appends,
+            .promote_loop_appends = .{ .value = options.promote_loop_appends },
             .prove_ranges = options.prove_ranges,
             .tag_reachability = options.tag_reachability,
         },

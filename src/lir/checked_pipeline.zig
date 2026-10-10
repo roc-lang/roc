@@ -169,10 +169,14 @@ pub const TargetConfig = struct {
     /// wrappers inlined their calls.
     keep_specialization_procs: bool = false,
     /// Thread slack counters through loop-carried append-only lists so the
-    /// per-element ownership and capacity checks amortize. On by default;
-    /// shape-comparison tests turn it off because promotion intentionally
-    /// changes the loop skeleton of qualifying sides.
-    promote_loop_appends: bool = true,
+    /// per-element ownership and capacity checks amortize. Always on outside
+    /// tests; shape-comparison tests turn it off because promotion
+    /// intentionally changes the loop skeleton of qualifying sides.
+    promote_loop_appends: base.TestSwitch(true) = .{},
+    /// Let Monotype replay completed interface summaries. Always on outside
+    /// tests; tests turn it off to expand every interface request freshly,
+    /// which must lower the same program.
+    replay_interface_summaries: base.TestSwitch(true) = .{},
     /// Route each literal tag edge straight to the arm that matches it:
     /// tag-case fusion and known-tag jump threading. Every runtime
     /// optimization level runs them, as it does TRMC and loop append
@@ -973,7 +977,7 @@ pub const LirPolicy = struct {
     code_provision: CodeProvision,
     comptime_closure_hits: bool,
     keep_specialization_procs: bool,
-    promote_loop_appends: bool,
+    promote_loop_appends: base.TestSwitch(true),
     fuse_tag_cases: bool,
     scalarize_joins: bool,
     reuse_boxes: bool,
@@ -1348,6 +1352,7 @@ pub fn prepareCheckedModulesMonotype(
                 .static_data_literals = target.checked_module_state == .checking_finalization or roots.include_internal_static_data,
                 .comptime_value_reads = target.comptime_value_reads,
                 .literal_roots = target.literal_roots,
+                .replay_interface_summaries = target.replay_interface_summaries,
                 .target_usize = target.target_usize,
                 .inline_expects = if (target.comptime_value_reads) .shared else switch (target.inline_expects) {
                     .run => .run,
@@ -1753,7 +1758,7 @@ fn finishLoweredOutput(
     if (target.scalarize_joins) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .scalarize);
     }
-    if (target.promote_loop_appends) {
+    if (target.promote_loop_appends.enabled()) {
         try runProcedurePass(allocator, &lowered.lir_result, pass_target, .loop_append);
     }
     verifyArithmeticBoundary(&lowered.lir_result.store, true);

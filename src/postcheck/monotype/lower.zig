@@ -302,6 +302,11 @@ pub const Options = struct {
     /// whose completed value the specialization reads. The consumer that
     /// asks for this evaluates every literal root the program registers.
     literal_roots: bool = false,
+    /// Whether an interface request may replay a completed summary instead of
+    /// expanding its callee's relations. A replay is a faithful stand-in for a
+    /// fresh expansion, so this never changes the lowered program. Always on
+    /// outside tests, which turn it off to compare the two.
+    replay_interface_summaries: base.TestSwitch(true) = .{},
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     /// Optional executor for isolated procedure roots and ordinary
     /// specialization batches.
@@ -3775,6 +3780,7 @@ const SpecJobWorkerInputs = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
+    replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
@@ -4132,6 +4138,7 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
+    replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
@@ -4382,6 +4389,7 @@ const Builder = struct {
             .static_data_literals = options.static_data_literals,
             .comptime_value_reads = options.comptime_value_reads,
             .literal_roots = options.literal_roots,
+            .replay_interface_summaries = options.replay_interface_summaries,
             .declared_comptime_root_functions = DeclaredComptimeRootFunctions.init(allocator),
             .post_check_executor = options.post_check_executor,
             .timing = options.timing,
@@ -4532,6 +4540,7 @@ const Builder = struct {
             .static_data_literals = inputs.static_data_literals,
             .comptime_value_reads = inputs.comptime_value_reads,
             .literal_roots = inputs.literal_roots,
+            .replay_interface_summaries = inputs.replay_interface_summaries,
             .post_check_executor = null,
             .timing = null,
         });
@@ -5303,6 +5312,7 @@ const Builder = struct {
             .static_data_literals = self.static_data_literals,
             .comptime_value_reads = self.comptime_value_reads,
             .literal_roots = self.literal_roots,
+            .replay_interface_summaries = self.replay_interface_summaries,
             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
             .hosted_catalog = self.hosted_catalog,
             .current_loc = self.current_loc,
@@ -7262,6 +7272,7 @@ const Builder = struct {
                             .static_data_literals = self.static_data_literals,
                             .comptime_value_reads = self.comptime_value_reads,
                             .literal_roots = self.literal_roots,
+                            .replay_interface_summaries = self.replay_interface_summaries,
                             .declared_comptime_root_functions = self.borrowed_comptime_root_functions orelse &self.declared_comptime_root_functions,
                             .hosted_catalog = self.hosted_catalog,
                             .current_loc = self.current_loc,
@@ -24895,6 +24906,7 @@ const BodyContext = struct {
     }
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
+        if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
@@ -25186,7 +25198,7 @@ const BodyContext = struct {
                     return null;
                 },
                 .ready => {
-                    if (!replay_state.use_finished_summaries) continue;
+                    if (!replay_state.use_finished_summaries or !self.builder.replay_interface_summaries.enabled()) continue;
                     cached = entry.summary orelse continue;
                     break;
                 },
@@ -51558,10 +51570,8 @@ const BodyContext = struct {
     /// variable the checker left unconstrained is bound by nothing but a
     /// specialization request, and requests are seeded before a body is
     /// lowered, so inside a body such a leaf's final content is its recorded
-    /// default. Reading that default here keeps dispatch evidence independent
-    /// of which callee interfaces have already been related on this path: an
-    /// interface replay may close the same cell to that default at any time,
-    /// and evidence read before and after it must agree.
+    /// default. Reading that default here gives dispatch evidence over the
+    /// open leaf the same answer the finalized type will.
     fn nodeFinalizesAsUninhabitedLeaf(self: *BodyContext, node: NodeId) Allocator.Error!bool {
         return switch ((try self.graph.content(node))) {
             .unresolved => |variable| blk: {
