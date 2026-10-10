@@ -47,7 +47,8 @@ pub const Timer = struct {
     }
 };
 
-/// Returns a monotonic timestamp in nanoseconds.
+/// Returns a monotonic timestamp in nanoseconds, excluding time suspended so
+/// a laptop's sleep is not charged to in-flight tests as a hang.
 pub fn monotonicNs() u64 {
     if (builtin.os.tag == .linux) {
         var ts: std.os.linux.timespec = undefined;
@@ -55,7 +56,7 @@ pub fn monotonicNs() u64 {
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd) {
         var ts: std.c.timespec = undefined;
-        _ = std.c.clock_gettime(std.c.CLOCK.MONOTONIC, &ts);
+        _ = std.c.clock_gettime(awake_clock_id, &ts);
         return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
     } else if (builtin.os.tag == .windows) {
         const k32 = struct {
@@ -157,9 +158,13 @@ pub fn milliTimestamp() i64 {
     }
     // POSIX (macOS, BSD, etc.) via libc.
     var ts: std.c.timespec = undefined;
-    _ = std.c.clock_gettime(.MONOTONIC, &ts);
+    _ = std.c.clock_gettime(awake_clock_id, &ts);
     return @as(i64, ts.sec) * 1000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
 }
+
+/// macOS `CLOCK_MONOTONIC` runs across suspend; `UPTIME_RAW` matches minici's
+/// `std.Io` `.awake` clock.
+const awake_clock_id: std.c.CLOCK = if (builtin.os.tag == .macos) .UPTIME_RAW else .MONOTONIC;
 
 /// pipe: returns [2]fd_t or error. Only defined where fork-based pools
 /// exist: mingw declares but does not implement pipe, so it must never be
@@ -810,6 +815,28 @@ pub fn parseStandardArgs(allocator: Allocator, process_args: std.process.Args) !
     // Cast from []const [:0]const u8 to []const []const u8.
     const raw_args_plain: []const []const u8 = @ptrCast(raw_args);
     return parseStandardArgsFromSlice(raw_args_plain, allocator);
+}
+
+test "timestamp helpers read the same clock as each other" {
+    // Deadlines mix both helpers, so they have to agree on what "now" means.
+    const ms = milliTimestamp();
+    const ns_as_ms: i64 = @intCast(monotonicNs() / std.time.ns_per_ms);
+    try std.testing.expect(@abs(ns_as_ms - ms) < 1000);
+}
+
+test "harness clock excludes time the machine spent suspended" {
+    // `.awake` is the clock minici measures its steps with; `.boot` keeps
+    // running while the machine is suspended.
+    const awake_ms = std.Io.Clock.awake.now(std.testing.io).toMilliseconds();
+    const boot_ms = std.Io.Clock.boot.now(std.testing.io).toMilliseconds();
+
+    const now = milliTimestamp();
+    try std.testing.expect(@abs(now - awake_ms) < 1000);
+
+    // Only distinguishable once the machine has been suspended since boot.
+    if (boot_ms - awake_ms > 2000) {
+        try std.testing.expect(now < boot_ms - 1000);
+    }
 }
 
 test "parseStandardArgsFromSlice preserves help and explicit timeout" {
