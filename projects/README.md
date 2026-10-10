@@ -39,14 +39,26 @@ termination hazard, and one verification coverage gap):
 - [small/pin-lambda-solved-invariants.md](small/pin-lambda-solved-invariants.md)—
   state, assert, and test the four invariants that make monomorphic
   lambda-set solving sound.
-- [small/monotype-machinery-hardening.md](small/monotype-machinery-hardening.md)—
-  release-gate verification-only type checks; measure-first fixes for
-  digest depth fallback, unify memo, spec duplication, cross-store reuse.
 
 Within this batch the projects are independent.
 (`spec-constr-specialization-limits` used to be paired here with
 `spec-constr-static-match-soundness`, which has since landed and had its
 doc removed.)
+
+The Monotype machinery hardening project has landed, mostly by finding its
+targets already gone. Every verification-only type-equality check in
+Monotype lowering is now a debug-only `assertSameType` (or a debug-gated
+`typeEql`), and `run-check-postcheck-architecture` rejects a release-computed
+one; on sampled echo and fx apps those checks had cost at most 0.16% of
+Monotype cycles, so this is policy, not speed. The digest walk has no depth
+cap any more (a 300-level nesting test pins that), the cross-call unify memo
+is a per-call set, and the checked source type is no longer part of
+specialization identity, so the depth-fallback, memo, and duplicate-spec
+items had nothing left to fix. The reserved-request refinement API had no
+production caller and is deleted, so a record's request view is its
+identity's requested type. Union-find paths averaged under 0.3 hops per
+`find` (at most 13), so `union_` keeps no rank, and `layoutOfType` already
+sizes its scratch by the visited subgraph.
 
 The lift capture single-sourcing project has landed, mostly by having
 already happened. The initial lift and the post-spec_constr re-solve both
