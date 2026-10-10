@@ -11510,6 +11510,23 @@ const Builder = struct {
         return .{ .view = view, .entries = view.static_dispatch_plans.siteEvidence(use.expr) };
     }
 
+    const CheckedRootEvidence = struct {
+        view: ?ModuleView,
+        entries: ?[]const static_dispatch.CheckedEvidence,
+    };
+
+    /// The checked evidence a root request supplies to its worker, read
+    /// through the CheckedModule that resolved it.
+    fn checkedRootEvidence(self: *Builder, request: checked.RootRequest) CheckedRootEvidence {
+        const root_evidence = request.root_evidence orelse return .{ .view = null, .entries = null };
+        const view = self.moduleForCheckedModuleId(root_evidence.checked_module);
+        const span = root_evidence.span;
+        return .{
+            .view = view,
+            .entries = view.static_dispatch_plans.evidence_refs[span.start .. span.start + span.len],
+        };
+    }
+
     fn checkedEvidenceForDirectCall(self: *Builder, direct: DirectCallPlan) CheckedCallEvidence {
         const view = self.moduleForId(direct.call.module);
         const call_expr = view.checked_bodies.expr(direct.call.expr);
@@ -13349,8 +13366,10 @@ const Builder = struct {
             try self.materializeDirectCallTypeSubstitutions();
             try self.materializeDictionaryDispatchTypeSubstitutions();
             try self.materializeWorkerHiddenDictionaryParams();
-            try self.materializeRootHiddenDictionaryArgs();
             try self.materializeDirectCallHiddenDictionaryArgs();
+            // A root's evidence can plan workers whose direct calls this
+            // iteration has not given substitutions; the next iteration does.
+            try self.materializeRootHiddenDictionaryArgs();
             try self.materializeConstEvalCallHiddenDictionaryArgs();
             try self.materializeIteratorCallHiddenDictionaryArgs();
             try self.materializeInspectMethodHiddenDictionaryArgs();
@@ -14589,7 +14608,20 @@ const Builder = struct {
                 arg_type.* = child.source_type;
             }
             const ret_type = self.plan.representations.items[@backingInt(function.ret)].source_type;
-            const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgs(root.worker, null, arg_types, ret_type);
+            // A root has no calling site; checking resolved the template's
+            // own requirements, including its captured codec requirements,
+            // into the request's root evidence.
+            const root_evidence = self.checkedRootEvidence(root.request);
+            const planned_hidden_dict_args = try self.materializeWorkerCallHiddenDictionaryArgsWithEvidence(
+                root.worker,
+                null,
+                arg_types,
+                ret_type,
+                root_evidence.view,
+                root_evidence.entries,
+                null,
+                0,
+            );
             self.plan.roots.items[root_index].hidden_dict_args = planned_hidden_dict_args;
         }
     }

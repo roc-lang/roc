@@ -2075,6 +2075,32 @@ test "issue 11910 boxy JSON parses of one shape share its generated parser" {
     try std.testing.expectEqual(@as(usize, 4), wide_second - narrow_second);
 }
 
+test "boxy root that parses JSON directly receives its codec evidence" {
+    // `main`'s scheme captures the codec requirement of its `Json.parse`
+    // call. A root has no caller, so its checked root evidence supplies it.
+    const allocator = std.testing.allocator;
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        \\Shape : {
+        \\    f0 : Str,
+        \\    f1 : Str,
+        \\}
+        \\
+        \\main : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
+        \\main = |json| Json.parse(json)
+    ,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    try std.testing.expect(compiled.lowered.view.store.getProcSpecs().len != 0);
+}
+
 test "issue 11910 boxy JSON record parser releases its fields once on error" {
     // Every error inside the record loop jumps to one error join that retains
     // the field names and payload slots, so their releases exist once rather

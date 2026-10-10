@@ -6288,7 +6288,9 @@ key components. CheckedModule construction caches the complete schema by its che
 owner; aliases and local scopes share the same evidence and quantified-variable
 pool ranges. Schemes whose checker-authored codec requirements require
 instantiation have no concrete template-root evidence. Selecting one as a root
-requires an explicit instantiated root edge with its own evidence.
+requires an explicit instantiated root edge with its own evidence. A root has
+no calling site, so Monotype and Boxy planning both take a root's evidence,
+including its captured codec requirements, from the request's root evidence.
 
 Constant-evaluation entry wrappers retain the evaluated value's quantified type
 variables without accepting its dispatch requirements as wrapper arguments.
