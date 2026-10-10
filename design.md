@@ -16099,7 +16099,12 @@ parent rather than from its own key: a nested descriptor read for aggregate,
 list and box positions, and a tag payload read
 (`ErasedArgDescRead.tag_payload`) for a variant payload such as a presence
 slot's `Present` value. Only a descriptor no earlier parameter holds is read
-from its call-site key.
+from its call-site key. The representation graph can share a child across
+multiple parents. When several earlier parameters contain the exact same
+descriptor identity, including nominal methods and opacity, the ABI uses the
+lowest published parameter index as the canonical parent. Every candidate is an
+exact projection of that identity; shared backing storage, equal sizes, or
+similar layouts never establish this relationship.
 
 An evidence-only descriptor collected inside an evidence dispatcher's
 representation, such as a presence slot of a record dispatcher, takes the
