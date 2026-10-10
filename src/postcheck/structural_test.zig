@@ -245,7 +245,7 @@ test "a checked row coercion has one post-check form at every stage" {
     try std.testing.expect(@hasField(Lifted.ExprData, "row_widen"));
     try std.testing.expect(@hasField(LambdaMono.ExprData, "row_widen"));
     try std.testing.expect(!@hasField(Mono.RowWiden, "target"));
-    try std.testing.expect(std.meta.fields(Mono.RowWiden).len == 1);
+    try std.testing.expect(@typeInfo(Mono.RowWiden).@"struct".field_names.len == 1);
 }
 
 test "stage expression forms only shrink checked syntax or add runtime encoding forms" {
