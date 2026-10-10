@@ -556,7 +556,10 @@ Builtin :: [].{
 					dec_from_str("0")
 				} else {
 					int_len = Str.count_utf8_bytes(parts.int_part).to_i64_wrap()
-					raw_point = int_len + exponent
+					# The exponent is any I64, so saturate rather than overflow. int_len and
+					# the trimmed zero count are non-negative, so a saturated point stays
+					# outside the representable range and is rejected below.
+					raw_point = int_len.plus_saturated(exponent)
 					trimmed = Json.trim_json_dec_leading_zeros(digits, raw_point)
 
 					if trimmed.point > 21 or trimmed.point < -18 {
@@ -591,7 +594,7 @@ Builtin :: [].{
 				{
 					# the dropped prefix is ASCII zeros, so the cut is a UTF-8 boundary
 					digits: str_drop_first_bytes_unsafe(digits, $index),
-					point: point - $index.to_i64_wrap(),
+					point: point.minus_saturated($index.to_i64_wrap()),
 				}
 			}
 

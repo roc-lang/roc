@@ -11368,7 +11368,6 @@ test "issue 10354 undefined identifier in expression does not panic monotype low
         error.VirtualAllocFailed,
         error.VirtualProtectFailed,
         error.WasmExecFailed,
-        error.WindowsSDKNotFound,
         error.WouldBlock,
         error.WriteFailed,
         => return err,

@@ -2487,13 +2487,13 @@ pub const StaticDispatchPlanTable = struct {
                 .method = try names.internMethodName(Ident.FROM_NUMERAL_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(numeral_plan.target_var))),
-                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(numeral_plan.fn_var))),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, numeral_plan.fnVar().?),
                 .args = ar,
                 .result_mode = .value,
             });
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @fromBackingInt(@intCast(numeral_plan.target_var)),
-                .constraint_fn_var = @fromBackingInt(@intCast(numeral_plan.fn_var)),
+                .constraint_fn_var = numeral_plan.fnVar().?,
                 .target_selected_by_checking = numeral_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .numeral,
             });
@@ -2544,13 +2544,13 @@ pub const StaticDispatchPlanTable = struct {
                 .method = try names.internMethodName(Ident.FROM_QUOTE_METHOD_NAME),
                 .dispatcher = .type_only,
                 .dispatcher_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(quote_plan.target_var))),
-                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, @fromBackingInt(@intCast(quote_plan.fn_var))),
+                .callable_ty = try checkedTypeIdForVar(allocator, module, checked_types, quote_plan.fnVar().?),
                 .args = ar,
                 .result_mode = .value,
             });
             try plan_sources.append(allocator, .{
                 .dispatcher_var = @fromBackingInt(@intCast(quote_plan.target_var)),
-                .constraint_fn_var = @fromBackingInt(@intCast(quote_plan.fn_var)),
+                .constraint_fn_var = quote_plan.fnVar().?,
                 .target_selected_by_checking = quote_plan.dispatchResolution() != .specialization_dispatch,
                 .literal_kind = .quote,
             });
