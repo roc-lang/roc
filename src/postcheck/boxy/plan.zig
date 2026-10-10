@@ -900,6 +900,25 @@ pub const WorkerSource = union(enum) {
     generated_field_iterator: GeneratedFieldIteratorSource,
 };
 
+/// What selects one planned worker: its source and, except for a nested
+/// expression whose site fixes its type, the checked type it is planned at.
+const WorkerIdentity = struct {
+    source: WorkerSource,
+    checked_type: ?CheckedTypeIdentity,
+
+    const Context = struct {
+        pub fn hash(_: Context, key: WorkerIdentity) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHash(&hasher, key);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Context, a: WorkerIdentity, b: WorkerIdentity) bool {
+            return std.meta.eql(a, b);
+        }
+    };
+};
+
 /// Const-store identity of a function value persisted into runtime code.
 pub const StoredFnSource = struct {
     module: checked.ModuleId,
@@ -3827,6 +3846,8 @@ const Builder = struct {
     active_worker: ?WorkerPlanId,
     /// The worker the most recent worker-planning step ensured.
     plan_worker_result: WorkerPlanId = undefined,
+    /// Every worker this builder planned, by the identity that selects it.
+    worker_ids: std.HashMapUnmanaged(WorkerIdentity, WorkerPlanId, WorkerIdentity.Context, std.hash_map.default_max_load_percentage) = .empty,
     /// The generated codec call the most recent worker-planning step ensured.
     plan_codec_result: GeneratedCodecCallPlan = undefined,
     generated_callable_uses: std.AutoHashMapUnmanaged(GeneratedCallableKey, void) = .empty,
@@ -3932,6 +3953,7 @@ const Builder = struct {
     }
 
     fn deinit(self: *Builder) void {
+        self.worker_ids.deinit(self.allocator);
         var host_nominal_keys = self.host_nominals.keyIterator();
         while (host_nominal_keys.next()) |key| self.allocator.free(key.args);
         self.host_nominals.deinit(self.allocator);
@@ -4988,19 +5010,22 @@ const Builder = struct {
         if (!typeRefEql(definition_type, worker_type)) {
             _ = try self.analyzeType(self.moduleForId(definition_type.module), definition_type.ty);
         }
-        for (self.plan.workers.items) |*worker| {
-            if (workerSourceEql(worker.source, source) and (source == .nested_expr or typeRefEql(worker.checked_type, worker_type))) {
-                if (root_request) |request| {
-                    if (worker.root_request == null) {
-                        self.plan.workers.items[@backingInt(worker.id)].root_request = request;
-                    }
-                }
-                self.plan_worker_result = worker.id;
-                return;
-            }
-        }
-
+        const identity = WorkerIdentity{
+            .source = source,
+            .checked_type = if (source == .nested_expr) null else worker_type,
+        };
         const worker_id: WorkerPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.plan.workers.items.len))));
+        const entry = try self.worker_ids.getOrPut(self.allocator, identity);
+        if (entry.found_existing) {
+            const worker = &self.plan.workers.items[@backingInt(entry.value_ptr.*)];
+            if (root_request) |request| {
+                if (worker.root_request == null) worker.root_request = request;
+            }
+            self.plan_worker_result = worker.id;
+            return;
+        }
+        entry.value_ptr.* = worker_id;
+        errdefer _ = self.worker_ids.remove(identity);
         const body = if (self.root_module != null and
             source != .generated_codec and
             source != .generated_field_iterator)

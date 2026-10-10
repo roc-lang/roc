@@ -1365,6 +1365,10 @@ const ProcedureBuilder = struct {
     rep_holds_callable: []?bool,
     generated_evidence_desc_ids: [4]?LIR.BoxyTypeDescId,
     internal_leaf_desc_ids: std.AutoHashMapUnmanaged(layout.Idx, LIR.BoxyTypeDescId),
+    /// Exact-storage template descriptors that read no procedure's bound
+    /// descriptor locals, so every procedure describes the representation
+    /// with the same descriptor.
+    exact_template_desc_ids: std.AutoHashMapUnmanaged(Plan.TypeRepId, LIR.BoxyTypeDescId) = .empty,
     static_dict_cache: std.ArrayList(StaticDictCacheEntry),
     /// The procedures every descriptor dictionary's `is_eq` and `to_hash`
     /// slots call; see `descriptorDict`.
@@ -1552,6 +1556,7 @@ const ProcedureBuilder = struct {
         self.callable_adapter_cache.deinit(self.allocator);
         self.descriptor_method_slot_cache.deinit(self.allocator);
         self.internal_leaf_desc_ids.deinit(self.allocator);
+        self.exact_template_desc_ids.deinit(self.allocator);
         self.static_dict_cache.deinit(self.allocator);
         self.descriptor_dicts.deinit(self.allocator);
         for (self.derived_helpers.items) |helper| helper.shape.deinit(self.allocator);
@@ -15952,6 +15957,9 @@ const ProcBodyBuilder = struct {
         exact_storage: bool,
         env: DescriptorTemplateEnvId = .empty,
         excluded_local: ?LIR.LocalId = null,
+        /// Whether the build asked which descriptor locals this procedure
+        /// has bound, making its descriptor specific to the procedure.
+        read_bound_locals: bool = false,
 
         fn deinit(self: *DescriptorTemplateContext, allocator: Allocator) void {
             self.ids.deinit();
@@ -33439,18 +33447,30 @@ const ProcBodyBuilder = struct {
         self: *ProcBodyBuilder,
         rep_id: Plan.TypeRepId,
     ) Allocator.Error!DescriptorMaterialization {
+        // Formal bindings make the template specific to this procedure.
+        const shareable = self.nominal_formal_bindings.items.len == 0;
+        if (shareable) {
+            if (self.parent.exact_template_desc_ids.get(rep_id)) |existing| {
+                return .{ .desc = .{ .static = existing }, .captures = LIR.LocalSpan.empty() };
+            }
+        }
+
         var captures = std.ArrayList(LIR.LocalId).empty;
         defer captures.deinit(self.parent.allocator);
 
         var context = try self.initDescriptorTemplateContext(true);
         defer context.deinit(self.parent.allocator);
 
-        const desc: LIR.BoxyDescRef = .{ .static = try self.descriptorTemplateTypeDescForRep(rep_id, &captures, &context) };
+        const desc_id = try self.descriptorTemplateTypeDescForRep(rep_id, &captures, &context);
+        if (shareable and !context.read_bound_locals) {
+            if (captures.items.len != 0) boxyLowerInvariant("boxy exact descriptor template captured a local it never read");
+            try self.parent.exact_template_desc_ids.put(self.parent.allocator, rep_id, desc_id);
+        }
         const span = if (captures.items.len == 0)
             LIR.LocalSpan.empty()
         else
             try self.parent.result.store.addLocalSpan(captures.items);
-        return .{ .desc = desc, .captures = span };
+        return .{ .desc = .{ .static = desc_id }, .captures = span };
     }
 
     fn descriptorMaterializationForKnownRepWithOverrides(
@@ -33943,6 +33963,7 @@ const ProcBodyBuilder = struct {
         const rep = self.parent.plan.representations.items[@backingInt(identity_rep)];
         if (may_reuse_rep_local) if (rep.descriptor) |desc| {
             if (parent_desc == null or desc != parent_desc.?) {
+                context.read_bound_locals = true;
                 if (self.descriptorLocalForRequirementAndRepOrNull(desc, identity_rep)) |local| {
                     if (self.descriptorBindingIsBoundForRep(identity_rep) and context.excluded_local != local) {
                         try appendUniqueLocal(self.parent.allocator, captures, local);
