@@ -193,7 +193,7 @@ fn movedMonoView(source: *const Mono.Program, moved: *const Ast.Program) Mono.Pr
         .branches = moved_view.branches,
         .if_branches = moved_view.if_branches,
         .string_literals = moved_view.string_literals,
-        .proc_debug_names = moved.proc_debug_names.view(),
+        .proc_debug_names = &moved.proc_debug_names,
         .roots = source_view.roots,
         .literal_roots = source_view.literal_roots,
         .layout_requests = source_view.layout_requests,

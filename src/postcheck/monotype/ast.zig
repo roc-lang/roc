@@ -1416,21 +1416,28 @@ pub const ProcDebugName = struct {
 /// Builder-owned procedure debug-name table.
 pub const ProcDebugNameMap = struct {
     allocator: std.mem.Allocator,
+    /// The names in the order they were first given.
     items: std.ArrayList(ProcDebugName),
+    /// Each named symbol's position in `items`, so a lookup is one direct
+    /// index rather than a scan of every name.
+    positions: collections.DenseMap(Common.Symbol, u32),
 
     pub fn init(allocator: std.mem.Allocator) ProcDebugNameMap {
         return .{
             .allocator = allocator,
             .items = .empty,
+            .positions = collections.DenseMap(Common.Symbol, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *ProcDebugNameMap) void {
         self.items.deinit(self.allocator);
+        self.positions.deinit();
     }
 
     pub fn get(self: *const ProcDebugNameMap, symbol: Common.Symbol) ?names.ExportNameId {
-        return procDebugNameInSlice(self.items.items, symbol);
+        const position = self.positions.get(symbol) orelse return null;
+        return self.items.items[position].name;
     }
 
     pub fn view(self: *const ProcDebugNameMap) []const ProcDebugName {
@@ -1438,25 +1445,24 @@ pub const ProcDebugNameMap = struct {
     }
 
     pub fn put(self: *ProcDebugNameMap, symbol: Common.Symbol, name: names.ExportNameId) std.mem.Allocator.Error!void {
-        for (self.items.items) |*entry| {
-            if (entry.symbol == symbol) {
-                entry.name = name;
-                return;
-            }
+        const entry = try self.positions.getOrPut(symbol);
+        if (entry.found_existing) {
+            self.items.items[entry.value_ptr.*].name = name;
+            return;
         }
+        errdefer _ = self.positions.remove(symbol);
+        entry.value_ptr.* = @intCast(self.items.items.len);
         try self.items.append(self.allocator, .{
             .symbol = symbol,
             .name = name,
         });
     }
-};
 
-fn procDebugNameInSlice(entries: []const ProcDebugName, symbol: Common.Symbol) ?names.ExportNameId {
-    for (entries) |entry| {
-        if (entry.symbol == symbol) return entry.name;
+    /// Give every name in `entries`, in order.
+    pub fn putAll(self: *ProcDebugNameMap, entries: []const ProcDebugName) std.mem.Allocator.Error!void {
+        for (entries) |entry| try self.put(entry.symbol, entry.name);
     }
-    return null;
-}
+};
 
 /// Root request bound to a Monotype definition.
 pub const Root = struct {
@@ -1549,7 +1555,7 @@ pub const ProgramView = struct {
     branches: []const Branch,
     if_branches: []const IfBranch,
     string_literals: []const StringLiteral,
-    proc_debug_names: []const ProcDebugName,
+    proc_debug_names: *const ProcDebugNameMap,
     roots: []const Root,
     literal_roots: []const LiteralRoot,
     layout_requests: []const LayoutRequest,
@@ -1596,7 +1602,7 @@ pub const ProgramView = struct {
     }
 
     pub fn procDebugName(self: ProgramView, symbol: Common.Symbol) ?names.ExportNameId {
-        return procDebugNameInSlice(self.proc_debug_names, symbol);
+        return self.proc_debug_names.get(symbol);
     }
 
     /// Verify that a completed program view refers only to durable type-store
@@ -1834,7 +1840,7 @@ pub const ProgramBuilder = struct {
         inline for (.{ "specs", "fns", "const_fn_evidence", "const_fn_evidence_frames", "defs", "nested_defs", "exprs", "pats", "stmts", "locals", "expr_ids", "pat_ids", "typed_locals", "stmt_ids", "field_exprs", "field_access_segments", "fn_def_captures", "capture_operands", "record_destructs", "str_pattern_steps", "branches", "if_branches", "roots", "literal_roots", "layout_requests", "comptime_value_reads", "runtime_schema_requests", "static_data_values", "lowering_modules", "expr_locs", "expr_regions", "stmt_locs", "stmt_regions" }) |field| {
             try @field(result, field).appendSlice(allocator, @field(self, field).unsafeRawItemsForView());
         }
-        try result.proc_debug_names.items.appendSlice(allocator, self.proc_debug_names.view());
+        try result.proc_debug_names.putAll(self.proc_debug_names.view());
         for (self.string_literals.unsafeRawItemsForView()) |literal| {
             const copied = try literal.clone(allocator);
             result.string_literals.append(allocator, copied) catch |err| {
@@ -2052,7 +2058,7 @@ pub const ProgramBuilder = struct {
             .branches = self.branches.unsafeRawItemsForView(),
             .if_branches = self.if_branches.unsafeRawItemsForView(),
             .string_literals = self.string_literals.unsafeRawItemsForView(),
-            .proc_debug_names = self.proc_debug_names.view(),
+            .proc_debug_names = &self.proc_debug_names,
             .roots = self.roots.unsafeRawItemsForView(),
             .literal_roots = self.literal_roots.unsafeRawItemsForView(),
             .layout_requests = self.layout_requests.unsafeRawItemsForView(),

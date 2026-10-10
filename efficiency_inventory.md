@@ -163,6 +163,35 @@ stages it touches; the instruction-count effect is reported in "Results".
     scanning the entry for its length.
 30. `src/check/Check.zig:785`: the binder source map is a `DenseMap`.
 
+31. `src/lir/arc_dismantle.zig:906`, `body_clone.zig:246`: the dismantle
+    future-field walk and the successor walk read statements through a
+    read-only pointer instead of copying each one.
+32. `src/lir/arc_dismantle.zig` whole-store scans and `src/lir/use_order.zig`
+    topology walks: same change.
+33. `src/postcheck/monotype/ast.zig:1417`: the procedure debug-name map indexes
+    symbols in a `DenseMap` instead of scanning its list.
+
+## Findings from profiling
+
+These were found by profiling the ReleaseFast compiler with
+`perf record -e cpu_core/instructions/u --call-graph=fp` rather than by
+reading code, and were not in the audit above.
+
+### src/postcheck/monotype/ast.zig:1417, `ProcDebugNameMap` is a list searched linearly
+- category B/E; runs per debug-name lookup during solved-to-LIR lowering (twice per lowered procedure and once per inline scope), and per insert
+- Finding: `get` and `put` scanned every recorded name, so lowering a program with N named procedures did O(N^2) work. In `roc build` of the roc-pg query example this function alone was 11.5% of all front-end instructions.
+- Fix: keep the names in insertion order and index each symbol's position in a `DenseMap`; Monotype and lifted program views hold the map instead of a slice.
+- Status: fixed (fix 33)
+
+### src/lir/arc_dismantle.zig:906 and callers, statement copies in the dismantle walks
+- category D; runs per statement visited per dismantle candidate
+- Finding: `getCFStmt` copies the 144-byte statement union; the dismantle future-field walk, its whole-store scans, and the successor and use-order walks it drives called it per visited statement. These copies were a third of all memcpy time in `roc check` and half of it in `roc build`.
+- Fix: `LirStore.getCFStmtImmediate` returns a read-only pointer, and these read-only walks switch on it.
+- Status: fixed (fixes 31 and 32)
+
+### Phase breakdown of `roc check` on roc-pg
+- Compile-time evaluation is 89% of all instructions, Monotype lowering 69% inclusive, Monotype solving 56%, interface capture and identity 21%, type digests 13% (6% in SHA-256 inside cyclic SCC resolution), ARC insertion 14% (dismantle 10%), and the type checker proper 9%. The remaining cost is concentrated in the specialization engine's interface capture and digest algorithms rather than in container choice.
+
 ## Findings by stage
 
 ## Checker, type store, canonicalizer, parser, base, collections, layout
