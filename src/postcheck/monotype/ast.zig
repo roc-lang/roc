@@ -236,6 +236,12 @@ pub const FnTemplate = struct {
     /// when Monotype finalizes the program. Dev inline analysis decides
     /// single-use inlining by this flag, which is the same in every program.
     single_source_call: bool = false,
+    /// The procedure was lowered only for discovery (design.md "Demand-Driven
+    /// Compile-Time Specialization"): a never-run stub, or a body whose
+    /// requests may name such stubs. It is part of the procedure's identity,
+    /// so such a procedure never stands for, or is merged with, the procedure
+    /// an evaluation lowers from the same template and types.
+    discovery: bool = false,
     /// Explicit dispatch selections captured when this specialization was
     /// created, retained for compile-time function values.
     const_evidence: Span(check.ConstStore.ConstFnEvidence) = Span(check.ConstStore.ConstFnEvidence).empty(),

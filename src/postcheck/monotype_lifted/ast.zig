@@ -1201,6 +1201,7 @@ pub const Program = struct {
             // by two programs must have one identity.
             const mono_digest = self.types.equalityDigest(&self.names, template.mono_fn_ty);
             hasher.update(&mono_digest.bytes);
+            if (template.discovery) writeIdentityBytes(&hasher, "discovery");
         } else {
             const root = fn_.root_identity orelse return null;
             writeIdentityBytes(&hasher, "root");
@@ -2222,7 +2223,11 @@ test "lifted source digest drops caller provenance and keeps generated bodies ap
     other_evidence.evidence_digest = .{ .bytes = testSourceDigestKey(5).bytes };
     var other_type = ordinary;
     other_type.mono_fn_ty = try program.types.add(.{ .primitive = .str });
-    for ([_]Mono.FnTemplate{ other_callable, other_evidence, other_type }) |distinct| {
+    // A body lowered only for discovery may call never-run stubs, so it must
+    // never be shared with the evaluation procedure of the same template.
+    var discovery = ordinary;
+    discovery.discovery = true;
+    for ([_]Mono.FnTemplate{ other_callable, other_evidence, other_type, discovery }) |distinct| {
         const distinct_fn = try addSourceDigestFn(&program, &symbols, distinct, ret_ty);
         const distinct_digest = (try program.fnSourceDigest(distinct_fn)) orelse return error.TestUnexpectedResult;
         try std.testing.expect(!std.mem.eql(u8, ordinary_digest[0..], distinct_digest[0..]));

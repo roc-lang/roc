@@ -358,20 +358,30 @@ fn isSource(
         };
         const plan = plan_id orelse continue;
         if (plans.plans[@backingInt(plan)].resolution == .checked_error) continue;
-        if (expr.data == .interpolation) return true;
+        if (expr.data == .interpolation) return traceSource(view, expr, "interpolation");
         // A conversion with no root of its own depends on its instance, and
         // registers a literal root only at a type converting its own literals.
         const root_id = conversion_root orelse {
-            if (custom_kind) return true;
+            if (custom_kind) return traceSource(view, expr, "dependent literal");
             continue;
         };
         const root = view.compile_time_roots.root(root_id);
         switch (root.payload) {
-            .pending => if (!declared.contains(.{ .module = view.key, .root = root_id })) return true,
+            .pending => if (!declared.contains(.{ .module = view.key, .root = root_id })) return traceSource(view, expr, "unrequested conversion root"),
             .const_node, .fn_value, .discarded, .expect, .runtime => {},
         }
     }
     return false;
+}
+
+/// The first expression that makes a module a source, for the trace.
+fn traceSource(view: checked.ImportedModuleView, expr: anytype, comptime reason: []const u8) bool {
+    if (traceEnabled()) std.debug.print("ctfe-demand source-reason {s} {s} at byte {d}\n", .{
+        view.canonical_names.moduleNameText(view.module_identity.module_name),
+        reason,
+        expr.source_region.start.offset,
+    });
+    return true;
 }
 
 /// Select the runtime roots compile-time evaluation must specialize to find

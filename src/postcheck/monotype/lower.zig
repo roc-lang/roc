@@ -7413,6 +7413,86 @@ const Builder = struct {
         self.next_spec_dispatch_index += 1;
     }
 
+    fn traceLink(self: *Builder, comptime how: []const u8, body_draft: *const BodyDraftStore, demand: Demand, callee: Ast.FnId) void {
+        _ = self;
+        if (!LiteralDemand.traceEnabled()) return;
+        std.debug.print("ctfe-demand link {s} owner={d} draft={s} demand={s} -> fn#{d}\n", .{
+            how,
+            if (body_draft.demand_owner) |owner| @backingInt(owner) else std.math.maxInt(u32),
+            @tagName(body_draft.demand),
+            @tagName(demand),
+            @backingInt(callee),
+        });
+    }
+
+    /// A procedure lowered only for discovery is no specialization's code: it
+    /// offers no object-cache entry, shares no layout-keyed procedure, and
+    /// its identity differs from the evaluation procedure of the same
+    /// template and types.
+    fn discoveryTemplate(template: Ast.FnTemplate) Ast.FnTemplate {
+        var marked = template;
+        marked.discovery = true;
+        marked.spec_key = null;
+        marked.procedure_keyed_by_layout = false;
+        return marked;
+    }
+
+    /// Program extents before a body draft commits, so the procedures it
+    /// adds can be found afterwards.
+    const CommitExtent = struct { fns: usize, defs: usize, nested_defs: usize };
+
+    fn commitExtent(self: *const Builder) CommitExtent {
+        return .{
+            .fns = self.program.fnCount(),
+            .defs = self.program.defCount(),
+            .nested_defs = self.program.nestedDefCount(),
+        };
+    }
+
+    /// Mark every procedure a discovery body draft committed, with the
+    /// definitions that carry their templates. The draft's own
+    /// specialization is marked where its body is finished.
+    fn markDiscoveryFns(self: *Builder, body_draft: *const BodyDraftStore, before: CommitExtent) void {
+        if (self.draftEvaluates(body_draft)) return;
+        for (before.fns..self.program.fnCount()) |raw| {
+            const fn_id: Ast.FnId = @fromBackingInt(@intCast(raw));
+            self.program.setFnSource(fn_id, discoveryTemplate(self.program.fnSource(fn_id)));
+        }
+        for (before.defs..self.program.defCount()) |raw| {
+            const def_id: Ast.DefId = @fromBackingInt(@intCast(raw));
+            var def = self.program.getDef(def_id);
+            const fn_id = def.fn_id orelse continue;
+            if (@backingInt(fn_id) < before.fns) continue;
+            def.fn_def = discoveryTemplate(def.fn_def.?);
+            self.program.setDef(def_id, def);
+        }
+        for (before.nested_defs..self.program.nestedDefCount()) |raw| {
+            const def_id: Ast.NestedDefId = @fromBackingInt(@intCast(raw));
+            const def = self.program.getNestedDef(def_id);
+            if (@backingInt(def.fn_id) < before.fns) continue;
+            self.program.setNestedDefSource(def_id, discoveryTemplate(def.fn_def));
+        }
+    }
+
+    /// Record a specialization a discovery body requested, so a later
+    /// upgrade of that body reaches it.
+    fn recordDiscoveryCallee(self: *Builder, body_draft: *const BodyDraftStore, callee: Ast.FnId) Allocator.Error!void {
+        const owner = body_draft.demand_owner orelse return;
+        const entry = try self.discovery_callees.getOrPut(self.allocator, owner);
+        if (!entry.found_existing) entry.value_ptr.* = .empty;
+        try entry.value_ptr.append(self.allocator, callee);
+    }
+
+    /// Whether every request of a committing body draft is an evaluation
+    /// request: it was lowered for evaluation, an evaluation request reused a
+    /// body it lowered for discovery, or its specialization was upgraded
+    /// while it lowered.
+    fn draftEvaluates(self: *const Builder, body_draft: *const BodyDraftStore) bool {
+        if (body_draft.demand == .evaluation or body_draft.upgrade_all) return true;
+        const owner = body_draft.demand_owner orelse return false;
+        return !self.discovery_specs.contains(owner);
+    }
+
     /// Why a specialization's body is lowered, as the coordinator knows it now.
     fn specDemand(self: *const Builder, fn_id: Ast.FnId) Demand {
         return if (self.discovery_specs.contains(fn_id)) .discovery else .evaluation;
@@ -7547,21 +7627,28 @@ const Builder = struct {
     /// view of the program total without lowering the procedure.
     fn completeParkedSpecJobsAsStubs(self: *Builder) Allocator.Error!void {
         if (self.parked_spec_jobs.count() == 0) return;
-        const message = try self.program.addStringLiteral("discovery-only specialization reached at compile time");
+        const shared_message = try self.program.addStringLiteral("discovery-only specialization reached at compile time");
         for (self.parked_spec_jobs.values()) |job| {
+            self.traceDemand("stub", job.reservation.fn_id);
+            const message = if (LiteralDemand.traceEnabled()) message: {
+                var buffer: [96]u8 = undefined;
+                const text = std.fmt.bufPrint(&buffer, "discovery-only specialization fn#{d} reached at compile time", .{@backingInt(job.reservation.fn_id)}) catch unreachable;
+                break :message try self.program.addStringLiteral(text);
+            } else shared_message;
             self.spec_store.markLowering(job.spec);
             const fn_data = self.programFunctionShape(job.fn_ty, "parked procedure specialization type was not a function");
             const args = try self.typedLocalsForArgs(self.program.types.span(fn_data.args));
             const body = try self.program.addExpr(.{ .ty = fn_data.ret, .data = .{ .crash = message } });
+            const stub_template = discoveryTemplate(job.fn_template);
             self.program.setDef(job.reservation.def, .{
                 .symbol = job.reservation.symbol,
-                .fn_def = job.fn_template,
+                .fn_def = stub_template,
                 .fn_id = job.reservation.fn_id,
                 .args = args,
                 .body = .{ .roc = body },
                 .ret = fn_data.ret,
             });
-            self.program.setFnSource(job.reservation.fn_id, job.fn_template);
+            self.program.setFnSource(job.reservation.fn_id, stub_template);
             try self.markTemplateReady(job.reservation.fn_id, job.fn_ty);
             self.demand_counters.stubs += 1;
         }
@@ -8436,6 +8523,7 @@ const Builder = struct {
             .exact_graph => pending.fn_template.mono_fn_ty,
             .independent_roots => final_fn_ty,
         };
+        if (self.specDemand(pending.reservation.fn_id) == .discovery) def_template = discoveryTemplate(def_template);
         self.program.setFnSource(pending.reservation.fn_id, def_template);
         const sealed_fn_data = self.programFunctionShape(final_fn_ty, "checked procedure template root type was not a function");
         self.program.setDef(pending.reservation.def, .{
@@ -8936,7 +9024,7 @@ const Builder = struct {
             request_fn_node
         else
             root_node;
-        try source_ctx.draft.demand_overrides.append(self.allocator, source_ctx.draft.template_specs.items[spec_index].demand);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, source_ctx.draft.template_specs.items[spec_index].demand);
         const lowered = lowered: {
             defer _ = source_ctx.draft.demand_overrides.pop();
             break :lowered try body_ctx.lowerTemplateBodyAtNode(template_ref, template, body_fn_node);
@@ -9073,7 +9161,7 @@ const Builder = struct {
             spec.request_fn_node
         else
             root_node;
-        try source_ctx.draft.demand_overrides.append(self.allocator, spec.demand);
+        try source_ctx.draft.lowerInDraftWithDemand(self.allocator, spec.demand);
         const lowered = lowered: {
             defer _ = source_ctx.draft.demand_overrides.pop();
             break :lowered try body_ctx.lowerTemplateBodyAtNode(spec.template_ref, template, body_fn_node);
@@ -12557,8 +12645,7 @@ const Builder = struct {
         if (body_draft.upgrade_owner) {
             if (body_draft.demand_owner) |owner| try self.upgradeDiscoverySpec(owner);
         }
-        const draft_evaluates = body_draft.demand == .evaluation or body_draft.upgrade_all or
-            if (body_draft.demand_owner) |owner| !self.discovery_specs.contains(owner) else false;
+        const draft_evaluates = self.draftEvaluates(body_draft);
         var spec_index: usize = 0;
         while (spec_index < body_draft.sealed_template_specs.items.len) : (spec_index += 1) {
             const state = body_draft.sealed_template_specs.items[spec_index].state;
@@ -12587,17 +12674,15 @@ const Builder = struct {
                 codec_contract,
                 demand,
             );
+            switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot.?) {
+                .local => |fn_id| self.traceLink("resolve", body_draft, demand, fn_id),
+            }
             if (demand == .discovery) {
-                // A later upgrade of this body reaches what it requested.
-                if (body_draft.demand_owner) |owner| {
-                    const callee = switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot orelse
-                        Common.invariant("resolved discovery request had no coordinator slot")) {
-                        .local => |fn_id| fn_id,
-                    };
-                    const entry = try self.discovery_callees.getOrPut(self.allocator, owner);
-                    if (!entry.found_existing) entry.value_ptr.* = .empty;
-                    try entry.value_ptr.append(self.allocator, callee);
-                }
+                const callee = switch (body_draft.sealed_template_specs.items[spec_index].resolved_slot orelse
+                    Common.invariant("resolved discovery request had no coordinator slot")) {
+                    .local => |fn_id| fn_id,
+                };
+                try self.recordDiscoveryCallee(body_draft, callee);
             }
         }
     }
@@ -12839,6 +12924,16 @@ const Builder = struct {
                     else
                         null;
                     if (committed) |hit| {
+                        // This body is discarded for the committed one, so an
+                        // evaluation request it served now reaches that one.
+                        const merged_demand: Demand = if (self.draftEvaluates(body_draft))
+                            .evaluation
+                        else if (template_spec) |spec| spec.demand else .discovery;
+                        switch (merged_demand) {
+                            .evaluation => try self.upgradeDiscoverySpec(hit.local.fn_id),
+                            .discovery => try self.recordDiscoveryCallee(body_draft, hit.local.fn_id),
+                        }
+                        self.traceLink("merge", body_draft, merged_demand, hit.local.fn_id);
                         if (fn_.signature_relation == .exact_graph) {
                             self.promoteFnSignatureRelation(hit.local.fn_id, .exact_graph);
                         }
@@ -13173,6 +13268,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             &committed_types,
@@ -13190,6 +13286,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -13232,6 +13329,7 @@ const Builder = struct {
         defer commit_map.deinit(self.allocator);
         const body_ids = commit_map.ids;
         const output_before = FinalBodyOutputCounts.fromProgram(self.program);
+        const commit_extent = self.commitExtent();
         try body_draft.sealCoreIntoProgramWithMap(
             self.program,
             committed_types,
@@ -13246,6 +13344,7 @@ const Builder = struct {
         try self.finalizeDraftTemplateSpecs(body_draft, body_ids);
         verifyDraftTemplateSpecsResolved(body_draft);
         try self.finalizeDraftNestedSpecs(body_draft, body_ids);
+        self.markDiscoveryFns(body_draft, commit_extent);
         var returned_ids = body_ids;
         returned_ids.fn_slots = &.{};
         returned_ids.def_ids = &.{};
@@ -17214,6 +17313,15 @@ const BodyDraftStore = struct {
             // demands of the requests it made.
             else => self.upgrade_all = true,
         }
+    }
+
+    /// Enter an in-draft specialization body lowered for `demand`. Commit may
+    /// merge an in-draft body with an equal one of this draft or of the
+    /// program, so a body lowered here for evaluation makes every request of
+    /// the draft an evaluation request.
+    fn lowerInDraftWithDemand(self: *BodyDraftStore, allocator: Allocator, demand: Demand) Allocator.Error!void {
+        if (demand == .evaluation and self.demand == .discovery) self.upgrade_all = true;
+        try self.demand_overrides.append(allocator, demand);
     }
 
     /// Record that a request with the current demand reuses the body this
@@ -64772,6 +64880,7 @@ test "queued specialization skips a body claimed immediately before dispatch" {
     builder.post_check_executor = null;
     builder.pending_spec_jobs = .empty;
     defer builder.pending_spec_jobs.deinit(allocator);
+    builder.discovery_specs = .empty;
     builder.next_spec_dispatch_index = 0;
     builder.next_spec_accept_index = 0;
     builder.counters = null;
