@@ -801,6 +801,29 @@ pub const GeneratedFieldIteratorLink = struct {
     first_step: WorkerPlanId,
 };
 
+/// Whether `source` is a callback a generated encoder packs for an encoding
+/// method to call.
+fn isGeneratedEncoderCallback(source: WorkerSource) bool {
+    return switch (source) {
+        .generated_codec => |codec| switch (codec.kind) {
+            .encoder_record_fields,
+            .encoder_dict_fields,
+            .encoder_sequence_elements,
+            .encoder_tag_payload_elements,
+            .encoder_value_thunk,
+            .encoder_dict_key_thunk,
+            => true,
+            .parser_constructor, .parser_runtime, .encoder_constructor, .encoder_runtime => false,
+        },
+        .procedure_template,
+        .procedure_binding,
+        .procedure_use,
+        .nested_expr,
+        .generated_field_iterator,
+        => false,
+    };
+}
+
 /// One renamed record field captured by a generated parser runtime worker.
 pub const GeneratedParserFieldCapture = struct {
     worker: WorkerPlanId,
@@ -954,6 +977,9 @@ pub const WorkerPlan = struct {
     hidden_dicts: Span = .{},
     body_hidden_dicts: Span = .{},
     erased_captures: Span = .{},
+    /// For a generated encoder runtime or callback, the renamed field names
+    /// it captures, as ascending indices into `generated_parser_field_captures`.
+    encoder_name_captures: Span = .{},
     /// Open records the worker's body needs whose descriptor one of its own
     /// dictionaries supplies, read from it on entry.
     dictionary_descs: Span = .{},
@@ -1286,6 +1312,7 @@ pub const ProgramPlan = struct {
     generated_parser_tag_union_record_types: std.ArrayList(CheckedTypeIdentity),
     generated_field_iterator_links: std.ArrayList(GeneratedFieldIteratorLink),
     generated_parser_field_captures: std.ArrayList(GeneratedParserFieldCapture),
+    encoder_name_captures: std.ArrayList(u32),
     generated_parser_missing_required_fields: std.ArrayList(GeneratedParserMissingRequiredField),
     generated_parser_try_plans: std.ArrayList(GeneratedParserTryPlan),
     generated_parser_dictionary_field_selections: std.ArrayList(GeneratedParserDictionaryFieldSelection),
@@ -1357,6 +1384,7 @@ pub const ProgramPlan = struct {
             .generated_parser_tag_union_record_types = .empty,
             .generated_field_iterator_links = .empty,
             .generated_parser_field_captures = .empty,
+            .encoder_name_captures = .empty,
             .generated_parser_missing_required_fields = .empty,
             .generated_parser_try_plans = .empty,
             .generated_parser_dictionary_field_selections = .empty,
@@ -1458,6 +1486,7 @@ pub const ProgramPlan = struct {
         self.derived_env_bindings.deinit(self.allocator);
         self.derived_envs.deinit(self.allocator);
         self.generated_parser_field_captures.deinit(self.allocator);
+        self.encoder_name_captures.deinit(self.allocator);
         self.generated_parser_missing_required_fields.deinit(self.allocator);
         self.generated_parser_try_plans.deinit(self.allocator);
         self.generated_parser_dictionary_field_selections.deinit(self.allocator);
@@ -1874,6 +1903,10 @@ pub const ProgramPlan = struct {
 
     pub fn erasedCaptureSlice(self: *const ProgramPlan, span: Span) []const ErasedCapture {
         return self.erased_captures.items[span.start .. span.start + span.len];
+    }
+
+    pub fn encoderNameCaptureSlice(self: *const ProgramPlan, span: Span) []const u32 {
+        return self.encoder_name_captures.items[span.start .. span.start + span.len];
     }
 
     pub fn generatedCodecCallTypeSlice(self: *const ProgramPlan, span: Span) []const CheckedTypeIdentity {
@@ -3695,6 +3728,7 @@ pub fn analyzeProgram(
     // propagation re-run before descriptor requirements are derived from it.
     builder.propagateDynamicRequirements();
     try builder.materializeDescriptorRequirements();
+    try builder.materializeEncoderNameCaptures();
     try builder.materializeWorkerHiddenDescriptorParams();
     try builder.materializeCallableUseHiddenDescriptorArgs();
     try builder.materializeDescriptorMethodHiddenDescriptorArgs();
@@ -3851,6 +3885,8 @@ const Builder = struct {
     /// The generated codec call the most recent worker-planning step ensured.
     plan_codec_result: GeneratedCodecCallPlan = undefined,
     generated_callable_uses: std.AutoHashMapUnmanaged(GeneratedCallableKey, void) = .empty,
+    /// How many workers had their encoder name captures planned.
+    encoder_name_capture_workers: usize = 0,
     has_custom_numeral: bool = false,
     observed_numeral_evidence: std.AutoHashMapUnmanaged(DictionaryMethodEvidence.EvidenceEdge, void) = .empty,
     evidence_workers_walked: usize = 0,
@@ -12136,6 +12172,74 @@ const Builder = struct {
         return result;
     }
 
+    /// The renamed field names each generated encoder worker captures. A
+    /// runtime holds every name its contract renames and a record-fields
+    /// callback needs its own record's names; every callback also needs the
+    /// names of each callback it packs.
+    fn materializeEncoderNameCaptures(self: *Builder) Allocator.Error!void {
+        const field_captures = self.plan.generated_parser_field_captures.items;
+        const workers = self.plan.workers.items;
+        const needs = try self.allocator.alloc(std.DynamicBitSetUnmanaged, workers.len);
+        defer self.allocator.free(needs);
+        @memset(needs, .{});
+        defer for (needs) |*names| names.deinit(self.allocator);
+        for (workers, needs) |worker, *names| {
+            const codec = switch (worker.source) {
+                .generated_codec => |codec| codec,
+                .procedure_template,
+                .procedure_binding,
+                .procedure_use,
+                .nested_expr,
+                .generated_field_iterator,
+                => continue,
+            };
+            switch (codec.kind) {
+                .parser_constructor, .parser_runtime, .encoder_constructor => continue,
+                .encoder_runtime => {
+                    names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len);
+                    for (field_captures, 0..) |capture, index| {
+                        if (capture.worker == worker.id) names.set(index);
+                    }
+                },
+                .encoder_record_fields => {
+                    const contract_worker = codec.contract_worker orelse
+                        boxyPlanInvariant("generated encoder record callback had no contract worker");
+                    names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len);
+                    for (field_captures, 0..) |capture, index| {
+                        if (capture.worker == contract_worker and typeRefEql(capture.record_type, codec.shape)) names.set(index);
+                    }
+                },
+                .encoder_dict_fields,
+                .encoder_sequence_elements,
+                .encoder_tag_payload_elements,
+                .encoder_value_thunk,
+                .encoder_dict_key_thunk,
+                => names.* = try std.DynamicBitSetUnmanaged.initEmpty(self.allocator, field_captures.len),
+            }
+        }
+        // A runtime already holds every name, so only callbacks grow.
+        var changed = true;
+        while (changed) {
+            changed = false;
+            var uses = self.generated_callable_uses.keyIterator();
+            while (uses.next()) |use| {
+                if (!isGeneratedEncoderCallback(workers[@backingInt(use.caller)].source)) continue;
+                if (!isGeneratedEncoderCallback(workers[@backingInt(use.worker)].source)) continue;
+                const caller = &needs[@backingInt(use.caller)];
+                const before = caller.count();
+                caller.setUnion(needs[@backingInt(use.worker)]);
+                if (caller.count() != before) changed = true;
+            }
+        }
+        for (workers, needs) |*worker, names| {
+            const start: u32 = @intCast(self.plan.encoder_name_captures.items.len);
+            var set_names = names.iterator(.{});
+            while (set_names.next()) |index| try self.plan.encoder_name_captures.append(self.allocator, @intCast(index));
+            worker.encoder_name_captures = .{ .start = start, .len = @intCast(self.plan.encoder_name_captures.items.len - start) };
+        }
+        self.encoder_name_capture_workers = workers.len;
+    }
+
     fn materializeWorkerHiddenDescriptorParams(self: *Builder) Allocator.Error!void {
         const worker_leaves = try self.computeWorkerDescriptorLeaves();
         defer {
@@ -12200,10 +12304,8 @@ const Builder = struct {
                                 boxyPlanInvariant("generated encoder callback schema type was not analyzed");
                             try self.collectHiddenDescriptorsForRep(.all, schema_rep, &pending, &seen_reps, &seen_descs);
                         }
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder callback had no contract worker");
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder field capture type was not analyzed");
                             try self.collectHiddenDescriptorsForRep(.all, field_rep, &pending, &seen_reps, &seen_descs);
@@ -12887,11 +12989,12 @@ const Builder = struct {
                             .rep = shape_rep,
                             .capture_id = checked.CaptureId.generatedCheck(1),
                         });
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder record callback had no contract worker");
+                        if (worker_index >= self.encoder_name_capture_workers) {
+                            boxyPlanInvariant("generated encoder callback was planned after its name captures");
+                        }
                         var capture_index: u32 = 2;
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |field_capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[field_capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder field-name capture type was not analyzed");
                             try pending.append(self.allocator, .{
@@ -12923,11 +13026,12 @@ const Builder = struct {
                             .rep = shape_rep,
                             .capture_id = checked.CaptureId.generatedCheck(1),
                         });
-                        const contract_worker = codec.contract_worker orelse
-                            boxyPlanInvariant("generated encoder value thunk had no contract worker");
+                        if (worker_index >= self.encoder_name_capture_workers) {
+                            boxyPlanInvariant("generated encoder value thunk was planned after its name captures");
+                        }
                         var capture_index: u32 = 2;
-                        for (self.plan.generated_parser_field_captures.items) |field_capture| {
-                            if (field_capture.worker != contract_worker) continue;
+                        for (self.plan.encoderNameCaptureSlice(worker.encoder_name_captures)) |field_capture_index| {
+                            const field_capture = self.plan.generated_parser_field_captures.items[field_capture_index];
                             const field_rep = self.plan.repForSourceType(field_capture.source_type) orelse
                                 boxyPlanInvariant("generated encoder value thunk field-name capture type was not analyzed");
                             try pending.append(self.allocator, .{

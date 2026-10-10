@@ -6024,7 +6024,12 @@ thunks, and the key thunk calls the format's key protocol (`encode_key_start`,
 `encode_key_str`, or the scalar's `encode_key_<scalar>`). `Set` calls
 `encode_list` with `Set` as the call subject. A record field stored in a
 presence slot is written from its `Present` payload, and a `Missing` slot is
-skipped. A generated codec constructor keeps its checked callable
+skipped. The runtime worker captures every field name its contract renames.
+Each callback it packs captures the encoding, the value it writes, and only
+the renamed names its own value reaches: a record-fields callback captures its
+record's names, and every callback also captures the names of each callback it
+packs, closed over the planned callback edges. A field whose value contains no
+record therefore captures no names. A generated codec constructor keeps its checked callable
 representation. When the runtime worker it returns has a different
 representation (for example, a presence slot where the constructor's return
 names an inline required field), the constructor's pack boundary adapts the

@@ -590,6 +590,47 @@ fn boxyStructuralJsonParserCounts(allocator: Allocator, field_count: usize, pars
     return counts;
 }
 
+/// Increfs in the whole Boxy-lowered program for a `Shape` of `field_count`
+/// string fields that one function encodes with `Json.to_str`.
+fn boxyStructuralJsonEncoderIncrefs(allocator: Allocator, field_count: usize) TestError!usize {
+    var source_buf = std.ArrayList(u8).empty;
+    defer source_buf.deinit(allocator);
+    try source_buf.appendSlice(allocator, "Shape : {\n");
+    for (0..field_count) |field_index| {
+        const field = try std.fmt.allocPrint(allocator, "    f{d} : Str,\n", .{field_index});
+        defer allocator.free(field);
+        try source_buf.appendSlice(allocator, field);
+    }
+    try source_buf.appendSlice(allocator,
+        \\}
+        \\
+        \\encode_shape : Shape -> Str
+        \\encode_shape = |shape| Json.to_str(shape)
+        \\
+        \\main : Shape -> Bool
+        \\main = |shape| encode_shape(shape).is_empty()
+        \\
+    );
+
+    var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
+        allocator,
+        std.testing.io,
+        .module,
+        source_buf.items,
+        &.{},
+        .native,
+        try sharedPrePublishedBuiltin(),
+        null,
+        .boxy,
+    );
+    defer compiled.deinit(allocator);
+    var increfs: usize = 0;
+    for (compiled.lowered.view.store.getCFStmts()) |stmt| {
+        if (stmt == .incref) increfs += 1;
+    }
+    return increfs;
+}
+
 fn structuralJsonLirPeakBytes(field_count: usize) TestError!usize {
     const source = try structuralJsonSource(std.testing.allocator, field_count, "Str", .parse);
     defer std.testing.allocator.free(source);
@@ -2099,6 +2140,20 @@ test "boxy root that parses JSON directly receives its codec evidence" {
     );
     defer compiled.deinit(allocator);
     try std.testing.expect(compiled.lowered.view.store.getProcSpecs().len != 0);
+}
+
+test "issue 11910 boxy JSON record encoder callbacks capture only the names they use" {
+    // A string field's value thunk captures no field names, so packing the
+    // thunks retains a constant number of values per field rather than every
+    // name of the record.
+    const allocator = std.testing.allocator;
+    const four = try boxyStructuralJsonEncoderIncrefs(allocator, 4);
+    const eight = try boxyStructuralJsonEncoderIncrefs(allocator, 8);
+    const sixteen = try boxyStructuralJsonEncoderIncrefs(allocator, 16);
+    if (2 * (eight - four) != sixteen - eight) {
+        std.debug.print("boxy JSON encoder increfs: 4 fields {d}, 8 fields {d}, 16 fields {d}\n", .{ four, eight, sixteen });
+    }
+    try std.testing.expectEqual(2 * (eight - four), sixteen - eight);
 }
 
 test "issue 11910 boxy JSON record parser releases its fields once on error" {

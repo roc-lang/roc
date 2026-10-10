@@ -9938,12 +9938,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated record encoder had no planned field callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
 
         const fields = try self.generatedEncoderRecordFields(proc, contract_worker, shape_type);
         defer self.allocator.free(fields);
@@ -10075,12 +10071,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated sequence encoder had no planned element callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = value;
-        @memcpy(capture_values[2..], name_captures);
         const shape_rep = proc.repForTypeRef(shape_type);
         const tuple_items = if (proc.tupleRepForBoundary(shape_rep) != null)
             try self.generatedParserTupleItems(proc, shape_rep)
@@ -10183,12 +10175,8 @@ const ProcedureBuilder = struct {
         ) orelse boxyLowerInvariant("generated Dict encoder had no planned field callback");
         const callback = try proc.addFrameLocalForRep(proc.repForTypeRef(arg_types[2]));
         const count = try proc.addFrameLocal(.u64);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, entries);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = entries;
-        @memcpy(capture_values[2..], name_captures);
 
         var continuation = try self.lowerGeneratedCodecCallLocalsInto(
             proc,
@@ -10245,8 +10233,6 @@ const ProcedureBuilder = struct {
             .{ .generated_codec = callback_source },
             arg_types[3],
         ) orelse boxyLowerInvariant("generated tag encoder had no planned payload callback");
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-
         const variants = try self.generatedEncoderTagVariants(proc, shape_type, false);
         defer self.allocator.free(variants);
         const bodies = try self.allocator.alloc(LIR.CFStmtId, variants.len);
@@ -10256,11 +10242,8 @@ const ProcedureBuilder = struct {
             const count = try proc.addFrameLocal(.u64);
             const callback_rep = proc.repForTypeRef(arg_types[3]);
             const callback = try proc.addFrameLocalForRep(callback_rep);
-            const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+            const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, callback_worker, value);
             defer self.allocator.free(capture_values);
-            capture_values[0] = proc.erased_capture_locals.items[0];
-            capture_values[1] = value;
-            @memcpy(capture_values[2..], name_captures);
 
             var continuation = try self.lowerGeneratedCodecCallLocalsInto(
                 proc,
@@ -10360,16 +10343,14 @@ const ProcedureBuilder = struct {
         );
     }
 
+    /// The locals of the current encoder worker's field-name captures, in
+    /// the order of its planned name captures.
     fn generatedEncoderNameCaptureLocals(
         self: *ProcedureBuilder,
         proc: *ProcBodyBuilder,
-        contract_worker: Plan.WorkerPlanId,
     ) []const LIR.LocalId {
-        var count: usize = 0;
-        for (self.plan.generated_parser_field_captures.items) |capture| {
-            if (capture.worker == contract_worker) count += 1;
-        }
         const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const count = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures).len;
         var captured_value_count: usize = 0;
         for (self.plan.erasedCaptureSlice(worker.erased_captures)) |capture| {
             if (capture.kind == .captured_value) captured_value_count += 1;
@@ -10378,6 +10359,33 @@ const ProcedureBuilder = struct {
             boxyLowerInvariant("generated encoder field-name captures exceeded bound captures");
         }
         return proc.erased_capture_locals.items[captured_value_count - count .. captured_value_count];
+    }
+
+    /// The value captures of an encoder callback `callee` this worker packs:
+    /// the encoding, `value`, and the field names `callee` captures, each
+    /// read from this worker's own name captures.
+    fn generatedEncoderCallbackCaptureValues(
+        self: *ProcedureBuilder,
+        proc: *ProcBodyBuilder,
+        callee: Plan.WorkerPlanId,
+        value: LIR.LocalId,
+    ) Allocator.Error![]LIR.LocalId {
+        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const own_names = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures);
+        const own_locals = self.generatedEncoderNameCaptureLocals(proc);
+        const callee_names = self.plan.encoderNameCaptureSlice(self.plan.workers.items[@backingInt(callee)].encoder_name_captures);
+        const values = try self.allocator.alloc(LIR.LocalId, 2 + callee_names.len);
+        values[0] = proc.erased_capture_locals.items[0];
+        values[1] = value;
+        var own_index: usize = 0;
+        for (callee_names, values[2..]) |name, *out| {
+            while (own_index < own_names.len and own_names[own_index] < name) own_index += 1;
+            if (own_index == own_names.len or own_names[own_index] != name) {
+                boxyLowerInvariant("generated encoder callback captured a field name its packing worker did not hold");
+            }
+            out.* = own_locals[own_index];
+        }
+        return values;
     }
 
     fn generatedEncoderRecordFields(
@@ -10408,30 +10416,30 @@ const ProcedureBuilder = struct {
         }
         const fields = try self.allocator.alloc(GeneratedEncoderRecordField, field_count);
         const record_view = procedureModuleById(self.modules, record.source_type.module);
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
+        const worker = self.plan.workers.items[@backingInt(proc.worker_layout.worker)];
+        const name_capture_ids = self.plan.encoderNameCaptureSlice(worker.encoder_name_captures);
+        const name_captures = self.generatedEncoderNameCaptureLocals(proc);
 
         var out_index: usize = 0;
         for (children) |child| {
             if (child.role == .record_ext) continue;
             if (child.role != .record_field) unreachable;
             const label = child.role.record_field;
-            var capture_index: usize = 0;
             var renamed: ?LIR.LocalId = null;
             var field_capture: ?Plan.GeneratedParserFieldCapture = null;
-            for (self.plan.generated_parser_field_captures.items) |capture| {
-                if (capture.worker != contract_worker) continue;
-                if (capture_index >= name_captures.len) {
-                    boxyLowerInvariant("generated encoder field capture exceeded bound names");
+            for (name_capture_ids, name_captures) |capture_index, name_local| {
+                const capture = self.plan.generated_parser_field_captures.items[capture_index];
+                if (capture.worker != contract_worker) {
+                    boxyLowerInvariant("generated encoder captured a field name outside its contract");
                 }
                 const capture_view = procedureModuleById(self.modules, capture.field_module);
                 if (planTypeRefEql(capture.record_type, shape_type) and
                     Plan.recordFieldNameMatches(viewNames(record_view), label, viewNames(capture_view), capture.field_name))
                 {
                     if (renamed != null) boxyLowerInvariant("generated encoder record field had duplicate renamed captures");
-                    renamed = name_captures[capture_index];
+                    renamed = name_local;
                     field_capture = capture;
                 }
-                capture_index += 1;
             }
             const capture = field_capture orelse
                 boxyLowerInvariant("generated encoder record field had no checked capture metadata");
@@ -10773,12 +10781,8 @@ const ProcedureBuilder = struct {
                         success,
                     );
 
-                    const name_captures = self.generatedEncoderNameCaptureLocals(proc, frame.contract_worker);
-                    const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+                    const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, frame.thunk_worker, frame.field_value);
                     defer self.allocator.free(capture_values);
-                    capture_values[0] = proc.erased_capture_locals.items[0];
-                    capture_values[1] = frame.field_value;
-                    @memcpy(capture_values[2..], name_captures);
                     frame.written = try self.packGeneratedCodecCallable(proc, frame.thunk, frame.thunk_rep, frame.thunk_worker, capture_values, success);
                     if (field.optional_missing or frame.presence != null) {
                         // Encode the fields after this one again, skipping it.
@@ -10954,12 +10958,8 @@ const ProcedureBuilder = struct {
             &.{ frame.state_rep, frame.thunk_rep },
             continuation,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, frame.contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, frame.thunk_worker, frame.value.local);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = frame.value.local;
-        @memcpy(capture_values[2..], name_captures);
         return try self.packGeneratedCodecCallable(proc, frame.thunk, frame.thunk_rep, frame.thunk_worker, capture_values, continuation);
     }
 
@@ -11279,12 +11279,8 @@ const ProcedureBuilder = struct {
             &.{ state_rep, thunk_rep },
             continuation,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
+        const capture_values = try self.generatedEncoderCallbackCaptureValues(proc, thunk_worker, elem_value);
         defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        capture_values[1] = elem_value;
-        @memcpy(capture_values[2..], name_captures);
         continuation = try self.packGeneratedCodecCallable(proc, thunk, thunk_rep, thunk_worker, capture_values, continuation);
         continuation = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, continuation);
         continuation = try proc.assignIntLiteral(one, 1, continuation);
@@ -11475,15 +11471,12 @@ const ProcedureBuilder = struct {
             &.{ state_rep, key_thunk_rep, value_thunk_rep },
             write_entry,
         );
-        const name_captures = self.generatedEncoderNameCaptureLocals(proc, contract_worker);
-        const capture_values = try self.allocator.alloc(LIR.LocalId, 2 + name_captures.len);
-        defer self.allocator.free(capture_values);
-        capture_values[0] = proc.erased_capture_locals.items[0];
-        @memcpy(capture_values[2..], name_captures);
-        capture_values[1] = item_value;
-        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, capture_values, write_entry);
-        capture_values[1] = key_value;
-        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, capture_values, write_entry);
+        const value_captures = try self.generatedEncoderCallbackCaptureValues(proc, value_thunk_worker, item_value);
+        defer self.allocator.free(value_captures);
+        write_entry = try self.packGeneratedCodecCallable(proc, value_thunk, value_thunk_rep, value_thunk_worker, value_captures, write_entry);
+        const key_captures = try self.generatedEncoderCallbackCaptureValues(proc, key_thunk_worker, key_value);
+        defer self.allocator.free(key_captures);
+        write_entry = try self.packGeneratedCodecCallable(proc, key_thunk, key_thunk_rep, key_thunk_worker, key_captures, write_entry);
         write_entry = try proc.assignBinaryLowLevel(next_index, .num_int_add_crash_on_overflow, index, one, write_entry);
         write_entry = try proc.assignIntLiteral(one, 1, write_entry);
         write_entry = try proc.lowerTupleFieldReadInto(item_value, entry_value, entry.rep, 1, write_entry);
