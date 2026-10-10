@@ -82,9 +82,9 @@ pub const UseOrder = struct {
             for (lists) |list| for (list) |id| {
                 if (self.stmts.contains(id)) continue;
                 try self.stmts.put(id, @intCast(self.stmts.count()));
-                const stmt = store.getCFStmt(id);
-                body_clone.forEachStmtRead(store, stmt, &locals, Locals.note);
-                body_clone.forEachStmtDef(store, stmt, &locals, Locals.note);
+                const stmt = store.getCFStmtImmediate(id);
+                body_clone.forEachStmtRead(store, stmt.*, &locals, Locals.note);
+                body_clone.forEachStmtDef(store, stmt.*, &locals, Locals.note);
                 if (locals.err) |err| return err;
             };
             return self;
@@ -385,12 +385,12 @@ pub const UseOrder = struct {
         for (lists) |list| {
             joins.clearRetainingCapacity();
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* == .join) try joins.put(stmt.join.id, @backingInt(stmt_id));
             }
             for (list) |stmt_id| {
-                const stmt = store.getCFStmt(stmt_id);
-                if (stmt != .jump) continue;
+                const stmt = store.getCFStmtImmediate(stmt_id);
+                if (stmt.* != .jump) continue;
                 if (joins.get(stmt.jump.target)) |join_stmt| {
                     tables.jump_join[tables.stmtIndex(@backingInt(stmt_id))] = join_stmt;
                 }
@@ -447,7 +447,7 @@ pub const UseOrder = struct {
     /// join parameter) and no other edge reaches the successor.
     fn blockContinuation(store: *const LirStore, tables: *const Scratch, preds: *const Rows, stmt: u32) ?u32 {
         if (tables.unresolved.isSet(tables.stmtIndex(stmt))) return null;
-        if (store.getCFStmt(@fromBackingInt(@intCast(stmt))) == .jump) return null;
+        if (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).* == .jump) return null;
         const Single = struct {
             count: u32 = 0,
             succ: u32 = no_local,
@@ -622,21 +622,21 @@ pub const UseOrder = struct {
         var builder = Builder{ .allocator = allocator, .index = index };
         errdefer builder.abandon();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.count),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.count),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.count),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.count),
             }
         }
         try builder.place();
         for (members) |raw| {
-            const stmt = store.getCFStmt(@fromBackingInt(@intCast(raw)));
-            if (!rowsInclude(stmt, kind)) continue;
+            const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(raw)));
+            if (!rowsInclude(stmt.*, kind)) continue;
             builder.stmt = raw;
             switch (kind) {
-                .reads => body_clone.forEachStmtRead(store, stmt, &builder, Builder.fill),
-                .defs => body_clone.forEachStmtDef(store, stmt, &builder, Builder.fill),
+                .reads => body_clone.forEachStmtRead(store, stmt.*, &builder, Builder.fill),
+                .defs => body_clone.forEachStmtDef(store, stmt.*, &builder, Builder.fill),
             }
         }
         return try builder.finish();
@@ -694,7 +694,7 @@ pub const UseOrder = struct {
                 if (seen.contains(current)) continue;
                 try seen.put(current, {});
                 try list.append(allocator, current);
-                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmt(current));
+                try appendStructuralSuccessors(allocator, store, &stack, store.getCFStmtImmediate(current).*);
             }
             try lists.ensureUnusedCapacity(allocator, 1);
             lists.appendAssumeCapacity(try list.toOwnedSlice(allocator));
@@ -893,11 +893,11 @@ pub const UseOrder = struct {
     /// A jump into a join that declares `local` as a parameter redefines
     /// it, so that edge carries no use of the previous value.
     fn cutEdge(self: *const UseOrder, from: u32, to: u32, local: LIR.LocalId) bool {
-        const node = self.topology.store.getCFStmt(@fromBackingInt(@intCast(from)));
-        if (node != .jump) return false;
+        const node = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(from)));
+        if (node.* != .jump) return false;
         const join_stmt = self.topology.jump_join[self.topology.tables.stmtIndex(from)];
         if (join_stmt == no_local) return false;
-        const join = self.topology.store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join;
+        const join = self.topology.store.getCFStmtImmediate(@fromBackingInt(@intCast(join_stmt))).join;
         if (@backingInt(join.body) != to) return false;
         const params = self.topology.store.getLocalSpan(join.params);
         for (0..GuardedList.borrowLen(params)) |index| {
@@ -909,7 +909,7 @@ pub const UseOrder = struct {
     /// Calls `note(ctx, successor)` for each control-flow successor of
     /// `stmt`; returns true when an edge cannot be resolved.
     fn forEachSuccessor(store: *const LirStore, tables: *const Scratch, stmt: u32, ctx: anytype, comptime note: fn (@TypeOf(ctx), u32) void) bool {
-        switch (store.getCFStmt(@fromBackingInt(@intCast(stmt)))) {
+        switch (store.getCFStmtImmediate(@fromBackingInt(@intCast(stmt))).*) {
             inline .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -973,7 +973,7 @@ pub const UseOrder = struct {
             .jump => {
                 const join_stmt = tables.jump_join[tables.stmtIndex(stmt)];
                 if (join_stmt == no_local) return true;
-                note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
+                note(ctx, @backingInt(store.getCFStmtImmediate(@fromBackingInt(@intCast(join_stmt))).join.body));
             },
             .loop_continue, .loop_break => return true,
             .runtime_error,

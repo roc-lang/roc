@@ -696,8 +696,8 @@ const Analysis = struct {
         }
         const candidate = (try self.entryOf(local)) orelse return;
         if (self.solution.isJoinParam(local)) {
-            const definition = self.store.getCFStmt(stmt);
-            if (definition != .set_local or definition.set_local.mode != .initialize_join_param) {
+            const definition = self.store.getCFStmtImmediate(stmt);
+            if (definition.* != .set_local or definition.set_local.mode != .initialize_join_param) {
                 candidate.disqualified = true;
                 return;
             }
@@ -1090,8 +1090,8 @@ fn collectProcJoinBodies(
         const stmt_index = @backingInt(stmt_id);
         if (epochs[stmt_index] == epoch) continue;
         epochs[stmt_index] = epoch;
-        const stmt = store.getCFStmt(stmt_id);
-        if (stmt == .join) {
+        const stmt = store.getCFStmtImmediate(stmt_id);
+        if (stmt.* == .join) {
             const entry = try joins.getOrPut(@backingInt(stmt.join.id));
             if (entry.found_existing) {
                 if (entry.value_ptr.* != stmt.join.body) dismantleInvariant("procedure contains two bodies for one join identity");
@@ -1359,8 +1359,8 @@ fn findOutcomeRefinement(
     var discriminant: ?LIR.LocalId = null;
     var cursor = next;
     while (true) {
-        const stmt = store.getCFStmt(cursor);
-        if (stmt == .assign_ref) {
+        const stmt = store.getCFStmtImmediate(cursor);
+        if (stmt.* == .assign_ref) {
             const assign = stmt.assign_ref;
             switch (assign.op) {
                 .local => |source| {
@@ -1381,7 +1381,7 @@ fn findOutcomeRefinement(
                 },
                 .field, .tag_payload, .tag_payload_struct, .list_reinterpret, .nominal => return null,
             }
-        } else if (stmt == .switch_stmt) {
+        } else if (stmt.* == .switch_stmt) {
             if (discriminant == null or stmt.switch_stmt.cond != discriminant.?) return null;
             return cursor;
         } else {
@@ -1716,8 +1716,8 @@ pub fn compute(
     @memset(join_init_counts, 0);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt == .set_local and stmt.set_local.mode == .initialize_join_param) {
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* == .set_local and stmt.set_local.mode == .initialize_join_param) {
             join_init_counts[@backingInt(stmt.set_local.target)] += 1;
         }
     }
@@ -1735,8 +1735,8 @@ pub fn compute(
     defer projection_edges.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!reachable.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref) continue;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* != .assign_ref) continue;
         const assign = stmt.assign_ref;
         const source: LIR.LocalId, const is_projection: bool = switch (assign.op) {
             .local => |local| blk: {
@@ -1870,9 +1870,9 @@ pub fn compute(
         const stmt_index = @backingInt(current);
         if (visited.isSet(stmt_index)) continue;
         visited.set(stmt_index);
-        const current_stmt = store.getCFStmt(current);
-        body_clone.countStmtReads(store, operand_read_counts, current_stmt);
-        switch (current_stmt) {
+        const current_stmt = store.getCFStmtImmediate(current);
+        body_clone.countStmtReads(store, operand_read_counts, current_stmt.*);
+        switch (current_stmt.*) {
             .init_uninitialized => |stmt| {
                 try analysis.useWhole(current, stmt.target);
                 try stack.append(gpa, stmt.next);
@@ -2433,8 +2433,8 @@ pub fn compute(
             const position = direct_call_position_by_arg[@backingInt(read.target)];
             if (call_stmt_index == no_index or position == std.math.maxInt(u8)) continue;
             const call_stmt_id: LIR.CFStmtId = @fromBackingInt(@intCast(call_stmt_index));
-            const call_stmt = store.getCFStmt(call_stmt_id);
-            if (call_stmt != .assign_call) continue;
+            const call_stmt = store.getCFStmtImmediate(call_stmt_id);
+            if (call_stmt.* != .assign_call) continue;
             const args = store.getLocalSpan(call_stmt.assign_call.args);
             if (position >= GuardedList.borrowLen(args) or GuardedList.at(args, position) != read.target) continue;
             const callee_sig = solution.sigOf(call_stmt.assign_call.proc);
@@ -2860,8 +2860,8 @@ pub fn compute(
     defer place_heads.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_ref) continue;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* != .assign_ref) continue;
         const assign = stmt.assign_ref;
         const source: LIR.LocalId, const kind: PlaceEdgeKind = switch (assign.op) {
             .local => |local| blk: {
@@ -3003,8 +3003,8 @@ pub fn compute(
     defer benefit_heads.deinit(gpa);
     for (0..store.cfStmtCount()) |stmt_index| {
         if (!visited.isSet(stmt_index)) continue;
-        const stmt = store.getCFStmt(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
-        if (stmt != .assign_call) continue;
+        const stmt = store.getCFStmtImmediate(@fromBackingInt(@intCast(@as(u32, @intCast(stmt_index)))));
+        if (stmt.* != .assign_call) continue;
         const call = stmt.assign_call;
         const args = store.getLocalSpan(call.args);
         for (0..GuardedList.borrowLen(args)) |position| {
