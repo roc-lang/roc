@@ -1361,7 +1361,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
     };
     const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .type_name = @fromBackingInt(@intCast(3)), .source_decl = null },
+        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
         .source_statement = 0,
         .declaration_root = @fromBackingInt(@intCast(4)),
         .backing = @fromBackingInt(@intCast(3)),
@@ -1379,6 +1379,7 @@ test "boxy layout planner commits nominal declared fields through shared layout 
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
+            .source_decl = 0,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
@@ -1426,7 +1427,7 @@ test "boxy layout planner reuses structural backing order without padding" {
     };
     const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .type_name = @fromBackingInt(@intCast(3)), .source_decl = null },
+        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
         .source_statement = 0,
         .declaration_root = @fromBackingInt(@intCast(3)),
         .backing = @fromBackingInt(@intCast(2)),
@@ -1441,6 +1442,7 @@ test "boxy layout planner reuses structural backing order without padding" {
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
+            .source_decl = 0,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .declared_fields = .{ .start = 0, .len = 2 },

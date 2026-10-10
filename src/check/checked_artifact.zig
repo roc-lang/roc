@@ -2890,7 +2890,7 @@ pub const CheckedNominalType = struct {
     /// Checked module id of the artifact that owns this named type's checked
     /// declaration data. This is intentionally separate from `origin_module`.
     owner_module: ModuleId,
-    source_decl: ?u32 = null,
+    source_decl: u32,
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     representation: CheckedNominalRepresentationRef,
@@ -2908,7 +2908,6 @@ pub const CheckedNominalType = struct {
 fn checkedNominalTypeKey(nominal: CheckedNominalType) canonical.NominalTypeKey {
     return .{
         .module = nominal.origin_module,
-        .type_name = nominal.name,
         .source_decl = nominal.source_decl,
     };
 }
@@ -3037,7 +3036,7 @@ pub const StoredNominal = struct {
     name: canonical.TypeNameId,
     origin_module: canonical.ModuleIdentityId,
     owner_module: ModuleId,
-    source_decl: ?u32 = null,
+    source_decl: u32,
     builtin: ?CheckedBuiltinNominal = null,
     is_opaque: bool,
     representation: CheckedNominalRepresentationRef,
@@ -5046,6 +5045,20 @@ pub const CheckedTypeStore = struct {
         return null;
     }
 
+    /// The declared name of `declaration`'s type, read from its declaration
+    /// root's nominal payload. Display metadata only: nominal identity
+    /// (`canonical.NominalTypeKey`) never includes it.
+    pub fn nominalDeclarationName(
+        self: *const CheckedTypeStore,
+        declaration: CheckedNominalDeclaration,
+    ) canonical.TypeNameId {
+        const root_payload = self.payload(declaration.declaration_root);
+        if (root_payload != .nominal) {
+            checkedArtifactInvariant("nominal declaration root was not a nominal checked type", .{});
+        }
+        return root_payload.nominal.name;
+    }
+
     pub fn nominalDeclarationById(
         self: *const CheckedTypeStore,
         id: CheckedNominalDeclarationId,
@@ -6861,11 +6874,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     }
     const nominal = root_payload.nominal;
 
-    const nominal_key = canonical.NominalTypeKey{
-        .module = nominal.origin_module,
-        .type_name = nominal.name,
-        .source_decl = nominal.source_decl,
-    };
+    const nominal_key = checkedNominalTypeKey(nominal);
     for (declarations.items) |existing| {
         if (canonicalNominalTypeKeyEql(existing.nominal, nominal_key)) {
             if (existing.backing == backing and
@@ -6898,8 +6907,7 @@ fn appendCheckedNominalDeclarationFromPayload(
     try declarations.append(allocator, .{
         .id = declaration_id,
         .nominal = nominal_key,
-        .source_statement = nominal.source_decl orelse
-            checkedArtifactInvariant("checked nominal declaration payload had no source declaration", .{}),
+        .source_statement = nominal.source_decl,
         .declaration_root = root,
         .backing = backing,
         .fa_start = fa.start,
@@ -7259,14 +7267,12 @@ fn embedReachableImportedNominalDecls(
         const nominal = payload.nominal;
         const origin_module = nominal.origin_module;
         const owner_module = nominal.owner_module;
-        const type_name = nominal.name;
         const source_decl = nominal.source_decl;
         const builtin_nominal = nominal.builtin;
         const representation = nominal.representation;
 
         const key = canonical.NominalTypeKey{
             .module = origin_module,
-            .type_name = type_name,
             .source_decl = source_decl,
         };
         // Already declared locally (this module's own declaration) or already
@@ -8616,13 +8622,13 @@ const CheckedTypePublisher = struct {
                         const name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
                         const origin_module = try names.internModuleIdentity(module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
                         const owner_module = checkedNamedTypeOwnerForSource(module, self.imports, nominal.origin_module);
-                        const representation = try checkedNominalRepresentationForSourceNominal(module, names, self.imports, &self.active.scratch.?.local_nominal_declarations, nominal, builtin_nominal);
+                        const representation = checkedNominalRepresentationForSourceNominal(module, self.imports, &self.active.scratch.?.local_nominal_declarations, nominal, builtin_nominal);
                         build.* = .{
                             .nominal = .{
                                 .name = name,
                                 .origin_module = origin_module,
                                 .owner_module = owner_module,
-                                .source_decl = nominal.sourceDeclOptional(),
+                                .source_decl = nominal.statement(),
                                 .builtin = builtin_nominal,
                                 .is_opaque = nominal.isOpaque(),
                                 .representation = representation,
@@ -9005,7 +9011,7 @@ fn checkedUniqueOwnerArtifact(existing: ?ModuleId, next: ModuleId) ModuleId {
 fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews, nominal: types.NominalType) ?CheckedBuiltinNominal {
     if (!nominal.originIsBuiltin()) return null;
 
-    const source_decl = nominal.sourceDeclOptional() orelse return null;
+    const source_decl = nominal.statement();
     const module_env = module.moduleEnvConst();
     const origin_hash = module_env.moduleIdentityHash(nominal.origin_module);
 
@@ -10257,51 +10263,42 @@ fn moduleEnvIdentityMatches(module_env: *const ModuleEnv, origin_hash: *const [3
 
 fn checkedNominalRepresentationForSourceNominal(
     module: TypedCIR.Module,
-    names: *canonical.CanonicalNameStore,
     imports: CheckedImportViews,
     local_nominal_declarations: *const LocalNominalDeclarationIds,
     nominal: types.NominalType,
     builtin_nominal: ?CheckedBuiltinNominal,
-) Allocator.Error!CheckedNominalRepresentationRef {
+) CheckedNominalRepresentationRef {
     if (builtin_nominal) |builtin_id| return .{ .builtin = builtin_id };
 
     const module_env = module.moduleEnvConst();
-    const source_decl = nominal.sourceDeclOptional();
     if (nominal.origin_module == module_env.selfModuleIdentity()) {
-        const statement = source_decl orelse
-            checkedArtifactInvariant("checked local nominal representation had no source declaration", .{});
-        return .{ .local_declaration = local_nominal_declarations.get(@fromBackingInt(@intCast(statement))) };
+        return .{ .local_declaration = local_nominal_declarations.get(@fromBackingInt(@intCast(nominal.statement()))) };
     }
 
     const origin_hash = module_env.moduleIdentityHash(nominal.origin_module);
-    const type_name = try names.internTypeIdent(module.identStoreConst(), nominal.ident.ident_idx);
     return .{ .imported_declaration = importedNominalDeclarationRefForSourceNominal(
-        names,
         imports,
         origin_hash,
-        type_name,
-        source_decl orelse checkedArtifactInvariant("checked imported nominal representation had no source declaration", .{}),
+        nominal.statement(),
     ) };
 }
 
 /// Resolve the artifact + declaration that owns an imported nominal type:
 /// the declaring module by 32-byte content identity, the declaration by its
-/// full nominal key.
+/// full nominal key (an artifact also embeds declarations of nominals other
+/// modules declare, so the declaration's own module identity is compared).
 fn importedNominalDeclarationRefForSourceNominal(
-    names: *const canonical.CanonicalNameStore,
     imports: CheckedImportViews,
     origin_hash: *const [32]u8,
-    type_name: canonical.TypeNameId,
     source_decl: u32,
 ) ImportedNominalDeclarationRef {
-    const type_text = names.typeNameText(type_name);
     var found: ?ImportedNominalDeclarationRef = null;
 
     for (imports.direct) |import| {
         if (!importedViewIdentityMatches(import.view, origin_hash)) continue;
         for (import.view.checked_types.nominal_declarations) |declaration| {
-            if (!Ident.textEql(import.view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
             if (declaration.source_statement != source_decl) continue;
+            if (!base.ModuleIdentity.eql(import.view.canonical_names.moduleIdentityBytes(declaration.nominal.module), origin_hash)) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = import.key,
                 .declaration = declaration.id,
@@ -10318,8 +10315,8 @@ fn importedNominalDeclarationRefForSourceNominal(
     for (imports.available) |view| {
         if (!importedViewIdentityMatches(view, origin_hash)) continue;
         for (view.checked_types.nominal_declarations) |declaration| {
-            if (!Ident.textEql(view.canonical_names.typeNameText(declaration.nominal.type_name), type_text)) continue;
             if (declaration.source_statement != source_decl) continue;
+            if (!base.ModuleIdentity.eql(view.canonical_names.moduleIdentityBytes(declaration.nominal.module), origin_hash)) continue;
             const next = ImportedNominalDeclarationRef{
                 .artifact = view.key,
                 .declaration = declaration.id,
@@ -10335,8 +10332,8 @@ fn importedNominalDeclarationRefForSourceNominal(
     }
 
     return found orelse checkedArtifactInvariant(
-        "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} type {s} statement {d}",
-        .{ origin_hash.*, type_text, source_decl },
+        "checked nominal representation referenced a missing imported nominal declaration for owner identity {any} statement {d}",
+        .{ origin_hash.*, source_decl },
     );
 }
 
@@ -20547,24 +20544,18 @@ const EvidencePass = struct {
                     .nominal_type => |nominal| {
                         if (categorizeBuiltinNominal(self.module, self.import_views, nominal)) |builtin_nominal| {
                             if (builtin_nominal == .try_) {
-                                const idents = self.module.identStoreConst();
                                 const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
-                                const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                                 return .{ .nominal = .{
                                     .module = module_identity_id,
-                                    .type_name = type_name,
-                                    .source_decl = nominal.sourceDeclOptional(),
+                                    .source_decl = nominal.statement(),
                                 } };
                             }
                             return .{ .builtin = static_dispatch.builtinOwnerForCheckedBuiltin(builtin_nominal) };
                         }
-                        const idents = self.module.identStoreConst();
                         const module_identity_id = try self.names.internModuleIdentity(self.module.moduleEnvConst().moduleIdentityHash(nominal.origin_module));
-                        const type_name = try self.names.internTypeIdent(idents, nominal.ident.ident_idx);
                         return .{ .nominal = .{
                             .module = module_identity_id,
-                            .type_name = type_name,
-                            .source_decl = nominal.sourceDeclOptional(),
+                            .source_decl = nominal.statement(),
                         } };
                     },
                     .record,
@@ -22677,6 +22668,9 @@ pub const ProcTarget = union(enum) {
 /// are explicit so postcheck never recognizes Try by names or backing shape.
 pub const HostedTryAdapterCapability = struct {
     nominal: canonical.NominalTypeKey,
+    /// The nominal's declared name: display metadata for the lowered type
+    /// definition, never identity.
+    type_name: canonical.TypeNameId,
     ok_tag: canonical.TagLabelId,
     err_tag: canonical.TagLabelId,
     ok_type_arg_index: u8,
@@ -22965,6 +22959,7 @@ fn hostedTryAdapterCapabilityForCheckedRoot(
     if (!checkedTypeIsClosedTagRow(checked_types, nominal.args[1])) return null;
     return .{
         .nominal = checkedNominalTypeKey(nominal),
+        .type_name = nominal.name,
         .ok_tag = try names.internTagLabel("Ok"),
         .err_tag = try names.internTagLabel("Err"),
         .ok_type_arg_index = 0,
@@ -27979,11 +27974,7 @@ pub const ModuleInterfaceCapabilities = struct {
             if (nominal.builtin != null) continue;
             if (nominal.origin_module != current_module) continue;
             const source_key = checked_types.roots.items[i].key;
-            const nominal_key = canonical.NominalTypeKey{
-                .module = nominal.origin_module,
-                .type_name = nominal.name,
-                .source_decl = nominal.source_decl,
-            };
+            const nominal_key = checkedNominalTypeKey(nominal);
             const seen_key = NominalCapabilitySeenKey{
                 .source_ty = source_key,
                 .nominal = nominal_key,
@@ -28188,7 +28179,7 @@ fn canonicalTypeKeyEql(a: canonical.CanonicalTypeKey, b: canonical.CanonicalType
 }
 
 fn canonicalNominalTypeKeyEql(a: canonical.NominalTypeKey, b: canonical.NominalTypeKey) bool {
-    return a.module == b.module and a.type_name == b.type_name and a.source_decl == b.source_decl;
+    return a.module == b.module and a.source_decl == b.source_decl;
 }
 
 fn testCanonicalTypeKey(byte: u8) canonical.CanonicalTypeKey {
@@ -36320,7 +36311,6 @@ const CheckedTypeStoreImportProjector = struct {
         const nominal = source_payload.nominal;
         const target_key = canonical.NominalTypeKey{
             .module = try self.remapModuleIdentity(nominal.origin_module),
-            .type_name = try self.remapTypeName(nominal.name),
             .source_decl = nominal.source_decl,
         };
         if (self.target_store.nominalDeclaration(target_key) != null) return null;
@@ -39701,7 +39691,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     const rf = try store.appendNominalRecordFields(gpa, &.{ .{ .named = field_name }, .{ .padding = a } });
     try store.nominal_declarations.append(gpa, .{
         .id = nominal_declaration_id,
-        .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .type_name = @as(canonical.TypeNameId, @fromBackingInt(@intCast(14))), .source_decl = 16 },
+        .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .source_decl = 16 },
         .source_statement = 16,
         .declaration_root = d,
         .backing = c,
@@ -40321,8 +40311,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0x1E, 0xDC, 0xAA, 0xFE, 0xF0, 0xDA, 0xA0, 0x8F, 0x11, 0xF2, 0x70, 0x4B, 0xE9, 0xED, 0x93,
-        0x7C, 0x88, 0x20, 0xB5, 0xB8, 0xD3, 0x0C, 0xF7, 0x76, 0xBB, 0xCC, 0xCE, 0xF0, 0xA0, 0xB9, 0xF7,
+        0x03, 0xAF, 0xA7, 0xD7, 0xF8, 0x3C, 0x46, 0xE5, 0x98, 0xC8, 0x71, 0x71, 0x5B, 0xEB, 0x98, 0xAC,
+        0x2B, 0x72, 0x2B, 0xAE, 0x9D, 0xF6, 0x0F, 0x1D, 0xCF, 0x80, 0xE5, 0xB7, 0xD8, 0x40, 0xCF, 0x96,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

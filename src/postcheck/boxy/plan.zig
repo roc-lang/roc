@@ -2346,8 +2346,7 @@ const LiteralPlanner = struct {
                 const names = view.canonical_names orelse boxyPlanInvariant("literal nominal type omitted its checked name table");
                 try key.appendSlice(allocator, names.moduleIdentityBytes(nominal.origin_module));
                 try self.appendName(&key, names.typeNameText(nominal.name));
-                try self.appendWord(&key, @intFromBool(nominal.source_decl != null));
-                if (nominal.source_decl) |decl| try self.appendWord(&key, decl);
+                try self.appendWord(&key, nominal.source_decl);
                 for (nominal.args) |arg| try children.append(allocator, typeRef(view, arg));
             },
             .record => |record| {
@@ -21962,7 +21961,6 @@ pub fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static
     const nominal = payload.nominal;
     const nominal_owner: static_dispatch.MethodOwner = .{ .nominal = .{
         .module = nominal.origin_module,
-        .type_name = nominal.name,
         .source_decl = nominal.source_decl,
     } };
     const builtin = nominal.builtin orelse return nominal_owner;
@@ -21971,7 +21969,7 @@ pub fn methodOwnerForCheckedPayload(payload: checked.CheckedTypePayload) ?static
 }
 
 /// `owner` re-expressed in `target_names`, or null when the target module
-/// does not name the owner's module or type.
+/// does not name the owner's module.
 pub fn methodOwnerInNames(
     source_names: *const checked_names.CanonicalNameStore,
     target_names: *const checked_names.CanonicalNameStore,
@@ -21981,7 +21979,6 @@ pub fn methodOwnerInNames(
         .builtin => |builtin| .{ .builtin = builtin },
         .nominal => |nominal| .{ .nominal = .{
             .module = target_names.lookupModuleIdentity(source_names.moduleIdentityBytes(nominal.module)) orelse return null,
-            .type_name = target_names.lookupTypeName(source_names.typeNameText(nominal.type_name)) orelse return null,
             .source_decl = nominal.source_decl,
         } },
     };
@@ -24348,7 +24345,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
     };
     const nominal_declarations = [_]checked.CheckedNominalDeclaration{.{
         .id = @fromBackingInt(@intCast(fixtureTableIndex(0))),
-        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .type_name = @fromBackingInt(@intCast(3)), .source_decl = null },
+        .nominal = .{ .module = @fromBackingInt(@intCast(4)), .source_decl = 0 },
         .source_statement = 0,
         .declaration_root = @fromBackingInt(@intCast(4)),
         .backing = @fromBackingInt(@intCast(3)),
@@ -24366,6 +24363,7 @@ test "boxy planner records nominal declared field order from checked payloads" {
             .name = @fromBackingInt(@intCast(3)),
             .origin_module = @fromBackingInt(@intCast(4)),
             .owner_module = .{},
+            .source_decl = 0,
             .is_opaque = false,
             .representation = .{ .local_declaration = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
             .padding_field_types = .{ .start = 0, .len = 1 },
@@ -24403,7 +24401,6 @@ test "boxy planner resolves local nominal declared order from box payload capabi
     const field_b: RecordFieldLabelId = @fromBackingInt(@intCast(2));
     const nominal_key = checked_names.NominalTypeKey{
         .module = @fromBackingInt(@intCast(4)),
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
     const type_pool = [_]checked.CheckedTypeId{@fromBackingInt(@intCast(fixtureTableIndex(0)))};
@@ -24435,7 +24432,7 @@ test "boxy planner resolves local nominal declared order from box payload capabi
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = root_key,
             .source_decl = nominal_key.source_decl,
@@ -24518,7 +24515,6 @@ test "boxy planner records imported box payload capability source modules" {
     try std.testing.expectEqual(nominal_module, source_nominal_module);
     const nominal_key = checked_names.NominalTypeKey{
         .module = nominal_module,
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
 
@@ -24532,7 +24528,7 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
@@ -24585,7 +24581,7 @@ test "boxy planner records imported box payload capability source modules" {
         .{ .empty_record = {} },
         .{ .record = .{ .fields = .{ .start = 0, .len = 2 }, .ext = @fromBackingInt(@intCast(2)) } },
         .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = source_key,
             .source_decl = nominal_key.source_decl,
@@ -24807,7 +24803,6 @@ test "boxy nominal substitutions share formals independently of runtime demand a
     const key = moduleKey(1);
     const nominal_key = checked_names.NominalTypeKey{
         .module = @fromBackingInt(@intCast(4)),
-        .type_name = @fromBackingInt(@intCast(3)),
         .source_decl = 9,
     };
     var payloads: [9 + use_count]checked.StoredCheckedTypePayload = undefined;
@@ -24850,7 +24845,7 @@ test "boxy nominal substitutions share formals independently of runtime demand a
     });
     for (payloads[9..], 0..) |*payload, index| {
         payload.* = .{ .nominal = .{
-            .name = nominal_key.type_name,
+            .name = @fromBackingInt(@intCast(3)),
             .origin_module = nominal_key.module,
             .owner_module = key,
             .source_decl = nominal_key.source_decl,

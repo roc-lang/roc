@@ -7329,6 +7329,139 @@ test "app artifact records platform requirement solutions from checking" {
     );
 }
 
+/// The checked nominal declarations one app declares for `type_name`: each
+/// one's identity key, with the module component as content-identity bytes so
+/// keys from different compilations compare.
+const NominalDeclarationIdentity = struct {
+    module_identity: [32]u8,
+    source_decl: u32,
+};
+
+fn checkNominalIdentityFixture(
+    allocator: Allocator,
+    app_source: []const u8,
+    type_name: []const u8,
+    out: []NominalDeclarationIdentity,
+) (CheckedModuleCacheRunError || std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError || std.Io.Dir.RealPathFileAllocError)!usize {
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+    try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_nominal_platform");
+    try tmp_dir.dir.writeFile(std.testing.io, .{ .sub_path = "app/main.roc", .data = app_source });
+    try tmp_dir.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/.roc_nominal_platform/main.roc",
+        .data =
+        \\platform ""
+        \\    requires {} { main! : {} -> Try({}, {}) }
+        \\    exposes []
+        \\    packages {}
+        \\    provides { "roc_entry": entry }
+        \\
+        \\entry : {} -> Try({}, {})
+        \\entry = |_| main!({})
+        ,
+    });
+    const app_path = try tmp_dir.dir.realPathFileAlloc(std.testing.io, "app/main.roc", allocator);
+    defer allocator.free(app_path);
+
+    const roc_ctx = CoreCtx.os(allocator, allocator, std.testing.io);
+    var coord = try Coordinator.init(
+        allocator,
+        .single_threaded,
+        1,
+        roc_target.RocTarget.detectNative(),
+        try sharedBuiltinModules(),
+        build_options.compiler_compatibility_id,
+        null,
+        roc_ctx,
+    );
+    defer coord.deinit();
+    coord.enable_hosted_transform = true;
+
+    var arena_impl = base.SingleThreadArena.init(allocator);
+    defer arena_impl.deinit();
+
+    try coord.start();
+    try coord.discoverAppFromPath(arena_impl.allocator(), .{ .entry_path = app_path });
+    try coord.coordinatorLoop();
+    try coord.finishCheckedProgram(.none);
+    try std.testing.expect(!coord.hasUserErrors());
+
+    const app = coord.appRootCheckedArtifact();
+    var count: usize = 0;
+    for (app.checked_types.nominal_declarations.items) |declaration| {
+        const name = app.canonical_names.typeNameText(app.checked_types.nominalDeclarationName(declaration));
+        if (!std.mem.eql(u8, name, type_name)) continue;
+        out[count] = .{
+            .module_identity = app.canonical_names.moduleIdentityBytes(declaration.nominal.module).*,
+            .source_decl = declaration.nominal.source_decl,
+        };
+        count += 1;
+    }
+    return count;
+}
+
+test "nominal identity is the declaring module's content identity and statement, never the type name" {
+    const allocator = std.testing.allocator;
+    var color: [1]NominalDeclarationIdentity = undefined;
+    var shade: [1]NominalDeclarationIdentity = undefined;
+
+    // The same declaration, at the same position, under two names.
+    try std.testing.expectEqual(@as(usize, 1), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\Color := [Red, Green]
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _color : Color
+        \\    _color = Red
+        \\    Ok({})
+        \\}
+    , "Color", &color));
+    try std.testing.expectEqual(@as(usize, 1), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\Shade := [Red, Green]
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _color : Shade
+        \\    _color = Red
+        \\    Ok({})
+        \\}
+    , "Shade", &shade));
+
+    // The rename changes identity only through the module's content identity;
+    // the declaring statement is unchanged.
+    try std.testing.expectEqual(color[0].source_decl, shade[0].source_decl);
+    try std.testing.expect(!std.mem.eql(u8, &color[0].module_identity, &shade[0].module_identity));
+
+    // Two block-local declarations sharing one name are distinct by statement.
+    var locals: [2]NominalDeclarationIdentity = undefined;
+    try std.testing.expectEqual(@as(usize, 2), try checkNominalIdentityFixture(allocator,
+        \\app [main!] { pf: platform "./.roc_nominal_platform/main.roc" }
+        \\
+        \\main! : {} -> Try({}, {})
+        \\main! = |_| {
+        \\    _first = {
+        \\        Local := [A]
+        \\        _value : Local
+        \\        _value = A
+        \\        1
+        \\    }
+        \\    _second = {
+        \\        Local := [B]
+        \\        _value : Local
+        \\        _value = B
+        \\        2
+        \\    }
+        \\    Ok({})
+        \\}
+    , "Local", &locals));
+    try std.testing.expect(std.mem.eql(u8, &locals[0].module_identity, &locals[1].module_identity));
+    try std.testing.expect(locals[0].source_decl != locals[1].source_decl);
+}
+
 fn writeErroneousFunctionRequirementFixture(tmp_dir: *std.testing.TmpDir) (std.Io.Dir.CreateDirPathError || std.Io.Dir.WriteFileError)!void {
     try tmp_dir.dir.createDirPath(std.testing.io, "app/.roc_error_platform");
     try tmp_dir.dir.writeFile(std.testing.io, .{

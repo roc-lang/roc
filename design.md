@@ -3546,6 +3546,14 @@ hash in the candidate env, or the self marker when the candidate is the owner
 env); it never spells an owner module's name and looks the text up in another
 env's ident store.
 
+Checked nominal identity (`NominalTypeKey`, and so the checked `MethodOwner`)
+is the declaring module's content identity plus the declaring statement. One
+statement declares exactly one type, and equal content identities imply
+byte-identical source, so the pair determines the type; the declared name is
+display metadata on the nominal payload and is read from a declaration's root
+payload when a consumer renders it. Renaming a type changes its module's source
+and so its content identity, which is the only way a rename changes identity.
+
 The package-qualified display identity of a module (`app.main`, `pf.Stdout`)
 is workspace information. The coordinator owns it on the module's state and
 records it on every env it installs for that module, canonicalized or checked,

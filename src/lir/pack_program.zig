@@ -256,11 +256,12 @@ test "closed export types bind a nominal backing's formal parameters to its argu
     const free_rigid = testTypeId(4);
     const wrap_free = testTypeId(5);
     const declaration_id = testNominalDeclarationId(0);
-    const nominal_key = check.CanonicalNames.NominalTypeKey{ .module = testModuleIdentity(0), .type_name = testTypeName(0) };
+    const nominal_key = check.CanonicalNames.NominalTypeKey{ .module = testModuleIdentity(0), .source_decl = 0 };
     const stored_nominal = checked.StoredNominal{
-        .name = nominal_key.type_name,
+        .name = testTypeName(0),
         .origin_module = nominal_key.module,
         .owner_module = .{},
+        .source_decl = nominal_key.source_decl,
         .is_opaque = false,
         .representation = .{ .local_declaration = declaration_id },
         .args = .{ .start = 1, .len = 1 },

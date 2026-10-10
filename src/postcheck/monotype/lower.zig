@@ -2933,22 +2933,19 @@ const ScopedMethodDispatch = struct {
     owner_tag: u8,
     owner_first: u32,
     owner_second: u32,
-    owner_third: u32,
     method: u32,
 
     fn init(scope: checked.ModuleId, owner: static_dispatch.MethodOwner, method: names.MethodNameId) ScopedMethodDispatch {
-        const owner_fields: struct { tag: u8, first: u32, second: u32, third: u32 } = switch (owner) {
+        const owner_fields: struct { tag: u8, first: u32, second: u32 } = switch (owner) {
             .builtin => |builtin| .{
                 .tag = 1,
                 .first = @backingInt(builtin),
                 .second = 0,
-                .third = 0,
             },
             .nominal => |nominal| .{
                 .tag = 0,
                 .first = @backingInt(nominal.module),
-                .second = @backingInt(nominal.type_name),
-                .third = if (nominal.source_decl) |source_decl| source_decl +| 1 else 0,
+                .second = nominal.source_decl,
             },
         };
         return .{
@@ -2956,7 +2953,6 @@ const ScopedMethodDispatch = struct {
             .owner_tag = owner_fields.tag,
             .owner_first = owner_fields.first,
             .owner_second = owner_fields.second,
-            .owner_third = owner_fields.third,
             .method = @backingInt(method),
         };
     }
@@ -5168,7 +5164,7 @@ const Builder = struct {
             .def = try self.typeDef(
                 view,
                 capability.nominal.module,
-                capability.nominal.type_name,
+                capability.type_name,
                 capability.nominal.source_decl,
             ),
             .ok_tag = try self.tagName(view, capability.ok_tag),
@@ -51592,8 +51588,8 @@ const BodyContext = struct {
                 if (named.builtin_owner) |owner| return .{ .builtin = owner };
                 if (named.kind != .alias) return .{ .nominal = .{
                     .module = named.def.module,
-                    .type_name = named.def.type_name,
-                    .source_decl = named.def.source_decl,
+                    .source_decl = named.def.source_decl orelse
+                        Common.invariant("nominal method owner type had no source declaration"),
                 } };
                 current = (named.backing orelse return null).node;
             },
@@ -66147,8 +66143,8 @@ fn methodOwnerFromType(types: *const Type.Store, ty: Type.TypeId) ?static_dispat
         .builtin => |owner| .{ .builtin = owner },
         .named_type => |def| .{ .nominal = .{
             .module = def.module,
-            .type_name = def.type_name,
-            .source_decl = def.source_decl,
+            .source_decl = def.source_decl orelse
+                Common.invariant("nominal method owner type had no source declaration"),
         } },
     };
 }

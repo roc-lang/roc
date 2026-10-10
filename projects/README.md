@@ -258,10 +258,18 @@ order. The rest are independent.
 2. [small/rceffect-conformance.md](small/rceffect-conformance.md)—
    comptime validity plus a per-op refcount conformance harness for the
    central ownership table (the PR 10023 bug class).
-3. [small/cache-and-identity-residuals.md](small/cache-and-identity-residuals.md)—
-   closes the four small seams left after the identity/cache cures
-   (name-text fallback, hand-enrolled serde contracts, split version
-   hashes, `type_name` in nominal keys).
+
+The cache-and-identity residuals project has landed. Its name-text
+auto-import fallback was already gone (auto-imports carry an explicit
+`AutoImportIdentity`). Every admitted serialization root now declares a
+`RootContract`, and a layout fingerprint exists only for a type that does;
+`compile/cache_versioning.zig` composes every entry's admission hash, and the
+platform-pairing entry gained its own instead of folding fingerprints into its
+key. `type_name` was redundant in `NominalTypeKey` and is removed—identity is
+the module content identity plus declaring statement. Correction: one consumer
+(imported nominal declaration resolution) had been using the name text to tell
+apart embedded declarations of different modules that share a statement index;
+it now compares the declaration's module identity.
 
 ### Chain A—dispatch evidence, consumed everywhere
 
@@ -329,9 +337,8 @@ front-loads leverage and keeps prerequisites satisfied:
 
 1. `small/cross-phase-coverage-parity-tests.md`
 2. `small/rceffect-conformance.md`
-3. `small/cache-and-identity-residuals.md`
-4. `small/pin-deferred-spec-requests.md`
-5. `small/hoist-consumes-dispatch-evidence.md`
-6. `small/hosted-extern-declared-abi.md`
-7. `small/frame-partitioned-checker-state.md`
-8. `small/compact-constant-aggregates.md`
+3. `small/pin-deferred-spec-requests.md`
+4. `small/hoist-consumes-dispatch-evidence.md`
+5. `small/hosted-extern-declared-abi.md`
+6. `small/frame-partitioned-checker-state.md`
+7. `small/compact-constant-aggregates.md`

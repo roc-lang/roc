@@ -3443,7 +3443,6 @@ const TypeTable = struct {
         // locally first so no owner artifact must be loaded.
         const local_key = check.CanonicalNames.NominalTypeKey{
             .module = nominal.origin_module,
-            .type_name = nominal.name,
             .source_decl = nominal.source_decl,
         };
         if (artifact.checked_types.nominalDeclaration(local_key)) |declaration| {
@@ -4770,7 +4769,7 @@ fn collectModuleTypeInfo(
     var main_type_str: []const u8 = try gpa.dupe(u8, "");
     errdefer gpa.free(main_type_str);
     for (artifact.checked_types.nominal_declarations.items) |declaration| {
-        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(declaration.nominal.type_name));
+        const type_name = TypeTable.getTypeDisplayName(artifact.canonical_names.typeNameText(artifact.checked_types.nominalDeclarationName(declaration)));
         if (std.mem.eql(u8, type_name, module_name)) {
             gpa.free(main_type_str);
             main_type_str = try typeStringAlloc(gpa, artifact, declaration.declaration_root);
