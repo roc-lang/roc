@@ -1248,7 +1248,7 @@ fn lowerAppPathToLir(
             .{ .requests = lir_roots },
             .{
                 .diagnostics = if (opts.monotype_diagnostics_out != null) &diagnostics else null,
-                .replay_interface_summaries = opts.replay_interface_summaries,
+                .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
             },
         );
         mono.deinit();
@@ -1307,7 +1307,7 @@ fn lowerAppPathToLir(
         .list_in_place_map = opts.list_in_place_map,
         .proc_debug_names = opts.proc_debug_names,
         .prove_ranges = opts.prove_ranges,
-        .replay_interface_summaries = opts.replay_interface_summaries,
+        .replay_interface_summaries = .{ .value = opts.replay_interface_summaries },
         .lifted_expr_count_out = opts.lifted_expr_count_out,
         .post_check_executor = post_check_executor,
         .solved_lir_parallel_metrics_out = opts.solved_lir_parallel_metrics_out,

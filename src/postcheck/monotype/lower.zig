@@ -304,9 +304,9 @@ pub const Options = struct {
     literal_roots: bool = false,
     /// Whether an interface request may replay a completed summary instead of
     /// expanding its callee's relations. A replay is a faithful stand-in for a
-    /// fresh expansion, so this never changes the lowered program; tests turn
-    /// it off to compare the two.
-    replay_interface_summaries: bool = true,
+    /// fresh expansion, so this never changes the lowered program. Always on
+    /// outside tests, which turn it off to compare the two.
+    replay_interface_summaries: base.TestSwitch(true) = .{},
     target_usize: base.target.TargetUsize = base.target.TargetUsize.native,
     /// Optional executor for isolated procedure roots and ordinary
     /// specialization batches.
@@ -3923,7 +3923,7 @@ const SpecJobWorkerInputs = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
-    replay_interface_summaries: bool,
+    replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: *const DeclaredComptimeRootFunctions,
     hosted_catalog: []const HostedCatalogEntry,
     current_loc: base.SourceLoc,
@@ -4281,7 +4281,7 @@ const Builder = struct {
     static_data_literals: bool,
     comptime_value_reads: bool,
     literal_roots: bool,
-    replay_interface_summaries: bool,
+    replay_interface_summaries: base.TestSwitch(true),
     declared_comptime_root_functions: DeclaredComptimeRootFunctions,
     borrowed_comptime_root_functions: ?*const DeclaredComptimeRootFunctions = null,
     post_check_executor: ?base.post_check_task_executor.Executor,
@@ -25063,7 +25063,7 @@ const BodyContext = struct {
     }
 
     fn findInterfaceSummary(self: *BodyContext, address: InterfaceReplayAddress, evidence: StoredConstFnEvidence, request: InterfaceConstraints.Identity) Allocator.Error!?InterfaceSummary {
-        if (!self.builder.replay_interface_summaries) return null;
+        if (!self.builder.replay_interface_summaries.enabled()) return null;
         const local = self.interfaceSummaryCache().cache;
         if (local.buckets.get(address)) |candidates| for (candidates.items) |index| {
             const entry = local.entries.items[index];
@@ -25355,7 +25355,7 @@ const BodyContext = struct {
                     return null;
                 },
                 .ready => {
-                    if (!replay_state.use_finished_summaries or !self.builder.replay_interface_summaries) continue;
+                    if (!replay_state.use_finished_summaries or !self.builder.replay_interface_summaries.enabled()) continue;
                     cached = entry.summary orelse continue;
                     break;
                 },
