@@ -515,7 +515,6 @@ pub const UseOrder = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -542,8 +541,6 @@ pub const UseOrder = struct {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -920,7 +917,6 @@ pub const UseOrder = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -975,7 +971,6 @@ pub const UseOrder = struct {
                 if (join_stmt == no_local) return true;
                 note(ctx, @backingInt(store.getCFStmt(@fromBackingInt(@intCast(join_stmt))).join.body));
             },
-            .loop_continue, .loop_break => return true,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .expect_err,
@@ -1036,7 +1031,6 @@ pub fn appendStructuralSuccessors(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -1066,8 +1060,6 @@ pub fn appendStructuralSuccessors(
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => {},
     }
 }

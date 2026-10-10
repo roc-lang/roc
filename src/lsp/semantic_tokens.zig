@@ -106,30 +106,12 @@ pub fn extractSemanticTokens(
     source: []const u8,
     info: *const LineOffsets,
 ) Allocator.Error![]SemanticToken {
-    return extractSemanticTokensWithImports(allocator, source, info, null);
-}
-
-/// Extracts semantic tokens with cross-module import context.
-/// When imported_envs is provided, a qualified name that an imported module
-/// exports as a function is a function even where it is not being called.
-pub fn extractSemanticTokensWithImports(
-    allocator: std.mem.Allocator,
-    source: []const u8,
-    info: *const LineOffsets,
-    imported_envs: ?[]*ModuleEnv,
-) Allocator.Error![]SemanticToken {
     var module_env = ModuleEnv.init(allocator, source) catch return error.OutOfMemory;
     defer module_env.deinit();
 
     // Parse the source. Syntax errors are reported through the AST diagnostics.
     const parse_ast = try parse.file(allocator, &module_env.common);
     defer parse_ast.deinit();
-
-    var import_context = ImportContext.init(allocator);
-    defer import_context.deinit();
-    if (imported_envs) |envs| {
-        for (envs) |imp_env| try import_context.addModuleExports(imp_env);
-    }
 
     const token_count = parse_ast.tokens.tokens.len;
     const classes = try allocator.alloc(Class, token_count);
@@ -140,7 +122,6 @@ pub fn extractSemanticTokensWithImports(
         .allocator = allocator,
         .ast = parse_ast,
         .classes = classes,
-        .import_context = &import_context,
     };
     defer classifier.bindings.deinit(allocator);
     try classifier.walkFile();
@@ -755,66 +736,6 @@ fn appendSpan(
     });
 }
 
-/// Context for cross-module import lookups.
-/// Maps module names to their exported symbols.
-const ImportContext = struct {
-    allocator: std.mem.Allocator,
-    /// Maps module name to a set of exported function names
-    module_functions: std.StringHashMap(std.StringHashMap(void)),
-
-    fn init(allocator: std.mem.Allocator) ImportContext {
-        return .{
-            .allocator = allocator,
-            .module_functions = std.StringHashMap(std.StringHashMap(void)).init(allocator),
-        };
-    }
-
-    fn deinit(self: *ImportContext) void {
-        var it = self.module_functions.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
-        self.module_functions.deinit();
-    }
-
-    /// Add exports from a module to the context.
-    fn addModuleExports(self: *ImportContext, module_env: *ModuleEnv) std.mem.Allocator.Error!void {
-        const module_name = module_env.module_name;
-        if (module_name.len == 0) return;
-
-        // Get or create the function set for this module
-        const gop = try self.module_functions.getOrPut(module_name);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = std.StringHashMap(void).init(self.allocator);
-        }
-
-        // Add all exported definitions that are functions
-        const exports = module_env.store.sliceDefs(module_env.exports);
-        for (exports) |def_idx| {
-            const def = module_env.store.getDef(def_idx);
-            // Check if this definition is a function by looking at its expression
-            const expr = module_env.store.getSourceExpr(def.expr);
-            const expr_tag = std.meta.activeTag(expr);
-            const is_function = expr_tag == .e_lambda or expr_tag == .e_closure;
-            if (is_function) {
-                // Get the name from the pattern
-                const pattern = module_env.store.getSourcePattern(def.pattern);
-                if (pattern == .assign) {
-                    const ident_idx = pattern.assign.ident;
-                    const name = module_env.common.idents.getText(ident_idx);
-                    try gop.value_ptr.put(name, {});
-                }
-            }
-        }
-    }
-
-    /// Check if a symbol is an exported function from a given module.
-    fn isModuleFunction(self: *const ImportContext, module_name: []const u8, symbol_name: []const u8) bool {
-        const functions = self.module_functions.get(module_name) orelse return false;
-        return functions.contains(symbol_name);
-    }
-};
-
 /// Walks the parse tree, recording what each name token is.
 ///
 /// Names are resolved lexically: a lambda's parameters, the bindings of a match
@@ -825,7 +746,6 @@ const Classifier = struct {
     allocator: Allocator,
     ast: *const AST,
     classes: []Class,
-    import_context: *const ImportContext,
     bindings: std.ArrayListUnmanaged(Binding) = .empty,
 
     const Binding = struct { name: []const u8, class: Class };
@@ -915,14 +835,7 @@ const Classifier = struct {
                 if (i.alias_tok) |alias| self.set(alias, .type);
                 for (self.ast.store.exposedItemSlice(i.exposes)) |item_idx| {
                     switch (self.ast.store.getExposedItem(item_idx)) {
-                        .lower_ident => |l| {
-                            const module = self.ast.resolve(target.lastToken());
-                            const bare = module[@min(module.len, namePrefixLen(self.ast.tokens.tokens.items(.tag)[target.lastToken()]))..];
-                            if (self.import_context.isModuleFunction(bare, self.ast.resolve(l.ident))) {
-                                try self.bind(l.ident, .function);
-                                if (l.as) |alias| try self.bind(alias, .function);
-                            }
-                        },
+                        .lower_ident => {},
                         .upper_ident => |u| {
                             self.set(u.ident, .type);
                             if (u.as) |alias| self.set(alias, .type);
@@ -1097,10 +1010,7 @@ const Classifier = struct {
                 if (qualifiers.len == 0) {
                     if (self.lookup(name)) |class| self.set(i.token, class);
                 } else {
-                    const module = self.ast.resolve(qualifiers[qualifiers.len - 1]);
-                    const bare_module = module[@min(module.len, namePrefixLen(self.ast.tokens.tokens.items(.tag)[qualifiers[qualifiers.len - 1]]))..];
-                    const is_function = self.import_context.isModuleFunction(bare_module, name);
-                    self.set(i.token, if (is_function) .function else .variable);
+                    self.set(i.token, .variable);
                 }
             },
             .tag => |t| {

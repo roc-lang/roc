@@ -639,7 +639,7 @@ fn writeFailureContext(
             if (reachable.contains(current)) continue;
             reachable.put(current, {}) catch return;
             switch (store.getCFStmt(current)) {
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump, .ret, .crash, .expect_err => {},
+                .runtime_error, .comptime_exhaustiveness_failed, .jump, .ret, .crash, .expect_err => {},
                 .comptime_branch_taken => |s| walk.append(store.allocator, s.next) catch return,
                 .switch_stmt => |s| {
                     const branches = store.getCFSwitchBranches(s.branches);
@@ -672,7 +672,7 @@ fn writeFailureContext(
                     walk.append(store.allocator, j.body) catch return;
                     walk.append(store.allocator, j.remainder) catch return;
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .incref, .decref, .decref_if_initialized, .free => |s| {
                     walk.append(store.allocator, s.next) catch return;
                 },
             }
@@ -902,7 +902,7 @@ fn writeFailureContext(
                 @backingInt(a.hasher),
                 @backingInt(a.next),
             }),
-            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_reuse_box, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
+            inline .assign_literal, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_adapt => |a| context.append(" target={d} next={d}", .{ @backingInt(a.target), @backingInt(a.next) }),
             .store_struct,
             .store_tag,
             .debug,
@@ -911,8 +911,6 @@ fn writeFailureContext(
             .runtime_error,
             .comptime_exhaustiveness_failed,
             .comptime_branch_taken,
-            .loop_continue,
-            .loop_break,
             .crash,
             => {},
         }
@@ -925,12 +923,6 @@ fn appendBoxyDescRef(context: *FailureContext, desc: LIR.BoxyDescRef) void {
         .static => |id| context.append("static:{d}", .{@backingInt(id)}),
         .local => |local| context.append("local:{d}", .{@backingInt(local)}),
         .runtime => |id| context.append("runtime:{d}", .{id}),
-        .dict_method_arg => |projection| context.append("dict-arg:{d}:{d}:{d}:{d}", .{
-            @backingInt(projection.dict),
-            @backingInt(projection.method),
-            projection.method_slot,
-            projection.arg_index,
-        }),
         .dict_method_hidden => |projection| context.append("dict-hidden:{d}:{d}:{d}:{d}:{s}", .{
             @backingInt(projection.dict),
             @backingInt(projection.method),
@@ -990,7 +982,6 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
             (a.payload_desc != null and boxyDescRefReadsLocal(a.payload_desc.?, needle)),
         .assign_boxy_record_update => |a| a.target == needle or a.base == needle or a.fields == needle or
             boxyDescRefReadsLocal(a.base_desc, needle) or boxyDescRefReadsLocal(a.fields_desc, needle),
-        .assign_boxy_reuse_box => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.desc, needle),
         .assign_boxy_unbox => |a| a.target == needle or a.source == needle or boxyDescRefReadsLocal(a.source_desc, needle) or
             (a.target_desc != null and boxyDescRefReadsLocal(a.target_desc.?, needle)),
         .assign_boxy_adapt => |a| a.target == needle or a.source == needle or
@@ -1054,7 +1045,7 @@ fn stmtMentionsLocal(store: *const LirStore, stmt: LIR.CFStmt, needle: LIR.Local
         .boxy_tag_match => |s| s.source == needle or boxyDescRefReadsLocal(s.source_desc, needle),
         .ret => |r| r.value == needle,
         .crash => |s| if (s.msg.localId()) |message| message == needle else false,
-        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .loop_continue, .loop_break => false,
+        .join, .jump, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken => false,
     };
 }
 
@@ -1210,7 +1201,6 @@ fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -1245,8 +1235,6 @@ fn resultBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .jump,
         .ret,
         .crash,
-        .loop_continue,
-        .loop_break,
         => null,
     };
 }
@@ -3983,12 +3971,6 @@ const Certifier = struct {
                     if (assign.fields_desc.localOrNull()) |local| try self.noteProcLocal(local);
                     try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
                 },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.noteProcLocal(assign.target);
-                    try self.noteProcLocal(assign.source);
-                    if (assign.desc.localOrNull()) |local| try self.noteProcLocal(local);
-                    try stack.append(self.allocator, .{ .stmt = assign.next, .region = region });
-                },
                 .assign_boxy_unbox => |assign| {
                     try self.noteProcLocal(assign.target);
                     try self.noteProcLocal(assign.source);
@@ -4185,7 +4167,7 @@ const Certifier = struct {
                 },
                 .ret => |ret_stmt| try self.noteProcLocal(ret_stmt.value),
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| try self.noteProcLocal(message),
-                .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
                 .comptime_branch_taken => |marker| try stack.append(self.allocator, .{ .stmt = marker.next, .region = region }),
             }
         }
@@ -4240,7 +4222,6 @@ const Certifier = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -4311,8 +4292,6 @@ const Certifier = struct {
                 .crash,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         }
@@ -4530,12 +4509,6 @@ const Certifier = struct {
                     self.setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.noteExposedReadLocal(&node_reads, assign.source);
-                    if (assign.desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
-                    self.setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
                 .assign_boxy_unbox => |assign| {
                     try self.noteExposedReadLocal(&node_reads, assign.source);
                     if (assign.source_desc.localOrNull()) |local| try self.noteExposedReadLocal(&node_reads, local);
@@ -4719,7 +4692,7 @@ const Certifier = struct {
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                     try self.noteExposedReadLocal(&node_reads, message);
                 },
-                .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .runtime_error, .comptime_exhaustiveness_failed => {},
                 .comptime_branch_taken => |marker| try appendReadBeforeRebindSuccessor(&graph, &work, node_index, marker.next),
             }
             graph.nodes.items[node_index].read_start = @intCast(graph.read_bits.items.len);
@@ -5897,12 +5870,6 @@ const Certifier = struct {
                     try self.consumeBoxyTransferIntoHolder(&state, assign.fields, .move, target_value);
                     cursor = assign.next;
                 },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.requireBoxyDescRef(&state, assign.desc);
-                    _ = try self.bindBoxyOwnedTarget(&state, assign.target);
-                    _ = try self.requireBoxyTransferSource(&state, assign.source, .move);
-                    cursor = assign.next;
-                },
                 .assign_boxy_unbox => |assign| {
                     try self.requireBoxyDescRef(&state, assign.source_desc);
                     if (assign.target_desc) |desc| try self.requireBoxyDescRef(&state, desc);
@@ -6346,12 +6313,6 @@ const Certifier = struct {
                 .runtime_error, .comptime_exhaustiveness_failed => {
                     try self.checkLeaks(&state);
                     if (segment.walk != 0) try self.propagateTerminal(segment.walk);
-                    return;
-                },
-                .loop_continue, .loop_break => {
-                    // Control returns to an enclosing iteration engine that
-                    // owns the kept values; per-path balance checking resumes
-                    // at the statements that follow the engine.
                     return;
                 },
             }

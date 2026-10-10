@@ -4866,11 +4866,11 @@ pub const InstGraph = struct {
             },
             .tag_union => {
                 if (private_content != .tag_union) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueTagRows(public_node, private_node, pair.row_width, pending);
+                try self.relateOpaqueRows(.tag_union, public_node, private_node, pair.row_width, pending);
             },
             .record => {
                 if (private_content != .record) Common.invariant("opaque interface relation received different type structure");
-                try self.relateOpaqueRecordRows(public_node, private_node, pair.row_width, pending);
+                try self.relateOpaqueRows(.record, public_node, private_node, pair.row_width, pending);
             },
             .empty_tag_union => if (private_content != .empty_tag_union)
                 Common.invariant("opaque interface relation received different type structure"),
@@ -4894,161 +4894,117 @@ pub const InstGraph = struct {
         }
     }
 
-    /// Relate row-polymorphic tag structure without merging a row that carries
-    /// generated-private evidence into its checked-public counterpart. Labels
-    /// present on only one side are ordinary checker-produced row widening;
-    /// their payloads must not themselves introduce private evidence.
-    fn relateOpaqueTagRows(
+    /// Relate row-polymorphic structure of `kind` without merging a row that
+    /// carries generated-private evidence into its checked-public counterpart.
+    /// Labels present on only one side are ordinary checker-produced row
+    /// widening; their payloads must not themselves introduce private evidence.
+    fn relateOpaqueRows(
         self: *InstGraph,
+        comptime kind: RowKind,
         public_node: NodeId,
         private_node: NodeId,
         row_width: RowWidthRelation,
         pending: *std.ArrayList(NodePair),
     ) Allocator.Error!void {
-        const flat_public = try self.flattenTagRow(public_node);
-        const flat_private = try self.flattenTagRow(private_node);
-        var only_public = std.ArrayList(InstTag).empty;
+        const Entry = RowEntry(kind);
+        const row_name = switch (kind) {
+            .tag_union => "tag",
+            .record => "record",
+        };
+        const public_entries, const public_ext = try self.flattenRowOfKind(kind, public_node);
+        const private_entries, const private_ext = try self.flattenRowOfKind(kind, private_node);
+        var only_public = std.ArrayList(Entry).empty;
         defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstTag).empty;
+        var only_private = std.ArrayList(Entry).empty;
         defer only_private.deinit(self.allocator);
 
         // Each private label's position, so every public label pairs in
         // constant time.
-        var private_positions: std.AutoHashMapUnmanaged(names.TagNameId, u32) = .empty;
+        var private_positions: std.AutoHashMapUnmanaged(@FieldType(Entry, "name"), u32) = .empty;
         defer private_positions.deinit(self.allocator);
-        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.tags.len));
-        for (flat_private.tags, 0..) |private_tag, index| {
-            const entry = private_positions.getOrPutAssumeCapacity(private_tag.name);
-            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private tag labels");
+        try private_positions.ensureTotalCapacity(self.allocator, @intCast(private_entries.len));
+        for (private_entries, 0..) |private_entry, index| {
+            const entry = private_positions.getOrPutAssumeCapacity(private_entry.name);
+            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private " ++ row_name ++ " labels");
             entry.value_ptr.* = @intCast(index);
         }
-        const private_shared = try self.allocator.alloc(bool, flat_private.tags.len);
+        const private_shared = try self.allocator.alloc(bool, private_entries.len);
         defer self.allocator.free(private_shared);
         @memset(private_shared, false);
 
-        for (flat_public.tags) |public_tag| {
-            const matched: ?InstTag = if (private_positions.get(public_tag.name)) |position| blk: {
-                private_shared[position] = true;
-                break :blk flat_private.tags[position];
-            } else null;
-            if (matched) |private_tag| {
-                if (public_tag.payloads.len != private_tag.payloads.len) {
-                    Common.invariant("opaque interface relation received one tag at two payload arities");
-                }
-                for (public_tag.payloads, private_tag.payloads) |public_payload, private_payload| {
-                    try self.relateOpaqueChild(public_payload, private_payload, row_width, pending);
-                }
-            } else {
-                try only_public.append(self.allocator, public_tag);
+        for (public_entries) |public_entry| {
+            const position = private_positions.get(public_entry.name) orelse {
+                try only_public.append(self.allocator, public_entry);
+                continue;
+            };
+            private_shared[position] = true;
+            const private_entry = private_entries[position];
+            switch (kind) {
+                .tag_union => {
+                    if (public_entry.payloads.len != private_entry.payloads.len) {
+                        Common.invariant("opaque interface relation received one tag at two payload arities");
+                    }
+                    for (public_entry.payloads, private_entry.payloads) |public_payload, private_payload| {
+                        try self.relateOpaqueChild(public_payload, private_payload, row_width, pending);
+                    }
+                },
+                .record => {
+                    _ = self.unifyFieldKinds(
+                        public_entry.kind,
+                        public_entry.default,
+                        private_entry.kind,
+                        private_entry.default,
+                    );
+                    try self.relateOpaqueChild(
+                        public_entry.value_ty orelse public_entry.ty,
+                        private_entry.value_ty orelse private_entry.ty,
+                        row_width,
+                        pending,
+                    );
+                    try self.relateOpaqueChild(public_entry.ty, private_entry.ty, row_width, pending);
+                },
             }
         }
-        for (flat_private.tags, private_shared) |private_tag, shared| {
-            if (!shared) {
-                for (private_tag.payloads) |payload| {
+        for (private_entries, private_shared) |private_entry, shared| {
+            if (shared) continue;
+            switch (kind) {
+                .tag_union => for (private_entry.payloads) |payload| {
                     if (try self.containsGeneratedPrivate(payload)) {
                         Common.invariant("opaque interface row widening introduced unmatched generated-private tag payload");
                     }
-                }
-                try only_private.append(self.allocator, private_tag);
-            }
-        }
-
-        if (self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .tag_union) or
-            self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .tag_union))
-        {
-            // Not `invariant`: a closed tag union that grows here changes the tag
-            // discriminants the backend emits, so a release build would silently
-            // read the wrong variant instead of hitting undefined behavior.
-            Common.compilerBug("opaque interface relation widened a closed tag union");
-        }
-        _ = try self.joinRowRests(
-            .tag_union,
-            relateOpaqueChild,
-            .right_additions_first,
-            flat_public.ext,
-            flat_private.ext,
-            only_private.items,
-            only_public.items,
-            row_width,
-            pending,
-        );
-    }
-
-    /// Record-row counterpart of `relateOpaqueTagRows`.
-    fn relateOpaqueRecordRows(
-        self: *InstGraph,
-        public_node: NodeId,
-        private_node: NodeId,
-        row_width: RowWidthRelation,
-        pending: *std.ArrayList(NodePair),
-    ) Allocator.Error!void {
-        const flat_public = try self.flattenRecordRow(public_node);
-        const flat_private = try self.flattenRecordRow(private_node);
-        var only_public = std.ArrayList(InstField).empty;
-        defer only_public.deinit(self.allocator);
-        var only_private = std.ArrayList(InstField).empty;
-        defer only_private.deinit(self.allocator);
-
-        // Each private label's position, so every public label pairs in
-        // constant time.
-        var private_positions: std.AutoHashMapUnmanaged(names.RecordFieldNameId, u32) = .empty;
-        defer private_positions.deinit(self.allocator);
-        try private_positions.ensureTotalCapacity(self.allocator, @intCast(flat_private.fields.len));
-        for (flat_private.fields, 0..) |private_field, index| {
-            const entry = private_positions.getOrPutAssumeCapacity(private_field.name);
-            if (entry.found_existing) Common.invariant("opaque interface relation received duplicate private record labels");
-            entry.value_ptr.* = @intCast(index);
-        }
-        const private_shared = try self.allocator.alloc(bool, flat_private.fields.len);
-        defer self.allocator.free(private_shared);
-        @memset(private_shared, false);
-
-        for (flat_public.fields) |public_field| {
-            const matched: ?InstField = if (private_positions.get(public_field.name)) |position| blk: {
-                private_shared[position] = true;
-                break :blk flat_private.fields[position];
-            } else null;
-            if (matched) |private_field| {
-                _ = self.unifyFieldKinds(
-                    public_field.kind,
-                    public_field.default,
-                    private_field.kind,
-                    private_field.default,
-                );
-                try self.relateOpaqueChild(
-                    public_field.value_ty orelse public_field.ty,
-                    private_field.value_ty orelse private_field.ty,
-                    row_width,
-                    pending,
-                );
-                try self.relateOpaqueChild(public_field.ty, private_field.ty, row_width, pending);
-            } else {
-                try only_public.append(self.allocator, public_field);
-            }
-        }
-        for (flat_private.fields, private_shared) |private_field, shared| {
-            if (!shared) {
-                if (try self.containsGeneratedPrivate(private_field.ty)) {
+                },
+                .record => if (try self.containsGeneratedPrivate(private_entry.ty)) {
                     Common.invariant("opaque interface row widening introduced unmatched generated-private record field");
-                }
-                try only_private.append(self.allocator, private_field);
+                },
+            }
+            try only_private.append(self.allocator, private_entry);
+        }
+
+        const public_absorbs_private, const private_absorbs_public = switch (kind) {
+            .tag_union => .{ false, false },
+            .record => .{
+                self.closedRecordAbsorbsFields(public_ext, only_private.items, row_width),
+                self.closedRecordAbsorbsFields(private_ext, only_public.items, row_width),
+            },
+        };
+        if ((!public_absorbs_private and self.rowAdditionConflicts(public_ext, only_private.items.len, kind)) or
+            (!private_absorbs_public and self.rowAdditionConflicts(private_ext, only_public.items.len, kind)))
+        {
+            switch (kind) {
+                // Not `invariant`: a closed tag union that grows here changes the tag
+                // discriminants the backend emits, so a release build would silently
+                // read the wrong variant instead of hitting undefined behavior.
+                .tag_union => Common.compilerBug("opaque interface relation widened a closed tag union"),
+                .record => Common.invariant("opaque interface relation widened a closed record"),
             }
         }
 
-        const public_absorbs_private = self.closedRecordAbsorbsFields(flat_public.ext, only_private.items, row_width);
-        const private_absorbs_public = self.closedRecordAbsorbsFields(flat_private.ext, only_public.items, row_width);
-        if ((!public_absorbs_private and self.rowAdditionConflicts(flat_public.ext, only_private.items.len, .record)) or
-            (!private_absorbs_public and self.rowAdditionConflicts(flat_private.ext, only_public.items.len, .record)))
-        {
-            Common.invariant("opaque interface relation widened a closed record");
-        }
-
         _ = try self.joinRowRests(
-            .record,
+            kind,
             relateOpaqueChild,
             .right_additions_first,
-            flat_public.ext,
-            flat_private.ext,
+            public_ext,
+            private_ext,
             if (public_absorbs_private) &.{} else only_private.items,
             if (private_absorbs_public) &.{} else only_public.items,
             row_width,
@@ -6805,6 +6761,20 @@ pub const InstGraph = struct {
         fields: []InstField,
         ext: NodeId,
     };
+
+    /// The flattened entries and extension of a row of `kind`.
+    fn flattenRowOfKind(self: *InstGraph, comptime kind: RowKind, node: NodeId) Allocator.Error!struct { []RowEntry(kind), NodeId } {
+        switch (kind) {
+            .tag_union => {
+                const flat = try self.flattenTagRow(node);
+                return .{ flat.tags, flat.ext };
+            },
+            .record => {
+                const flat = try self.flattenRecordRow(node);
+                return .{ flat.fields, flat.ext };
+            },
+        }
+    }
 
     /// Chase a tag row's extension chain and rewrite the root to a single
     /// flattened row. The returned extension is unresolved (open), an empty tag

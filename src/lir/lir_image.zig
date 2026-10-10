@@ -63,7 +63,9 @@ pub const MAGIC: u32 = 0x52494c52; // "RLIR" in little-endian bytes.
 /// v41: `proc_ref` is the `LIR.LiteralValue` tag that follows `bytes_literal`.
 /// v42: wide-UTF decoding ops renumber later LowLevel ops.
 /// v43: Boxy type descriptors record rejected `is_eq` and `to_hash` declarations.
-pub const FORMAT_VERSION: u32 = 43;
+/// v44: LowLevel ops, `CFStmt` kinds, Boxy descriptor references, and Boxy
+///      side tables carry only what lowering produces.
+pub const FORMAT_VERSION: u32 = 44;
 const StaticDataImage = @import("lir_image_static_data.zig").Schema(@This());
 
 /// Public `ImageError` declaration.
@@ -151,8 +153,6 @@ pub const ProgramView = struct {
     boxy_tag_variants: []Program.BoxyTagVariant,
     boxy_tag_payload_descs: []Program.BoxyTagPayloadDesc,
     boxy_field_names: []LIR.BoxyNameId,
-    boxy_adapt_steps: []Program.BoxyAdaptStep,
-    boxy_payload_steps: []Program.BoxyPayloadStep,
     boxy_method_slots: []Program.BoxyMethodSlot,
     boxy_worker_procs: []LIR.LirProcSpecId,
     boxy_method_arg_layouts: []layout_mod.Idx,
@@ -256,8 +256,6 @@ pub const LirStoreImage = extern struct {
             .strings_insertable = false,
             .allocator = allocator,
             .next_synthetic_symbol = self.next_synthetic_symbol,
-            .patterns = .empty,
-            .pattern_ids = .empty,
             .source_file_bytes = try guardedListFromRef(u8, "LirStore.source_file_bytes", base_ptr, image_size, self.source_file_bytes),
             .source_file_ends = try guardedListFromRef(u32, "LirStore.source_file_ends", base_ptr, image_size, self.source_file_ends),
             .source_file_qualified_bytes = try guardedListFromRef(u8, "LirStore.source_file_qualified_bytes", base_ptr, image_size, self.source_file_qualified_bytes),
@@ -450,8 +448,6 @@ pub const BoxyTablesImage = extern struct {
     tag_variants: ArrayRef,
     tag_payload_descs: ArrayRef,
     field_names: ArrayRef,
-    adapt_steps: ArrayRef,
-    payload_steps: ArrayRef,
     method_slots: ArrayRef,
     method_arg_layouts: ArrayRef,
     method_hidden_desc_sources: ArrayRef,
@@ -470,8 +466,6 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = lowered.boxy_tag_variants.items,
             .tag_payload_descs = lowered.boxy_tag_payload_descs.items,
             .field_names = lowered.boxy_field_names.items,
-            .adapt_steps = lowered.boxy_adapt_steps.items,
-            .payload_steps = lowered.boxy_payload_steps.items,
             .method_slots = lowered.boxy_method_slots.items,
             .method_arg_layouts = lowered.boxy_method_arg_layouts.items,
             .method_hidden_desc_sources = lowered.boxy_method_hidden_desc_sources.items,
@@ -492,8 +486,6 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = try encoder.ref(tables.tag_variants),
             .tag_payload_descs = try encoder.ref(tables.tag_payload_descs),
             .field_names = try encoder.ref(tables.field_names),
-            .adapt_steps = try encoder.ref(tables.adapt_steps),
-            .payload_steps = try encoder.ref(tables.payload_steps),
             .method_slots = try encoder.ref(tables.method_slots),
             .method_arg_layouts = try encoder.ref(tables.method_arg_layouts),
             .method_hidden_desc_sources = try encoder.ref(tables.method_hidden_desc_sources),
@@ -514,8 +506,6 @@ pub const BoxyTablesImage = extern struct {
             .tag_variants = try sliceFromRef(Program.BoxyTagVariant, base_ptr, image_size, self.tag_variants),
             .tag_payload_descs = try sliceFromRef(Program.BoxyTagPayloadDesc, base_ptr, image_size, self.tag_payload_descs),
             .field_names = try sliceFromRef(LIR.BoxyNameId, base_ptr, image_size, self.field_names),
-            .adapt_steps = try sliceFromRef(Program.BoxyAdaptStep, base_ptr, image_size, self.adapt_steps),
-            .payload_steps = try sliceFromRef(Program.BoxyPayloadStep, base_ptr, image_size, self.payload_steps),
             .method_slots = try sliceFromRef(Program.BoxyMethodSlot, base_ptr, image_size, self.method_slots),
             .method_arg_layouts = try sliceFromRef(layout_mod.Idx, base_ptr, image_size, self.method_arg_layouts),
             .method_hidden_desc_sources = try sliceFromRef(Program.BoxyMethodHiddenDescSource, base_ptr, image_size, self.method_hidden_desc_sources),
@@ -537,8 +527,6 @@ pub const BoxyTablesView = struct {
     tag_variants: []Program.BoxyTagVariant,
     tag_payload_descs: []Program.BoxyTagPayloadDesc,
     field_names: []LIR.BoxyNameId,
-    adapt_steps: []Program.BoxyAdaptStep,
-    payload_steps: []Program.BoxyPayloadStep,
     method_slots: []Program.BoxyMethodSlot,
     method_arg_layouts: []layout_mod.Idx,
     method_hidden_desc_sources: []Program.BoxyMethodHiddenDescSource,
@@ -736,8 +724,6 @@ fn serializeSidecarInto(
     const tag_variants = try cloneStdArrayList(Program.BoxyTagVariant, gpa, lowered.boxy_tag_variants);
     const tag_payload_descs = try cloneStdArrayList(Program.BoxyTagPayloadDesc, gpa, lowered.boxy_tag_payload_descs);
     const field_names = try cloneStdArrayList(LIR.BoxyNameId, gpa, lowered.boxy_field_names);
-    const adapt_steps = try cloneStdArrayList(Program.BoxyAdaptStep, gpa, lowered.boxy_adapt_steps);
-    const payload_steps = try cloneStdArrayList(Program.BoxyPayloadStep, gpa, lowered.boxy_payload_steps);
     const method_slots = try cloneStdArrayList(Program.BoxyMethodSlot, gpa, lowered.boxy_method_slots);
     const method_arg_layouts = try cloneStdArrayList(layout_mod.Idx, gpa, lowered.boxy_method_arg_layouts);
     const method_hidden_desc_sources = try cloneStdArrayList(Program.BoxyMethodHiddenDescSource, gpa, lowered.boxy_method_hidden_desc_sources);
@@ -755,8 +741,6 @@ fn serializeSidecarInto(
         .tag_variants = tag_variants.items,
         .tag_payload_descs = tag_payload_descs.items,
         .field_names = field_names.items,
-        .adapt_steps = adapt_steps.items,
-        .payload_steps = payload_steps.items,
         .method_slots = method_slots.items,
         .method_arg_layouts = method_arg_layouts.items,
         .method_hidden_desc_sources = method_hidden_desc_sources.items,
@@ -811,7 +795,7 @@ comptime {
     // `facts` are transient worker state, not serialized, and default to
     // null or empty in views. The layout store's `digest_cache` is a memo
     // each view starts empty.
-    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 37);
+    std.debug.assert(@typeInfo(LirStore).@"struct".field_names.len == 35);
     std.debug.assert(@typeInfo(layout_mod.Store).@"struct".field_names.len == 16);
     std.debug.assert(@typeInfo(base.StringLiteral.Store).@"struct".field_names.len == 1);
 
@@ -883,24 +867,6 @@ pub const CopiedProgram = struct {
     }
 };
 
-/// Copy a finalized ARC-ready LIR program into an independently allocated
-/// image buffer. Compiler scratch and intermediate IR stay in their ordinary
-/// reclaimable allocator; the image owns only the arrays its mapped consumer
-/// reads. `image_capacity` validates every copied pointer; the returned data
-/// writes a header only after the caller supplies the allocator's final used
-/// size. `contract` states whether the image's bytes outlive the process.
-pub fn copyProgramIntoBuffer(
-    allocator: std.mem.Allocator,
-    base_ptr: [*]align(1) const u8,
-    image_capacity: usize,
-    contract: ByteContract,
-    lowered: *const Program.Result,
-    platform_entrypoints: []const PlatformEntrypoint,
-) CopyError!CopiedProgram {
-    if (lowered.static_data_values.items.len != 0) return error.InvalidLirImage;
-    return copyProgramWithStaticDataIntoBuffer(allocator, base_ptr, image_capacity, contract, lowered, platform_entrypoints, &.{});
-}
-
 /// Retain the offsets of a program already allocated in the image buffer,
 /// copying only its frozen graph. The caller supplies the final used size to
 /// `fillHeader` after these graph allocations complete. The image's tables
@@ -929,8 +895,10 @@ pub fn referenceProgramWithStaticDataInBuffer(
     };
 }
 
-/// Copy a lowered program and its explicit frozen graph into an image buffer
-/// whose bytes follow `contract`.
+/// Copy a finalized ARC-ready LIR program and its explicit frozen graph into
+/// an independently allocated image buffer whose bytes follow `contract`.
+/// `image_capacity` validates every copied pointer; the returned data writes a
+/// header only after the caller supplies the allocator's final used size.
 pub fn copyProgramWithStaticDataIntoBuffer(
     allocator: std.mem.Allocator,
     base_ptr: [*]align(1) const u8,
@@ -1014,8 +982,6 @@ pub fn viewMappedImageWithAllocator(
         .boxy_tag_variants = boxy_tables.tag_variants,
         .boxy_tag_payload_descs = boxy_tables.tag_payload_descs,
         .boxy_field_names = boxy_tables.field_names,
-        .boxy_adapt_steps = boxy_tables.adapt_steps,
-        .boxy_payload_steps = boxy_tables.payload_steps,
         .boxy_method_slots = boxy_tables.method_slots,
         .boxy_worker_procs = try sliceFromRef(LIR.LirProcSpecId, mutable_base, @intCast(header.image_size), header.boxy_worker_procs),
         .boxy_method_arg_layouts = boxy_tables.method_arg_layouts,
@@ -1211,8 +1177,6 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_dict_refs.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_tag_variants.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_tag_payload_descs.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_adapt_steps.len);
-    try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_worker_procs.len);
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_method_arg_layouts.len);
@@ -1220,10 +1184,6 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 0), empty_view.boxy_erased_arg_layouts.len);
 
     try lowered.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
-    try lowered.boxy_payload_steps.append(allocator, .{ .dynamic = .{
-        .op = .copy,
-        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-    } });
     try lowered.boxy_method_arg_layouts.append(allocator, .zst);
     try lowered.boxy_erased_arg_layouts.append(allocator, .u64);
     try lowered.boxy_method_hidden_desc_sources.append(allocator, .{ .slot = 0 });
@@ -1257,23 +1217,16 @@ test "LIR image views empty and populated boxy tables" {
         .shape = .tag_union,
         .nested_descs = .{ .start = 0, .len = 1 },
         .tag_variants = .{ .start = 0, .len = 1 },
-        .copy_plan = .{ .start = 0, .len = 1 },
         .presence_slot_present_discriminant = 1,
         .inspect_method = @fromBackingInt(@intCast(fixtureTableIndex(0))),
     });
     try lowered.boxy_dicts.append(allocator, .{
         .method_slots = .{ .start = 0, .len = 1 },
     });
-    try lowered.boxy_adapt_steps.append(allocator, .{ .copy_bytes = .{
-        .source_offset = 0,
-        .target_offset = 8,
-        .layout_idx = .str,
-    } });
     try lowered.boxy_adapters.append(allocator, .{
         .kind = .host_to_boxy,
         .source_layout = .str,
         .target_layout = .str,
-        .steps = .{ .start = 0, .len = 1 },
         .consumes_source = false,
         .produces_owned_result = true,
     });
@@ -1311,8 +1264,6 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_dict_refs.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_tag_variants.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_tag_payload_descs.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_adapt_steps.len);
-    try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_payload_steps.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_slots.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_worker_procs.len);
     try std.testing.expectEqual(@as(usize, 1), populated_view.boxy_method_arg_layouts.len);
@@ -1325,8 +1276,6 @@ test "LIR image views empty and populated boxy tables" {
     try std.testing.expectEqualStrings("Ok", populated_view.store.getBoxyName(populated_view.boxy_tag_variants[0].name));
     try std.testing.expectEqual(@as(u32, 0), populated_view.boxy_tag_payload_descs[0].payload_index);
     try std.testing.expectEqual(Program.BoxyAdapterKind.host_to_boxy, populated_view.boxy_adapters[0].kind);
-    try std.testing.expectEqual(layout_mod.Idx.str, populated_view.boxy_adapt_steps[0].copy_bytes.layout_idx);
-    try std.testing.expectEqual(Program.BoxyPayloadOp.copy, populated_view.boxy_payload_steps[0].dynamic.op);
     try std.testing.expectEqual(layout_mod.Idx.zst, populated_view.boxy_method_arg_layouts[0]);
     try std.testing.expectEqual(layout_mod.Idx.u64, populated_view.boxy_erased_arg_layouts[0]);
     try std.testing.expectEqual(Program.BoxySpan{ .start = 0, .len = 1 }, populated_view.boxy_method_slots[0].adapter.call_descs);
@@ -1493,7 +1442,7 @@ test "persisted image bytes do not depend on what store memory held before" {
         @memset(buffer, 0);
         var fba = std.heap.FixedBufferAllocator.init(buffer);
         const header = try fba.allocator().create(Header);
-        const copied = try copyProgramIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, .persisted, &lowered, &.{});
+        const copied = try copyProgramWithStaticDataIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, .persisted, &lowered, &.{}, &.{});
         try copied.fillHeader(header, fba.end_index);
 
         // Canonicalization happens in the image's copy; the store keeps its bytes.
@@ -1602,8 +1551,8 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
             .next = ret,
         } };
     }
-    try store.commitProcRewrite(&first);
-    try store.commitProcRewrite(&second);
+    try store.commitProcRewriteWithJoinRelocation(&first, null);
+    try store.commitProcRewriteWithJoinRelocation(&second, null);
     try std.testing.expectEqual(prefix.locals + 2, store.captureBodyPrefix().locals);
     try std.testing.expectEqual(prefix.cf_stmts + 2, store.captureBodyPrefix().cf_stmts);
     for (roots, 0..) |root, index| {
@@ -1617,7 +1566,7 @@ test "LIR image round-trips ordered procedure rewrites with relocated suffixes" 
     defer gpa.free(buffer);
     var fba = std.heap.FixedBufferAllocator.init(buffer);
     const header = try fba.allocator().create(Header);
-    const copied = try copyProgramIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, .mapped, &lowered, &.{});
+    const copied = try copyProgramWithStaticDataIntoBuffer(fba.allocator(), buffer.ptr, buffer.len, .mapped, &lowered, &.{}, &.{});
     try copied.fillHeader(header, fba.end_index);
     var view = try viewMappedImageWithAllocator(header, buffer.ptr, buffer.len, .u64, gpa);
     defer view.deinit();
@@ -1767,7 +1716,7 @@ test "LIR image copies and round-trips every populated store field" {
     lowered.store = store;
     lowered.layouts = layouts;
     lowered.root_procs = .{ .items = root_procs, .capacity = root_procs.len, .pointer_stability = .{} };
-    const copied = try copyProgramIntoBuffer(fba, base_ptr, buffer.len, .mapped, &lowered, entrypoints);
+    const copied = try copyProgramWithStaticDataIntoBuffer(fba, base_ptr, buffer.len, .mapped, &lowered, entrypoints, &.{});
     try copied.fillHeader(header, fba_state.end_index);
 
     // View back over the same buffer.
@@ -1794,13 +1743,6 @@ test "LIR image copies and round-trips every populated store field" {
     try h.expectBytesEq(std.mem.sliceAsBytes(store.boxy_names.interner.ranges.items.items), std.mem.sliceAsBytes(view.store.boxy_names.interner.ranges.items.items));
     try std.testing.expectEqual(@as(usize, 0), view.store.boxy_names.interner.index.len());
     try std.testing.expect(!view.store.boxy_names.interner.supports_inserts);
-
-    // `patterns`/`pattern_ids` carry no data in statement-only LIR (nothing
-    // lowers into the LIR-level pattern lists), so the image intentionally omits
-    // them and `view` restores them empty. Assert that intent explicitly rather
-    // than round-tripping populated data.
-    try std.testing.expectEqual(@as(usize, 0), view.store.patterns.len());
-    try std.testing.expectEqual(@as(usize, 0), view.store.pattern_ids.len());
 
     try std.testing.expectEqual(@as(?*const LirStore, null), view.store.body_coordinator);
     try std.testing.expect(view.store.proc_rewrite == null);

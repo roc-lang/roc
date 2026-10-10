@@ -1103,18 +1103,6 @@ pub fn retainRuntimeRoots(lowered: *LoweredProgram, root_indices: []const u32) A
     try completeComptimeValueSlots(lowered);
 }
 
-/// Turn a runtime consumer's completed compile-time value slots into ordinary
-/// frozen program data.
-///
-/// This consumer lowered only its own roots, so nothing here selects roots. It
-/// reaches each compile-time value through a slot the evaluation has since
-/// filled, and its own roots are the program's roots already.
-pub fn adoptCompletedComptimeValues(lowered: *LoweredProgram) Allocator.Error!void {
-    if (lowered.lir_result.const_roots.items.len != 0 or lowered.lir_result.literal_roots.items.len != 0) checkedPipelineInvariant("runtime consumer lowered a compile-time root");
-    if (lowered.frozen_static_data == null) checkedPipelineInvariant("runtime consumer has no completed compile-time values to adopt");
-    try completeComptimeValueSlots(lowered);
-}
-
 /// Adopt completed values whose frozen graph already participated in this
 /// consumer's reachability pass. This is the separate-target continuation;
 /// rerunning compaction here would repeat work after ARC and cannot discover
@@ -2257,7 +2245,7 @@ test "adopting completed compile-time values drops their initializers and identi
     };
     lowered.frozen_static_data = .{ .allocator = allocator, .exports = exports };
 
-    try adoptCompletedComptimeValues(&lowered);
+    try completeComptimeValueSlots(&lowered);
 
     const slot = lowered.lir_result.static_data_values.items[0];
     try std.testing.expectEqual(@as(?LIR.LirProcSpecId, null), slot.initializer);

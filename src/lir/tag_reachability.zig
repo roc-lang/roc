@@ -233,7 +233,7 @@ const Pass = struct {
                 }
                 return changed;
             },
-            inline .init_uninitialized, .assign_literal, .assign_packed_erased_fn, .assign_list, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
+            inline .init_uninitialized, .assign_literal, .assign_packed_erased_fn, .assign_list, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level => |s| {
                 return self.localInfoMut(s.target).markAll(self.allocator);
             },
             .assign_struct => |s| return try self.localInfoMut(s.target).addConstruction(self.allocator, stmt_id),
@@ -265,8 +265,6 @@ const Pass = struct {
             .crash,
             .runtime_error,
             .comptime_exhaustiveness_failed,
-            .loop_continue,
-            .loop_break,
             => return false,
         }
     }

@@ -140,27 +140,6 @@ pub fn extractDocComment(gpa: Allocator, source: []const u8, def_start_offset: u
     };
 }
 
-/// Extract documentation for all exported definitions in a module.
-///
-/// For type modules, only the main type entry (the one matching the module name)
-/// and its nested children are included. All other top-level definitions are
-/// considered private to the module and are excluded from documentation.
-/// For example, in a `Color.roc` type module, only `Color := ...` and its
-/// methods are documented; any helper functions defined outside the `Color`
-/// type declaration are not visible.
-///
-/// The Builtin module receives additional special handling: the `Builtin` opaque
-/// entry itself is removed, and its children are re-distributed under the
-/// proper parent types (Str, List, Bool, Num, etc.).
-pub fn extractModuleDocs(
-    gpa: Allocator,
-    module_env: *const ModuleEnv,
-    package_name: []const u8,
-    source_path: ?[]const u8,
-) Allocator.Error!DocModel.ModuleDocs {
-    return extractModuleDocsWithOptions(gpa, module_env, package_name, source_path, .{});
-}
-
 /// Controls which source-level entries are included in one module's docs.
 pub const ExtractOptions = struct {
     /// When set, retain only these top-level entries and their children.
@@ -203,7 +182,20 @@ const PublicReferenceRouting = struct {
     checked_artifact: ?*const CheckedArtifact.CheckedModuleArtifact,
 };
 
-/// Extract documentation, optionally restricted to explicit top-level names.
+/// Extract documentation for all exported definitions in a module.
+///
+/// For type modules, only the main type entry (the one matching the module name)
+/// and its nested children are included. All other top-level definitions are
+/// considered private to the module and are excluded from documentation.
+/// For example, in a `Color.roc` type module, only `Color := ...` and its
+/// methods are documented; any helper functions defined outside the `Color`
+/// type declaration are not visible.
+///
+/// The Builtin module receives additional special handling: the `Builtin` opaque
+/// entry itself is removed, and its children are re-distributed under the
+/// proper parent types (Str, List, Bool, Num, etc.).
+///
+/// `options` can restrict the result to explicit top-level names.
 pub fn extractModuleDocsWithOptions(
     gpa: Allocator,
     module_env: *const ModuleEnv,
@@ -810,7 +802,7 @@ test "Builtin docs exclude private sibling types and preserve public nested type
     defer gpa.free(diagnostics);
     try std.testing.expectEqual(0, diagnostics.len);
 
-    var docs = try extractModuleDocs(gpa, &env, "Builtin", null);
+    var docs = try extractModuleDocsWithOptions(gpa, &env, "Builtin", null, .{});
     defer docs.deinit(gpa);
     try std.testing.expectEqual(2, docs.entries.len);
     try std.testing.expectEqualStrings("Public", docs.entries[0].name);

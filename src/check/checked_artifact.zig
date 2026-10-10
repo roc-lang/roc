@@ -2422,7 +2422,7 @@ pub const CheckedTypeScheme = struct {
 
     /// The scheme's generalized vars within its store's `type_id_pool`.
     pub fn generalizedVars(self: CheckedTypeScheme, pool_owner: anytype) []const CheckedTypeId {
-        return pool_owner.typeIdPool()[self.gv_start .. self.gv_start + self.gv_len];
+        return storePool(pool_owner, CheckedTypeId)[self.gv_start .. self.gv_start + self.gv_len];
     }
 };
 
@@ -2588,7 +2588,7 @@ pub const CheckedTag = struct {
 
     /// The tag's argument type ids within its store's `type_id_pool`.
     pub fn argsSlice(self: CheckedTag, pool_owner: anytype) []const CheckedTypeId {
-        return pool_owner.typeIdPool()[self.args_start .. self.args_start + self.args_len];
+        return storePool(pool_owner, CheckedTypeId)[self.args_start .. self.args_start + self.args_len];
     }
 };
 
@@ -3058,76 +3058,45 @@ pub const StoredCheckedTypePayload = union(enum) {
     empty_tag_union,
 };
 
-/// Materialize the public read-form `CheckedTypePayload` from its stored POD
-/// form. `pool_owner` must expose `typeIdPool()`, `recordFieldPool()`,
-/// `constraintPool()`, `tagPool()`, and `varName(OptionalVarNameId)` accessors (both
-/// `CheckedTypeStore` and `CheckedTypeStoreView` do). Slice fields alias the
-/// pools; no allocation.
+/// Materialize a live checked type value of type `Live` (a
+/// `CheckedTypePayload` or one of its parts) from its stored POD form: a
+/// `CheckedTypeRange` becomes the slice of the pool holding its element type,
+/// a variable name id its interned text, and every other field is copied.
+/// `pool_owner` is a `CheckedTypeStore` or `CheckedTypeStoreView`. Slice fields
+/// alias the pools; no allocation.
 ///
 /// ALIASING INVARIANT: the returned slices point INTO the store's pools. On a
 /// frozen/deserialized store the pools are immutable (buffer-backed), so this is
 /// unconditionally safe—the common case (all post-load consumers: lowering, glue).
 /// During CONSTRUCTION the pools are growable `ArrayList`s, so a build-time caller
 /// must not retain a returned slice across a subsequent pool-growing call
-/// (`appendTypeIds`/`commitPayload`/…), which may reallocate and dangle it; snapshot
+/// (`appendPool`/`commitPayload`/…), which may reallocate and dangle it; snapshot
 /// or `dupe` first (as `cloneCheckedTypeRootSubstituting` and `instantiateNominalBacking`
-/// do). The append helpers `assert(!serialized)` to mark that growth boundary.
-fn reconstructCheckedTypePayload(pool_owner: anytype, stored: *const StoredCheckedTypePayload) CheckedTypePayload {
-    return switch (stored.*) {
-        .pending => .pending,
-        .err => .err,
-        .empty_record => .empty_record,
-        .empty_tag_union => .empty_tag_union,
-        .flex => |v| .{ .flex = reconstructCheckedTypeVariable(pool_owner, v) },
-        .rigid => |v| .{ .rigid = reconstructCheckedTypeVariable(pool_owner, v) },
-        .alias => |a| .{ .alias = .{
-            .name = a.name,
-            .origin_module = a.origin_module,
-            .owner_module = a.owner_module,
-            .source_decl = a.source_decl,
-            .builtin_origin = a.builtin_origin,
-            .backing = a.backing,
-            .args = pool_owner.typeIdPool()[a.args.start .. a.args.start + a.args.len],
-        } },
-        .record => |r| .{ .record = .{
-            .fields = pool_owner.recordFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
-            .ext = r.ext,
-        } },
-        .tuple => |range| .{
-            .tuple = pool_owner.typeIdPool()[range.start .. range.start + range.len],
-        },
-        .nominal => |n| .{ .nominal = .{
-            .name = n.name,
-            .origin_module = n.origin_module,
-            .owner_module = n.owner_module,
-            .source_decl = n.source_decl,
-            .builtin = n.builtin,
-            .is_opaque = n.is_opaque,
-            .representation = n.representation,
-            .args = pool_owner.typeIdPool()[n.args.start .. n.args.start + n.args.len],
-            .padding_field_types = pool_owner.typeIdPool()[n.padding_field_types.start .. n.padding_field_types.start + n.padding_field_types.len],
-            .declared_fields = pool_owner.declaredFieldPool()[n.declared_fields.start .. n.declared_fields.start + n.declared_fields.len],
-        } },
-        .function => |f| .{ .function = .{
-            .kind = f.kind,
-            .args = pool_owner.typeIdPool()[f.args.start .. f.args.start + f.args.len],
-            .ret = f.ret,
-        } },
-        .tag_union => |tu| .{ .tag_union = .{
-            .tags = pool_owner.tagPool()[tu.tags.start .. tu.tags.start + tu.tags.len],
-            .ext = tu.ext,
-        } },
-    };
-}
-
-fn reconstructCheckedTypeVariable(pool_owner: anytype, v: StoredTypeVariable) CheckedTypeVariable {
-    return .{
-        .name = pool_owner.varName(v.name),
-        .constraints = pool_owner.constraintPool()[v.constraints.start .. v.constraints.start + v.constraints.len],
-        .numeric_default_phase = v.numeric_default_phase,
-        .row_default = v.row_default,
-        .row_default_discharges_constraints = v.row_default_discharges_constraints,
-    };
+/// do). `appendPool` asserts `!serialized` to mark that growth boundary.
+fn reconstructTypeData(comptime Live: type, pool_owner: anytype, stored: anytype) Live {
+    const Stored = @TypeOf(stored);
+    const info = @typeInfo(Live);
+    if (comptime Stored == Live) {
+        return stored;
+    } else if (comptime Stored == CheckedTypeRange) {
+        return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
+    } else if (comptime Stored == OptionalVarNameId) {
+        return pool_owner.varName(stored);
+    } else if (comptime info == .@"struct") {
+        var live: Live = undefined;
+        inline for (info.@"struct".field_names, info.@"struct".field_types) |name, FieldType| {
+            @field(live, name) = reconstructTypeData(FieldType, pool_owner, @field(stored, name));
+        }
+        return live;
+    } else {
+        inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
+            const name = @tagName(tag);
+            if (stored == @field(std.meta.Tag(Stored), name)) {
+                return @unionInit(Live, name, reconstructTypeData(@FieldType(Live, name), pool_owner, @field(stored, name)));
+            }
+        }
+        unreachable;
+    }
 }
 
 /// Public `CheckedTypeStoreView` declaration.
@@ -3179,36 +3148,6 @@ pub const CheckedTypeStoreView = struct {
     tag_pool: []const CheckedTag = &.{},
     var_names: *const canonical.NameInterner = &empty_view_var_names,
 
-    /// The shared flat pool of `CheckedTypeId`s backing range fields.
-    pub fn typeIdPool(self: CheckedTypeStoreView) []const CheckedTypeId {
-        return self.type_id_pool;
-    }
-
-    /// The shared flat pool of record fields backing record range fields.
-    pub fn recordFieldPool(self: CheckedTypeStoreView) []const CheckedRecordField {
-        return self.record_field_pool;
-    }
-
-    /// The shared flat pool of declared nominal record fields.
-    pub fn declaredFieldPool(self: CheckedTypeStoreView) []const CheckedDeclaredField {
-        return self.declared_field_pool;
-    }
-
-    /// The shared flat pool of declared-order nominal record fields.
-    pub fn nominalRecordFieldPool(self: CheckedTypeStoreView) []const CheckedNominalRecordField {
-        return self.nominal_record_field_pool;
-    }
-
-    /// The shared flat pool of static-dispatch constraints.
-    pub fn constraintPool(self: CheckedTypeStoreView) []const CheckedStaticDispatchConstraint {
-        return self.constraint_pool;
-    }
-
-    /// The shared flat pool of (range-form) tags.
-    pub fn tagPool(self: CheckedTypeStoreView) []const CheckedTag {
-        return self.tag_pool;
-    }
-
     /// Text of a stored variable name id, or null when absent.
     pub fn varName(self: CheckedTypeStoreView, id: OptionalVarNameId) ?[]const u8 {
         const name_id = id.get() orelse return null;
@@ -3227,7 +3166,7 @@ pub const CheckedTypeStoreView = struct {
         if (index >= self.stored_payloads.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructCheckedTypePayload(self, &self.stored_payloads[index]);
+        return reconstructTypeData(CheckedTypePayload, self, self.stored_payloads[index]);
     }
 
     /// Looks up a published checked type root by canonical source type key.
@@ -3816,22 +3755,22 @@ pub const CheckedNominalDeclaration = struct {
 
     /// The declaration's formal args within its store's `type_id_pool`.
     pub fn formalArgs(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
-        return pool_owner.typeIdPool()[self.fa_start .. self.fa_start + self.fa_len];
+        return storePool(pool_owner, CheckedTypeId)[self.fa_start .. self.fa_start + self.fa_len];
     }
 
     /// The declaration's padding field types within its store's `type_id_pool`.
     pub fn paddingFieldTypes(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedTypeId {
-        return pool_owner.typeIdPool()[self.pf_start .. self.pf_start + self.pf_len];
+        return storePool(pool_owner, CheckedTypeId)[self.pf_start .. self.pf_start + self.pf_len];
     }
 
     /// The declaration's source-declared nominal record field order.
     pub fn declaredFields(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedDeclaredField {
-        return pool_owner.declaredFieldPool()[self.df_start .. self.df_start + self.df_len];
+        return storePool(pool_owner, CheckedDeclaredField)[self.df_start .. self.df_start + self.df_len];
     }
 
     /// The declaration's top-level record field sequence.
     pub fn declaredRecordFields(self: CheckedNominalDeclaration, pool_owner: anytype) []const CheckedNominalRecordField {
-        return pool_owner.nominalRecordFieldPool()[self.rf_start .. self.rf_start + self.rf_len];
+        return storePool(pool_owner, CheckedNominalRecordField)[self.rf_start .. self.rf_start + self.rf_len];
     }
 };
 
@@ -4085,36 +4024,6 @@ pub const CheckedTypeStore = struct {
         "synthetic_variable_roots",
     };
 
-    /// The shared flat pool of `CheckedTypeId`s backing range fields.
-    pub fn typeIdPool(self: *const CheckedTypeStore) []const CheckedTypeId {
-        return self.type_id_pool.items;
-    }
-
-    /// The shared flat pool of record fields backing record range fields.
-    pub fn recordFieldPool(self: *const CheckedTypeStore) []const CheckedRecordField {
-        return self.record_field_pool.items;
-    }
-
-    /// The shared flat pool of declared nominal record fields.
-    pub fn declaredFieldPool(self: *const CheckedTypeStore) []const CheckedDeclaredField {
-        return self.declared_field_pool.items;
-    }
-
-    /// The shared flat pool of declared-order nominal record fields.
-    pub fn nominalRecordFieldPool(self: *const CheckedTypeStore) []const CheckedNominalRecordField {
-        return self.nominal_record_field_pool.items;
-    }
-
-    /// The shared flat pool of static-dispatch constraints.
-    pub fn constraintPool(self: *const CheckedTypeStore) []const CheckedStaticDispatchConstraint {
-        return self.constraint_pool.items;
-    }
-
-    /// The shared flat pool of (range-form) tags.
-    pub fn tagPool(self: *const CheckedTypeStore) []const CheckedTag {
-        return self.tag_pool.items;
-    }
-
     /// Text of a stored variable name id, or null when absent.
     pub fn varName(self: *const CheckedTypeStore, id: OptionalVarNameId) ?[]const u8 {
         const name_id = id.get() orelse return null;
@@ -4133,46 +4042,19 @@ pub const CheckedTypeStore = struct {
         if (index >= self.payloads.items.len) {
             checkedArtifactInvariant("checked type payload id is out of range", .{});
         }
-        return reconstructCheckedTypePayload(self, &self.payloads.items[index]);
+        return reconstructTypeData(CheckedTypePayload, self, self.payloads.items[index]);
     }
 
-    /// Append `ids` to `type_id_pool`, returning their range.
-    fn appendTypeIds(self: *CheckedTypeStore, allocator: Allocator, ids: []const CheckedTypeId) Allocator.Error!CheckedTypeRange {
+    /// Append `items` to the pool holding `T`, returning their range.
+    fn appendPool(self: *CheckedTypeStore, allocator: Allocator, comptime T: type, items: []const T) Allocator.Error!CheckedTypeRange {
         // Pools only grow during construction. A frozen (deserialized) store's pools
         // alias buffer memory and must never be appended to—this catches such a bug,
         // and is the boundary where build-time aliasing slices could be invalidated
         // (see the `argsSlice`/`payload`/`formalArgs` aliasing-invariant docs).
         std.debug.assert(!self.serialized);
-        if (ids.len != 0) try self.ownColumn(allocator, .type_id_pool);
-        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedTypeId, &self.type_id_pool, allocator, ids);
-    }
-
-    /// Append `fields` to `record_field_pool`, returning their range.
-    fn appendRecordFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedRecordField) Allocator.Error!CheckedTypeRange {
-        std.debug.assert(!self.serialized);
-        if (fields.len != 0) try self.ownColumn(allocator, .record_field_pool);
-        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedRecordField, &self.record_field_pool, allocator, fields);
-    }
-
-    /// Append `fields` to `declared_field_pool`, returning their range.
-    fn appendDeclaredFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedDeclaredField) Allocator.Error!CheckedTypeRange {
-        std.debug.assert(!self.serialized);
-        if (fields.len != 0) try self.ownColumn(allocator, .declared_field_pool);
-        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedDeclaredField, &self.declared_field_pool, allocator, fields);
-    }
-
-    /// Append `fields` to `nominal_record_field_pool`, returning their range.
-    fn appendNominalRecordFields(self: *CheckedTypeStore, allocator: Allocator, fields: []const CheckedNominalRecordField) Allocator.Error!CheckedTypeRange {
-        std.debug.assert(!self.serialized);
-        if (fields.len != 0) try self.ownColumn(allocator, .nominal_record_field_pool);
-        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedNominalRecordField, &self.nominal_record_field_pool, allocator, fields);
-    }
-
-    /// Append `constraints` to `constraint_pool`, returning their range.
-    fn appendConstraints(self: *CheckedTypeStore, allocator: Allocator, constraints: []const CheckedStaticDispatchConstraint) Allocator.Error!CheckedTypeRange {
-        std.debug.assert(!self.serialized);
-        if (constraints.len != 0) try self.ownColumn(allocator, .constraint_pool);
-        return artifact_serialize.appendSpan(CheckedTypeRange, CheckedStaticDispatchConstraint, &self.constraint_pool, allocator, constraints);
+        const field = comptime poolField(CheckedTypeStore, T);
+        if (items.len != 0) try self.ownColumn(allocator, @field(BorrowedColumn, field));
+        return artifact_serialize.appendSpan(CheckedTypeRange, T, &@field(self, field), allocator, items);
     }
 
     /// Intern a variable name, returning its optional interner id (`.none`
@@ -4186,108 +4068,58 @@ pub const CheckedTypeStore = struct {
         return .some(@fromBackingInt(@intCast(try self.var_names.insert(allocator, text))));
     }
 
-    /// Convert a build-form variable into stored form, copying its constraints
-    /// into the pool and interning its name. The build constraints/name are
-    /// freed only once both copies succeeded, so a failing commit leaves the
-    /// build intact for its owner to release exactly once.
-    fn commitVariable(self: *CheckedTypeStore, allocator: Allocator, variable: CheckedTypeVariable) Allocator.Error!StoredTypeVariable {
-        const name_id = try self.internVarName(allocator, variable.name);
-        const constraints = try self.appendConstraints(allocator, variable.constraints);
-        if (variable.name) |name| allocator.free(name);
-        if (variable.constraints.len != 0) allocator.free(variable.constraints);
-        return .{
-            .name = name_id,
-            .constraints = constraints,
-            .numeric_default_phase = variable.numeric_default_phase,
-            .row_default = variable.row_default,
-            .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-        };
-    }
-
-    /// Convert a build-form payload into stored form, copying all slices into the
-    /// store's pools and freeing the build memory. Takes ownership of `build`.
     /// Copy a build payload into the store's pools. The build's own slices
     /// are released only once every copy succeeded, so a failing commit leaves
     /// the build intact for its owner to release exactly once.
     fn commitPayload(self: *CheckedTypeStore, allocator: Allocator, build: CheckedTypePayloadBuild) Allocator.Error!StoredCheckedTypePayload {
-        return switch (build) {
-            .pending => .pending,
-            .err => .err,
-            .empty_record => .empty_record,
-            .empty_tag_union => .empty_tag_union,
-            .flex => |v| .{ .flex = try self.commitVariable(allocator, v) },
-            .rigid => |v| .{ .rigid = try self.commitVariable(allocator, v) },
-            .alias => |a| blk: {
-                const args = try self.appendTypeIds(allocator, a.args);
-                if (a.args.len != 0) allocator.free(a.args);
-                break :blk .{ .alias = .{
-                    .name = a.name,
-                    .origin_module = a.origin_module,
-                    .owner_module = a.owner_module,
-                    .source_decl = a.source_decl,
-                    .builtin_origin = a.builtin_origin,
-                    .backing = a.backing,
-                    .args = args,
-                } };
-            },
-            .record => |r| blk: {
-                const fields = try self.appendRecordFields(allocator, r.fields);
-                if (r.fields.len != 0) allocator.free(r.fields);
-                break :blk .{ .record = .{ .fields = fields, .ext = r.ext } };
-            },
-            .tuple => |elems| blk: {
-                const range = try self.appendTypeIds(allocator, elems);
-                if (elems.len != 0) allocator.free(elems);
-                break :blk .{ .tuple = range };
-            },
-            .nominal => |n| blk: {
-                const args = try self.appendTypeIds(allocator, n.args);
-                const padding_field_types = try self.appendTypeIds(allocator, n.padding_field_types);
-                const declared_fields = try self.appendDeclaredFields(allocator, n.declared_fields);
-                if (n.args.len != 0) allocator.free(n.args);
-                if (n.padding_field_types.len != 0) allocator.free(n.padding_field_types);
-                if (n.declared_fields.len != 0) allocator.free(n.declared_fields);
-                break :blk .{ .nominal = .{
-                    .name = n.name,
-                    .origin_module = n.origin_module,
-                    .owner_module = n.owner_module,
-                    .source_decl = n.source_decl,
-                    .builtin = n.builtin,
-                    .is_opaque = n.is_opaque,
-                    .representation = n.representation,
-                    .args = args,
-                    .padding_field_types = padding_field_types,
-                    .declared_fields = declared_fields,
-                } };
-            },
-            .function => |f| blk: {
-                const args = try self.appendTypeIds(allocator, f.args);
-                if (f.args.len != 0) allocator.free(f.args);
-                break :blk .{ .function = .{
-                    .kind = f.kind,
-                    .args = args,
-                    .ret = f.ret,
-                } };
-            },
-            .tag_union => |tu| blk: {
-                const tags_start: u32 = @intCast(self.tag_pool.items.len);
-                if (tu.tags.len != 0) try self.ownColumn(allocator, .tag_pool);
-                try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
-                for (tu.tags) |tag| {
-                    const args = try self.appendTypeIds(allocator, tag.args);
-                    self.tag_pool.appendAssumeCapacity(.{
-                        .name = tag.name,
-                        .args_start = args.start,
-                        .args_len = args.len,
-                    });
+        const stored: StoredCheckedTypePayload = if (build == .tag_union) blk: {
+            const tu = build.tag_union;
+            const tags_start: u32 = @intCast(self.tag_pool.items.len);
+            if (tu.tags.len != 0) try self.ownColumn(allocator, .tag_pool);
+            try self.tag_pool.ensureUnusedCapacity(allocator, tu.tags.len);
+            for (tu.tags) |tag| {
+                const args = try self.appendPool(allocator, CheckedTypeId, tag.args);
+                self.tag_pool.appendAssumeCapacity(.{
+                    .name = tag.name,
+                    .args_start = args.start,
+                    .args_len = args.len,
+                });
+            }
+            break :blk .{ .tag_union = .{
+                .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
+                .ext = tu.ext,
+            } };
+        } else try self.commitTypeData(allocator, StoredCheckedTypePayload, build);
+        freeOwned(allocator, build);
+        return stored;
+    }
+
+    /// The stored form of a build-form type value: each slice is copied into
+    /// the pool holding its element type and each variable name is interned.
+    /// The build stays owned by the caller.
+    fn commitTypeData(self: *CheckedTypeStore, allocator: Allocator, comptime Stored: type, build: anytype) Allocator.Error!Stored {
+        const Build = @TypeOf(build);
+        if (comptime Stored == Build) {
+            return build;
+        } else if (comptime Stored == CheckedTypeRange) {
+            return self.appendPool(allocator, @typeInfo(Build).pointer.child, build);
+        } else if (comptime Stored == OptionalVarNameId) {
+            return self.internVarName(allocator, build);
+        } else if (comptime @typeInfo(Stored) == .@"struct") {
+            var stored: Stored = undefined;
+            inline for (@typeInfo(Stored).@"struct".field_names) |name| {
+                @field(stored, name) = try self.commitTypeData(allocator, @FieldType(Stored, name), @field(build, name));
+            }
+            return stored;
+        } else {
+            inline for (comptime std.enums.values(std.meta.Tag(Build))) |tag| {
+                const name = @tagName(tag);
+                if (comptime !artifact_serialize.comptimeStrEq(name, "tag_union")) {
+                    if (build == tag) return @unionInit(Stored, name, try self.commitTypeData(allocator, @FieldType(Stored, name), @field(build, name)));
                 }
-                deinitCheckedTagsBuild(allocator, tu.tags);
-                break :blk .{ .tag_union = .{
-                    .tags = .{ .start = tags_start, .len = @intCast(tu.tags.len) },
-                    .ext = tu.ext,
-                } };
-            },
-        };
+            }
+            unreachable;
+        }
     }
 
     /// Set a stored nominal payload's representation in place.
@@ -4786,7 +4618,7 @@ pub const CheckedTypeStore = struct {
         try self.roots.ensureUnusedCapacity(allocator, 1);
         try self.ownColumn(allocator, .payloads);
         try self.payloads.ensureUnusedCapacity(allocator, 1);
-        const args_range = try self.appendTypeIds(allocator, args);
+        const args_range = try self.appendPool(allocator, CheckedTypeId, args);
 
         const root = CheckedTypeRoot{
             .id = id,
@@ -5348,58 +5180,24 @@ pub const CheckedTypeStore = struct {
         allocator: Allocator,
         stored: StoredCheckedTypePayload,
     ) Allocator.Error!CheckedTypePayloadBuild {
-        const read = reconstructCheckedTypePayload(self, &stored);
-        return switch (read) {
-            .pending => .pending,
-            .err => .err,
-            .empty_record => .empty_record,
-            .empty_tag_union => .empty_tag_union,
-            .flex => |v| .{ .flex = try snapshotCheckedTypeVariable(allocator, v) },
-            .rigid => |v| .{ .rigid = try snapshotCheckedTypeVariable(allocator, v) },
-            .alias => |a| .{ .alias = .{
-                .name = a.name,
-                .origin_module = a.origin_module,
-                .owner_module = a.owner_module,
-                .source_decl = a.source_decl,
-                .builtin_origin = a.builtin_origin,
-                .backing = a.backing,
-                .args = try allocator.dupe(CheckedTypeId, a.args),
-            } },
-            .record => |r| .{ .record = .{
-                .fields = try allocator.dupe(CheckedRecordField, r.fields),
-                .ext = r.ext,
-            } },
-            .tuple => |elems| .{ .tuple = try allocator.dupe(CheckedTypeId, elems) },
-            .nominal => |n| .{ .nominal = .{
-                .name = n.name,
-                .origin_module = n.origin_module,
-                .owner_module = n.owner_module,
-                .source_decl = n.source_decl,
-                .builtin = n.builtin,
-                .is_opaque = n.is_opaque,
-                .representation = n.representation,
-                .args = try allocator.dupe(CheckedTypeId, n.args),
-                .padding_field_types = try allocator.dupe(CheckedTypeId, n.padding_field_types),
-                .declared_fields = try allocator.dupe(CheckedDeclaredField, n.declared_fields),
-            } },
-            .function => |f| .{ .function = .{
-                .kind = f.kind,
-                .args = try allocator.dupe(CheckedTypeId, f.args),
-                .ret = f.ret,
-            } },
-            .tag_union => |tu| blk: {
-                const tags = try allocator.alloc(CheckedTagBuild, tu.tags.len);
-                for (tags) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-                errdefer {
-                    for (tags) |tag| allocator.free(tag.args);
-                    allocator.free(tags);
+        const read = reconstructTypeData(CheckedTypePayload, self, stored);
+        if (read != .tag_union) {
+            inline for (comptime std.enums.values(std.meta.Tag(CheckedTypePayload))) |tag| {
+                const name = @tagName(tag);
+                if (comptime !artifact_serialize.comptimeStrEq(name, "tag_union")) {
+                    if (read == tag) return @unionInit(CheckedTypePayloadBuild, name, try dupeOwned(allocator, @field(read, name)));
                 }
-                for (tu.tags, 0..) |tag, i| {
-                    tags[i] = .{ .name = tag.name, .args = try allocator.dupe(CheckedTypeId, tag.argsSlice(self)) };
-                }
-                break :blk .{ .tag_union = .{ .tags = tags, .ext = tu.ext } };
-            },
-        };
+            }
+            unreachable;
+        }
+        const tu = read.tag_union;
+        const tags = try allocator.alloc(CheckedTagBuild, tu.tags.len);
+        for (tags) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
+        errdefer freeOwned(allocator, tags);
+        for (tu.tags, 0..) |tag, i| {
+            tags[i] = .{ .name = tag.name, .args = try allocator.dupe(CheckedTypeId, tag.argsSlice(self)) };
+        }
+        return .{ .tag_union = .{ .tags = tags, .ext = tu.ext } };
     }
 
     fn checkedTypeSliceContainsIdentityVariables(
@@ -5544,7 +5342,7 @@ fn cloneCheckedTypeBuildPayload(
             const tags: []const CheckedTagBuild = if (tag_union.tags.len == 0) &.{} else tags_blk: {
                 const out = try allocator.alloc(CheckedTagBuild, tag_union.tags.len);
                 for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-                errdefer deinitCheckedTagsBuild(allocator, out);
+                errdefer freeOwned(allocator, out);
                 for (tag_union.tags, out) |tag, *slot| {
                     slot.name = tag.name;
                     slot.args = try cloned.typeIds(allocator, tag.args.len);
@@ -5606,53 +5404,10 @@ const CheckedTypeIdentityScan = struct {
     }
 };
 
-fn snapshotCheckedTypeVariable(allocator: Allocator, variable: CheckedTypeVariable) Allocator.Error!CheckedTypeVariable {
-    const name = if (variable.name) |name_text| try allocator.dupe(u8, name_text) else null;
-    errdefer if (name) |owned| allocator.free(owned);
-    const constraints = try allocator.dupe(CheckedStaticDispatchConstraint, variable.constraints);
-    return .{
-        .name = name,
-        .constraints = constraints,
-        .numeric_default_phase = variable.numeric_default_phase,
-        .row_default = variable.row_default,
-        .row_default_discharges_constraints = variable.row_default_discharges_constraints,
-    };
-}
-
-fn deinitCheckedTagsBuild(allocator: Allocator, tags: []const CheckedTagBuild) void {
-    for (tags) |tag| allocator.free(tag.args);
-    allocator.free(tags);
-}
-
 /// Free a build-form payload's individually-allocated slices/name.
 fn deinitCheckedTypePayloadBuild(allocator: Allocator, payload: *CheckedTypePayloadBuild) void {
-    freeCheckedTypePayloadBuild(allocator, payload);
+    freeOwned(allocator, payload.*);
     payload.* = .pending;
-}
-
-/// Free what a payload build owns, for a payload that is discarded at once.
-fn freeCheckedTypePayloadBuild(allocator: Allocator, payload: *const CheckedTypePayloadBuild) void {
-    switch (payload.*) {
-        .pending,
-        .err,
-        .empty_record,
-        .empty_tag_union,
-        => {},
-        inline .flex, .rigid => |flex| {
-            if (flex.name) |name| allocator.free(name);
-            allocator.free(flex.constraints);
-        },
-        .alias => |alias| allocator.free(alias.args),
-        .record => |record| allocator.free(record.fields),
-        .tuple => |elems| allocator.free(elems),
-        .nominal => |nominal| {
-            allocator.free(nominal.args);
-            allocator.free(nominal.padding_field_types);
-            allocator.free(nominal.declared_fields);
-        },
-        .function => |function| allocator.free(function.args),
-        .tag_union => |tag_union| deinitCheckedTagsBuild(allocator, tag_union.tags),
-    }
 }
 
 const LocalTypeDeclarationIndex = struct {
@@ -6217,7 +5972,7 @@ const DeclarationAnnoWalk = struct {
                 const tags: []const CheckedTagBuild = if (tag_annos.len == 0) &.{} else blk: {
                     const out = try gpa.alloc(CheckedTagBuild, tag_annos.len);
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-                    errdefer deinitCheckedTagsBuild(gpa, out);
+                    errdefer freeOwned(gpa, out);
                     for (tag_annos, out) |tag_anno_idx, *slot| {
                         const tag = module_env.store.getTypeAnno(tag_anno_idx).tag;
                         slot.name = @fromBackingInt(@intCast(results.take()));
@@ -6864,10 +6619,10 @@ fn appendCheckedNominalDeclarationFromPayload(
     defer allocator.free(padding_copy);
     const declared_copy = try allocator.dupe(CheckedDeclaredField, nominal.declared_fields);
     defer allocator.free(declared_copy);
-    const fa = try store.appendTypeIds(allocator, args_copy);
-    const pf = try store.appendTypeIds(allocator, padding_copy);
-    const df = try store.appendDeclaredFields(allocator, declared_copy);
-    const rf = try store.appendNominalRecordFields(allocator, declared_record_fields);
+    const fa = try store.appendPool(allocator, CheckedTypeId, args_copy);
+    const pf = try store.appendPool(allocator, CheckedTypeId, padding_copy);
+    const df = try store.appendPool(allocator, CheckedDeclaredField, declared_copy);
+    const rf = try store.appendPool(allocator, CheckedNominalRecordField, declared_record_fields);
     const declaration_id: CheckedNominalDeclarationId = @fromBackingInt(@intCast(@as(u32, @intCast(declarations.items.len))));
     try store.ownColumn(allocator, .nominal_declarations);
     try declarations.append(allocator, .{
@@ -8267,7 +8022,7 @@ const CheckedTypePublisher = struct {
             },
             .range => |*task| self.allocator.free(task.out),
             .fields => |*task| self.allocator.free(task.out),
-            .tags => |*task| deinitCheckedTagsBuild(self.allocator, task.out),
+            .tags => |*task| freeOwned(self.allocator, task.out),
             .constraints => |*task| self.allocator.free(task.out),
         }
     }
@@ -8425,7 +8180,7 @@ const CheckedTypePublisher = struct {
         errdefer _ = active.remove(resolved_var);
         const fingerprint = checkedTypePayloadStructuralFingerprint(.source, build_payload.*);
         if (store.structuralRootForPayload(.source, fingerprint, build_payload.*)) |existing| {
-            freeCheckedTypePayloadBuild(self.allocator, build_payload);
+            freeOwned(self.allocator, build_payload.*);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
             source_root.value_ptr.* = existing;
@@ -8435,7 +8190,7 @@ const CheckedTypePublisher = struct {
         const key_info = try active.scratch.?.key_writer.fromVar(resolved_var);
         std.debug.assert(!key_info.contains_identity_variables);
         if (store.rootForKey(key_info.key)) |existing| {
-            freeCheckedTypePayloadBuild(self.allocator, build_payload);
+            freeOwned(self.allocator, build_payload.*);
             payload_owned = false;
             applyCheckedTypeRowDefault(store, existing, row_default);
             source_root.value_ptr.* = existing;
@@ -8921,13 +8676,7 @@ fn checkedNamedTypeOwnerForSource(
     const module_env = module.moduleEnvConst();
     if (origin_module == module_env.selfModuleIdentity()) return imports.current_owner;
 
-    return checkedImportedOwnerForOriginHash(imports, module_env.moduleIdentityHash(origin_module));
-}
-
-fn checkedImportedOwnerForOriginHash(
-    imports: CheckedImportViews,
-    origin_hash: *const [32]u8,
-) ModuleId {
+    const origin_hash = module_env.moduleIdentityHash(origin_module);
     const view = importedViewForOriginHash(imports.direct, imports.available, origin_hash) orelse checkedArtifactInvariant(
         "checked named type source origin had no available checked owner artifact {any}",
         .{origin_hash.*},
@@ -8945,38 +8694,21 @@ fn categorizeBuiltinNominal(module: TypedCIR.Module, imports: CheckedImportViews
     if (module_env.module_role == .builtin and moduleEnvIdentityMatches(module_env, origin_hash)) {
         return checkedBuiltinNominalForSourceDecl(module_env, source_decl);
     }
-    if (checkedBuiltinNominalForImportedSource(imports.direct, origin_hash, source_decl)) |builtin_nominal| return builtin_nominal;
-    if (checkedBuiltinNominalForAvailableSource(imports.available, origin_hash, source_decl)) |builtin_nominal| return builtin_nominal;
-    return null;
+    if (checkedBuiltinNominalForSource(PublishImportArtifact, imports.direct, origin_hash, source_decl)) |builtin_nominal| return builtin_nominal;
+    return checkedBuiltinNominalForSource(ImportedModuleView, imports.available, origin_hash, source_decl);
 }
 
-fn checkedBuiltinNominalForImportedSource(
-    imports: []const PublishImportArtifact,
+/// The one builtin nominal that `items` (import entries or bare views) resolve
+/// the source declaration to, if any.
+fn checkedBuiltinNominalForSource(
+    comptime Item: type,
+    items: []const Item,
     origin_hash: *const [32]u8,
     source_decl: u32,
 ) ?CheckedBuiltinNominal {
     var found: ?CheckedBuiltinNominal = null;
-    for (imports) |import| {
-        if (checkedBuiltinNominalForView(import.view, origin_hash, source_decl)) |builtin_nominal| {
-            if (found) |existing| {
-                if (existing != builtin_nominal) {
-                    checkedArtifactInvariant("checked builtin nominal source resolved to multiple builtin declarations", .{});
-                }
-            } else {
-                found = builtin_nominal;
-            }
-        }
-    }
-    return found;
-}
-
-fn checkedBuiltinNominalForAvailableSource(
-    views: []const ImportedModuleView,
-    origin_hash: *const [32]u8,
-    source_decl: u32,
-) ?CheckedBuiltinNominal {
-    var found: ?CheckedBuiltinNominal = null;
-    for (views) |view| {
+    for (items) |item| {
+        const view: ImportedModuleView = if (Item == PublishImportArtifact) item.view else item;
         if (checkedBuiltinNominalForView(view, origin_hash, source_decl)) |builtin_nominal| {
             if (found) |existing| {
                 if (existing != builtin_nominal) {
@@ -10406,7 +10138,7 @@ pub const CheckedMatchBranchPattern = struct {
     /// The branch pattern's alternative binder remaps within its store's
     /// `binder_remap_pool`.
     pub fn binderRemapsSlice(self: CheckedMatchBranchPattern, pool_owner: anytype) []const CheckedAlternativeBinderRemap {
-        return pool_owner.binderRemapPool()[self.bn_start .. self.bn_start + self.bn_len];
+        return storePool(pool_owner, CheckedAlternativeBinderRemap)[self.bn_start .. self.bn_start + self.bn_len];
     }
 };
 
@@ -10428,7 +10160,7 @@ pub const CheckedMatchBranch = struct {
 
     /// The match branch's patterns within its store's `match_branch_pattern_pool`.
     pub fn patternsSlice(self: CheckedMatchBranch, pool_owner: anytype) []const CheckedMatchBranchPattern {
-        return pool_owner.matchBranchPatternPool()[self.pt_start .. self.pt_start + self.pt_len];
+        return storePool(pool_owner, CheckedMatchBranchPattern)[self.pt_start .. self.pt_start + self.pt_len];
     }
 };
 
@@ -10870,218 +10602,190 @@ pub const CheckedReturnContext = enum {
 /// `(start, len)` range into one of `CheckedBodyStore`'s flat side pools.
 pub const CheckedBodyRange = extern struct { start: u32 = 0, len: u32 = 0 };
 
-/// POD form of `CheckedInterpolation`: `segments` and `values` are ranges into
-/// `expr_id_pool`.
-pub const StoredCheckedInterpolation = struct {
-    plan: ?StaticDispatchPlanId,
-    segments: CheckedBodyRange = .{},
-    values: CheckedBodyRange = .{},
-    assembler_ty: CheckedTypeId,
-};
+/// The stored, relocation-invariant (POD) form of a live checked body type:
+/// each slice becomes a `CheckedBodyRange` into the `CheckedBodyStore` pool
+/// holding its element type (`poolField`), recursively through struct and
+/// union payloads. A slice-free type is stored as itself.
+fn StoredBodyData(comptime Live: type) type {
+    comptime {
+        @setEvalBranchQuota(100_000);
+        if (!ownsSlice(Live)) return Live;
+        const info = @typeInfo(Live);
+        if (info == .pointer) return CheckedBodyRange;
+        if (info == .optional) @compileError("checked body data holds an optional slice: " ++ @typeName(Live));
+        if (info == .@"struct") {
+            const fields = info.@"struct";
+            var stored_types: [fields.field_types.len]type = undefined;
+            var attrs: [fields.field_types.len]std.builtin.Type.Struct.FieldAttributes = undefined;
+            for (fields.field_types, fields.field_attrs, 0..) |T, attr, i| {
+                stored_types[i] = StoredBodyData(T);
+                attrs[i] = attr;
+                if (stored_types[i] != T and attr.default_value_ptr != null) attrs[i].default_value_ptr = &CheckedBodyRange{};
+            }
+            const final_types = stored_types;
+            const final_attrs = attrs;
+            return @Struct(.auto, null, fields.field_names, &final_types, &final_attrs);
+        }
+        const variants = info.@"union";
+        var stored_types: [variants.field_types.len]type = undefined;
+        for (variants.field_types, 0..) |T, i| stored_types[i] = StoredBodyData(T);
+        const final_types = stored_types;
+        return @Union(.auto, variants.tag_type, variants.field_names, &final_types, variants.field_attrs);
+    }
+}
 
-/// Internal, relocation-invariant (POD) form of `CheckedExprData`: variant slices
-/// are replaced by ranges into the store's flat pools. The public `CheckedExprData`
-/// (with slices) is reconstructed on demand by `expr`/`reconstructCheckedExprData`.
-pub const StoredCheckedExprData = union(enum) {
-    pending,
-    numeral: CheckedNumeralData,
-    str_from_quote: CheckedQuoteData,
-    str_segment: CheckedStringLiteralId,
-    str: CheckedBodyRange,
-    bytes_literal: CheckedStringLiteralId,
-    lookup_local: struct {
-        pattern: CheckedPatternId,
-        resolved: ?ResolvedValueRefId,
-    },
-    lookup_external: ?ResolvedValueRefId,
-    lookup_required: ?ResolvedValueRefId,
-    list: CheckedBodyRange,
-    empty_list,
-    tuple: CheckedBodyRange,
-    match_: struct {
-        cond: CheckedExprId,
-        branches: CheckedBodyRange,
-        is_try_suffix: bool,
-        skip_exhaustiveness: bool,
-        comptime_site_kind: CheckedComptimeSiteKind,
-    },
-    if_: struct {
-        branches: CheckedBodyRange,
-        final_else: CheckedExprId,
-        warn_unused_branches: bool,
-    },
-    call: struct {
-        func: CheckedExprId,
-        args: CheckedBodyRange,
-        called_via: base.CalledVia,
-        source_fn_ty_payload: CheckedTypeId,
-        direct_target: ?ResolvedValueId = null,
-    },
-    record: struct {
-        fields: CheckedBodyRange,
-        unsets: CheckedBodyRange,
-        ext: ?CheckedExprId,
-    },
-    empty_record,
-    block: struct {
-        statements: CheckedBodyRange,
-        final_expr: CheckedExprId,
-    },
-    tag: struct {
-        name: canonical.TagLabelId,
-        args: CheckedBodyRange,
-    },
-    nominal: struct {
-        backing_expr: CheckedExprId,
-        backing_type: CIR.Expr.NominalBackingType,
-    },
-    zero_argument_tag: struct {
-        closure_name: canonical.TagLabelId,
-        name: canonical.TagLabelId,
-    },
-    closure: struct {
-        lambda: CheckedExprId,
-        captures: CheckedBodyRange,
-        tag_name: canonical.TagLabelId,
-    },
-    lambda: struct {
-        args: CheckedBodyRange,
-        body: CheckedExprId,
-    },
-    binop: struct {
-        op: CIR.Expr.Binop.Op,
-        lhs: CheckedExprId,
-        rhs: CheckedExprId,
-    },
-    unary_minus: CheckedExprId,
-    unary_not: CheckedExprId,
-    field_access: struct {
-        receiver: CheckedExprId,
-        segments: CheckedBodyRange,
-    },
-    dispatch_call: ?StaticDispatchPlanId,
-    interpolation: StoredCheckedInterpolation,
-    structural_eq: struct {
-        lhs: CheckedExprId,
-        rhs: CheckedExprId,
-        negated: bool,
-        discriminant: ?CheckedTagDiscriminantEquality = null,
-    },
-    structural_hash: struct {
-        value: CheckedExprId,
-        hasher: CheckedExprId,
-    },
-    method_eq: ?StaticDispatchPlanId,
-    type_dispatch_call: ?StaticDispatchPlanId,
-    tuple_access: struct {
-        tuple: CheckedExprId,
-        elem_index: u32,
-    },
-    runtime_error: CheckedBodyRange,
-    crash: CheckedStringLiteralId,
-    dbg: CheckedExprId,
-    expect_err: struct {
-        expr: CheckedExprId,
-        snippet: CheckedStringLiteralId,
-    },
-    expect: CheckedExprId,
-    ellipsis,
-    anno_only,
-    break_,
-    return_: struct {
-        expr: CheckedExprId,
-        lambda: CheckedExprId,
-        context: CheckedReturnContext,
-    },
-    for_: struct {
-        pattern: CheckedPatternId,
-        expr: CheckedExprId,
-        body: CheckedExprId,
-        plan: ?static_dispatch.IteratorForPlanId,
-        mutations: ?LoopMutationPlanId = null,
-    },
-    hosted_lambda: struct {
-        symbol_name: canonical.ExternalSymbolNameId,
-        args: CheckedBodyRange,
-    },
-    run_low_level: struct {
-        op: CIR.Expr.LowLevel,
-        args: CheckedBodyRange,
-    },
-};
+/// The one `*_pool` field of `Owner` (a checked body or type store, or its
+/// view) whose elements are `T`.
+fn poolField(comptime Owner: type, comptime T: type) []const u8 {
+    comptime {
+        var found: ?[]const u8 = null;
+        const owner = @typeInfo(Owner).@"struct";
+        for (owner.field_names, owner.field_types) |name, FT| {
+            if (name.len < 5 or !artifact_serialize.comptimeStrEq(name[name.len - 5 ..], "_pool")) continue;
+            if (FT != std.ArrayList(T) and FT != []const T) continue;
+            if (found != null) @compileError("two pools of " ++ @typeName(Owner) ++ " hold " ++ @typeName(T));
+            found = name;
+        }
+        return found orelse @compileError("no pool of " ++ @typeName(Owner) ++ " holds " ++ @typeName(T));
+    }
+}
 
-/// Internal, relocation-invariant (POD) form of `CheckedPatternData`.
-pub const StoredCheckedPatternData = union(enum) {
-    pending,
-    assign: PatternBinderId,
-    as: struct {
-        pattern: CheckedPatternId,
-        binder: PatternBinderId,
-    },
-    applied_tag: struct {
-        name: canonical.TagLabelId,
-        args: CheckedBodyRange,
-    },
-    nominal: struct {
-        backing_pattern: CheckedPatternId,
-        backing_type: CIR.Expr.NominalBackingType,
-    },
-    record_destructure: CheckedBodyRange,
-    list: struct {
-        patterns: CheckedBodyRange,
-        rest: ?CheckedListRestPattern,
-    },
-    tuple: CheckedBodyRange,
-    numeral_literal: struct {
-        literal: ModuleEnv.NumeralLiteral,
-        guard: ?CheckedExprId = null,
-    },
-    str_literal: struct {
-        literal: CheckedStringLiteralId,
-        guard: ?CheckedExprId = null,
-    },
-    str_interpolation: struct {
-        prefix: CheckedStringLiteralId,
-        /// Range into `CheckedBodyStore.str_pattern_step_pool` (transform B).
-        steps: CheckedBodyRange,
-        end: CheckedStrPatternEnd,
-    },
-    underscore,
-    runtime_error,
-};
+/// The pool of `T` elements in a checked body or type store, or its view.
+fn storePool(pool_owner: anytype, comptime T: type) []const T {
+    const Owner = @TypeOf(pool_owner);
+    const pool = @field(pool_owner, poolField(if (@typeInfo(Owner) == .pointer) @typeInfo(Owner).pointer.child else Owner, T));
+    return if (@TypeOf(pool) == std.ArrayList(T)) pool.items else pool;
+}
 
-/// Internal, relocation-invariant (POD) form of `CheckedStatementData`.
-pub const StoredCheckedStatementData = union(enum) {
-    pending,
-    decl: struct { pattern: CheckedPatternId, expr: CheckedExprId, recursive: bool = false },
-    promoted_proc: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_: struct { pattern: CheckedPatternId, expr: CheckedExprId },
-    var_uninitialized: struct { pattern: CheckedPatternId },
-    reassign: struct { pattern: CheckedPatternId, expr: CheckedExprId, reassigned_binders: CheckedBodyRange },
-    crash: CheckedStringLiteralId,
-    dbg: CheckedExprId,
-    expr: CheckedExprId,
-    expect: CheckedExprId,
-    for_: struct {
-        pattern: CheckedPatternId,
-        expr: CheckedExprId,
-        body: CheckedExprId,
-        plan: ?static_dispatch.IteratorForPlanId,
-        mutations: ?LoopMutationPlanId = null,
-    },
-    while_: CheckedConditionLoop,
-    infinite_loop: CheckedConditionLoop,
-    breakable_loop: CheckedConditionLoop,
-    break_,
-    return_: struct { expr: CheckedExprId, lambda: CheckedExprId },
-    import_,
-    alias_decl,
-    where_alias_decl,
-    nominal_decl,
-    type_anno,
-    type_var_alias,
-    runtime_error,
-};
+/// Copy a live checked body value's slices into `store`'s pools, returning its
+/// stored form. The live slices stay owned by the caller.
+fn commitBodyData(store: *CheckedBodyStore, allocator: Allocator, live: anytype) Allocator.Error!StoredBodyData(@TypeOf(live)) {
+    const Live = @TypeOf(live);
+    const Stored = StoredBodyData(Live);
+    const info = @typeInfo(Live);
+    if (comptime Stored == Live) {
+        return live;
+    } else if (comptime info == .pointer) {
+        const Elem = info.pointer.child;
+        return artifact_serialize.appendSpan(CheckedBodyRange, Elem, &@field(store, poolField(CheckedBodyStore, Elem)), allocator, live);
+    } else if (comptime info == .@"struct") {
+        var stored: Stored = undefined;
+        inline for (info.@"struct".field_names) |name| {
+            @field(stored, name) = try commitBodyData(store, allocator, @field(live, name));
+        }
+        return stored;
+    } else {
+        inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
+            if (live == tag) return @unionInit(Stored, @tagName(tag), try commitBodyData(store, allocator, @field(live, @tagName(tag))));
+        }
+        unreachable;
+    }
+}
+
+/// Materialize a live checked body value of type `Live` from its stored form.
+/// `stored` may carry fields beyond `Live`'s; only `Live`'s are read. Slices
+/// alias the pools of `pool_owner` (a `CheckedBodyStore` or its view), so a
+/// caller must not retain one across a pool-growing commit on a store under
+/// construction.
+fn reconstructBodyData(comptime Live: type, pool_owner: anytype, stored: anytype) Live {
+    const info = @typeInfo(Live);
+    if (comptime StoredBodyData(Live) == Live) {
+        return stored;
+    } else if (comptime info == .pointer) {
+        return storePool(pool_owner, info.pointer.child)[stored.start .. stored.start + stored.len];
+    } else if (comptime info == .@"struct") {
+        var live: Live = undefined;
+        inline for (info.@"struct".field_names, info.@"struct".field_types) |name, FieldType| {
+            @field(live, name) = reconstructBodyData(FieldType, pool_owner, @field(stored, name));
+        }
+        return live;
+    } else {
+        inline for (comptime std.enums.values(std.meta.Tag(Live))) |tag| {
+            if (stored == tag) return @unionInit(Live, @tagName(tag), reconstructBodyData(@FieldType(Live, @tagName(tag)), pool_owner, @field(stored, @tagName(tag))));
+        }
+        unreachable;
+    }
+}
+
+/// Whether a value of `T` can own a slice: one held directly or through a
+/// struct, union, or optional, or by a slice element.
+fn ownsSlice(comptime T: type) bool {
+    comptime {
+        const info = @typeInfo(T);
+        if (info == .pointer) {
+            if (info.pointer.size != .slice) @compileError("owned checked data holds a non-slice pointer: " ++ @typeName(T));
+            return true;
+        }
+        if (info == .optional) return ownsSlice(info.optional.child);
+        const field_types = if (info == .@"struct") info.@"struct".field_types else if (info == .@"union") info.@"union".field_types else return false;
+        for (field_types) |field_type| {
+            if (ownsSlice(field_type)) return true;
+        }
+        return false;
+    }
+}
+
+/// Free every slice `value` owns, recursively through struct and union
+/// payloads, optionals, and slice elements.
+fn freeOwned(allocator: Allocator, value: anytype) void {
+    const T = @TypeOf(value);
+    const info = @typeInfo(T);
+    if (comptime !ownsSlice(T)) {
+        return;
+    } else if (comptime info == .pointer) {
+        if (comptime ownsSlice(info.pointer.child)) {
+            for (value) |item| freeOwned(allocator, item);
+        }
+        allocator.free(value);
+    } else if (comptime info == .optional) {
+        if (value) |payload| freeOwned(allocator, payload);
+    } else if (comptime info == .@"struct") {
+        inline for (info.@"struct".field_names) |name| freeOwned(allocator, @field(value, name));
+    } else {
+        inline for (comptime std.enums.values(std.meta.Tag(T))) |tag| {
+            if (value == tag) return freeOwned(allocator, @field(value, @tagName(tag)));
+        }
+        unreachable;
+    }
+}
+
+/// Copy every slice `value` references into memory owned by the result,
+/// recursively through struct and union payloads and optionals. Slice
+/// elements are copied as they are. Release the result with `freeOwned`.
+fn dupeOwned(allocator: Allocator, value: anytype) Allocator.Error!@TypeOf(value) {
+    const T = @TypeOf(value);
+    const info = @typeInfo(T);
+    if (comptime !ownsSlice(T)) {
+        return value;
+    } else if (comptime info == .pointer) {
+        return allocator.dupe(info.pointer.child, value);
+    } else if (comptime info == .optional) {
+        return if (value) |payload| try dupeOwned(allocator, payload) else null;
+    } else if (comptime info == .@"struct") {
+        var owned: T = value;
+        inline for (info.@"struct".field_names, 0..) |name, i| {
+            @field(owned, name) = dupeOwned(allocator, @field(value, name)) catch |err| {
+                inline for (info.@"struct".field_names[0..i]) |copied| freeOwned(allocator, @field(owned, copied));
+                return err;
+            };
+        }
+        return owned;
+    } else {
+        inline for (comptime std.enums.values(std.meta.Tag(T))) |tag| {
+            if (value == tag) return @unionInit(T, @tagName(tag), try dupeOwned(allocator, @field(value, @tagName(tag))));
+        }
+        unreachable;
+    }
+}
+
+/// Internal stored form of `CheckedExprData`.
+pub const StoredCheckedExprData = StoredBodyData(CheckedExprData);
+
+/// Internal stored form of `CheckedPatternData`.
+pub const StoredCheckedPatternData = StoredBodyData(CheckedPatternData);
+
+/// Internal stored form of `CheckedStatementData`.
+pub const StoredCheckedStatementData = StoredBodyData(CheckedStatementData);
 
 /// POD wrapper for a stored checked expression: `data` is the stored form.
 pub const StoredCheckedExpr = struct {
@@ -11130,207 +10834,6 @@ pub const InlineExpectMode = enum {
     run,
     omit,
 };
-
-/// Materialize the public read-form `CheckedExprData` from its stored POD form.
-/// `pool_owner` must expose the body-store pool accessors. Slice fields alias the
-/// pools; no allocation.
-fn reconstructCheckedExprData(pool_owner: anytype, stored: StoredCheckedExprData) CheckedExprData {
-    return switch (stored) {
-        .pending => .pending,
-        .empty_list => .empty_list,
-        .empty_record => .empty_record,
-        .runtime_error => |r| .{ .runtime_error = .{ .evaluated = pool_owner.exprIdPool()[r.start .. r.start + r.len] } },
-        .ellipsis => .ellipsis,
-        .anno_only => .anno_only,
-        .numeral => |v| .{ .numeral = v },
-        .str_from_quote => |v| .{ .str_from_quote = v },
-        .str_segment => |l| .{ .str_segment = l },
-        .str => |r| .{ .str = pool_owner.exprIdPool()[r.start .. r.start + r.len] },
-        .bytes_literal => |l| .{ .bytes_literal = l },
-        .lookup_local => |v| .{ .lookup_local = .{ .pattern = v.pattern, .resolved = v.resolved } },
-        .lookup_external => |r| .{ .lookup_external = r },
-        .lookup_required => |r| .{ .lookup_required = r },
-        .list => |r| .{ .list = pool_owner.exprIdPool()[r.start .. r.start + r.len] },
-        .tuple => |r| .{ .tuple = pool_owner.exprIdPool()[r.start .. r.start + r.len] },
-        .match_ => |m| .{ .match_ = .{
-            .cond = m.cond,
-            .branches = reconstructMatchBranches(pool_owner, m.branches),
-            .is_try_suffix = m.is_try_suffix,
-            .skip_exhaustiveness = m.skip_exhaustiveness,
-            .comptime_site_kind = m.comptime_site_kind,
-        } },
-        .if_ => |i| .{ .if_ = .{
-            .branches = pool_owner.ifBranchPool()[i.branches.start .. i.branches.start + i.branches.len],
-            .final_else = i.final_else,
-            .warn_unused_branches = i.warn_unused_branches,
-        } },
-        .call => |c| .{ .call = .{
-            .func = c.func,
-            .args = pool_owner.exprIdPool()[c.args.start .. c.args.start + c.args.len],
-            .called_via = c.called_via,
-            .source_fn_ty_payload = c.source_fn_ty_payload,
-            .direct_target = c.direct_target,
-        } },
-        .record => |r| .{ .record = .{
-            .fields = pool_owner.recordExprFieldPool()[r.fields.start .. r.fields.start + r.fields.len],
-            .unsets = pool_owner.recordUnsetLabelPool()[r.unsets.start .. r.unsets.start + r.unsets.len],
-            .ext = r.ext,
-        } },
-        .block => |b| .{ .block = .{
-            .statements = pool_owner.statementIdPool()[b.statements.start .. b.statements.start + b.statements.len],
-            .final_expr = b.final_expr,
-        } },
-        .tag => |t| .{ .tag = .{
-            .name = t.name,
-            .args = pool_owner.exprIdPool()[t.args.start .. t.args.start + t.args.len],
-        } },
-        .nominal => |n| .{ .nominal = .{ .backing_expr = n.backing_expr, .backing_type = n.backing_type } },
-        .zero_argument_tag => |t| .{ .zero_argument_tag = .{ .closure_name = t.closure_name, .name = t.name } },
-        .closure => |c| .{ .closure = .{
-            .lambda = c.lambda,
-            .captures = pool_owner.capturePool()[c.captures.start .. c.captures.start + c.captures.len],
-            .tag_name = c.tag_name,
-        } },
-        .lambda => |l| .{ .lambda = .{
-            .args = pool_owner.patternIdPool()[l.args.start .. l.args.start + l.args.len],
-            .body = l.body,
-        } },
-        .binop => |b| .{ .binop = .{ .op = b.op, .lhs = b.lhs, .rhs = b.rhs } },
-        .unary_minus => |e| .{ .unary_minus = e },
-        .unary_not => |e| .{ .unary_not = e },
-        .field_access => |f| .{ .field_access = .{
-            .receiver = f.receiver,
-            .segments = pool_owner.fieldAccessSegmentPool()[f.segments.start .. f.segments.start + f.segments.len],
-        } },
-        .dispatch_call => |p| .{ .dispatch_call = p },
-        .interpolation => |i| .{ .interpolation = .{
-            .plan = i.plan,
-            .segments = pool_owner.exprIdPool()[i.segments.start .. i.segments.start + i.segments.len],
-            .values = pool_owner.exprIdPool()[i.values.start .. i.values.start + i.values.len],
-            .assembler_ty = i.assembler_ty,
-        } },
-        .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
-        .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
-        .method_eq => |p| .{ .method_eq = p },
-        .type_dispatch_call => |p| .{ .type_dispatch_call = p },
-        .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
-        .crash => |l| .{ .crash = l },
-        .dbg => |e| .{ .dbg = e },
-        .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
-        .expect => |e| .{ .expect = e },
-        .break_ => .break_,
-        .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
-        .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
-        .hosted_lambda => |h| .{ .hosted_lambda = .{
-            .symbol_name = h.symbol_name,
-            .args = pool_owner.patternIdPool()[h.args.start .. h.args.start + h.args.len],
-        } },
-        .run_low_level => |r| .{ .run_low_level = .{
-            .op = r.op,
-            .args = pool_owner.exprIdPool()[r.args.start .. r.args.start + r.args.len],
-        } },
-    };
-}
-
-/// Materialize a match-branch slice (aliasing `match_branch_pool`); each branch's
-/// `patterns` and nested `binder_remaps` alias their pools too.
-fn reconstructMatchBranches(pool_owner: anytype, range: CheckedBodyRange) []const CheckedMatchBranch {
-    return pool_owner.matchBranchPool()[range.start .. range.start + range.len];
-}
-
-/// Materialize the public read-form `CheckedPatternData` from its stored POD form.
-fn reconstructCheckedPatternData(pool_owner: anytype, stored: StoredCheckedPatternData) CheckedPatternData {
-    return switch (stored) {
-        .pending => .pending,
-        .underscore => .underscore,
-        .runtime_error => .runtime_error,
-        .assign => |b| .{ .assign = b },
-        .as => |a| .{ .as = .{ .pattern = a.pattern, .binder = a.binder } },
-        .applied_tag => |t| .{ .applied_tag = .{
-            .name = t.name,
-            .args = pool_owner.patternIdPool()[t.args.start .. t.args.start + t.args.len],
-        } },
-        .nominal => |n| .{ .nominal = .{ .backing_pattern = n.backing_pattern, .backing_type = n.backing_type } },
-        .record_destructure => |r| .{ .record_destructure = pool_owner.recordDestructPool()[r.start .. r.start + r.len] },
-        .list => |l| .{ .list = .{
-            .patterns = pool_owner.patternIdPool()[l.patterns.start .. l.patterns.start + l.patterns.len],
-            .rest = l.rest,
-        } },
-        .tuple => |r| .{ .tuple = pool_owner.patternIdPool()[r.start .. r.start + r.len] },
-        .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .guard = v.guard } },
-        .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .guard = v.guard } },
-        .str_interpolation => |s| .{ .str_interpolation = .{
-            .prefix = s.prefix,
-            .steps = pool_owner.strPatternStepPool()[s.steps.start .. s.steps.start + s.steps.len],
-            .end = s.end,
-        } },
-    };
-}
-
-/// Materialize the public read-form `CheckedStatementData` from its stored POD form.
-fn reconstructCheckedStatementData(pool_owner: anytype, stored: StoredCheckedStatementData) CheckedStatementData {
-    return switch (stored) {
-        .pending => .pending,
-        .break_ => .break_,
-        .import_ => .import_,
-        .alias_decl => .alias_decl,
-        .where_alias_decl => .where_alias_decl,
-        .nominal_decl => .nominal_decl,
-        .type_anno => .type_anno,
-        .type_var_alias => .type_var_alias,
-        .runtime_error => .runtime_error,
-        .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .recursive = s.recursive } },
-        .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
-        .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
-        .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
-        .reassign => |s| .{ .reassign = .{
-            .pattern = s.pattern,
-            .expr = s.expr,
-            .reassigned_binders = pool_owner.patternBinderIdPool()[s.reassigned_binders.start .. s.reassigned_binders.start + s.reassigned_binders.len],
-        } },
-        .crash => |l| .{ .crash = l },
-        .dbg => |e| .{ .dbg = e },
-        .expr => |e| .{ .expr = e },
-        .expect => |e| .{ .expect = e },
-        .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan, .mutations = s.mutations } },
-        .while_ => |s| .{ .while_ = s },
-        .infinite_loop => |s| .{ .infinite_loop = s },
-        .breakable_loop => |s| .{ .breakable_loop = s },
-        .return_ => |s| .{ .return_ = .{ .expr = s.expr, .lambda = s.lambda } },
-    };
-}
-
-/// Materialize a public `CheckedExpr` from its stored form (slices alias pools).
-/// Same aliasing invariant as `reconstructCheckedTypePayload`: safe unconditionally
-/// on a frozen/deserialized store (immutable pools); during construction a caller must
-/// not retain a returned slice across a pool-growing `commit*` call.
-fn reconstructCheckedExpr(pool_owner: anytype, stored: StoredCheckedExpr) CheckedExpr {
-    return .{
-        .id = stored.id,
-        .ty = stored.ty,
-        .source_region = stored.source_region,
-        .data = reconstructCheckedExprData(pool_owner, stored.data),
-    };
-}
-
-/// Materialize a public `CheckedPattern` from its stored form (slices alias pools).
-fn reconstructCheckedPattern(pool_owner: anytype, stored: StoredCheckedPattern) CheckedPattern {
-    return .{
-        .id = stored.id,
-        .ty = stored.ty,
-        .source_region = stored.source_region,
-        .data = reconstructCheckedPatternData(pool_owner, stored.data),
-    };
-}
-
-/// Materialize a public `CheckedStatement` from its stored form (slices alias pools).
-fn reconstructCheckedStatement(pool_owner: anytype, stored: StoredCheckedStatement) CheckedStatement {
-    return .{
-        .id = stored.id,
-        .source_region = stored.source_region,
-        .data = reconstructCheckedStatementData(pool_owner, stored.data),
-    };
-}
 
 /// Public `CheckedExpr` declaration.
 pub const CheckedExpr = struct {
@@ -11421,52 +10924,12 @@ pub const CheckedBodyStoreView = struct {
         return null;
     }
 
-    pub fn exprIdPool(self: CheckedBodyStoreView) []const CheckedExprId {
-        return self.expr_id_pool;
-    }
-    pub fn patternIdPool(self: CheckedBodyStoreView) []const CheckedPatternId {
-        return self.pattern_id_pool;
-    }
-    pub fn statementIdPool(self: CheckedBodyStoreView) []const CheckedStatementId {
-        return self.statement_id_pool;
-    }
     pub fn patternBinderIdPool(self: CheckedBodyStoreView) []const PatternBinderId {
         return self.pattern_binder_id_pool;
     }
 
     pub fn loopMutations(self: CheckedBodyStoreView, id: LoopMutationPlanId) CheckedLoopMutations {
         return self.loop_mutations[@backingInt(id)];
-    }
-    pub fn recordExprFieldPool(self: CheckedBodyStoreView) []const CheckedRecordExprField {
-        return self.record_expr_field_pool;
-    }
-
-    pub fn recordUnsetLabelPool(self: CheckedBodyStoreView) []const canonical.RecordFieldLabelId {
-        return self.record_unset_label_pool;
-    }
-    pub fn fieldAccessSegmentPool(self: CheckedBodyStoreView) []const CheckedFieldAccessSegment {
-        return self.field_access_segment_pool;
-    }
-    pub fn ifBranchPool(self: CheckedBodyStoreView) []const CheckedIfBranch {
-        return self.if_branch_pool;
-    }
-    pub fn matchBranchPool(self: CheckedBodyStoreView) []const CheckedMatchBranch {
-        return self.match_branch_pool;
-    }
-    pub fn matchBranchPatternPool(self: CheckedBodyStoreView) []const CheckedMatchBranchPattern {
-        return self.match_branch_pattern_pool;
-    }
-    pub fn binderRemapPool(self: CheckedBodyStoreView) []const CheckedAlternativeBinderRemap {
-        return self.binder_remap_pool;
-    }
-    pub fn capturePool(self: CheckedBodyStoreView) []const CheckedCapture {
-        return self.capture_pool;
-    }
-    pub fn recordDestructPool(self: CheckedBodyStoreView) []const CheckedRecordDestruct {
-        return self.record_destruct_pool;
-    }
-    pub fn strPatternStepPool(self: CheckedBodyStoreView) []const CheckedStrPatternStep {
-        return self.str_pattern_step_pool;
     }
 
     pub fn exprCount(self: CheckedBodyStoreView) usize {
@@ -11493,7 +10956,7 @@ pub const CheckedBodyStoreView = struct {
     }
 
     pub fn expr(self: CheckedBodyStoreView, id: CheckedExprId) CheckedExpr {
-        return reconstructCheckedExpr(self, self.stored_exprs[@backingInt(id)]);
+        return reconstructBodyData(CheckedExpr, self, self.stored_exprs[@backingInt(id)]);
     }
 
     /// The literal-conversion compile-time root checking linked to a literal
@@ -11503,11 +10966,11 @@ pub const CheckedBodyStoreView = struct {
     }
 
     pub fn pattern(self: CheckedBodyStoreView, id: CheckedPatternId) CheckedPattern {
-        return reconstructCheckedPattern(self, self.stored_patterns[@backingInt(id)]);
+        return reconstructBodyData(CheckedPattern, self, self.stored_patterns[@backingInt(id)]);
     }
 
     pub fn statement(self: CheckedBodyStoreView, id: CheckedStatementId) CheckedStatement {
-        return reconstructCheckedStatement(self, self.stored_statements[@backingInt(id)]);
+        return reconstructBodyData(CheckedStatement, self, self.stored_statements[@backingInt(id)]);
     }
 
     pub fn patternBinder(self: CheckedBodyStoreView, id: PatternBinderId) CheckedPatternBinder {
@@ -12654,7 +12117,7 @@ pub const CheckedBodyStore = struct {
             module.moduleEnvConst().moduleIdentityHash(module.moduleEnvConst().selfModuleIdentity()),
         );
         {
-            for (checked_types.store.recordFieldPool()) |field| {
+            for (checked_types.store.record_field_pool.items) |field| {
                 const default = field.kind.defaultIdentity() orelse continue;
                 const default_origin = default.origin() orelse
                     checkedArtifactInvariant("checked defaulted field kind carried no default identity", .{});
@@ -12872,21 +12335,6 @@ pub const CheckedBodyStore = struct {
         for (self.stored_exprs.items, may_be_elided) |*stored, may_elide| stored.evaluation_may_be_elided_for_inspect = may_elide;
     }
 
-    // --- Shared flat pool accessors (used by materialize functions). ---
-
-    pub fn exprIdPool(self: *const CheckedBodyStore) []const CheckedExprId {
-        return self.expr_id_pool.items;
-    }
-    pub fn patternIdPool(self: *const CheckedBodyStore) []const CheckedPatternId {
-        return self.pattern_id_pool.items;
-    }
-    pub fn statementIdPool(self: *const CheckedBodyStore) []const CheckedStatementId {
-        return self.statement_id_pool.items;
-    }
-    pub fn patternBinderIdPool(self: *const CheckedBodyStore) []const PatternBinderId {
-        return self.pattern_binder_id_pool.items;
-    }
-
     pub fn loopMutations(self: *const CheckedBodyStore, id: LoopMutationPlanId) CheckedLoopMutations {
         return self.loop_mutations.items[@backingInt(id)];
     }
@@ -12895,236 +12343,6 @@ pub const CheckedBodyStore = struct {
         const id: LoopMutationPlanId = @fromBackingInt(@intCast(@as(u32, @intCast(self.loop_mutations.items.len))));
         try self.loop_mutations.append(allocator, mutations);
         return id;
-    }
-    pub fn recordExprFieldPool(self: *const CheckedBodyStore) []const CheckedRecordExprField {
-        return self.record_expr_field_pool.items;
-    }
-
-    pub fn recordUnsetLabelPool(self: *const CheckedBodyStore) []const canonical.RecordFieldLabelId {
-        return self.record_unset_label_pool.items;
-    }
-    pub fn fieldAccessSegmentPool(self: *const CheckedBodyStore) []const CheckedFieldAccessSegment {
-        return self.field_access_segment_pool.items;
-    }
-    pub fn ifBranchPool(self: *const CheckedBodyStore) []const CheckedIfBranch {
-        return self.if_branch_pool.items;
-    }
-    pub fn matchBranchPool(self: *const CheckedBodyStore) []const CheckedMatchBranch {
-        return self.match_branch_pool.items;
-    }
-    pub fn matchBranchPatternPool(self: *const CheckedBodyStore) []const CheckedMatchBranchPattern {
-        return self.match_branch_pattern_pool.items;
-    }
-    pub fn binderRemapPool(self: *const CheckedBodyStore) []const CheckedAlternativeBinderRemap {
-        return self.binder_remap_pool.items;
-    }
-    pub fn capturePool(self: *const CheckedBodyStore) []const CheckedCapture {
-        return self.capture_pool.items;
-    }
-    pub fn recordDestructPool(self: *const CheckedBodyStore) []const CheckedRecordDestruct {
-        return self.record_destruct_pool.items;
-    }
-    pub fn strPatternStepPool(self: *const CheckedBodyStore) []const CheckedStrPatternStep {
-        return self.str_pattern_step_pool.items;
-    }
-
-    fn appendExprIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedExprId) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedExprId, &self.expr_id_pool, allocator, ids);
-    }
-
-    fn appendPatternIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedPatternId) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedPatternId, &self.pattern_id_pool, allocator, ids);
-    }
-
-    fn appendStatementIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const CheckedStatementId) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedStatementId, &self.statement_id_pool, allocator, ids);
-    }
-
-    fn appendPatternBinderIds(self: *CheckedBodyStore, allocator: Allocator, ids: []const PatternBinderId) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, PatternBinderId, &self.pattern_binder_id_pool, allocator, ids);
-    }
-
-    fn appendRecordExprFields(self: *CheckedBodyStore, allocator: Allocator, fields: []const CheckedRecordExprField) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordExprField, &self.record_expr_field_pool, allocator, fields);
-    }
-
-    fn appendRecordUnsetLabels(self: *CheckedBodyStore, allocator: Allocator, labels: []const canonical.RecordFieldLabelId) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, canonical.RecordFieldLabelId, &self.record_unset_label_pool, allocator, labels);
-    }
-
-    fn appendFieldAccessSegments(self: *CheckedBodyStore, allocator: Allocator, segments: []const CheckedFieldAccessSegment) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedFieldAccessSegment, &self.field_access_segment_pool, allocator, segments);
-    }
-
-    fn appendIfBranches(self: *CheckedBodyStore, allocator: Allocator, branches: []const CheckedIfBranch) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedIfBranch, &self.if_branch_pool, allocator, branches);
-    }
-
-    fn appendCaptures(self: *CheckedBodyStore, allocator: Allocator, captures: []const CheckedCapture) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedCapture, &self.capture_pool, allocator, captures);
-    }
-
-    fn appendRecordDestructs(self: *CheckedBodyStore, allocator: Allocator, destructs: []const CheckedRecordDestruct) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedRecordDestruct, &self.record_destruct_pool, allocator, destructs);
-    }
-
-    fn appendStrPatternSteps(self: *CheckedBodyStore, allocator: Allocator, steps: []const CheckedStrPatternStep) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedStrPatternStep, &self.str_pattern_step_pool, allocator, steps);
-    }
-
-    /// Append already-range-formed match branches into `match_branch_pool`. The
-    /// branches' `pt_start`/`bn_start` ranges index `match_branch_pattern_pool` /
-    /// `binder_remap_pool`, which the copier transferred 1:1 before committing.
-    fn appendMatchBranches(self: *CheckedBodyStore, allocator: Allocator, branches: []const CheckedMatchBranch) Allocator.Error!CheckedBodyRange {
-        return artifact_serialize.appendSpan(CheckedBodyRange, CheckedMatchBranch, &self.match_branch_pool, allocator, branches);
-    }
-
-    /// Convert a build-form expr `data` into stored POD form, copying slices into
-    /// the pools. Does NOT free the build slices (the caller frees the whole list).
-    fn commitExprData(self: *CheckedBodyStore, allocator: Allocator, data: CheckedExprData) Allocator.Error!StoredCheckedExprData {
-        return switch (data) {
-            .pending => .pending,
-            .empty_list => .empty_list,
-            .empty_record => .empty_record,
-            .runtime_error => |r| .{ .runtime_error = try self.appendExprIds(allocator, r.evaluated) },
-            .ellipsis => .ellipsis,
-            .anno_only => .anno_only,
-            .numeral => |v| .{ .numeral = v },
-            .str_from_quote => |v| .{ .str_from_quote = v },
-            .str_segment => |l| .{ .str_segment = l },
-            .str => |items| .{ .str = try self.appendExprIds(allocator, items) },
-            .bytes_literal => |l| .{ .bytes_literal = l },
-            .lookup_local => |v| .{ .lookup_local = .{ .pattern = v.pattern, .resolved = v.resolved } },
-            .lookup_external => |r| .{ .lookup_external = r },
-            .lookup_required => |r| .{ .lookup_required = r },
-            .list => |items| .{ .list = try self.appendExprIds(allocator, items) },
-            .tuple => |items| .{ .tuple = try self.appendExprIds(allocator, items) },
-            .match_ => |m| .{ .match_ = .{
-                .cond = m.cond,
-                .branches = try self.appendMatchBranches(allocator, m.branches),
-                .is_try_suffix = m.is_try_suffix,
-                .skip_exhaustiveness = m.skip_exhaustiveness,
-                .comptime_site_kind = m.comptime_site_kind,
-            } },
-            .if_ => |i| .{ .if_ = .{
-                .branches = try self.appendIfBranches(allocator, i.branches),
-                .final_else = i.final_else,
-                .warn_unused_branches = i.warn_unused_branches,
-            } },
-            .call => |c| .{ .call = .{
-                .func = c.func,
-                .args = try self.appendExprIds(allocator, c.args),
-                .called_via = c.called_via,
-                .source_fn_ty_payload = c.source_fn_ty_payload,
-                .direct_target = c.direct_target,
-            } },
-            .record => |r| .{ .record = .{
-                .fields = try self.appendRecordExprFields(allocator, r.fields),
-                .unsets = try self.appendRecordUnsetLabels(allocator, r.unsets),
-                .ext = r.ext,
-            } },
-            .block => |b| .{ .block = .{
-                .statements = try self.appendStatementIds(allocator, b.statements),
-                .final_expr = b.final_expr,
-            } },
-            .tag => |t| .{ .tag = .{ .name = t.name, .args = try self.appendExprIds(allocator, t.args) } },
-            .nominal => |n| .{ .nominal = .{ .backing_expr = n.backing_expr, .backing_type = n.backing_type } },
-            .zero_argument_tag => |t| .{ .zero_argument_tag = .{ .closure_name = t.closure_name, .name = t.name } },
-            .closure => |c| .{ .closure = .{
-                .lambda = c.lambda,
-                .captures = try self.appendCaptures(allocator, c.captures),
-                .tag_name = c.tag_name,
-            } },
-            .lambda => |l| .{ .lambda = .{
-                .args = try self.appendPatternIds(allocator, l.args),
-                .body = l.body,
-            } },
-            .binop => |b| .{ .binop = .{ .op = b.op, .lhs = b.lhs, .rhs = b.rhs } },
-            .unary_minus => |e| .{ .unary_minus = e },
-            .unary_not => |e| .{ .unary_not = e },
-            .field_access => |f| .{ .field_access = .{
-                .receiver = f.receiver,
-                .segments = try self.appendFieldAccessSegments(allocator, f.segments),
-            } },
-            .dispatch_call => |p| .{ .dispatch_call = p },
-            .interpolation => |i| .{ .interpolation = .{
-                .plan = i.plan,
-                .segments = try self.appendExprIds(allocator, i.segments),
-                .values = try self.appendExprIds(allocator, i.values),
-                .assembler_ty = i.assembler_ty,
-            } },
-            .structural_eq => |e| .{ .structural_eq = .{ .lhs = e.lhs, .rhs = e.rhs, .negated = e.negated, .discriminant = e.discriminant } },
-            .structural_hash => |h| .{ .structural_hash = .{ .value = h.value, .hasher = h.hasher } },
-            .method_eq => |p| .{ .method_eq = p },
-            .type_dispatch_call => |p| .{ .type_dispatch_call = p },
-            .tuple_access => |a| .{ .tuple_access = .{ .tuple = a.tuple, .elem_index = a.elem_index } },
-            .crash => |l| .{ .crash = l },
-            .dbg => |e| .{ .dbg = e },
-            .expect_err => |e| .{ .expect_err = .{ .expr = e.expr, .snippet = e.snippet } },
-            .expect => |e| .{ .expect = e },
-            .break_ => .break_,
-            .return_ => |r| .{ .return_ = .{ .expr = r.expr, .lambda = r.lambda, .context = r.context } },
-            .for_ => |f| .{ .for_ = .{ .pattern = f.pattern, .expr = f.expr, .body = f.body, .plan = f.plan, .mutations = f.mutations } },
-            .hosted_lambda => |h| .{ .hosted_lambda = .{
-                .symbol_name = h.symbol_name,
-                .args = try self.appendPatternIds(allocator, h.args),
-            } },
-            .run_low_level => |r| .{ .run_low_level = .{ .op = r.op, .args = try self.appendExprIds(allocator, r.args) } },
-        };
-    }
-
-    fn commitPatternData(self: *CheckedBodyStore, allocator: Allocator, data: CheckedPatternData) Allocator.Error!StoredCheckedPatternData {
-        return switch (data) {
-            .pending => .pending,
-            .underscore => .underscore,
-            .runtime_error => .runtime_error,
-            .assign => |b| .{ .assign = b },
-            .as => |a| .{ .as = .{ .pattern = a.pattern, .binder = a.binder } },
-            .applied_tag => |t| .{ .applied_tag = .{ .name = t.name, .args = try self.appendPatternIds(allocator, t.args) } },
-            .nominal => |n| .{ .nominal = .{ .backing_pattern = n.backing_pattern, .backing_type = n.backing_type } },
-            .record_destructure => |destructs| .{ .record_destructure = try self.appendRecordDestructs(allocator, destructs) },
-            .list => |l| .{ .list = .{ .patterns = try self.appendPatternIds(allocator, l.patterns), .rest = l.rest } },
-            .tuple => |patterns| .{ .tuple = try self.appendPatternIds(allocator, patterns) },
-            .numeral_literal => |v| .{ .numeral_literal = .{ .literal = v.literal, .guard = v.guard } },
-            .str_literal => |v| .{ .str_literal = .{ .literal = v.literal, .guard = v.guard } },
-            .str_interpolation => |s| .{ .str_interpolation = .{
-                .prefix = s.prefix,
-                .steps = try self.appendStrPatternSteps(allocator, s.steps),
-                .end = s.end,
-            } },
-        };
-    }
-
-    fn commitStatementData(self: *CheckedBodyStore, allocator: Allocator, data: CheckedStatementData) Allocator.Error!StoredCheckedStatementData {
-        return switch (data) {
-            .pending => .pending,
-            .break_ => .break_,
-            .import_ => .import_,
-            .alias_decl => .alias_decl,
-            .where_alias_decl => .where_alias_decl,
-            .nominal_decl => .nominal_decl,
-            .type_anno => .type_anno,
-            .type_var_alias => .type_var_alias,
-            .runtime_error => .runtime_error,
-            .decl => |s| .{ .decl = .{ .pattern = s.pattern, .expr = s.expr, .recursive = s.recursive } },
-            .promoted_proc => |s| .{ .promoted_proc = .{ .pattern = s.pattern, .expr = s.expr } },
-            .var_ => |s| .{ .var_ = .{ .pattern = s.pattern, .expr = s.expr } },
-            .var_uninitialized => |s| .{ .var_uninitialized = .{ .pattern = s.pattern } },
-            .reassign => |s| .{ .reassign = .{
-                .pattern = s.pattern,
-                .expr = s.expr,
-                .reassigned_binders = try self.appendPatternBinderIds(allocator, s.reassigned_binders),
-            } },
-            .crash => |l| .{ .crash = l },
-            .dbg => |e| .{ .dbg = e },
-            .expr => |e| .{ .expr = e },
-            .expect => |e| .{ .expect = e },
-            .for_ => |s| .{ .for_ = .{ .pattern = s.pattern, .expr = s.expr, .body = s.body, .plan = s.plan, .mutations = s.mutations } },
-            .while_ => |s| .{ .while_ = s },
-            .infinite_loop => |s| .{ .infinite_loop = s },
-            .breakable_loop => |s| .{ .breakable_loop = s },
-            .return_ => |s| .{ .return_ = .{ .expr = s.expr, .lambda = s.lambda } },
-        };
     }
 
     fn commitExprs(self: *CheckedBodyStore, allocator: Allocator, exprs: []const CheckedExpr) Allocator.Error!void {
@@ -13137,7 +12355,7 @@ pub const CheckedBodyStore = struct {
                 .id = e.id,
                 .ty = e.ty,
                 .source_region = e.source_region,
-                .data = try self.commitExprData(allocator, e.data),
+                .data = try commitBodyData(self, allocator, e.data),
             });
         }
     }
@@ -13150,7 +12368,7 @@ pub const CheckedBodyStore = struct {
                 .id = p.id,
                 .ty = p.ty,
                 .source_region = p.source_region,
-                .data = try self.commitPatternData(allocator, p.data),
+                .data = try commitBodyData(self, allocator, p.data),
             });
         }
     }
@@ -13162,7 +12380,7 @@ pub const CheckedBodyStore = struct {
             self.stored_statements.appendAssumeCapacity(.{
                 .id = s.id,
                 .source_region = s.source_region,
-                .data = try self.commitStatementData(allocator, s.data),
+                .data = try commitBodyData(self, allocator, s.data),
             });
         }
     }
@@ -13182,7 +12400,7 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn expr(self: *const CheckedBodyStore, id: CheckedExprId) CheckedExpr {
-        return reconstructCheckedExpr(self, self.stored_exprs.items[@backingInt(id)]);
+        return reconstructBodyData(CheckedExpr, self, self.stored_exprs.items[@backingInt(id)]);
     }
 
     /// The literal-conversion compile-time root checking linked to a literal
@@ -13192,11 +12410,11 @@ pub const CheckedBodyStore = struct {
     }
 
     pub fn pattern(self: *const CheckedBodyStore, id: CheckedPatternId) CheckedPattern {
-        return reconstructCheckedPattern(self, self.stored_patterns.items[@backingInt(id)]);
+        return reconstructBodyData(CheckedPattern, self, self.stored_patterns.items[@backingInt(id)]);
     }
 
     pub fn statement(self: *const CheckedBodyStore, id: CheckedStatementId) CheckedStatement {
-        return reconstructCheckedStatement(self, self.stored_statements.items[@backingInt(id)]);
+        return reconstructBodyData(CheckedStatement, self, self.stored_statements.items[@backingInt(id)]);
     }
 
     pub fn stringLiteral(self: *const CheckedBodyStore, id: CheckedStringLiteralId) []const u8 {
@@ -13569,7 +12787,7 @@ pub const CheckedBodyStore = struct {
         data: CheckedExprData,
     ) Allocator.Error!CheckedExprId {
         try self.stored_exprs.ensureUnusedCapacity(allocator, 1);
-        const stored_data = try self.commitExprData(allocator, data);
+        const stored_data = try commitBodyData(self, allocator, data);
         const id: CheckedExprId = @fromBackingInt(@intCast(@as(u32, @intCast(self.stored_exprs.items.len))));
         self.stored_exprs.appendAssumeCapacity(.{
             .id = id,
@@ -16109,125 +15327,15 @@ fn checkedConcreteBuiltinForLiteralTarget(view: CheckedTypeStoreView, root: Chec
 }
 
 fn deinitCheckedExprList(allocator: Allocator, exprs: []CheckedExpr) void {
-    for (exprs) |*expr| deinitCheckedExprData(allocator, &expr.data);
+    for (exprs) |expr| freeOwned(allocator, expr.data);
 }
 
 fn deinitCheckedPatternList(allocator: Allocator, patterns: []CheckedPattern) void {
-    for (patterns) |*pattern| deinitCheckedPatternData(allocator, &pattern.data);
+    for (patterns) |pattern| freeOwned(allocator, pattern.data);
 }
 
 fn deinitCheckedStatementList(allocator: Allocator, statements: []CheckedStatement) void {
-    for (statements) |*statement| deinitCheckedStatementData(allocator, &statement.data);
-}
-
-fn deinitCheckedExprData(allocator: Allocator, data: *CheckedExprData) void {
-    switch (data.*) {
-        .pending,
-        .numeral,
-        .str_from_quote,
-        .str_segment,
-        .bytes_literal,
-        .lookup_local,
-        .lookup_external,
-        .lookup_required,
-        .empty_list,
-        .empty_record,
-        .zero_argument_tag,
-        .dispatch_call,
-        .structural_eq,
-        .structural_hash,
-        .method_eq,
-        .type_dispatch_call,
-        .tuple_access,
-        .crash,
-        .dbg,
-        .expect_err,
-        .expect,
-        .ellipsis,
-        .anno_only,
-        .break_,
-        .return_,
-        .for_,
-        => {},
-        inline .str, .list, .tuple => |items| allocator.free(items),
-        .runtime_error => |runtime_error| allocator.free(runtime_error.evaluated),
-        // `branches` is an owned array of range-form branches; the patterns and
-        // binder remaps they reference live in the copier's match-branch pools.
-        .match_ => |match| allocator.free(match.branches),
-        .if_ => |if_| allocator.free(if_.branches),
-        .call => |call| allocator.free(call.args),
-        .record => |record| {
-            allocator.free(record.fields);
-            allocator.free(record.unsets);
-        },
-        .block => |block| allocator.free(block.statements),
-        .tag => |tag| allocator.free(tag.args),
-        .nominal => {},
-        .closure => |closure| allocator.free(closure.captures),
-        .lambda => |lambda| allocator.free(lambda.args),
-        .binop => {},
-        .unary_minus,
-        .unary_not,
-        => {},
-        .field_access => |field_access| allocator.free(field_access.segments),
-        .interpolation => |interpolation| {
-            allocator.free(interpolation.segments);
-            allocator.free(interpolation.values);
-        },
-        .hosted_lambda => |hosted| allocator.free(hosted.args),
-        .run_low_level => |run| allocator.free(run.args),
-    }
-    data.* = .pending;
-}
-
-fn deinitCheckedPatternData(allocator: Allocator, data: *CheckedPatternData) void {
-    switch (data.*) {
-        .pending,
-        .assign,
-        .as,
-        .nominal,
-        .numeral_literal,
-        .str_literal,
-        .underscore,
-        .runtime_error,
-        => {},
-        .applied_tag => |tag| allocator.free(tag.args),
-        .record_destructure => |destructs| allocator.free(destructs),
-        .list => |list| allocator.free(list.patterns),
-        .tuple => |patterns| allocator.free(patterns),
-        .str_interpolation => |str| allocator.free(str.steps),
-    }
-    data.* = .pending;
-}
-
-fn deinitCheckedStatementData(allocator: Allocator, data: *CheckedStatementData) void {
-    switch (data.*) {
-        .reassign => |reassign| allocator.free(reassign.reassigned_binders),
-        .pending,
-        .decl,
-        .promoted_proc,
-        .var_,
-        .var_uninitialized,
-        .crash,
-        .dbg,
-        .expr,
-        .expect,
-        .for_,
-        .while_,
-        .infinite_loop,
-        .breakable_loop,
-        .break_,
-        .return_,
-        .import_,
-        .alias_decl,
-        .where_alias_decl,
-        .nominal_decl,
-        .type_anno,
-        .type_var_alias,
-        .runtime_error,
-        => {},
-    }
-    data.* = .pending;
+    for (statements) |statement| freeOwned(allocator, statement.data);
 }
 
 fn verifyCheckedExprDataComplete(
@@ -29498,7 +28606,7 @@ fn appendCheckedPatternValidationRootBody(
         .guard = null,
     };
 
-    var data: CheckedExprData = .{ .match_ = .{
+    const data: CheckedExprData = .{ .match_ = .{
         .cond = scrutinee,
         .branches = branches,
         .is_try_suffix = false,
@@ -29506,7 +28614,7 @@ fn appendCheckedPatternValidationRootBody(
         .comptime_site_kind = .destructure,
     } };
     branches_owned = false;
-    defer deinitCheckedExprData(allocator, &data);
+    defer freeOwned(allocator, data);
 
     const wrapper = try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_validation_wrapper = .{
         .selected_root_index = selected_index,
@@ -29560,7 +28668,7 @@ fn appendCheckedPatternExtractionRootExpr(
         .guard = null,
     };
 
-    var data: CheckedExprData = .{ .match_ = .{
+    const data: CheckedExprData = .{ .match_ = .{
         .cond = scrutinee,
         .branches = branches,
         .is_try_suffix = false,
@@ -29568,7 +28676,7 @@ fn appendCheckedPatternExtractionRootExpr(
         .comptime_site_kind = .destructure,
     } };
     branches_owned = false;
-    defer deinitCheckedExprData(allocator, &data);
+    defer freeOwned(allocator, data);
 
     const match_region = module.regionAt(ModuleEnv.nodeIdxFrom(extraction.scrutinee_pattern));
     return try checked_body_builder.appendSyntheticExpr(allocator, .{ .pattern_extraction_wrapper = .{
@@ -31561,43 +30669,20 @@ pub const ExportedProcedureTemplateTable = struct {
     closure_pool: ClosurePool = ClosurePool.empty,
 
     pub fn fromModule(
-        allocator: Allocator,
+        closure_context: ImportedTemplateClosureContext,
         module: TypedCIR.Module,
         published_exports: []const CIR.Def.Idx,
         names: *canonical.CanonicalNameStore,
-        artifact_key: CheckedModuleArtifactKey,
-        checked_types: *const CheckedTypeStore,
-        checked_templates: *const CheckedProcedureTemplateTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        const_templates: *const ConstTemplateTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        top_level_bindings: *const TopLevelProcedureBindingTable,
-        platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
         checked_type_publication: *const CheckedTypePublication,
     ) Allocator.Error!ExportedProcedureTemplateTable {
+        const allocator = closure_context.allocator;
+        const checked_templates = closure_context.checked_templates;
         var templates = std.ArrayList(ExportedProcedureTemplate).empty;
         var closure_pool = ClosurePool.empty;
         errdefer {
             templates.deinit(allocator);
             closure_pool.deinit(allocator);
         }
-        const closure_context = ImportedTemplateClosureContext{
-            .allocator = allocator,
-            .artifact_key = artifact_key,
-            .checked_types = checked_types,
-            .checked_templates = checked_templates,
-            .callable_eval_template_table = callable_eval_templates,
-            .entry_wrappers = entry_wrappers,
-            .const_templates_table = const_templates,
-            .resolved_value_refs_table = resolved_value_refs,
-            .top_level_bindings = top_level_bindings,
-            .platform_required_bindings = platform_required_bindings,
-            .imports = imports,
-            .available_artifacts = available_artifacts,
-        };
 
         for (published_exports) |def_idx| {
             const template = checked_templates.lookupByDef(def_idx) orelse continue;
@@ -31608,15 +30693,10 @@ pub const ExportedProcedureTemplateTable = struct {
                 null;
             const source_scheme = checked_type_publication.schemeForSourceVar(module, module.defType(def_idx));
             const template_data = checked_templates.get(template.template);
-            var template_closure = try buildImportedTemplateClosure(
-                closure_context,
-                template,
-                template_data,
+            const stored_closure = try closure_pool.commit(
+                allocator,
+                try buildImportedTemplateClosure(closure_context, template, template_data),
             );
-            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
-
-            const stored_closure = try closure_pool.commit(allocator, template_closure);
-            template_closure = .{};
 
             try templates.append(allocator, .{
                 .export_name = export_name,
@@ -32237,14 +31317,11 @@ pub fn deinitImportedTemplateClosure(
     closure.* = .{};
 }
 
-/// Public `ImportedProcedureBindingBody` declaration.
-pub const ImportedProcedureBindingBody = ProcedureBindingBody;
-
 /// Public `ImportedProcedureBindingView` declaration.
 pub const ImportedProcedureBindingView = struct {
     binding: ImportedProcedureBindingRef,
     source_scheme: canonical.CanonicalTypeSchemeKey,
-    body: ImportedProcedureBindingBody,
+    body: ProcedureBindingBody,
     intrinsic: ?IntrinsicId = null,
     iterator_procedure: ?IteratorProcedureId = null,
     runtime_result_provenance: ?RuntimeResultProvenance,
@@ -32266,45 +31343,23 @@ pub const ExportedProcedureBindingTable = struct {
     closure_pool: ClosurePool = ClosurePool.empty,
 
     pub fn fromModule(
-        allocator: Allocator,
+        closure_context: ImportedTemplateClosureContext,
         module: TypedCIR.Module,
         published_exports: []const CIR.Def.Idx,
         published_export_binders: []const CIR.Pattern.Idx,
         checked_bodies: *const CheckedBodyStore,
         selected_hoisted_callables: *const SelectedHoistedCallableTable,
-        checked_types: *const CheckedTypeStore,
-        checked_templates: *const CheckedProcedureTemplateTable,
-        const_templates: *const ConstTemplateTable,
         top_level_values: *const TopLevelValueTable,
-        procedure_bindings: *const TopLevelProcedureBindingTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
-        artifact_key: CheckedModuleArtifactKey,
     ) Allocator.Error!ExportedProcedureBindingTable {
+        const allocator = closure_context.allocator;
+        const artifact_key = closure_context.artifact_key;
+        const procedure_bindings = closure_context.top_level_bindings;
         var bindings = std.ArrayList(ImportedProcedureBindingView).empty;
         var closure_pool = ClosurePool.empty;
         errdefer {
             bindings.deinit(allocator);
             closure_pool.deinit(allocator);
         }
-        const closure_context = ImportedTemplateClosureContext{
-            .allocator = allocator,
-            .artifact_key = artifact_key,
-            .checked_types = checked_types,
-            .checked_templates = checked_templates,
-            .callable_eval_template_table = callable_eval_templates,
-            .entry_wrappers = entry_wrappers,
-            .const_templates_table = const_templates,
-            .resolved_value_refs_table = resolved_value_refs,
-            .top_level_bindings = procedure_bindings,
-            .platform_required_bindings = platform_required_bindings,
-            .imports = imports,
-            .available_artifacts = available_artifacts,
-        };
 
         // A function bound by a top-level destructure is a promoted callable
         // root; its row is keyed by the binder node the importer reaches it
@@ -32313,14 +31368,7 @@ pub const ExportedProcedureBindingTable = struct {
             const checked_pattern = checked_bodies.patternIdForSource(binder) orelse continue;
             const binding_ref = selected_hoisted_callables.lookupByPattern(checked_pattern) orelse continue;
             const binding = procedure_bindings.get(binding_ref);
-            var template_closure = try buildProcedureBindingClosure(
-                closure_context,
-                binding.body,
-            );
-            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
-
-            const stored_closure = try closure_pool.commit(allocator, template_closure);
-            template_closure = .{};
+            const stored_closure = try closure_pool.commit(allocator, try buildProcedureBindingClosure(closure_context, binding.body));
 
             try bindings.append(allocator, .{
                 .binding = .{
@@ -32344,14 +31392,7 @@ pub const ExportedProcedureBindingTable = struct {
                 .const_ref => continue,
             };
             const binding = procedure_bindings.get(binding_ref);
-            var template_closure = try buildProcedureBindingClosure(
-                closure_context,
-                binding.body,
-            );
-            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
-
-            const stored_closure = try closure_pool.commit(allocator, template_closure);
-            template_closure = .{};
+            const stored_closure = try closure_pool.commit(allocator, try buildProcedureBindingClosure(closure_context, binding.body));
 
             try bindings.append(allocator, .{
                 .binding = .{
@@ -32677,45 +31718,22 @@ pub const ExportedConstTemplateTable = struct {
     closure_pool: ClosurePool = ClosurePool.empty,
 
     pub fn fromModule(
-        allocator: Allocator,
+        closure_context: ImportedTemplateClosureContext,
         module: TypedCIR.Module,
         published_exports: []const CIR.Def.Idx,
-        artifact_key: CheckedModuleArtifactKey,
-        checked_types: *const CheckedTypeStore,
-        checked_templates: *const CheckedProcedureTemplateTable,
-        callable_eval_templates: *const CallableEvalTemplateTable,
-        entry_wrappers: *const EntryWrapperTable,
-        top_level_values: *const TopLevelValueTable,
-        const_templates: *const ConstTemplateTable,
-        resolved_value_refs: *const ResolvedValueRefTable,
-        top_level_bindings: *const TopLevelProcedureBindingTable,
-        platform_required_bindings: *const PlatformRequiredBindingTable,
-        imports: []const PublishImportArtifact,
-        available_artifacts: []const ImportedModuleView,
         published_export_binders: []const CIR.Pattern.Idx,
         checked_bodies: *const CheckedBodyStore,
+        top_level_values: *const TopLevelValueTable,
         hoisted_constants: *const HoistedConstTable,
     ) Allocator.Error!ExportedConstTemplateTable {
+        const allocator = closure_context.allocator;
+        const const_templates = closure_context.const_templates_table;
         var templates = std.ArrayList(ImportedConstTemplateView).empty;
         var closure_pool = ClosurePool.empty;
         errdefer {
             templates.deinit(allocator);
             closure_pool.deinit(allocator);
         }
-        const closure_context = ImportedTemplateClosureContext{
-            .allocator = allocator,
-            .artifact_key = artifact_key,
-            .checked_types = checked_types,
-            .checked_templates = checked_templates,
-            .callable_eval_template_table = callable_eval_templates,
-            .entry_wrappers = entry_wrappers,
-            .const_templates_table = const_templates,
-            .resolved_value_refs_table = resolved_value_refs,
-            .top_level_bindings = top_level_bindings,
-            .platform_required_bindings = platform_required_bindings,
-            .imports = imports,
-            .available_artifacts = available_artifacts,
-        };
 
         // A value bound by a top-level destructure is a hoisted extraction
         // root; its row is keyed by the binder node the importer reaches it
@@ -32724,13 +31742,7 @@ pub const ExportedConstTemplateTable = struct {
             const checked_pattern = checked_bodies.patternIdForSource(binder) orelse continue;
             const entry = hoisted_constants.lookupByPattern(checked_pattern) orelse continue;
             const template = const_templates.get(entry.const_ref);
-            var template_closure = try buildImportedConstTemplateClosure(
-                closure_context,
-                entry.const_ref,
-            );
-            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
-            const stored_closure = try closure_pool.commit(allocator, template_closure);
-            template_closure = .{};
+            const stored_closure = try closure_pool.commit(allocator, try buildImportedConstTemplateClosure(closure_context, entry.const_ref));
             try templates.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = @fromBackingInt(@intCast(@backingInt(binder))),
@@ -32749,13 +31761,7 @@ pub const ExportedConstTemplateTable = struct {
                 .procedure_binding => continue,
             };
             const template = const_templates.get(const_ref);
-            var template_closure = try buildImportedConstTemplateClosure(
-                closure_context,
-                const_ref,
-            );
-            errdefer deinitImportedTemplateClosure(allocator, &template_closure);
-            const stored_closure = try closure_pool.commit(allocator, template_closure);
-            template_closure = .{};
+            const stored_closure = try closure_pool.commit(allocator, try buildImportedConstTemplateClosure(closure_context, const_ref));
             try templates.append(allocator, .{
                 .module_idx = module.moduleIndex(),
                 .def = def_idx,
@@ -33306,7 +32312,7 @@ pub const CheckedModuleArtifact = struct {
     /// Manual discriminant for `SERIALIZED_VERSION_HASH`: bump to force a cache /
     /// baked-blob invalidation for a layout change the structural fingerprint below
     /// cannot observe (e.g. a semantic change to how a field is interpreted).
-    const serialized_layout_version: u32 = 107;
+    const serialized_layout_version: u32 = 108;
 
     /// Comptime fingerprint of `Serialized`'s layout, mirroring
     /// `cache_module.MODULE_ENV_VERSION_HASH`. It is appended to the baked builtin
@@ -35637,7 +34643,7 @@ const CheckedTypeStoreImportProjector = struct {
                 const tags: []const CheckedTagBuild = if (tag_union.tags.len == 0) &.{} else tags_blk: {
                     const out = try gpa.alloc(CheckedTagBuild, tag_union.tags.len);
                     for (out) |*tag| tag.* = .{ .name = undefined, .args = &.{} };
-                    errdefer deinitCheckedTagsBuild(gpa, out);
+                    errdefer freeOwned(gpa, out);
                     for (tag_union.tags, out) |tag, *slot| {
                         slot.name = @fromBackingInt(@intCast(results.take()));
                         slot.args = try results.typeIds(gpa, tag.args_len);
@@ -36887,66 +35893,47 @@ pub fn publishFromTypedModule(
         EvaluationDiagnostics{};
     errdefer evaluation_diagnostics.deinit(allocator);
 
+    const closure_context = ImportedTemplateClosureContext{
+        .allocator = allocator,
+        .artifact_key = artifact_key,
+        .checked_types = checked_types,
+        .checked_templates = &checked_procedure_templates,
+        .callable_eval_template_table = &callable_eval_templates,
+        .entry_wrappers = &entry_wrappers,
+        .const_templates_table = &const_templates,
+        .resolved_value_refs_table = &resolved_value_refs,
+        .top_level_bindings = &top_level_procedure_bindings,
+        .platform_required_bindings = &platform_required_bindings,
+        .imports = inputs.imports,
+        .available_artifacts = inputs.available_artifacts,
+    };
     var exported_procedure_templates = try ExportedProcedureTemplateTable.fromModule(
-        allocator,
+        closure_context,
         module,
         exports,
         &canonical_names,
-        artifact_key,
-        checked_types,
-        &checked_procedure_templates,
-        &callable_eval_templates,
-        &entry_wrappers,
-        &const_templates,
-        &resolved_value_refs,
-        &top_level_procedure_bindings,
-        &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
         &checked_type_publication,
     );
     errdefer exported_procedure_templates.deinit(allocator);
 
     var exported_procedure_bindings = try ExportedProcedureBindingTable.fromModule(
-        allocator,
+        closure_context,
         module,
         exports,
         export_binders,
         checked_bodies,
         &selected_hoisted_callables,
-        checked_types,
-        &checked_procedure_templates,
-        &const_templates,
         &top_level_values,
-        &top_level_procedure_bindings,
-        &callable_eval_templates,
-        &entry_wrappers,
-        &resolved_value_refs,
-        &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
-        artifact_key,
     );
     errdefer exported_procedure_bindings.deinit(allocator);
 
     var exported_const_templates = try ExportedConstTemplateTable.fromModule(
-        allocator,
+        closure_context,
         module,
         exports,
-        artifact_key,
-        checked_types,
-        &checked_procedure_templates,
-        &callable_eval_templates,
-        &entry_wrappers,
-        &top_level_values,
-        &const_templates,
-        &resolved_value_refs,
-        &top_level_procedure_bindings,
-        &platform_required_bindings,
-        inputs.imports,
-        inputs.available_artifacts,
         export_binders,
         checked_bodies,
+        &top_level_values,
         &hoisted_constants,
     );
     errdefer exported_const_templates.deinit(allocator);
@@ -38492,7 +37479,7 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
     try store.payloads.append(gpa, record_stored);
 
     // A scheme with generalized vars [a, b].
-    const gv = try store.appendTypeIds(gpa, &.{ a, b });
+    const gv = try store.appendPool(gpa, CheckedTypeId, &.{ a, b });
     const scheme_key = canonical.CanonicalTypeSchemeKey{ .bytes = @as([32]u8, @splat(3)) };
     const scheme_id = try store.internScheme(gpa, scheme_key, a);
     store.schemes.items[@backingInt(scheme_id)].gv_start = gv.start;
@@ -38507,14 +37494,14 @@ test "CheckedTypeStore: POD round-trip preserves payloads, tags, var names, rang
 
     // A nominal declaration with formal args [c], backing c, padding fields [a], and a
     // declared record sequence [{field}, {_ : a}].
-    const fa = try store.appendTypeIds(gpa, &.{c});
-    const pf = try store.appendTypeIds(gpa, &.{a});
+    const fa = try store.appendPool(gpa, CheckedTypeId, &.{c});
+    const pf = try store.appendPool(gpa, CheckedTypeId, &.{a});
     const field_name: canonical.RecordFieldLabelId = @fromBackingInt(@intCast(4));
-    const df = try store.appendDeclaredFields(gpa, &.{
+    const df = try store.appendPool(gpa, CheckedDeclaredField, &.{
         .{ .named = field_name },
         .{ .padding = 0 },
     });
-    const rf = try store.appendNominalRecordFields(gpa, &.{ .{ .named = field_name }, .{ .padding = a } });
+    const rf = try store.appendPool(gpa, CheckedNominalRecordField, &.{ .{ .named = field_name }, .{ .padding = a } });
     try store.nominal_declarations.append(gpa, .{
         .id = nominal_declaration_id,
         .nominal = .{ .module = @as(canonical.ModuleIdentityId, @fromBackingInt(@intCast(15))), .type_name = @as(canonical.TypeNameId, @fromBackingInt(@intCast(14))), .source_decl = 16 },
@@ -38686,7 +37673,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
             body.loopMutations(body.statement(@fromBackingInt(@intCast(6))).data.for_.mutations.?),
         };
         for (plans) |plan| {
-            const pool = body.patternBinderIdPool();
+            const pool = body.pattern_binder_id_pool.items;
             // b1 is reassigned only inside an expect, which never carries loop state.
             try std.testing.expectEqualSlices(PatternBinderId, &.{b0}, pool[plan.binders.start..][0..plan.binders.len]);
         }
@@ -38695,7 +37682,7 @@ test "loop mutation plans preserve expect mode, dispatch operands, nesting, cond
             body.loopMutations(body.expr(@fromBackingInt(@intCast(11))).data.for_.mutations.?),
         };
         for (condition_plans) |plan| {
-            const pool = body.patternBinderIdPool();
+            const pool = body.pattern_binder_id_pool.items;
             try std.testing.expectEqualSlices(PatternBinderId, &.{ b0, b2 }, pool[plan.binders.start..][0..plan.binders.len]);
         }
     }
@@ -39137,8 +38124,8 @@ test "SERIALIZED_VERSION_HASH golden value" {
     // `serialized_layout_version` only for semantic changes the structural hash
     // cannot observe, as documented at that discriminant.
     const golden: [32]u8 = .{
-        0x22, 0x1E, 0xDC, 0xAA, 0xFE, 0xF0, 0xDA, 0xA0, 0x8F, 0x11, 0xF2, 0x70, 0x4B, 0xE9, 0xED, 0x93,
-        0x7C, 0x88, 0x20, 0xB5, 0xB8, 0xD3, 0x0C, 0xF7, 0x76, 0xBB, 0xCC, 0xCE, 0xF0, 0xA0, 0xB9, 0xF7,
+        0xE7, 0x67, 0xF1, 0xC3, 0x0F, 0x36, 0x33, 0x74, 0xA8, 0xAC, 0x45, 0xE7, 0xB7, 0x46, 0xA8, 0x75,
+        0xD7, 0x03, 0x01, 0x30, 0x17, 0xC8, 0x89, 0xA5, 0xD7, 0x7A, 0x82, 0x0A, 0xA9, 0xAF, 0xF2, 0x11,
     };
     try std.testing.expectEqualSlices(u8, &golden, &CheckedModuleArtifact.SERIALIZED_VERSION_HASH);
 }

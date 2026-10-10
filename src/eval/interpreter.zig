@@ -379,7 +379,6 @@ pub const Interpreter = struct {
     runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
-    runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
     runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Descriptor-guided boxy value machinery, bound to this interpreter's live
     /// descriptor tables by `bindBoxyRuntime` before each evaluation.
@@ -654,8 +653,6 @@ pub const Interpreter = struct {
         returned: LocalId,
         /// The procedure returned without a value because a call is pending.
         returned_pending,
-        loop_continue,
-        loop_break,
         /// A frame-replacing call: the procedure's result is whatever this
         /// call returns, so its own frame ends before the callee's begins.
         tail_call: TailCall,
@@ -912,7 +909,6 @@ pub const Interpreter = struct {
             .runtime_boxy_desc_refs = .empty,
             .runtime_boxy_tag_variants = .empty,
             .runtime_boxy_tag_payload_descs = .empty,
-            .runtime_boxy_payload_steps = .empty,
             .runtime_boxy_dicts = .{},
             .boxy_runtime = .{
                 .store = store,
@@ -926,7 +922,6 @@ pub const Interpreter = struct {
                 .runtime_boxy_desc_refs = undefined,
                 .runtime_boxy_tag_variants = undefined,
                 .runtime_boxy_tag_payload_descs = undefined,
-                .runtime_boxy_payload_steps = undefined,
                 .runtime_boxy_dicts = undefined,
                 .roc_ops = undefined,
                 .scratch = allocator,
@@ -943,7 +938,6 @@ pub const Interpreter = struct {
         self.comptime_branch_hits.deinit(self.evalAllocator());
         self.failed_call_stack.deinit(self.evalAllocator());
         self.call_stack.deinit(self.evalAllocator());
-        self.runtime_boxy_payload_steps.deinit(self.allocator);
         self.runtime_boxy_dicts.deinit(self.allocator);
         self.runtime_boxy_tag_payload_descs.deinit(self.allocator);
         self.runtime_boxy_tag_variants.deinit(self.allocator);
@@ -1184,7 +1178,6 @@ pub const Interpreter = struct {
         self.boxy_runtime.runtime_boxy_desc_refs = &self.runtime_boxy_desc_refs;
         self.boxy_runtime.runtime_boxy_tag_variants = &self.runtime_boxy_tag_variants;
         self.boxy_runtime.runtime_boxy_tag_payload_descs = &self.runtime_boxy_tag_payload_descs;
-        self.boxy_runtime.runtime_boxy_payload_steps = &self.runtime_boxy_payload_steps;
         self.boxy_runtime.runtime_boxy_dicts = &self.runtime_boxy_dicts;
         self.boxy_runtime.roc_ops = &self.roc_ops;
         self.boxy_runtime.descriptor_arena = self.descriptor_arena.allocator();
@@ -1243,7 +1236,7 @@ pub const Interpreter = struct {
                     }
                     return self.interp.runtime_boxy_type_descs.items[runtime_id];
                 },
-                .local, .dict_method_arg, .dict_method_hidden => {},
+                .local, .dict_method_hidden => {},
             }
             const frame = self.frame orelse return self.interp.invariantFailedError(
                 "LIR/interpreter invariant violated: boxy operation resolved a descriptor reference without a frame",
@@ -2318,14 +2311,6 @@ pub const Interpreter = struct {
                     .layout = raw_layout,
                 } };
             },
-            .loop_continue => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: proc {d} terminated via loop_continue",
-                .{proc_spec.name.raw()},
-            ),
-            .loop_break => return self.invariantFailedError(
-                "LIR/interpreter invariant violated: proc {d} terminated via loop_break",
-                .{proc_spec.name.raw()},
-            ),
         };
     }
 
@@ -2825,18 +2810,6 @@ pub const Interpreter = struct {
                     frame.setLocalDesc(assign.target, updated.desc);
                     current = assign.next;
                 },
-                .assign_boxy_reuse_box => |assign| {
-                    _ = try self.resolveBoxyDescRef(frame, assign.desc);
-                    const source_value = try self.getLocalChecked(frame, assign.source);
-                    try self.setLocalChecked(
-                        frame,
-                        current,
-                        assign.target,
-                        try self.materializeLocalValue(source_value, self.store.getLocal(assign.target).layout_idx),
-                        false,
-                    );
-                    current = assign.next;
-                },
                 .assign_boxy_unbox => |assign| {
                     const source_desc = try self.resolveBoxyDescRef(frame, assign.source_desc);
                     const target_desc = try self.resolveOptionalBoxyDescRef(frame, assign.target_desc);
@@ -3302,8 +3275,6 @@ pub const Interpreter = struct {
                 .str_match_set => |str_match_set| {
                     current = try self.execStrMatchSet(frame, current, str_match_set);
                 },
-                .loop_continue => return .loop_continue,
-                .loop_break => return .loop_break,
                 .join => |join_stmt| {
                     current = join_stmt.remainder;
                 },
@@ -5333,13 +5304,6 @@ pub const Interpreter = struct {
 
     const ListElemInfo = struct { alignment: u32, width: usize };
 
-    const ListElementPairStruct = struct {
-        list_offset: usize,
-        list_layout: layout_mod.Idx,
-        elem_offset: usize,
-        elem_layout: layout_mod.Idx,
-    };
-
     const ListElementRcContext = struct {
         interp: *LirInterpreter,
         frame: *const Frame,
@@ -6002,30 +5966,6 @@ pub const Interpreter = struct {
                 val.write(i128, args[0].read(i128));
                 break :blk val;
             },
-            .num_to_str => blk: {
-                // Generic num_to_str uses arg layout to determine type
-                const size = self.helper.sizeOf(arg_layout);
-                const l = self.layout_store.getLayout(arg_layout);
-                const is_float = l.tag == .scalar and l.getScalar().tag == .frac;
-                if (isDec(arg_layout)) {
-                    const dec = RocDec{ .num = args[0].read(i128) };
-                    var crash_boundary = self.enterCrashBoundary();
-                    defer crash_boundary.deinit();
-                    const sj = crash_boundary.set();
-                    if (sj != 0) return self.crashError();
-                    const result = builtins.dec.to_str(dec, &self.roc_ops);
-                    break :blk self.rocStrToValue(result, ll.ret_layout);
-                } else if (is_float) {
-                    const bits: u64 = switch (size) {
-                        4 => @as(u64, @as(u32, @bitCast(args[0].read(f32)))),
-                        else => @bitCast(args[0].read(f64)),
-                    };
-                    const result = builtins.str.floatToStrFromBits(bits, size == 4, &self.roc_ops);
-                    break :blk self.rocStrToValue(result, ll.ret_layout);
-                } else {
-                    break :blk self.numToStrByLayout(args[0], arg_layout, ll.ret_layout);
-                }
-            },
 
             // ── List ops ──
             // A hint only: nothing to do, and nothing to return.
@@ -6611,15 +6551,9 @@ pub const Interpreter = struct {
                 );
                 break :blk self.rocListToValue(result, ll.ret_layout);
             },
-            .list_first => self.evalListEnd(.first, args[0], arg_layout, ll.ret_layout),
-            .list_last => self.evalListEnd(.last, args[0], arg_layout, ll.ret_layout),
-            .list_drop_first => self.evalListSublist(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll, 1, std.math.maxInt(u64)),
-            .list_drop_last => self.evalListDropLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             .list_take_first => self.evalListSublist(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll, 0, args[1].read(u64)),
             .list_take_last => self.evalListTakeLast(args[0], args[1], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
             .list_reverse => self.evalListReverse(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_split_first => self.evalListSplitFirst(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
-            .list_split_last => self.evalListSplitLast(args[0], arg_layout, ll.ret_layout, updateModeForArg0(ll.unique_args), ll),
 
             // ── Arithmetic ──
             .num_int_add_wrap,
@@ -6660,7 +6594,6 @@ pub const Interpreter = struct {
             .num_asin => self.evalFracMath(.asin, args[0], args[0], ll.ret_layout, arg_layout),
             .num_acos => self.evalFracMath(.acos, args[0], args[0], ll.ret_layout, arg_layout),
             .num_atan => self.evalFracMath(.atan, args[0], args[0], ll.ret_layout, arg_layout),
-            .num_log => self.evalFracMath(.log, args[0], args[0], ll.ret_layout, arg_layout),
             .num_floor => self.evalFracMath(.floor, args[0], args[0], ll.ret_layout, arg_layout),
             .num_ceiling => self.evalFracMath(.ceiling, args[0], args[0], ll.ret_layout, arg_layout),
 
@@ -7296,85 +7229,6 @@ pub const Interpreter = struct {
         };
     }
 
-    fn resolveListElementPairStruct(self: *LirInterpreter, struct_layout: layout_mod.Idx) ListElementPairStruct {
-        const struct_layout_val = self.layout_store.getLayout(struct_layout);
-        if (struct_layout_val.tag != .struct_) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: expected struct layout for list/element pair, got layout {d} ({s})",
-                .{ @backingInt(struct_layout), @tagName(struct_layout_val.tag) },
-            );
-        }
-
-        const struct_info = self.layout_store.getStructInfo(struct_layout_val);
-        if (struct_info.fields.len != 2) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: expected 2-field struct layout {d} for list/element pair, found {d} fields",
-                .{ @backingInt(struct_layout), struct_info.fields.len },
-            );
-        }
-
-        var pair: ?ListElementPairStruct = null;
-        var found_list = false;
-        var found_elem = false;
-        for (0..struct_info.fields.len) |i| {
-            const field_layout = self.layout_store.getStructFieldLayout(struct_layout_val.getStruct().idx, @intCast(i));
-            const field_offset = self.layout_store.getStructFieldOffset(struct_layout_val.getStruct().idx, @intCast(i));
-            const field_layout_val = self.layout_store.getLayout(field_layout);
-            const is_list = field_layout_val.tag == .list or field_layout_val.tag == .list_of_zst;
-            if (is_list) {
-                if (found_list) {
-                    self.invariantFailed(
-                        "LIR/interpreter invariant violated: struct layout {d} had multiple list fields in list/element pair lowering",
-                        .{@backingInt(struct_layout)},
-                    );
-                }
-                found_list = true;
-                pair = if (pair) |existing| .{
-                    .list_offset = field_offset,
-                    .list_layout = field_layout,
-                    .elem_offset = existing.elem_offset,
-                    .elem_layout = existing.elem_layout,
-                } else .{
-                    .list_offset = field_offset,
-                    .list_layout = field_layout,
-                    .elem_offset = 0,
-                    .elem_layout = .zst,
-                };
-            } else {
-                if (found_elem) {
-                    self.invariantFailed(
-                        "LIR/interpreter invariant violated: struct layout {d} had multiple non-list fields in list/element pair lowering",
-                        .{@backingInt(struct_layout)},
-                    );
-                }
-                found_elem = true;
-                pair = if (pair) |existing| .{
-                    .list_offset = existing.list_offset,
-                    .list_layout = existing.list_layout,
-                    .elem_offset = field_offset,
-                    .elem_layout = field_layout,
-                } else .{
-                    .list_offset = 0,
-                    .list_layout = undefined,
-                    .elem_offset = field_offset,
-                    .elem_layout = field_layout,
-                };
-            }
-        }
-
-        const resolved = pair orelse self.invariantFailed(
-            "LIR/interpreter invariant violated: struct layout {d} did not resolve a list/element pair shape",
-            .{@backingInt(struct_layout)},
-        );
-        if (!found_list or !found_elem) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: struct layout {d} missing list or element field in list/element pair shape",
-                .{@backingInt(struct_layout)},
-            );
-        }
-        return resolved;
-    }
-
     fn writeStructFieldValue(
         self: *LirInterpreter,
         struct_base: Value,
@@ -7525,14 +7379,6 @@ pub const Interpreter = struct {
         }
         return self.rocListToValue(list, ll.ret_layout);
     }
-
-    /// Determine if a layout index represents a Dec type.
-    fn isDec(layout_idx: layout_mod.Idx) bool {
-        return layout_idx == .dec;
-    }
-
-    /// Determine if a layout index represents an unsigned integer.
-    const isUnsigned = boxy_runtime.isUnsigned;
 
     fn numericOperandKind(self: *LirInterpreter, layout_idx: layout_mod.Idx) Error!NumericOperandKind {
         if (layout_idx == .u8) return .{ .unsigned_int = .w8 };
@@ -7853,7 +7699,6 @@ pub const Interpreter = struct {
         pow,
         atan2,
         sqrt,
-        log,
         sin,
         cos,
         tan,
@@ -7869,7 +7714,6 @@ pub const Interpreter = struct {
                 .pow => math.pow(a, b),
                 .atan2 => math.atan2(a, b),
                 .sqrt => @sqrt(a),
-                .log => if (F == f32) math.log(a) else @log(a),
                 .sin => math.sin(a),
                 .cos => math.cos(a),
                 .tan => math.tan(a),
@@ -7888,7 +7732,6 @@ pub const Interpreter = struct {
                 .pow,
                 .atan2,
                 .sqrt,
-                .log,
                 .sin,
                 .cos,
                 .tan,
@@ -7905,7 +7748,6 @@ pub const Interpreter = struct {
                 .pow => builtins.dec.powC(a, b, roc_ops),
                 .atan2 => builtins.dec.atan2C(a, b, roc_ops),
                 .sqrt => builtins.dec.sqrtC(a, roc_ops),
-                .log => builtins.dec.logC(a, roc_ops),
                 .sin => builtins.dec.sinC(a, roc_ops),
                 .cos => builtins.dec.cosC(a, roc_ops),
                 .tan => builtins.dec.tanC(a, roc_ops),
@@ -8257,39 +8099,7 @@ pub const Interpreter = struct {
         return try self.makeRocStr(formatted);
     }
 
-    fn numToStrByLayout(self: *LirInterpreter, arg: Value, arg_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const size = self.helper.sizeOf(arg_layout);
-        return switch (size) {
-            1 => if (isUnsigned(arg_layout)) self.numToStr(u8, arg, ret_layout) else self.numToStr(i8, arg, ret_layout),
-            2 => if (isUnsigned(arg_layout)) self.numToStr(u16, arg, ret_layout) else self.numToStr(i16, arg, ret_layout),
-            4 => if (isUnsigned(arg_layout)) self.numToStr(u32, arg, ret_layout) else self.numToStr(i32, arg, ret_layout),
-            8 => if (isUnsigned(arg_layout)) self.numToStr(u64, arg, ret_layout) else self.numToStr(i64, arg, ret_layout),
-            16 => if (isUnsigned(arg_layout)) self.numToStr(u128, arg, ret_layout) else self.numToStr(i128, arg, ret_layout),
-            else => self.makeRocStr("0"),
-        };
-    }
-
     // ── List operation helpers ──
-
-    fn evalListEnd(self: *LirInterpreter, comptime end: enum { first, last }, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            // Result tag union: payload at 0, discriminant after
-            const offset = switch (end) {
-                .first => 0,
-                .last => (rl.len() - 1) * info.width,
-            };
-            @memcpy(val.ptr[0..info.width], rl.bytes.?[offset..][0..info.width]);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1); // Ok tag
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0); // Err tag
-        }
-        return val;
-    }
 
     /// Keep `len` elements of the list starting at `start`, releasing the rest.
     fn evalListSublist(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput, start: u64, len: u64) Error!Value {
@@ -8317,15 +8127,6 @@ pub const Interpreter = struct {
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListDropLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const len = rl.len();
-        if (len == 0) {
-            return self.rocListToValue(if (self.listElemInfo(list_layout).width == 0) canonicalZstList(0) else rl, ret_layout);
-        }
-        return self.evalListSublist(list_arg, list_layout, ret_layout, update_mode, ll, 0, len - 1);
     }
 
     fn evalListTakeLast(self: *LirInterpreter, list_arg: Value, count_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
@@ -8391,78 +8192,6 @@ pub const Interpreter = struct {
             &self.roc_ops,
         );
         return self.rocListToValue(result, ret_layout);
-    }
-
-    fn evalListSplitFirst(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
-            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            const first_elem = Value{ .ptr = rl.bytes.? };
-            try self.writeStructFieldValue(
-                val,
-                pair.elem_offset,
-                pair.elem_layout,
-                first_elem,
-                elem_layout,
-            );
-            if (self.builtinInternalContainsRefcounted("interpreter.list_split_first.elem_rc", elem_layout)) {
-                self.performBuiltinInternalRc("interpreter.list_split_first.elem_incref", .incref, first_elem, elem_layout, 1);
-            }
-            // Rest list starts at offset info.width
-            const rest_value = try self.evalListSublist(list_arg, list_layout, pair.list_layout, update_mode, ll, 1, std.math.maxInt(u64));
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0);
-        }
-        return val;
-    }
-
-    fn evalListSplitLast(self: *LirInterpreter, list_arg: Value, list_layout: layout_mod.Idx, ret_layout: layout_mod.Idx, update_mode: UpdateMode, ll: LowLevelEvalInput) Error!Value {
-        const rl = self.valueToRocListForLayout(list_arg, list_layout);
-        const info = self.listElemInfo(list_layout);
-        const elem_layout = self.listElemLayout(list_layout);
-        const val = try self.alloc(ret_layout);
-        if (rl.len() > 0 and info.width == 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            try self.writeStructFieldValue(val, pair.elem_offset, pair.elem_layout, Value.zst, elem_layout);
-            const rest_value = try self.rocListToValue(canonicalZstList(rl.len() - 1), pair.list_layout);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else if (rl.len() > 0 and rl.bytes != null and info.width > 0) {
-            const payload_layout = self.tagPayloadLayout(ret_layout, 1);
-            const pair = self.resolveListElementPairStruct(payload_layout);
-            const last_offset = (rl.len() - 1) * info.width;
-            const last_elem = Value{ .ptr = rl.bytes.? + last_offset };
-            try self.writeStructFieldValue(
-                val,
-                pair.elem_offset,
-                pair.elem_layout,
-                last_elem,
-                elem_layout,
-            );
-            if (self.builtinInternalContainsRefcounted("interpreter.list_split_last.elem_rc", elem_layout)) {
-                self.performBuiltinInternalRc("interpreter.list_split_last.elem_incref", .incref, last_elem, elem_layout, 1);
-            }
-            const rest_value = try self.evalListSublist(list_arg, list_layout, pair.list_layout, update_mode, ll, 0, rl.len() - 1);
-            try self.writeStructFieldValue(val, pair.list_offset, pair.list_layout, rest_value, pair.list_layout);
-            self.helper.writeTagDiscriminant(val, ret_layout, 1);
-        } else {
-            self.helper.writeTagDiscriminant(val, ret_layout, 0);
-        }
-        return val;
     }
 
     /// Generic integer binary operation.
@@ -8701,16 +8430,6 @@ pub const Interpreter = struct {
                     );
                 }
                 break :blk @ptrFromInt(raw_ptr);
-            },
-            .dict_method_arg => |projection| blk: {
-                const dict = try self.resolveBoxyDictRef(frame, .{ .local = projection.dict });
-                break :blk try self.boxy_runtime.resolveDictMethodArgDesc(
-                    BoxyFrameHooks{ .interp = self, .frame = frame },
-                    dict,
-                    projection.method_slot,
-                    @backingInt(projection.method),
-                    projection.arg_index,
-                );
             },
             .dict_method_hidden => |projection| blk: {
                 const dict = try self.resolveBoxyDictRef(frame, .{ .local = projection.dict });

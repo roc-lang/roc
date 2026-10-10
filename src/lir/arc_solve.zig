@@ -1180,7 +1180,6 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -1215,8 +1214,6 @@ fn outcomeBindingTarget(stmt: LIR.CFStmt) ?LIR.LocalId {
         .jump,
         .ret,
         .crash,
-        .loop_continue,
-        .loop_break,
         => null,
     };
 }
@@ -1480,13 +1477,6 @@ fn computeOutcomeRestitution(
                         }
                         try pushNext(&stack, allocator, next_state, assign.next);
                     },
-                    .assign_boxy_reuse_box => |assign| {
-                        if (!consumeOutcomeLocal(solution, active_param, &next_state.present, assign.source)) {
-                            valid = false;
-                            break;
-                        }
-                        try pushNext(&stack, allocator, next_state, assign.next);
-                    },
                     inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_tag_payload => |assign| {
                         if (!consumeOutcomeTransfer(solution, active_param, &next_state.present, assign.source, assign.source_mode)) {
                             valid = false;
@@ -1684,10 +1674,6 @@ fn computeOutcomeRestitution(
                         }
                     },
                     .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .crash => {},
-                    .loop_continue, .loop_break => {
-                        valid = false;
-                        break;
-                    },
                 }
                 if (!valid) break;
             }
@@ -2166,7 +2152,6 @@ fn liftProcStmtFacts(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -2195,8 +2180,6 @@ fn liftProcStmtFacts(
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .crash,
         => {},
     }
@@ -2869,14 +2852,6 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try liftVisibilityLink(solver, assign.target, assign.base);
             try liftVisibilityLink(solver, assign.target, assign.fields);
         },
-        .assign_boxy_reuse_box => |assign| {
-            try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
-            try solver.binding_facts.append(allocator, .{ .demand = assign.source });
-            try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
-            try solver.unique_facts.append(allocator, .{ .consume = .{ .local = assign.source, .stmt = current } });
-            try liftBoxyDescRead(solver, assign.desc);
-            try liftVisibilityLink(solver, assign.target, assign.source);
-        },
         .assign_boxy_unbox => |assign| {
             try solver.binding_facts.append(allocator, .{ .fresh = assign.target });
             try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
@@ -3114,7 +3089,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
                         .stmt = current,
                     } });
                 },
-                .replace_existing, .initialize_join_result => {
+                .replace_existing => {
                     try solver.unique_facts.append(allocator, .{ .foreign = assign.target });
                     try solver.unique_facts.append(allocator, .{ .destroy = assign.target });
                     try solver.unique_facts.append(allocator, .{ .destroy = assign.value });
@@ -3209,7 +3184,7 @@ fn liftSharedStmtFacts(solver: *Solver, current: LIR.CFStmtId) SolveError!void {
             try solver.unique_facts.append(allocator, .{ .consume = .{ .local = message, .stmt = current } });
         },
         .jump => {},
-        .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+        .runtime_error, .comptime_exhaustiveness_failed => {},
     }
 }
 
@@ -3465,10 +3440,10 @@ fn computeVisibilityFromLift(
                         try stack.append(allocator, stmt.body);
                         try stack.append(allocator, stmt.remainder);
                     },
-                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
+                    inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| {
                         try stack.append(allocator, stmt.next);
                     },
-                    .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                    .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
                 }
             }
         }
@@ -3565,7 +3540,7 @@ fn computeVisibilityFromLift(
                 addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.base));
                 addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.fields));
             },
-            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign| {
+            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_tag_payload => |assign| {
                 addEdge(&sets, rc_local, @backingInt(assign.target), @backingInt(assign.source));
             },
             .assign_boxy_tag => |assign| {
@@ -3722,8 +3697,6 @@ fn computeVisibilityFromLift(
             .free,
             .switch_stmt,
             .switch_initialized_payload,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -4571,31 +4544,6 @@ const UniquenessWorkspace = struct {
     }
 };
 
-/// Settles uniqueness for the whole store against the solved signatures and
-/// the given take source, iterating with the unique-return bits and the
-/// conditional-return rows of every signature until they stop changing.
-///
-/// A proc's return is unique when every returned local is born unique and
-/// never given another holder; the union of the returned locals' conditions
-/// is the row's parameters, or, when empty, the unconditional bit. Returned
-/// aggregates get the same per field. Rows only ever gain parts or lose
-/// parameters between iterations, since a new row adds edges and adds no
-/// contradiction, so the loop terminates. The solver settles without takes
-/// and emission settles again against the committed takes; both leave the
-/// verdict, the per-local conditions, and the per-proc seed masks in the
-/// solution.
-pub fn settleUniqueness(
-    allocator: Allocator,
-    store: *const LirStore,
-    layouts: *const layout_mod.Store,
-    rc_local: []const bool,
-    solution: *Solution,
-    takes: TakeSource,
-    consume_dead_boxes: bool,
-) SolveError!void {
-    return settleUniquenessWithOptions(allocator, store, layouts, rc_local, solution, takes, consume_dead_boxes, .{});
-}
-
 /// Ownership components, unlike call SCCs, contain every procedure which can
 /// affect the same base-analysis local or statement. Calls only invalidate.
 /// Store-shaped inputs of a uniqueness settlement: every procedure's
@@ -5016,6 +4964,20 @@ fn runUniquenessTasks(
     if (failed) return error.OutOfMemory;
 }
 
+/// Settles uniqueness for the whole store against the solved signatures and
+/// the given take source, iterating with the unique-return bits and the
+/// conditional-return rows of every signature until they stop changing.
+///
+/// A proc's return is unique when every returned local is born unique and
+/// never given another holder; the union of the returned locals' conditions
+/// is the row's parameters, or, when empty, the unconditional bit. Returned
+/// aggregates get the same per field. Rows only ever gain parts or lose
+/// parameters between iterations, since a new row adds edges and adds no
+/// contradiction, so the loop terminates. The solver settles without takes
+/// and emission settles again against the committed takes; both leave the
+/// verdict, the per-local conditions, and the per-proc seed masks in the
+/// solution.
+///
 /// Exact ownership components run against frozen signatures in deterministic
 /// waves. Only callers of semantically changed signatures enter the next wave.
 /// Every invocation starts all components afresh, including post-take
@@ -5834,11 +5796,6 @@ fn computeUniquenessDetailed(
                 try marks.transfer(allocator, &consumes, &destroyed, assign.base, .borrow, @intCast(stmt_index));
                 try marks.transfer(allocator, &consumes, &destroyed, assign.fields, .move, @intCast(stmt_index));
             },
-            .assign_boxy_reuse_box => |assign| {
-                marks.trackDef(&has_def, &multi_def, assign.target);
-                marks.destroy(&foreign_def, assign.target);
-                try marks.consumeAt(allocator, &consumes, assign.source, @intCast(stmt_index));
-            },
             inline .assign_boxy_unbox, .assign_boxy_adapt => |assign| {
                 marks.trackDef(&has_def, &multi_def, assign.target);
                 marks.destroy(&foreign_def, assign.target);
@@ -6045,7 +6002,7 @@ fn computeUniquenessDetailed(
                             marks.destroy(&foreign_def, assign.target);
                         }
                     },
-                    .replace_existing, .initialize_join_result => {
+                    .replace_existing => {
                         marks.trackDef(&has_def, &multi_def, assign.target);
                         marks.destroy(&foreign_def, assign.target);
                         marks.destroy(&destroyed, assign.target);
@@ -6083,7 +6040,7 @@ fn computeUniquenessDetailed(
             .switch_stmt => {},
             .switch_initialized_payload => {},
             .decref_if_initialized => {},
-            .decref, .free, .jump, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+            .decref, .free, .jump, .runtime_error, .comptime_exhaustiveness_failed => {},
         }
     }
 
@@ -6510,7 +6467,6 @@ fn computeUniquenessDetailed(
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -6540,8 +6496,6 @@ fn computeUniquenessDetailed(
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -7005,7 +6959,7 @@ test "uniqueness fixed point propagates fresh returns through a call diamond and
     // Even settled signatures must receive the mandatory post-take analysis,
     // over the structure the first settlement retained on the solution.
     const settled_rounds = uniqueness_analysis_rounds;
-    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try testing.expectEqual(@as(usize, 1), @import("use_order.zig").topology_builds - builds_before);
     try testing.expectEqual(@as(usize, 1), uniqueness_analysis_rounds - settled_rounds);
     try testing.expectEqual(@as(u64, 3), solution.sigOf(chain).ret_unique_fields);
@@ -7472,7 +7426,7 @@ test "uniqueness carries a candidate read's origin through a returned record fie
     @memset(rc, true);
     var solution = try solve(allocator, &f.store, &f.layouts, rc, &.{}, &.{}, true);
     defer solution.deinit();
-    try settleUniqueness(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true);
+    try settleUniquenessWithOptions(allocator, &f.store, &f.layouts, rc, &solution, .stamped, true, .{});
     try std.testing.expect(solution.fresh_reads.isSet(@backingInt(read)));
     try std.testing.expect(solution.isUnique(first));
     try std.testing.expect(solution.isUniqueUnder(first, 0));

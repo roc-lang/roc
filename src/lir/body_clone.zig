@@ -255,7 +255,6 @@ pub fn appendSuccessors(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -310,8 +309,6 @@ pub fn appendSuccessors(
         .runtime_error,
         .comptime_exhaustiveness_failed,
         .expect_err,
-        .loop_continue,
-        .loop_break,
         .jump,
         .ret,
         .crash,
@@ -341,7 +338,6 @@ pub fn redirectSuccessors(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -400,8 +396,6 @@ pub fn redirectSuccessors(
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => {},
     }
 }
@@ -503,10 +497,6 @@ pub fn forEachStmtRead(
             emitDesc(ctx, note, s.base_desc);
             emitDesc(ctx, note, s.fields_desc);
         },
-        .assign_boxy_reuse_box => |s| {
-            note(ctx, s.source);
-            emitDesc(ctx, note, s.desc);
-        },
         .assign_boxy_unbox => |s| {
             note(ctx, s.source);
             emitDesc(ctx, note, s.source_desc);
@@ -589,8 +579,6 @@ pub fn forEachStmtRead(
         .jump,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => {},
     }
 }
@@ -622,12 +610,6 @@ fn countReachable(store: *LirStore, body: CFStmtId, allocator: Allocator, scratc
     return counts;
 }
 
-/// Add this statement's definitions to an existing per-local count row.
-/// Operand reads are deliberately excluded, matching `countReachableDefs`.
-pub fn countStmtDefs(store: *const LirStore, counts: []u32, stmt: LIR.CFStmt) void {
-    forEachStmtDef(store, stmt, counts, noteRead);
-}
-
 /// Call `note(ctx, local)` for every local this statement defines, in the
 /// one inventory every reader of definitions shares; operand reads are
 /// excluded.
@@ -646,7 +628,6 @@ pub fn forEachStmtDef(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -692,8 +673,6 @@ pub fn forEachStmtDef(
         .jump,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => {},
     }
 }
@@ -714,7 +693,6 @@ pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -748,8 +726,6 @@ pub fn definedTarget(stmt: LIR.CFStmt) ?LocalId {
         .str_match,
         .str_match_set,
         .boxy_tag_match,
-        .loop_continue,
-        .loop_break,
         .ret,
         .crash,
         => null,
@@ -782,7 +758,6 @@ pub fn forEachFlowSuccessor(
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -831,8 +806,6 @@ pub fn forEachFlowSuccessor(
         .expect_err,
         .runtime_error,
         .comptime_exhaustiveness_failed,
-        .loop_continue,
-        .loop_break,
         => {},
     }
 }
@@ -1005,7 +978,6 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -1055,8 +1027,6 @@ pub fn visitStmtDefinitions(store: *const LirStore, defined: anytype, stmt_id: C
         .switch_stmt,
         .switch_initialized_payload,
         .boxy_tag_match,
-        .loop_continue,
-        .loop_break,
         .jump,
         .ret,
         .crash,
@@ -1680,8 +1650,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .comptime_exhaustiveness_failed => |s| try self.store.addCFStmt(.{ .comptime_exhaustiveness_failed = .{
                     .site = s.site,
                 } }, origin),
-                .loop_continue => try self.store.addCFStmt(.loop_continue, origin),
-                .loop_break => try self.store.addCFStmt(.loop_break, origin),
                 .jump => |s| try self.cloneJump(s, origin),
                 .ret => |s| if (@hasDecl(Rewriter, "cloneRet"))
                     try self.rewriter.cloneRet(self, s.value, origin)
@@ -1694,7 +1662,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     },
                     .literal_rejection = s.literal_rejection,
                 } }, origin),
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join => null,
             };
         }
 
@@ -1786,12 +1754,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                     .fields = try self.mapLocal(s.fields),
                     .fields_layout = s.fields_layout,
                     .fields_desc = try self.mapBoxyDescRef(s.fields_desc),
-                    .next = s.next,
-                } },
-                .assign_boxy_reuse_box => |s| .{ .assign_boxy_reuse_box = .{
-                    .target = try self.mapLocal(s.target),
-                    .source = try self.mapLocal(s.source),
-                    .desc = try self.mapBoxyDescRef(s.desc),
                     .next = s.next,
                 } },
                 .assign_boxy_unbox => |s| .{ .assign_boxy_unbox = .{
@@ -1963,8 +1925,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 .jump,
                 .ret,
                 .crash,
@@ -2078,7 +2038,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                         return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
                     },
                 },
-                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .loop_continue, .loop_break, .jump, .ret, .crash => {
+                .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .jump, .ret, .crash => {
                     if (step == 0) return .{ .clone = linearNext(frame.source) };
                     setLinearNext(&frame.built, returned.?);
                     return .{ .finished = try self.store.addCFStmt(frame.built, frame.origin) };
@@ -2276,7 +2236,6 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 .static => |id| .{ .static = id },
                 .local => |local| .{ .local = try self.mapLocal(local) },
                 .runtime => |index| .{ .runtime = index },
-                .dict_method_arg => |arg| .{ .dict_method_arg = arg },
                 .dict_method_hidden => |hidden| .{ .dict_method_hidden = hidden },
             };
         }
@@ -2321,7 +2280,7 @@ pub fn BodyCloner(comptime Rewriter: type) type {
                 try pending.append(self.allocator, .{ .fresh = fresh, .desc = desc });
                 switch (desc) {
                     .local => |desc_local| old = desc_local,
-                    .static, .runtime, .dict_method_arg, .dict_method_hidden => {
+                    .static, .runtime, .dict_method_hidden => {
                         _ = pending.pop();
                         self.store.setLocalBoxyDesc(fresh, desc);
                         try self.new_locals.append(self.allocator, fresh);
@@ -2431,7 +2390,6 @@ pub fn linearNext(stmt: LIR.CFStmt) CFStmtId {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -2463,8 +2421,6 @@ pub fn linearNext(stmt: LIR.CFStmt) CFStmtId {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .join,
         .jump,
         .ret,
@@ -2486,7 +2442,6 @@ pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .assign_boxy_dict_ref,
         .assign_boxy_box,
         .assign_boxy_record_update,
-        .assign_boxy_reuse_box,
         .assign_boxy_unbox,
         .assign_boxy_adapt,
         .assign_boxy_inspect,
@@ -2518,8 +2473,6 @@ pub fn setLinearNext(stmt: *LIR.CFStmt, next: CFStmtId) void {
         .switch_initialized_payload,
         .str_match,
         .str_match_set,
-        .loop_continue,
-        .loop_break,
         .join,
         .jump,
         .ret,
@@ -2744,7 +2697,7 @@ test "body_clone scratch is bounded by reachable locals and scopes" {
     for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtReads(&store, dense, store.getCFStmt(stmt));
     for (dense, 0..) |count, index| try testing.expectEqual(count, reads.get(@fromBackingInt(@intCast(index))));
     @memset(dense, 0);
-    for ([_]CFStmtId{ body, copy, ret }) |stmt| countStmtDefs(&store, dense, store.getCFStmt(stmt));
+    for ([_]CFStmtId{ body, copy, ret }) |stmt| forEachStmtDef(&store, store.getCFStmt(stmt), dense, noteRead);
     for (dense, 0..) |count, index| try testing.expectEqual(count, defs.get(@fromBackingInt(@intCast(index))));
 
     var cloner = try BodyCloner(TestRetRewriter).initWithAllocator(&store, .{}, allocator);

@@ -919,9 +919,6 @@ const FutureFields = struct {
                     }
                     try self.edge(gpa, index, stmt.default_branch, ~restoredFieldMaskForDefault(solution, store, receipts, cursor));
                 },
-                .loop_continue, .loop_break => {
-                    if (solution.isJoinParam(local)) try self.observe(gpa, index, ~@as(u64, 0));
-                },
                 .init_uninitialized,
                 .assign_ref,
                 .assign_literal,
@@ -932,7 +929,6 @@ const FutureFields = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -1025,7 +1021,6 @@ fn fieldObservedAfter(
                     try work.append(gpa, stmt.default_branch);
                 }
             },
-            .loop_continue, .loop_break => if (solution.isJoinParam(local)) return true,
             .init_uninitialized,
             .assign_ref,
             .assign_literal,
@@ -1036,7 +1031,6 @@ fn fieldObservedAfter(
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -1157,14 +1151,14 @@ test "future field uses resolve joins in their procedure" {
     try std.testing.expect(future.observed(back_edge) & 1 == 0);
 }
 
-test "future field observations agree with per-read traversal across joins rebinds loops and outcomes" {
+test "future field observations agree with per-read traversal across joins rebinds and outcomes" {
     const gpa = std.testing.allocator;
     var store = LirStore.init(gpa);
     defer store.deinit();
     const local = try store.addLocal(.{ .layout_idx = .str });
     const other = try store.addLocal(.{ .layout_idx = .str });
     const exit = try store.addCFStmt(.{ .ret = .{ .value = other } }, .test_fixture);
-    const boundary = try store.addCFStmt(.loop_continue, .test_fixture);
+    const boundary = try store.addCFStmt(.runtime_error, .test_fixture);
     // Reserve the two procedure-local join identities before building their
     // bodies, which contain forward references to the enclosing joins.
     var join_ids: [2]LIR.JoinPointId = undefined;
@@ -1249,11 +1243,9 @@ test "future field observations agree with per-read traversal across joins rebin
     for (0..128) |configuration| {
         for (&outcomes, 0..) |*outcome, index| outcome.restituted_params = @intCast((configuration >> @intCast(index)) & 1);
         if (configuration & 16 != 0) solution.join_param.set(0) else solution.join_param.unset(0);
-        store.getCFStmtPtr(boundary).* = if (configuration & 1 != 0) .loop_break else .loop_continue;
         store.getCFStmtPtr(rebind).set_local.target = if (configuration & 32 != 0) local else other;
         try joins.put(gpa, 0, if (configuration & 64 != 0) nested else exit);
         try future.compute(gpa, &store, &solution, local, &reads, &joins, &receipts, null);
-        try std.testing.expectEqual(if (configuration & 16 != 0) ~@as(u64, 0) else @as(u64, 0), future.observed(boundary));
         for (starts) |start| {
             for ([_]u64{ 1, 2, 4 }) |bit| {
                 var visits: usize = 0;
@@ -1975,7 +1967,7 @@ pub fn compute(
                 analysis.disqualify(stmt.target);
                 try stack.append(gpa, stmt.next);
             },
-            inline .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
+            inline .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect => |stmt| {
                 try analysis.useWhole(current, stmt.source);
                 try analysis.noteDef(stmt.target, current);
                 analysis.disqualify(stmt.target);
@@ -2080,7 +2072,7 @@ pub fn compute(
                 try stack.append(gpa, stmt.next);
             },
             .expect_err => |stmt| try analysis.useWhole(current, stmt.message),
-            .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break, .jump => {},
+            .runtime_error, .comptime_exhaustiveness_failed, .jump => {},
             .comptime_branch_taken => |stmt| try stack.append(gpa, stmt.next),
             // The input contract is RC-free LIR; if RC statements ever appear
             // here, classifying their operands as whole uses stays sound.
@@ -2341,7 +2333,6 @@ pub fn compute(
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -2367,8 +2358,6 @@ pub fn compute(
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -2589,7 +2578,7 @@ pub fn compute(
                     }
                 }
                 switch (store.getCFStmt(cursor)) {
-                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
+                    inline .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |stmt| cursor = stmt.next,
                     .set_local => |stmt| {
                         // The value operand above still observes the old
                         // definition. Only the explicit write starts a fresh
@@ -2650,10 +2639,6 @@ pub fn compute(
                             try flow_frames.append(gpa, .{ .cursor = GuardedList.at(arms, i).on_match, .state = state });
                         }
                         cursor = stmt.on_miss;
-                    },
-                    .loop_continue, .loop_break => {
-                        if (solution.isJoinParam(local)) poison |= state.may;
-                        break :chain;
                     },
                     .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {
                         break :chain;

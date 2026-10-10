@@ -7136,7 +7136,7 @@ const ProcedureBuilder = struct {
                         try stack.append(self.allocator, assign.next);
                         const desc_id = switch (assign.desc) {
                             .static => |id| id,
-                            .local, .runtime, .dict_method_arg, .dict_method_hidden => continue,
+                            .local, .runtime, .dict_method_hidden => continue,
                         };
                         const captures = capture_sets.items[@backingInt(desc_id)].items;
                         if (std.mem.findScalar(LIR.LocalId, captures, assign.target) != null) {
@@ -7158,7 +7158,6 @@ const ProcedureBuilder = struct {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
@@ -7219,8 +7218,6 @@ const ProcedureBuilder = struct {
                     .expect_err,
                     .runtime_error,
                     .comptime_exhaustiveness_failed,
-                    .loop_continue,
-                    .loop_break,
                     => {},
                 }
             }
@@ -7271,9 +7268,6 @@ const ProcedureBuilder = struct {
                     try self.collectDescriptorGraphRef(payload.desc, parent, captures, parents);
                 }
             }
-
-            try self.collectDescriptorPayloadStepRefs(desc.copy_plan, parent, captures, parents);
-            try self.collectDescriptorPayloadStepRefs(desc.drop_plan, parent, captures, parents);
         }
 
         var queue = std.ArrayList(LIR.BoxyTypeDescId).empty;
@@ -7334,26 +7328,6 @@ const ProcedureBuilder = struct {
         }
     }
 
-    fn collectDescriptorPayloadStepRefs(
-        self: *ProcedureBuilder,
-        span: LIR.BoxySpan,
-        parent: LIR.BoxyTypeDescId,
-        captures: []std.ArrayList(LIR.LocalId),
-        parents: []std.ArrayList(LIR.BoxyTypeDescId),
-    ) Allocator.Error!void {
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.result.boxy_payload_steps.items.len) {
-            boxyLowerInvariant("boxy descriptor payload step span exceeded its table");
-        }
-        for (self.result.boxy_payload_steps.items[start..end]) |step| {
-            switch (step) {
-                .concrete => {},
-                .dynamic => |dynamic| try self.collectDescriptorGraphRef(dynamic.desc, parent, captures, parents),
-            }
-        }
-    }
-
     fn collectDescriptorGraphRef(
         self: *ProcedureBuilder,
         desc_ref: LIR.BoxyDescRef,
@@ -7377,7 +7351,7 @@ const ProcedureBuilder = struct {
                     try reverse.append(self.allocator, parent);
                 }
             },
-            .runtime, .dict_method_arg, .dict_method_hidden => {},
+            .runtime, .dict_method_hidden => {},
         }
     }
 
@@ -14903,7 +14877,7 @@ const ProcedureBuilder = struct {
                 boxyLowerInvariant("boxy host wrapper worker result descriptor was not one of its arguments");
             },
             .static => ret_desc,
-            .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy host wrapper worker result descriptor was not a static or argument descriptor"),
+            .runtime, .dict_method_hidden => boxyLowerInvariant("boxy host wrapper worker result descriptor was not a static or argument descriptor"),
         } else if (self.plan.representations.items[@backingInt(proc.descriptorStorageRep(worker_ret_rep))].descriptor != null)
             // The worker result carries no descriptor of its own; the wrapper
             // knows the root's exact instantiation and describes it statically.
@@ -15062,7 +15036,6 @@ const ProcedureBuilder = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -15130,8 +15103,6 @@ const ProcedureBuilder = struct {
                 .expect_err,
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
-                .loop_continue,
-                .loop_break,
                 => {},
             }
         }
@@ -15149,7 +15120,7 @@ const ProcedureBuilder = struct {
                     else
                         .{};
                 },
-                .runtime, .dict_method_arg, .dict_method_hidden => .{},
+                .runtime, .dict_method_hidden => .{},
             },
             .divergent => blk: {
                 for (return_edges.items) |edge| {
@@ -15246,7 +15217,6 @@ const ProcedureBuilder = struct {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_inspect,
                     .assign_boxy_eq,
@@ -15275,8 +15245,6 @@ const ProcedureBuilder = struct {
                     .switch_initialized_payload,
                     .str_match,
                     .str_match_set,
-                    .loop_continue,
-                    .loop_break,
                     .join,
                     .jump,
                     .ret,
@@ -15330,7 +15298,6 @@ const ProcedureBuilder = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -15361,8 +15328,6 @@ const ProcedureBuilder = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -24104,7 +24069,7 @@ const ProcBodyBuilder = struct {
                         .source_rep = desc_source.rep,
                         .exact = if (hidden_desc_initializer) |initializer| if (initializer.materialize) |materialize| switch (materialize) {
                             .static => |id| if (initializer.captures.len == 0) id else null,
-                            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+                            .local, .runtime, .dict_method_hidden => null,
                         } else null else null,
                     } },
                     .hidden_dict => .{ .dictionary = capture.dictionaries },
@@ -26146,7 +26111,7 @@ const ProcBodyBuilder = struct {
         const desc = info.desc orelse return null;
         const candidate: DescriptorMaterialization = switch (desc) {
             .static => DescriptorMaterialization{ .desc = desc },
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| materialized: {
+            .local, .runtime, .dict_method_hidden => info.template orelse if (info.materialize) |materialize| materialized: {
                 // Only a whole-descriptor materialization is this value's
                 // template. Nested, path, and tag-extension reads name the
                 // enclosing descriptor they read from.
@@ -26163,7 +26128,7 @@ const ProcBodyBuilder = struct {
         };
         return switch (candidate.desc) {
             .static => candidate,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => null,
+            .local, .runtime, .dict_method_hidden => null,
         };
     }
 
@@ -26255,7 +26220,7 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter target descriptor template was not static"),
         };
         const target_template = self.parent.result.boxy_type_descs.items[@backingInt(target_template_id)];
 
@@ -26265,7 +26230,7 @@ const ProcBodyBuilder = struct {
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy tuple adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@backingInt(source_template_id)];
         } else null;
@@ -26614,7 +26579,7 @@ const ProcBodyBuilder = struct {
                 result.desc orelse boxyLowerInvariant("recursive boxy adapter descriptor had no result");
             const template_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("recursive boxy adapter descriptor had no static template"),
             };
             if (template_id == recursive_desc) {
                 boxyLowerInvariant("recursive boxy adapter descriptor resolved only to its unfinished reservation");
@@ -26800,7 +26765,7 @@ const ProcBodyBuilder = struct {
         const materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const template_id = switch (materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy adapter descriptor template was not static"),
         };
         const template = self.parent.result.boxy_type_descs.items[@backingInt(template_id)];
 
@@ -26819,7 +26784,7 @@ const ProcBodyBuilder = struct {
         const source_template: LirProgram.BoxyTypeDesc = if (source_template_desc) |template_desc| blk: {
             const source_template_id = switch (template_desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy call adapter source descriptor template was not static"),
             };
             break :blk self.parent.result.boxy_type_descs.items[@backingInt(source_template_id)];
         } else return .{ .finished = try self.adapterDescriptorFromMaterialization(
@@ -27123,7 +27088,7 @@ const ProcBodyBuilder = struct {
         const target_materialization = try self.descriptorMaterializationForExactRep(target_rep);
         const target_template_id = switch (target_materialization.desc) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+            .local, .runtime, .dict_method_hidden => switch (kind) {
                 .aggregate => boxyLowerInvariant("boxy declared aggregate adapter target descriptor template was not static"),
                 .record => boxyLowerInvariant("boxy record adapter target descriptor template was not static"),
             },
@@ -27138,7 +27103,7 @@ const ProcBodyBuilder = struct {
         const source_template: ?LirProgram.BoxyTypeDesc = if (source_materialization) |materialization| blk: {
             const source_template_id = switch (materialization.desc) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => switch (kind) {
+                .local, .runtime, .dict_method_hidden => switch (kind) {
                     .aggregate => boxyLowerInvariant("boxy declared aggregate adapter source descriptor template was not static"),
                     .record => boxyLowerInvariant("boxy record adapter source descriptor template was not static"),
                 },
@@ -27416,7 +27381,7 @@ const ProcBodyBuilder = struct {
             known.desc orelse return known;
         const known_desc_id = switch (known_template_ref) {
             .static => |desc_id| desc_id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("planned list adapter target descriptor template was not static"),
         };
         const known_desc = self.parent.result.boxy_type_descs.items[@backingInt(known_desc_id)];
 
@@ -27442,7 +27407,7 @@ const ProcBodyBuilder = struct {
         const source_elem_desc_info: ResultDescriptorSource = if (source_template_ref) |template_ref| template_elem: {
             const source_desc_id = switch (template_ref) {
                 .static => |desc_id| desc_id,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
+                .local, .runtime, .dict_method_hidden => boxyLowerInvariant("planned list adapter source descriptor template was not static"),
             };
             const source_type_desc = self.parent.result.boxy_type_descs.items[@backingInt(source_desc_id)];
             if (source_type_desc.nested_descs.len != 1) {
@@ -27572,7 +27537,6 @@ const ProcBodyBuilder = struct {
                 adapter.operation == operation and
                 adapter.source_layout == source_layout and
                 adapter.target_layout == target_layout and
-                adapter.steps.len == 0 and
                 adapter.consumes_source == consumes_source and
                 adapter.produces_owned_result)
             {
@@ -32827,7 +32791,6 @@ const ProcBodyBuilder = struct {
             },
             .local,
             .runtime,
-            .dict_method_arg,
             .dict_method_hidden,
             => null,
         };
@@ -36941,7 +36904,7 @@ const ProcBodyBuilder = struct {
         const payload_desc = self.parent.result.store.getLocal(target).boxy_desc orelse return null;
         return switch (payload_desc) {
             .static => null,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => payload_desc,
+            .local, .runtime, .dict_method_hidden => payload_desc,
         };
     }
 
@@ -36953,7 +36916,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@backingInt(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
+            .local, .runtime, .dict_method_hidden => boxyLowerInvariant("boxy dynamic literal target used a runtime descriptor without a concrete literal payload layout"),
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -36980,7 +36943,7 @@ const ProcBodyBuilder = struct {
             boxyLowerInvariant("boxy dynamic literal target had no payload descriptor");
         const payload_layout = switch (payload_desc) {
             .static => |desc_id| self.parent.result.boxy_type_descs.items[@backingInt(desc_id)].payload_layout,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => known_payload_layout,
+            .local, .runtime, .dict_method_hidden => known_payload_layout,
         };
         if (payload_layout == target_layout) {
             boxyLowerInvariant("boxy dynamic literal target descriptor resolved to dynamic storage");
@@ -38597,7 +38560,7 @@ const ProcBodyBuilder = struct {
                         const materialization = try self.descriptorMaterializationForKnownRep(nested.nested_rep);
                         try initializers.append(allocator, materialization.initializer(nested_local));
                     },
-                    .local, .runtime, .dict_method_arg, .dict_method_hidden => try initializers.append(allocator, .{
+                    .local, .runtime, .dict_method_hidden => try initializers.append(allocator, .{
                         .local = nested_local,
                         .materialize = nested.parent_desc,
                         .nested_index = nested.nested_index,
@@ -41524,7 +41487,6 @@ const ProcBodyBuilder = struct {
                 .static => self.parent.result.store.setLocalBoxyDesc(local, desc),
                 .local,
                 .runtime,
-                .dict_method_arg,
                 .dict_method_hidden,
                 => self.parent.result.store.setLocalBoxyDesc(local, .{ .local = try self.addFrameLocal(.opaque_ptr) }),
             }
@@ -44796,7 +44758,7 @@ fn boxyLowLevelKind(op: can.CIR.Expr.LowLevel) BoxyLowLevelKind {
         .box_unbox => .box_unbox,
         .box_unbox_borrowed => .box_unbox_borrowed,
         .list_map_can_reuse => .list_map_can_reuse,
-        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_first, .list_last, .list_drop_first, .list_drop_last, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_split_first, .list_split_last, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_log, .num_floor, .num_ceiling, .num_to_str, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
+        .str_is_eq, .str_is_eq_static_small, .str_static_small_word_eq, .str_static_small_word_caseless_eq, .str_concat, .str_contains, .str_trim, .str_trim_start, .str_trim_end, .str_caseless_ascii_equals, .str_with_ascii_lowercased, .str_with_ascii_uppercased, .str_starts_with, .str_ends_with, .str_repeat, .str_drop_prefix, .str_drop_prefix_caseless_ascii, .str_drop_suffix, .str_split_first, .str_split_last, .str_count_utf8_bytes, .str_get_utf8_byte_unsafe, .str_substring_unsafe, .str_with_capacity, .str_reserve, .str_release_excess_capacity, .str_to_utf8, .str_from_utf8_lossy, .str_from_utf8_validated, .str_from_utf16_le_short, .str_from_utf16_be_short, .str_from_utf32_le_short, .str_from_utf32_be_short, .str_from_utf8, .str_split_on, .str_join_with, .str_inspect, .u8_to_str, .i8_to_str, .u16_to_str, .i16_to_str, .u32_to_str, .i32_to_str, .u64_to_str, .i64_to_str, .u128_to_str, .i128_to_str, .dec_to_str, .f32_to_str, .f64_to_str, .list_len, .list_prefetch, .list_prefetched, .list_capacity, .list_get_unsafe, .list_append_unsafe, .list_concat, .list_with_capacity, .list_drop_at, .list_sublist, .list_sublist_borrowed, .list_set, .list_replace_unsafe, .list_swap, .list_prepend, .list_take_first, .list_take_last, .list_reverse, .list_sort_with, .list_reserve, .list_reserve_for_append, .list_release_excess_capacity, .list_clear, .list_map_prepare_reuse, .list_map_cast_unsafe, .list_map_extract_unsafe, .list_map_write_unsafe, .list_slack_unique, .list_owned_unique, .list_set_in_place_unsafe, .list_append_range_within, .list_copy_range_within, .list_append_range_within_unsafe, .list_append_le_bytes, .list_append_sublist, .bool_not, .bool_likely, .dict_pseudo_seed, .hasher_finish, .hasher_write_bool, .hasher_write_u8, .hasher_write_u16, .hasher_write_u32, .hasher_write_u64, .hasher_write_u128, .hasher_write_i8, .hasher_write_i16, .hasher_write_i32, .hasher_write_i64, .hasher_write_i128, .hasher_write_f32, .hasher_write_f64, .hasher_write_dec, .hasher_write_bytes, .hasher_write_str, .crypto_sha256_hash_bytes, .crypto_sha256_hasher_empty, .crypto_sha256_hasher_write, .crypto_sha256_hasher_finish, .crypto_blake3_hash_bytes, .crypto_blake3_hasher_empty, .crypto_blake3_hasher_write, .crypto_blake3_hasher_finish, .num_is_eq, .num_is_gt, .num_is_gte, .num_is_lt, .num_is_lte, .num_negate, .num_abs, .num_abs_diff, .num_plus, .num_minus, .num_times, .num_float_add, .num_float_sub, .num_float_mul, .dec_mul, .num_int_add_wrap, .num_int_add_crash_on_overflow, .num_int_add_overflows, .num_int_add_proven_cannot_overflow, .num_int_sub_wrap, .num_int_sub_crash_on_overflow, .num_int_sub_overflows, .num_int_sub_proven_cannot_overflow, .num_int_mul_wrap, .num_int_mul_crash_on_overflow, .num_int_mul_overflows, .num_int_mul_proven_cannot_overflow, .num_div_by, .num_div_by_checked, .num_div_trunc_by, .num_div_trunc_by_checked, .num_rem_by, .num_rem_by_checked, .num_mod_by, .num_mod_by_checked, .num_negate_checked, .num_abs_checked, .num_pow, .num_atan2, .num_sqrt, .num_sin, .num_cos, .num_tan, .num_asin, .num_acos, .num_atan, .num_floor, .num_ceiling, .f32_to_bits, .f32_from_bits, .f64_to_bits, .f64_from_bits, .num_shift_left_by, .num_shift_right_by, .num_shift_right_zf_by, .num_bitwise_and, .num_bitwise_or, .num_bitwise_xor, .num_bitwise_not, .num_count_one_bits, .num_count_leading_zero_bits, .num_count_trailing_zero_bits, .num_from_le_bytes_unchecked, .simd_load_16_unchecked, .simd_store_16_unchecked, .simd_append_16, .simd_splat, .simd_get_lane_unchecked, .simd_with_lane_unchecked, .simd_to_u128_bits, .simd_from_u128_bits, .simd_add_wrap, .simd_sub_wrap, .simd_add_sat, .simd_sub_sat, .simd_neg_wrap, .simd_abs_wrap, .simd_min, .simd_max, .simd_abs_diff, .simd_avg_rounded, .simd_mul_wrap, .simd_mul_high, .simd_mul_q15_sat, .simd_mul_wide_lo, .simd_mul_wide_hi, .simd_dot_pairs, .simd_dot_pairs_sat, .simd_sad, .simd_and, .simd_or, .simd_xor, .simd_not, .simd_bit_select, .simd_eq_lanes, .simd_gt_lanes, .simd_gte_lanes, .simd_bitmask, .simd_shl_wrap, .simd_shr_wrap, .simd_shr_zf_wrap, .simd_shr_rounded, .simd_interleave_lo, .simd_interleave_hi, .simd_even_lanes, .simd_odd_lanes, .simd_reverse_lanes, .simd_table_lookup, .simd_concat_shift_bytes, .simd_widen_lo, .simd_widen_hi, .simd_pairwise_add_widen, .simd_narrow_wrap, .simd_narrow_sat, .simd_sum_lanes, .simd_sum_lanes_wrap, .simd_clmul_lo, .simd_clmul_hi, .u8_from_str, .i8_from_str, .u16_from_str, .i16_from_str, .u32_from_str, .i32_from_str, .u64_from_str, .i64_from_str, .u128_from_str, .i128_from_str, .dec_from_str, .dec_to_attos, .dec_from_attos, .f32_from_str, .f64_from_str, .u8_from_str_prefix, .u8_from_utf8_prefix, .i8_from_str_prefix, .i8_from_utf8_prefix, .u16_from_str_prefix, .u16_from_utf8_prefix, .i16_from_str_prefix, .i16_from_utf8_prefix, .u32_from_str_prefix, .u32_from_utf8_prefix, .i32_from_str_prefix, .i32_from_utf8_prefix, .u64_from_str_prefix, .u64_from_utf8_prefix, .i64_from_str_prefix, .i64_from_utf8_prefix, .u128_from_str_prefix, .u128_from_utf8_prefix, .i128_from_str_prefix, .i128_from_utf8_prefix, .dec_from_str_prefix, .dec_from_utf8_prefix, .f32_from_str_prefix, .f32_from_utf8_prefix, .f64_from_str_prefix, .f64_from_utf8_prefix, .u8_to_i8_wrap, .u8_to_i8_try, .u8_to_i16, .u8_to_i32, .u8_to_i64, .u8_to_i128, .u8_to_u16, .u8_to_u32, .u8_to_u64, .u8_to_u128, .u8_to_f32, .u8_to_f64, .u8_to_dec, .i8_to_i16, .i8_to_i32, .i8_to_i64, .i8_to_i128, .i8_to_u8_wrap, .i8_to_u8_try, .i8_to_u16_wrap, .i8_to_u16_try, .i8_to_u32_wrap, .i8_to_u32_try, .i8_to_u64_wrap, .i8_to_u64_try, .i8_to_u128_wrap, .i8_to_u128_try, .i8_to_f32, .i8_to_f64, .i8_to_dec, .u16_to_i8_wrap, .u16_to_i8_try, .u16_to_i16_wrap, .u16_to_i16_try, .u16_to_i32, .u16_to_i64, .u16_to_i128, .u16_to_u8_wrap, .u16_to_u8_try, .u16_to_u32, .u16_to_u64, .u16_to_u128, .u16_to_f32, .u16_to_f64, .u16_to_dec, .i16_to_i8_wrap, .i16_to_i8_try, .i16_to_i32, .i16_to_i64, .i16_to_i128, .i16_to_u8_wrap, .i16_to_u8_try, .i16_to_u16_wrap, .i16_to_u16_try, .i16_to_u32_wrap, .i16_to_u32_try, .i16_to_u64_wrap, .i16_to_u64_try, .i16_to_u128_wrap, .i16_to_u128_try, .i16_to_f32, .i16_to_f64, .i16_to_dec, .u32_to_i8_wrap, .u32_to_i8_try, .u32_to_i16_wrap, .u32_to_i16_try, .u32_to_i32_wrap, .u32_to_i32_try, .u32_to_i64, .u32_to_i128, .u32_to_u8_wrap, .u32_to_u8_try, .u32_to_u16_wrap, .u32_to_u16_try, .u32_to_u64, .u32_to_u128, .u32_to_f32, .u32_to_f64, .u32_to_dec, .i32_to_i8_wrap, .i32_to_i8_try, .i32_to_i16_wrap, .i32_to_i16_try, .i32_to_i64, .i32_to_i128, .i32_to_u8_wrap, .i32_to_u8_try, .i32_to_u16_wrap, .i32_to_u16_try, .i32_to_u32_wrap, .i32_to_u32_try, .i32_to_u64_wrap, .i32_to_u64_try, .i32_to_u128_wrap, .i32_to_u128_try, .i32_to_f32, .i32_to_f64, .i32_to_dec, .u64_to_i8_wrap, .u64_to_i8_try, .u64_to_i16_wrap, .u64_to_i16_try, .u64_to_i32_wrap, .u64_to_i32_try, .u64_to_i64_wrap, .u64_to_i64_try, .u64_to_i128, .u64_to_u8_wrap, .u64_to_u8_try, .u64_to_u16_wrap, .u64_to_u16_try, .u64_to_u32_wrap, .u64_to_u32_try, .u64_to_u128, .u64_to_f32, .u64_to_f64, .u64_to_dec, .i64_to_i8_wrap, .i64_to_i8_try, .i64_to_i16_wrap, .i64_to_i16_try, .i64_to_i32_wrap, .i64_to_i32_try, .i64_to_i128, .i64_to_u8_wrap, .i64_to_u8_try, .i64_to_u16_wrap, .i64_to_u16_try, .i64_to_u32_wrap, .i64_to_u32_try, .i64_to_u64_wrap, .i64_to_u64_try, .i64_to_u128_wrap, .i64_to_u128_try, .i64_to_f32, .i64_to_f64, .i64_to_dec, .u128_to_i8_wrap, .u128_to_i8_try, .u128_to_i16_wrap, .u128_to_i16_try, .u128_to_i32_wrap, .u128_to_i32_try, .u128_to_i64_wrap, .u128_to_i64_try, .u128_to_i128_wrap, .u128_to_i128_try, .u128_to_u8_wrap, .u128_to_u8_try, .u128_to_u16_wrap, .u128_to_u16_try, .u128_to_u32_wrap, .u128_to_u32_try, .u128_to_u64_wrap, .u128_to_u64_try, .u128_to_f32, .u128_to_f64, .u128_to_dec_try_unsafe, .i128_to_i8_wrap, .i128_to_i8_try, .i128_to_i16_wrap, .i128_to_i16_try, .i128_to_i32_wrap, .i128_to_i32_try, .i128_to_i64_wrap, .i128_to_i64_try, .i128_to_u8_wrap, .i128_to_u8_try, .i128_to_u16_wrap, .i128_to_u16_try, .i128_to_u32_wrap, .i128_to_u32_try, .i128_to_u64_wrap, .i128_to_u64_try, .i128_to_u128_wrap, .i128_to_u128_try, .i128_to_f32, .i128_to_f64, .i128_to_dec_try_unsafe, .f32_to_i8_trunc, .f32_to_i8_try_unsafe, .f32_to_i16_trunc, .f32_to_i16_try_unsafe, .f32_to_i32_trunc, .f32_to_i32_try_unsafe, .f32_to_i64_trunc, .f32_to_i64_try_unsafe, .f32_to_i128_trunc, .f32_to_i128_try_unsafe, .f32_to_u8_trunc, .f32_to_u8_try_unsafe, .f32_to_u16_trunc, .f32_to_u16_try_unsafe, .f32_to_u32_trunc, .f32_to_u32_try_unsafe, .f32_to_u64_trunc, .f32_to_u64_try_unsafe, .f32_to_u128_trunc, .f32_to_u128_try_unsafe, .f32_to_f64, .f64_to_i8_trunc, .f64_to_i8_try_unsafe, .f64_to_i16_trunc, .f64_to_i16_try_unsafe, .f64_to_i32_trunc, .f64_to_i32_try_unsafe, .f64_to_i64_trunc, .f64_to_i64_try_unsafe, .f64_to_i128_trunc, .f64_to_i128_try_unsafe, .f64_to_u8_trunc, .f64_to_u8_try_unsafe, .f64_to_u16_trunc, .f64_to_u16_try_unsafe, .f64_to_u32_trunc, .f64_to_u32_try_unsafe, .f64_to_u64_trunc, .f64_to_u64_try_unsafe, .f64_to_u128_trunc, .f64_to_u128_try_unsafe, .f64_to_f32_wrap, .f64_to_f32_try_unsafe, .dec_to_i8_trunc, .dec_to_i8_try_unsafe, .dec_to_i16_trunc, .dec_to_i16_try_unsafe, .dec_to_i32_trunc, .dec_to_i32_try_unsafe, .dec_to_i64_trunc, .dec_to_i64_try_unsafe, .dec_to_i128_trunc, .dec_to_u8_trunc, .dec_to_u8_try_unsafe, .dec_to_u16_trunc, .dec_to_u16_try_unsafe, .dec_to_u32_trunc, .dec_to_u32_try_unsafe, .dec_to_u64_trunc, .dec_to_u64_try_unsafe, .dec_to_u128_trunc, .dec_to_u128_try_unsafe, .dec_to_f32_wrap, .dec_to_f32_try_unsafe, .dec_to_f64, .box_prepare_update, .erased_capture_load, .ptr_alloca, .box_alloc_zeroed, .ptr_store, .ptr_load, .ptr_cast, .compare, .crash => .other,
     };
 }
 
@@ -45963,7 +45925,7 @@ test "boxy lowerer emits direct calls to planned imported workers" {
             try std.testing.expectEqual(LIR.BoxyTransferMode.move, adapt.source_mode);
             break :blk .{ adapt.target, adapt.next };
         },
-        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+        .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
     };
     try std.testing.expectEqual(LIR.CFStmt{ .ret = .{ .value = returned[0] } }, out.lir_result.store.getCFStmt(returned[1]));
 
@@ -51897,7 +51859,7 @@ test "boxy lowerer inspects declared-field nominals through backing field_read" 
                 try std.testing.expect(debug.message != construct_nominal.target);
                 break;
             },
-            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -52104,7 +52066,7 @@ test "boxy lowerer hashes declared-field nominals through backing field_read" {
                 try std.testing.expect(ret.value != seed.target);
                 break;
             },
-            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .crash => return error.TestUnexpectedResult,
+            .init_uninitialized, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .crash => return error.TestUnexpectedResult,
         }
     } else return error.TestUnexpectedResult;
 }
@@ -52546,7 +52508,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const first = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52559,7 +52521,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .set_local => |set| set.next,
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const second = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -52571,7 +52533,7 @@ test "boxy lowerer stores dynamic list elements with boxy storage layout" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const list = out.lir_result.store.getCFStmt(cursor).assign_list;
@@ -53115,7 +53077,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
     while (true) {
         cursor = switch (out.lir_result.store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const from_arg = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -53137,7 +53099,7 @@ test "boxy lowerer reuses dynamic boxes for Box(a)" {
                 if (uses_source_desc) descriptor_materialization_target = assign.target;
                 break :blk assign.next;
             },
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => break,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => break,
         };
     }
     const reused = out.lir_result.store.getCFStmt(cursor).assign_ref;
@@ -54021,7 +53983,7 @@ fn skipLeadingDescriptorInitializers(store: *const LirStore, start: LIR.CFStmtId
     while (true) {
         cursor = switch (store.getCFStmt(cursor)) {
             .assign_boxy_desc_ref => |assign| assign.next,
-            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .loop_continue, .loop_break, .join, .jump, .ret, .crash => return cursor,
+            .init_uninitialized, .assign_ref, .assign_literal, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .boxy_tag_match, .assign_call_dict, .assign_low_level, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .join, .jump, .ret, .crash => return cursor,
         };
     }
 }

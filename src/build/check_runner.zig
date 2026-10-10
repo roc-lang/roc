@@ -654,44 +654,9 @@ const CheckPanicStep = struct {
         "fuzz_sort.zig",
     };
 
-    // Line-level allowlist patterns - if any of these appear on the line, allow the @panic
-    const allowlist_patterns = [_][]const u8{
-        "trace_modules", // traceDbg helper in interpreter
-    };
-
-    // File-specific line ranges to exclude (test-only code)
-    // Format: { file_suffix, start_line, end_line }
-    const ExcludedRange = struct { file: []const u8, start: usize, end: usize };
-    const excluded_ranges = [_]ExcludedRange{
-        // TestEnv struct in utils.zig is test-only (lines 60-214)
-        .{ .file = "utils.zig", .start = 60, .end = 214 },
-        // Cross-module name matching in Check.zig requires string comparison (lines 5530-5547)
-        // This is necessary because origin_module is an ident from the type's defining module,
-        // while module_name is from the importing module's ident store - no way to compare without strings
-        .{ .file = "Check.zig", .start = 5530, .end = 5547 },
-    };
-
     fn isExcludedFile(file_name: []const u8) bool {
         for (excluded_files) |excluded| {
             if (std.mem.eql(u8, file_name, excluded)) return true;
-        }
-        return false;
-    }
-
-    fn isAllowlisted(line: []const u8) bool {
-        for (allowlist_patterns) |pattern| {
-            if (std.mem.find(u8, line, pattern) != null) return true;
-        }
-        return false;
-    }
-
-    fn isInExcludedRange(file_path: []const u8, line_number: usize) bool {
-        for (excluded_ranges) |range| {
-            if (std.mem.endsWith(u8, file_path, range.file)) {
-                if (line_number >= range.start and line_number <= range.end) {
-                    return true;
-                }
-            }
         }
         return false;
     }
@@ -719,13 +684,11 @@ const CheckPanicStep = struct {
                     const has_debug_panic = std.mem.find(u8, line, "std.debug.panic") != null;
 
                     if (has_panic or has_debug_panic) {
-                        if (!isAllowlisted(line) and !isInExcludedRange(file_path, line_number)) {
-                            try violations.append(allocator, .{
-                                .file_path = try allocator.dupe(u8, file_path),
-                                .line_number = line_number,
-                                .line_content = try allocator.dupe(u8, trimmed),
-                            });
-                        }
+                        try violations.append(allocator, .{
+                            .file_path = try allocator.dupe(u8, file_path),
+                            .line_number = line_number,
+                            .line_content = try allocator.dupe(u8, trimmed),
+                        });
                     }
                 }
 

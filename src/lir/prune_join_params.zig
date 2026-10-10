@@ -16,11 +16,9 @@
 //! so the pass repeats until no parameter qualifies.
 //!
 //! A parameter is never removed when anything reads it outside an operand
-//! position: a join's retained or maybe-uninitialized lists, another local's
-//! descriptor, or the implicit carry of a `loop_continue` or `loop_break`,
-//! which keeps every current definition live. A procedure argument that is
-//! also a join parameter is defined by the call as well as by its writes, so
-//! it is never removed either.
+//! position: a join's retained or maybe-uninitialized lists, or another local's
+//! descriptor. A procedure argument that is also a join parameter is defined by
+//! the call as well as by its writes, so it is never removed either.
 
 const std = @import("std");
 const collections = @import("collections");
@@ -106,7 +104,6 @@ const Pass = struct {
             BodyClone.forEachStmtRead(store, stmt, &reads, ReadNote.note);
             if (reads.failure) |err| return err;
             switch (stmt) {
-                .loop_continue, .loop_break => return false,
                 .join => |join| {
                     const params = store.getLocalSpan(join.params);
                     for (0..params.len) |index| {
@@ -129,7 +126,6 @@ const Pass = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,

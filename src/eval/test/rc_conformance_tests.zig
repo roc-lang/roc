@@ -1103,15 +1103,8 @@ const cases = [_]Case{
 const exemptions = [_]Exemption{
     .{ .op = .box_unbox, .reason = "allocation-consuming compiled variant is pinned by focused LIR and runtime-helper tests" },
     .{ .op = .list_prefetched, .reason = "never executed: LIR lowering splits it into list_prefetch and an alias of the list" },
-    .{ .op = .list_first, .reason = "no producer: List.first lowers through list_get_unsafe" },
-    .{ .op = .list_last, .reason = "no producer: List.last lowers through list_get_unsafe" },
-    .{ .op = .list_drop_first, .reason = "no producer: List.drop_first lowers through list_sublist" },
-    .{ .op = .list_drop_last, .reason = "no producer: List.drop_last lowers through list_sublist" },
     .{ .op = .list_prefetched, .reason = "no LIR producer: lowering splits List.prefetched into an alias of its list and list_prefetch" },
     .{ .op = .list_reverse, .reason = "no producer: List.rev is written in Roc over list_get_unsafe" },
-    .{ .op = .list_split_first, .reason = "no producer: List.split_first is written in Roc" },
-    .{ .op = .list_split_last, .reason = "no producer: List.split_last is written in Roc" },
-    .{ .op = .num_to_str, .reason = "no producer: each numeric type maps to its own <type>_to_str op" },
     .{ .op = .list_prefetched, .reason = "replaced: LIR lowering splits List.prefetched into list_prefetch and an alias of the list" },
 };
 

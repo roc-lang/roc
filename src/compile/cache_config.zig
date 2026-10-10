@@ -299,7 +299,10 @@ pub const Constants = struct {
     /// 139: Literal dispatch plans store an optional conversion function, absent
     ///      for a proved concrete builtin numeral.
     /// 140: Canonical node payloads are encoded from their payload field types.
-    pub const CACHE_VERSION = 140;
+    /// 141: Low-level op numbering covers only ops that lowering produces.
+    /// 142: A stored checked runtime error keeps its evaluated operands in a
+    ///      field of their own.
+    pub const CACHE_VERSION = 142;
 };
 
 /// Configuration for the Roc cache system.

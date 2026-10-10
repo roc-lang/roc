@@ -114,7 +114,7 @@ test "Monotype lookup lowering uses explicit resolved use nodes" {
     try expectContains(lower_lookup_at_type, "required.const_use,\n                ty,\n                (try self.evidenceForUseSite(record.expr)).vector,");
     try expectContains(lower_lookup_at_type, ".platform_required_proc => |proc| try self.lowerProcedureUseValueAtNode(proc.procedure, try self.activeNodeFromType(ty), record.expr, proc.root_evidence, record.recursive_reference)");
     try expectContains(lower_source, "fn lowerCallableEvalBindingValueAtNode(");
-    try expectContains(lower_source, "try self.restoreConstFnAtNode(view, fn_id, request_fn_node)");
+    try expectContains(lower_source, "try self.restoreConstFnAt(view, fn_id, .{ .node = request_fn_node }, null)");
     try expectContains(lower_source, "try body_ctx.graphFunctionNode(&.{}, request_fn_node)");
     try expectContains(lower_source, "body_ctx.lowerComptimeRootExprAtCell(");
 }

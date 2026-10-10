@@ -368,7 +368,6 @@ pub const BuiltinFn = builtins.builtin_registry.BuiltinFn;
 pub const BoxyBuiltinFn = enum {
     static_desc,
     static_dict,
-    dict_method_arg_desc,
     dict_method_hidden_desc,
     nested_desc,
     box_payload_desc,
@@ -461,7 +460,6 @@ pub const BoxyBuiltinFn = enum {
             .list_sort_with => &.{ p, p, p, p, p, 4, p, 1, p, p, 4, p, 1 },
             .static_desc,
             .static_dict,
-            .dict_method_arg_desc,
             .dict_method_hidden_desc,
             .nested_desc,
             .box_payload_desc,
@@ -762,16 +760,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         /// Where the erased-callable proc being compiled keeps whether the
         /// erased-call runtime invoked it, when its body reads that.
         caller_drives_slot: ?i32 = null,
-
-        /// Stack of active loop continue targets.
-        /// `loop_continue` lowers by jumping to the innermost active loop header.
-        loop_continue_targets: std.ArrayList(usize),
-
-        /// Stack markers into `loop_break_patches` for active loop exits.
-        loop_break_patch_starts: std.ArrayList(usize),
-
-        /// Jump patches emitted by `loop_break` that must target the active loop exit.
-        loop_break_patches: std.ArrayList(usize),
 
         /// Stack slot where early return value is stored during deferred-prologue proc compilation.
         early_return_result_slot: ?i32 = null,
@@ -1291,9 +1279,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .internal_addr_patches = std.ArrayList(InternalAddrPatch).empty,
                 .early_return_patches = std.ArrayList(usize).empty,
                 .tail_exit_patches = std.ArrayList(usize).empty,
-                .loop_continue_targets = std.ArrayList(usize).empty,
-                .loop_break_patch_starts = std.ArrayList(usize).empty,
-                .loop_break_patches = std.ArrayList(usize).empty,
                 .scratch_arg_locs = scratch_arg_locs,
                 .scratch_arg_infos = scratch_arg_infos,
                 .scratch_pass_by_ptr = scratch_pass_by_ptr,
@@ -1388,9 +1373,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.deinit(self.allocator);
             self.early_return_patches.deinit(self.allocator);
             self.tail_exit_patches.deinit(self.allocator);
-            self.loop_continue_targets.deinit(self.allocator);
-            self.loop_break_patch_starts.deinit(self.allocator);
-            self.loop_break_patches.deinit(self.allocator);
             self.scratch_arg_locs.deinit();
             self.scratch_arg_infos.deinit();
             self.scratch_pass_by_ptr.deinit();
@@ -1445,9 +1427,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             self.internal_addr_patches.clearRetainingCapacity();
             self.early_return_patches.clearRetainingCapacity();
             self.tail_exit_patches.clearRetainingCapacity();
-            self.loop_continue_targets.clearRetainingCapacity();
-            self.loop_break_patch_starts.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
         }
 
         fn clearSymbolCaches(self: *Self) void {
@@ -1566,9 +1545,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             }
             self.join_point_jumps.clearRetainingCapacity();
             self.join_point_params.clearRetainingCapacity();
-            self.loop_continue_targets.clearRetainingCapacity();
-            self.loop_break_patch_starts.clearRetainingCapacity();
-            self.loop_break_patches.clearRetainingCapacity();
         }
 
         /// Generate code for a compiled root proc.
@@ -2795,22 +2771,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
-                },
-                .list_drop_first => {
-                    // list_drop_first(list, n) -> List  (sublist from index n to end)
-                    if (args.len != 2) unreachable;
-                    const list_local = GuardedList.at(args, 0);
-                    const list_loc = try self.emitValueLocal(list_local);
-                    const n_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.callListSublist(ll, list_local, list_loc, n_loc, .drop_first);
-                },
-                .list_drop_last => {
-                    // list_drop_last(list, n) -> List  (sublist from 0 with len - n)
-                    if (args.len != 2) unreachable;
-                    const list_local = GuardedList.at(args, 0);
-                    const list_loc = try self.emitValueLocal(list_local);
-                    const n_loc = try self.emitValueLocal(GuardedList.at(args, 1));
-                    return try self.callListSublist(ll, list_local, list_loc, n_loc, .drop_last);
                 },
                 .list_take_first => {
                     // list_take_first(list, n) -> List  (sublist from 0 with n elements)
@@ -4151,18 +4111,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                     return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
                 },
-                .list_first => {
-                    // list_first(list) -> element  (same as list_get at index 0)
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.listGetAtConstIndex(list_loc, 0, ll.ret_layout);
-                },
-                .list_last => {
-                    // list_last(list) -> element  (same as list_get at index len-1)
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.listGetAtLastIndex(list_loc, ll.ret_layout);
-                },
                 .list_reverse => {
                     // list_reverse(list) -> List
                     // Clone and reverse in place using listSublist (full range)
@@ -4195,18 +4143,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const list_local = GuardedList.at(args, 0);
                     const list_loc = try self.emitValueLocal(list_local);
                     return try self.callListReleaseExcessCapOp(list_local, list_loc, ll);
-                },
-                .list_split_first => {
-                    // list_split_first(list) -> {first: elem, rest: List}
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.callListSplitOp(ll, list_loc, .first);
-                },
-                .list_split_last => {
-                    // list_split_last(list) -> {rest: List, last: elem}
-                    if (args.len != 1) unreachable;
-                    const list_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return try self.callListSplitOp(ll, list_loc, .last);
                 },
 
                 // ── Integer-to-integer try conversions ──
@@ -4466,32 +4402,13 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const operand_layout =
                         self.valueLayout(GuardedList.at(args, 0));
 
-                    // With ANF, operands are always lookups or literals, so we
-                    // dispatch structural equality purely by layout.
-                    if (ll.op == .num_is_eq) {
-                        {
-                            const ls = self.layout_store;
-                            const layout_idx = self.valueLayout(GuardedList.at(args, 0));
-                            const stored_layout = ls.getLayout(layout_idx);
-                            if (stored_layout.tag == .struct_ or
-                                stored_layout.tag == .list or
-                                stored_layout.tag == .list_of_zst or
-                                stored_layout.tag == .tag_union)
-                                return self.generateStructuralEquality(lhs_loc, rhs_loc, layout_idx);
-                        }
-                    }
-
-                    // Check for string operands that ended up in num_is_eq
-                    // (e.g., from structural equality on tag unions containing strings)
-                    if (ll.op == .num_is_eq) {
-                        if (operand_layout == .str) {
-                            const a_off = try self.ensureOnStack(lhs_loc, roc_str_size);
-                            const b_off = try self.ensureOnStack(rhs_loc, roc_str_size);
-                            const eq_loc = try self.callStr2ToScalar(a_off, b_off, LowLevelBuiltins.strOp(.str_is_eq));
-                            const eq_reg = try self.ensureInGeneralReg(eq_loc);
-                            return .{ .general_reg = eq_reg };
-                        }
-                    }
+                    // Lowering decomposes structural equality, so `num_is_eq`
+                    // only ever compares numbers.
+                    const operand = self.layout_store.getLayout(operand_layout);
+                    if (ll.op == .num_is_eq and !(operand.tag == .scalar and (operand.getScalar().tag == .int or operand.getScalar().tag == .frac))) base.invariant(
+                        "LIR/codegen invariant violated: num_is_eq received non-numeric operand layout {d}",
+                        .{@backingInt(operand_layout)},
+                    );
 
                     const is_float = operand_layout == .f32 or operand_layout == .f64;
                     const is_i128_op = operand_layout == .dec or operand_layout == .i128 or operand_layout == .u128;
@@ -4730,28 +4647,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         null,
                     );
                 },
-                .num_to_str => {
-                    const value_loc = try self.emitValueLocal(GuardedList.at(args, 0));
-                    return switch (self.valueLayout(GuardedList.at(args, 0))) {
-                        .u8 => self.callIntToStr(value_loc, 1, false),
-                        .i8 => self.callIntToStr(value_loc, 1, true),
-                        .u16 => self.callIntToStr(value_loc, 2, false),
-                        .i16 => self.callIntToStr(value_loc, 2, true),
-                        .u32 => self.callIntToStr(value_loc, 4, false),
-                        .i32 => self.callIntToStr(value_loc, 4, true),
-                        .u64 => self.callIntToStr(value_loc, 8, false),
-                        .i64 => self.callIntToStr(value_loc, 8, true),
-                        .u128 => self.callIntToStr(value_loc, 16, false),
-                        .i128 => self.callIntToStr(value_loc, 16, true),
-                        .dec => self.callDecToStr(value_loc),
-                        .f32 => self.callFloatToStr(value_loc, true),
-                        .f64 => self.callFloatToStr(value_loc, false),
-                        .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => base.invariant(
-                            "LirCodeGen invariant violated: num_to_str received non-numeric layout {s}",
-                            .{@tagName(self.valueLayout(GuardedList.at(args, 0)))},
-                        ),
-                    };
-                },
 
                 .num_sqrt => {
                     if (args.len != 1) unreachable;
@@ -4905,15 +4800,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     return .{ .general_reg = same_reg };
                 },
 
-                // Resolved before backend codegen: builtin `from_numeral` is
-                // folded to a constant during Monotype lowering, so the op must
-                // never reach a backend. Reaching here is an invariant failure,
-                // not a missing feature.
-                // Unimplemented ops
-                .num_log,
-                => {
-                    std.debug.panic("UNIMPLEMENTED low-level op: {s}", .{@tagName(ll.op)});
-                },
                 .box_box => {
                     // Box.box(value) -> Box(value): heap-allocate and copy value
                     const ls = self.layout_store;
@@ -6752,10 +6638,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_replace_unsafe,
                 .list_swap,
                 .list_prepend,
-                .list_first,
-                .list_last,
-                .list_drop_first,
-                .list_drop_last,
                 .list_take_first,
                 .list_take_last,
                 .list_reverse,
@@ -6764,8 +6646,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .list_reserve_for_append,
                 .list_release_excess_capacity,
                 .list_clear,
-                .list_split_first,
-                .list_split_last,
                 .list_map_prepare_reuse,
                 .list_map_can_reuse,
                 .list_map_cast_unsafe,
@@ -6845,10 +6725,8 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 .num_asin,
                 .num_acos,
                 .num_atan,
-                .num_log,
                 .num_floor,
                 .num_ceiling,
-                .num_to_str,
                 .f32_to_bits,
                 .f32_from_bits,
                 .f64_to_bits,
@@ -8195,9 +8073,9 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .stack_str = result_offset };
         }
 
-        /// Helper for list_drop_first, list_drop_last, list_take_first, list_take_last
+        /// Helper for list_take_first and list_take_last
         /// These all map to listSublist with different start/len calculations
-        fn callListSublist(self: *Self, ll: anytype, list_local: LocalId, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { drop_first, drop_last, take_first, take_last }) Allocator.Error!ValueLocation {
+        fn callListSublist(self: *Self, ll: anytype, list_local: LocalId, list_loc: ValueLocation, n_loc: ValueLocation, mode: enum { take_first, take_last }) Allocator.Error!ValueLocation {
             const ls = self.layout_store;
             const list_abi = builtinInternalListAbi(ls, "dev.callListSublist.builtin_list_abi", ll.ret_layout);
 
@@ -8213,24 +8091,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             const len_slot = self.codegen.allocStackSlot(8);
 
             switch (mode) {
-                .drop_first => {
-                    // start = n, len = max(list_len - n, 0)
-                    const diff_reg = try self.allocTempGeneral();
-                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
-                    try self.emitStore(.w64, frame_ptr, start_slot, n_reg);
-                    try self.emitStore(.w64, frame_ptr, len_slot, diff_reg);
-                    self.codegen.freeGeneral(diff_reg);
-                },
-                .drop_last => {
-                    // start = 0, len = max(list_len - n, 0)
-                    const diff_reg = try self.allocTempGeneral();
-                    try self.emitSaturatingSub(diff_reg, len_reg, n_reg);
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
-                    try self.emitStore(.w64, frame_ptr, len_slot, diff_reg);
-                    self.freeGenerals(.{ zero_reg, diff_reg });
-                },
                 .take_first => {
                     // start = 0, len = min(n, list_len)
                     // listSublist handles this correctly even if n > list_len
@@ -8468,163 +8328,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             return .{ .list_stack = .{ .struct_offset = result_offset, .data_offset = 0, .num_elements = 0 } };
         }
 
-        /// Helper for list_split_first and list_split_last.
-        /// Returns a record {element, List} with fields at layout-determined offsets.
-        fn callListSplitOp(self: *Self, ll: anytype, list_loc: ValueLocation, mode: enum { first, last }) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-
-            // Get the return record layout
-            const ret_layout = ls.getLayout(ll.ret_layout);
-            if (ret_layout.tag != .struct_) unreachable;
-            const record_idx = ret_layout.getStruct().idx;
-            const record_data = ls.getStructData(record_idx);
-            const result_size: u32 = record_data.size.get(ls.targetUsize());
-
-            // Find which field is the list and which is the element.
-            // The record has exactly 2 fields.
-            const field0_layout_idx = ls.getStructFieldLayout(record_idx, 0);
-            const field0_layout = ls.getLayout(field0_layout_idx);
-            const field0_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 0));
-            const field1_layout_idx = ls.getStructFieldLayout(record_idx, 1);
-            const field1_layout = ls.getLayout(field1_layout_idx);
-            const field1_offset: i32 = @intCast(ls.getStructFieldOffset(record_idx, 1));
-
-            const field0_is_list = field0_layout.tag == .list or field0_layout.tag == .list_of_zst;
-            const list_field_offset: i32 = if (field0_is_list) field0_offset else field1_offset;
-            const elem_field_offset: i32 = if (field0_is_list) field1_offset else field0_offset;
-            const elem_layout = if (field0_is_list) field1_layout else field0_layout;
-            const list_field_layout_idx = if (field0_is_list) field0_layout_idx else field1_layout_idx;
-            const list_abi = builtinInternalListAbi(ls, "dev.callListSplitOp.builtin_list_abi", list_field_layout_idx);
-
-            const elem_size_align = ls.layoutSizeAlign(elem_layout);
-            const elem_size: u32 = elem_size_align.size;
-
-            // Ensure list is on stack
-            const list_off = try self.ensureOnStack(list_loc, roc_list_size);
-
-            // Allocate result struct
-            const result_offset = self.codegen.allocStackSlot(result_size);
-
-            // Load list length
-            const len_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_off + 8);
-
-            // Copy the element from the list into the result struct
-            if (elem_size > 0) {
-                // Load list pointer
-                const ptr_reg = try self.allocTempGeneral();
-                try self.emitLoad(.w64, ptr_reg, frame_ptr, list_off);
-
-                if (mode == .last) {
-                    // Element is at ptr + (len-1) * elem_size
-                    const idx_reg = try self.allocTempGeneral();
-                    try self.codegen.emit.movRegReg(.w64, idx_reg, len_reg);
-                    try self.emitSubImm(.w64, idx_reg, idx_reg, 1);
-                    if (elem_size != 1) {
-                        const size_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(size_reg, elem_size);
-                        try self.emitMulRegs(.w64, idx_reg, idx_reg, size_reg);
-                        self.codegen.freeGeneral(size_reg);
-                    }
-                    try self.emitAddRegs(.w64, ptr_reg, ptr_reg, idx_reg);
-                    self.codegen.freeGeneral(idx_reg);
-                }
-
-                // Copy element from ptr_reg+0 to result+elem_field_offset
-                const elem_dst = result_offset + elem_field_offset;
-                const temp_reg = try self.allocTempGeneral();
-                if (elem_size <= 8) {
-                    const vs = ValueSize.fromByteCount(@intCast(elem_size));
-                    try self.emitSizedLoadMem(temp_reg, ptr_reg, 0, vs);
-                    try self.emitSizedStoreMem(frame_ptr, elem_dst, temp_reg, vs);
-                } else {
-                    try self.copyChunked(temp_reg, ptr_reg, 0, frame_ptr, elem_dst, elem_size);
-                }
-                self.freeGenerals(.{ temp_reg, ptr_reg });
-            }
-
-            // Build rest list via roc_builtins_list_sublist, writing directly into result+list_field_offset
-            // For split_first: start=1, len=len-1
-            // For split_last: start=0, len=len-1
-            const start_slot = self.codegen.allocStackSlot(8);
-            const sublist_len_slot = self.codegen.allocStackSlot(8);
-
-            const one_tmp = try self.allocTempGeneral();
-            try self.codegen.emitLoadImm(one_tmp, 1);
-            const new_len_reg = try self.allocTempGeneral();
-            try self.emitSaturatingSub(new_len_reg, len_reg, one_tmp);
-            self.codegen.freeGeneral(one_tmp);
-            try self.emitStore(.w64, frame_ptr, sublist_len_slot, new_len_reg);
-            self.codegen.freeGeneral(new_len_reg);
-
-            switch (mode) {
-                .first => {
-                    // start = 1
-                    const one_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(one_reg, 1);
-                    try self.emitStore(.w64, frame_ptr, start_slot, one_reg);
-                    self.codegen.freeGeneral(one_reg);
-                },
-                .last => {
-                    // start = 0
-                    const zero_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(zero_reg, 0);
-                    try self.emitStore(.w64, frame_ptr, start_slot, zero_reg);
-                    self.codegen.freeGeneral(zero_reg);
-                },
-            }
-            self.codegen.freeGeneral(len_reg);
-
-            const elem_decref_reg = if (list_abi.elem_layout_idx) |idx| try self.emitBuiltinInternalOptionalRcHelperAddress(.decref, idx) else null;
-            defer if (elem_decref_reg) |reg| self.codegen.freeGeneral(reg);
-
-            {
-                // roc_builtins_list_sublist(out, list_bytes, list_len, list_cap,
-                // alignment, element_width, start, len, elements_refcounted, element_decref, update_mode, roc_ops)
-                const list_dst_offset = result_offset + list_field_offset;
-                var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                defer builder.deinit();
-                try builder.addLeaArg(frame_ptr, list_dst_offset);
-                try builder.addThreeWordMemArg(frame_ptr, list_off);
-                try builder.addImmArg(@intCast(list_abi.alignment_bytes));
-                try builder.addImmArg(@intCast(elem_size));
-                try builder.addMemArg(frame_ptr, start_slot);
-                try builder.addMemArg(frame_ptr, sublist_len_slot);
-                try builder.addImmArg(if (list_abi.elements_refcounted) 1 else 0);
-                if (elem_decref_reg) |reg| try builder.addRegArg(reg) else try builder.addImmArg(0);
-                try builder.addImmArg(updateModeImmForArg0(ll.unique_args));
-                try self.callBuiltin(&builder, LowLevelBuiltins.listOp(.list_sublist));
-            }
-
-            // Return the record as a stack value
-            return .{ .stack = .{ .offset = result_offset } };
-        }
-
-        /// Get element at constant index 0 from a list
-        fn listGetAtConstIndex(
-            self: *Self,
-            list_loc: ValueLocation,
-            index: u64,
-            ret_layout_idx: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const list_base: i32 = listStructOffset(list_loc);
-
-            const ls = self.layout_store;
-            const ret_layout_val = ls.getLayout(ret_layout_idx);
-            const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
-
-            if (elem_size == 0) return .{ .immediate_i64 = 0 };
-
-            // Load list pointer
-            const ptr_reg = try self.allocTempGeneral();
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
-
-            // Element address = ptr + index * elem_size
-            const byte_offset: u32 = @intCast(index * elem_size);
-
-            return self.loadListElemToStack(ptr_reg, @intCast(byte_offset), elem_size, ret_layout_idx, ret_layout_val);
-        }
-
         /// Copy the `elem_size`-byte list element at `addr_reg + byte_offset` into a
         /// fresh stack slot, free `addr_reg`, and return the element's location.
         fn loadListElemToStack(
@@ -8655,46 +8358,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             else
                 .{ .stack = .{ .offset = elem_slot } };
             return self.stabilize(result_loc);
-        }
-
-        /// Get element at last index (len - 1) from a list
-        fn listGetAtLastIndex(
-            self: *Self,
-            list_loc: ValueLocation,
-            ret_layout_idx: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const list_base: i32 = listStructOffset(list_loc);
-
-            const ls = self.layout_store;
-            const ret_layout_val = ls.getLayout(ret_layout_idx);
-            const elem_size: u32 = ls.layoutSizeAlign(ret_layout_val).size;
-
-            if (elem_size == 0) return .{ .immediate_i64 = 0 };
-
-            // Load list pointer and length
-            const ptr_reg, const len_reg = try self.allocTempGenerals(2);
-            try self.emitLoad(.w64, ptr_reg, frame_ptr, list_base);
-            try self.emitLoad(.w64, len_reg, frame_ptr, list_base + 8);
-
-            // index = len - 1
-            try self.emitSubImm(.w64, len_reg, len_reg, 1);
-
-            // addr = ptr + index * elem_size
-            const addr_reg = try self.allocTempGeneral();
-            try self.codegen.emit.movRegReg(.w64, addr_reg, len_reg);
-            self.codegen.freeGeneral(len_reg);
-
-            if (elem_size != 1) {
-                const size_reg = try self.allocTempGeneral();
-                try self.codegen.emitLoadImm(size_reg, elem_size);
-                try self.emitMulRegs(.w64, addr_reg, addr_reg, size_reg);
-                self.codegen.freeGeneral(size_reg);
-            }
-
-            try self.emitAddRegs(.w64, addr_reg, addr_reg, ptr_reg);
-            self.codegen.freeGeneral(ptr_reg);
-
-            return self.loadListElemToStack(addr_reg, 0, elem_size, ret_layout_idx, ret_layout_val);
         }
 
         /// Generate list_reverse via the listReverse builtin: in place when the
@@ -9452,7 +9115,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
         fn lowLevelListDescRef(self: *Self, s: anytype) ?LIR.BoxyDescRef {
             const op = s.op;
             if (op != .list_concat and op != .list_prepend and op != .list_set and op != .list_set_in_place_unsafe and
-                op != .list_swap and op != .list_drop_first and op != .list_drop_last and
+                op != .list_swap and
                 op != .list_take_first and op != .list_take_last and op != .list_sublist and
                 op != .list_drop_at and op != .list_reverse and op != .list_sort_with and
                 op != .list_reserve and op != .list_reserve_for_append and op != .list_release_excess_capacity and op != .list_clear) return null;
@@ -9547,7 +9210,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
@@ -9576,8 +9238,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .free,
                     .switch_stmt,
                     .switch_initialized_payload,
-                    .loop_continue,
-                    .loop_break,
                     .jump,
                     .ret,
                     .crash,
@@ -9618,7 +9278,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_packed_erased_fn,
                     .assign_boxy_desc_ref,
                     .assign_boxy_dict_ref,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_inspect,
                     .assign_boxy_eq,
                     .assign_boxy_hash,
@@ -9640,8 +9299,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .switch_initialized_payload,
                     .str_match,
                     .str_match_set,
-                    .loop_continue,
-                    .loop_break,
                     .join,
                     .jump,
                     .crash,
@@ -9676,7 +9333,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         try successors.append(self.allocator, s.on_miss);
                     },
                     .jump => {}, // Resolved after every join has been declared.
-                    .loop_continue, .loop_break => unreachable, // No enclosing native LIR loop region.
                     .init_uninitialized,
                     .assign_ref,
                     .assign_literal,
@@ -9687,7 +9343,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .assign_boxy_dict_ref,
                     .assign_boxy_box,
                     .assign_boxy_record_update,
-                    .assign_boxy_reuse_box,
                     .assign_boxy_unbox,
                     .assign_boxy_adapt,
                     .assign_boxy_inspect,
@@ -12046,582 +11701,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
 
                 self.freeGenerals(.{ temp, low_result, one_reg });
             }
-        }
-
-        // Heap state shared by the explicit-stack continuations that emit a
-        // multi-variant tag-union structural comparison. Freed by `tag_finish`.
-        const EqTagState = struct {
-            result_reg: GeneralReg,
-            lhs_base: i32,
-            rhs_base: i32,
-            disc_slot: i32,
-            disc_ne_patch: usize,
-            end_patches: std.ArrayList(usize),
-        };
-        // Heap state for a list structural comparison loop. Freed by `list_finish`.
-        const EqListState = struct {
-            result_reg: GeneralReg,
-            loop_start: usize,
-            ctr_slot: i32,
-            offset_slot: i32,
-            elem_size: u32,
-            exit_patch: usize,
-            len_ne_patch: usize,
-            empty_patch: usize,
-        };
-
-        /// Structural equality (`num_is_eq`) for compound layouts, emitted with an
-        /// explicit work stack so nested layouts never grow the native call stack.
-        /// Every work item writes a 0/1 result into a caller-provided result reg.
-        fn generateStructuralEquality(
-            self: *Self,
-            lhs_loc: ValueLocation,
-            rhs_loc: ValueLocation,
-            layout_idx: layout.Idx,
-        ) Allocator.Error!ValueLocation {
-            const ls = self.layout_store;
-            const result_reg = try self.allocTempGeneral();
-
-            const EqWork = union(enum) {
-                // compareFieldByLayout: dispatch by layout tag/size on stack offsets.
-                node_field: struct { lhs_off: i32, rhs_off: i32, layout_idx: layout.Idx, size: u32, result_reg: GeneralReg },
-                // Structural comparators (operate on value locations).
-                node_struct: struct { lhs_loc: ValueLocation, rhs_loc: ValueLocation, layout_idx: layout.Idx, result_reg: GeneralReg },
-                node_tag: struct { lhs_loc: ValueLocation, rhs_loc: ValueLocation, layout_idx: layout.Idx, result_reg: GeneralReg },
-                node_list: struct { lhs_loc: ValueLocation, rhs_loc: ValueLocation, layout_idx: layout.Idx, result_reg: GeneralReg },
-                // Struct field continuations.
-                struct_field: struct { result_slot: i32, lhs_off: i32, rhs_off: i32, field_layout_idx: layout.Idx, field_size: u32, result_reg: GeneralReg },
-                struct_and: struct { result_slot: i32, result_reg: GeneralReg },
-                struct_finish: struct { result_slot: i32, result_reg: GeneralReg },
-                // Tag union continuations.
-                tag_variant: struct { state: *EqTagState, variant_i: u32, payload_layout_idx: layout.Idx, payload_size: u32 },
-                tag_after: struct { state: *EqTagState, skip_patch: usize },
-                tag_finish: *EqTagState,
-                tag_finish1: struct { result_reg: GeneralReg, disc_ne_patch: usize },
-                // List continuation.
-                list_finish: *EqListState,
-            };
-
-            var sfa_buffer: [32 * @sizeOf(EqWork)]u8 align(@alignOf(usize)) = undefined;
-            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
-            const wa = sfa.allocator();
-            var work = std.ArrayList(EqWork).empty;
-            defer work.deinit(wa);
-
-            const top_layout = ls.getLayout(layout_idx);
-            switch (top_layout.tag) {
-                .list, .list_of_zst => try work.append(wa, .{ .node_list = .{ .lhs_loc = lhs_loc, .rhs_loc = rhs_loc, .layout_idx = layout_idx, .result_reg = result_reg } }),
-                .tag_union => try work.append(wa, .{ .node_tag = .{ .lhs_loc = lhs_loc, .rhs_loc = rhs_loc, .layout_idx = layout_idx, .result_reg = result_reg } }),
-                .scalar,
-                .box,
-                .box_of_zst,
-                .erased_box,
-                .struct_,
-                .closure,
-                .erased_callable,
-                .zst,
-                .ptr,
-                => try work.append(wa, .{ .node_struct = .{ .lhs_loc = lhs_loc, .rhs_loc = rhs_loc, .layout_idx = layout_idx, .result_reg = result_reg } }),
-            }
-
-            while (work.pop()) |item| switch (item) {
-                .node_field => |f| {
-                    const rr = f.result_reg;
-                    const field_layout = ls.getLayout(f.layout_idx);
-                    if (field_layout.tag == .box) {
-                        const inner_layout_idx = field_layout.getIdx();
-                        const inner_layout = ls.getLayout(inner_layout_idx);
-                        const lhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = f.lhs_off } }, f.layout_idx, inner_layout_idx);
-                        const rhs_norm = try self.normalizeValueLocationToLayout(.{ .stack = .{ .offset = f.rhs_off } }, f.layout_idx, inner_layout_idx);
-                        switch (inner_layout.tag) {
-                            .struct_ => try work.append(wa, .{ .node_struct = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
-                            .tag_union => try work.append(wa, .{ .node_tag = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
-                            .list, .list_of_zst => try work.append(wa, .{ .node_list = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } }),
-                            .erased_box => unreachable,
-                            .scalar,
-                            .box,
-                            .box_of_zst,
-                            .closure,
-                            .erased_callable,
-                            .zst,
-                            .ptr,
-                            => {
-                                const inner_size = ls.layoutSizeAlign(inner_layout).size;
-                                const lhs_stack = switch (lhs_norm) {
-                                    .stack => |s| s.offset,
-                                    inline .stack_str, .stack_i128 => |s| s,
-                                    .list_stack => |s| s.struct_offset,
-                                    .general_reg,
-                                    .float_reg,
-                                    .vector_reg,
-                                    .immediate_i64,
-                                    .immediate_f32,
-                                    .immediate_f64,
-                                    .immediate_i128,
-                                    .noreturn,
-                                    => try self.ensureOnStack(lhs_norm, inner_size),
-                                };
-                                const rhs_stack = switch (rhs_norm) {
-                                    .stack => |s| s.offset,
-                                    inline .stack_str, .stack_i128 => |s| s,
-                                    .list_stack => |s| s.struct_offset,
-                                    .general_reg,
-                                    .float_reg,
-                                    .vector_reg,
-                                    .immediate_i64,
-                                    .immediate_f32,
-                                    .immediate_f64,
-                                    .immediate_i128,
-                                    .noreturn,
-                                    => try self.ensureOnStack(rhs_norm, inner_size),
-                                };
-                                try work.append(wa, .{ .node_field = .{ .lhs_off = lhs_stack, .rhs_off = rhs_stack, .layout_idx = inner_layout_idx, .size = inner_size, .result_reg = rr } });
-                            },
-                        }
-                    } else if (field_layout.tag == .struct_) {
-                        try work.append(wa, .{ .node_struct = .{ .lhs_loc = .{ .stack = .{ .offset = f.lhs_off } }, .rhs_loc = .{ .stack = .{ .offset = f.rhs_off } }, .layout_idx = f.layout_idx, .result_reg = rr } });
-                    } else if (f.layout_idx == .str) {
-                        const eq_loc = try self.callStr2ToScalar(f.lhs_off, f.rhs_off, .str_equal);
-                        const eq_reg = try self.ensureInGeneralReg(eq_loc);
-                        try self.emitMovRegReg(rr, eq_reg);
-                        self.codegen.freeGeneral(eq_reg);
-                    } else if (f.layout_idx == .dec or f.layout_idx == .i128 or f.layout_idx == .u128) {
-                        const lhs_parts = try self.getI128Parts(.{ .stack_i128 = f.lhs_off }, .signed);
-                        const rhs_parts = try self.getI128Parts(.{ .stack_i128 = f.rhs_off }, .signed);
-                        try self.generateI128Equality(lhs_parts, rhs_parts, rr, true);
-                        self.freeGenerals(.{ lhs_parts.low, lhs_parts.high, rhs_parts.low, rhs_parts.high });
-                    } else if (field_layout.tag == .list or field_layout.tag == .list_of_zst) {
-                        try work.append(wa, .{ .node_list = .{ .lhs_loc = .{ .stack = .{ .offset = f.lhs_off } }, .rhs_loc = .{ .stack = .{ .offset = f.rhs_off } }, .layout_idx = f.layout_idx, .result_reg = rr } });
-                    } else if (f.size <= 8) {
-                        const lhs_reg, const rhs_reg = try self.allocTempGenerals(2);
-                        switch (f.size) {
-                            1 => {
-                                try self.emitLoadStackW8(lhs_reg, f.lhs_off);
-                                try self.emitLoadStackW8(rhs_reg, f.rhs_off);
-                            },
-                            2 => {
-                                try self.emitLoadStackW16(lhs_reg, f.lhs_off);
-                                try self.emitLoadStackW16(rhs_reg, f.rhs_off);
-                            },
-                            4 => {
-                                try self.codegen.emitLoadStack(.w32, lhs_reg, f.lhs_off);
-                                try self.codegen.emitLoadStack(.w32, rhs_reg, f.rhs_off);
-                            },
-                            8 => {
-                                try self.codegen.emitLoadStack(.w64, lhs_reg, f.lhs_off);
-                                try self.codegen.emitLoadStack(.w64, rhs_reg, f.rhs_off);
-                            },
-                            else => {
-                                const mask: u64 = (@as(u64, 1) << @intCast(f.size * 8)) - 1;
-                                const mask_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadStack(.w64, lhs_reg, f.lhs_off);
-                                try self.codegen.emitLoadStack(.w64, rhs_reg, f.rhs_off);
-                                try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                                try self.emitAndRegs(.w64, lhs_reg, lhs_reg, mask_reg);
-                                try self.emitAndRegs(.w64, rhs_reg, rhs_reg, mask_reg);
-                                self.codegen.freeGeneral(mask_reg);
-                            },
-                        }
-                        try self.emitCmpReg(lhs_reg, rhs_reg);
-                        try self.emitSetCond(rr, condCode(.equal));
-                        self.freeGenerals(.{ lhs_reg, rhs_reg });
-                    } else if (field_layout.tag == .tag_union) {
-                        try work.append(wa, .{ .node_tag = .{ .lhs_loc = .{ .stack = .{ .offset = f.lhs_off } }, .rhs_loc = .{ .stack = .{ .offset = f.rhs_off } }, .layout_idx = f.layout_idx, .result_reg = rr } });
-                    } else {
-                        const tmp_a, const tmp_b, const xor_acc = try self.allocTempGenerals(3);
-                        try self.codegen.emitLoadImm(xor_acc, 0);
-                        var cmp_off: u32 = 0;
-                        while (cmp_off < f.size) {
-                            try self.codegen.emitLoadStack(.w64, tmp_a, f.lhs_off + @as(i32, @intCast(cmp_off)));
-                            try self.codegen.emitLoadStack(.w64, tmp_b, f.rhs_off + @as(i32, @intCast(cmp_off)));
-                            const remaining = f.size - cmp_off;
-                            if (remaining < 8) {
-                                const mask: u64 = (@as(u64, 1) << @intCast(remaining * 8)) - 1;
-                                const mask_reg = try self.allocTempGeneral();
-                                try self.codegen.emitLoadImm(mask_reg, @bitCast(mask));
-                                try self.emitAndRegs(.w64, tmp_a, tmp_a, mask_reg);
-                                try self.emitAndRegs(.w64, tmp_b, tmp_b, mask_reg);
-                                self.codegen.freeGeneral(mask_reg);
-                            }
-                            if (comptime target.toCpuArch() == .aarch64) {
-                                try self.codegen.emit.eorRegRegReg(.w64, tmp_a, tmp_a, tmp_b);
-                                try self.codegen.emit.orrRegRegReg(.w64, xor_acc, xor_acc, tmp_a);
-                            } else {
-                                try self.codegen.emit.xorRegReg(.w64, tmp_a, tmp_b);
-                                try self.codegen.emit.orRegReg(.w64, xor_acc, tmp_a);
-                            }
-                            cmp_off += 8;
-                        }
-                        try self.emitCmpImm(xor_acc, 0);
-                        try self.emitSetCond(rr, condCode(.equal));
-                        self.freeGenerals(.{ tmp_a, tmp_b, xor_acc });
-                    }
-                },
-
-                .node_struct => |s| {
-                    const rr = s.result_reg;
-                    const stored_layout = ls.getLayout(s.layout_idx);
-                    if (stored_layout.tag == .box) {
-                        const inner_layout_idx = stored_layout.getIdx();
-                        const lhs_norm = try self.normalizeValueLocationToLayout(s.lhs_loc, s.layout_idx, inner_layout_idx);
-                        const rhs_norm = try self.normalizeValueLocationToLayout(s.rhs_loc, s.layout_idx, inner_layout_idx);
-                        try work.append(wa, .{ .node_struct = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } });
-                        continue;
-                    }
-                    if (stored_layout.tag != .struct_) {
-                        try self.codegen.emitLoadImm(rr, 1);
-                        continue;
-                    }
-                    const struct_idx = stored_layout.getStruct().idx;
-                    const struct_data = ls.getStructData(struct_idx);
-                    const field_count = struct_data.fields.count;
-                    if (field_count == 0) {
-                        try self.codegen.emitLoadImm(rr, 1);
-                        continue;
-                    }
-                    const lhs_base = try self.ensureRecordOnStack(s.lhs_loc, ls.layoutSizeAlign(stored_layout).size);
-                    const rhs_base = try self.ensureRecordOnStack(s.rhs_loc, ls.layoutSizeAlign(stored_layout).size);
-                    const result_slot = self.codegen.allocStackSlot(8);
-                    {
-                        const temp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(temp, 1);
-                        try self.codegen.emitStoreStack(.w64, result_slot, temp);
-                        self.codegen.freeGeneral(temp);
-                    }
-                    try work.append(wa, .{ .struct_finish = .{ .result_slot = result_slot, .result_reg = rr } });
-                    // Push fields in reverse so emission keeps source order.
-                    var fi: u32 = field_count;
-                    while (fi > 0) {
-                        fi -= 1;
-                        // Padding spacers hold uninitialized bytes; never compare them.
-                        if (ls.getStructFieldIsPadding(struct_idx, @intCast(fi))) continue;
-                        const field_size = ls.getStructFieldSize(struct_idx, @intCast(fi));
-                        if (field_size == 0) continue;
-                        const field_offset = ls.getStructFieldOffset(struct_idx, @intCast(fi));
-                        const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(fi));
-                        try work.append(wa, .{ .struct_field = .{
-                            .result_slot = result_slot,
-                            .lhs_off = lhs_base + @as(i32, @intCast(field_offset)),
-                            .rhs_off = rhs_base + @as(i32, @intCast(field_offset)),
-                            .field_layout_idx = field_layout_idx,
-                            .field_size = field_size,
-                            .result_reg = rr,
-                        } });
-                    }
-                },
-
-                .struct_field => |sf| {
-                    // The child finishes before `struct_and` runs, so both can reuse the
-                    // caller-provided result register. Register use stays constant as the
-                    // layout nesting depth grows.
-                    try work.append(wa, .{ .struct_and = .{ .result_slot = sf.result_slot, .result_reg = sf.result_reg } });
-                    try work.append(wa, .{ .node_field = .{ .lhs_off = sf.lhs_off, .rhs_off = sf.rhs_off, .layout_idx = sf.field_layout_idx, .size = sf.field_size, .result_reg = sf.result_reg } });
-                },
-
-                .struct_and => |sa_| {
-                    const acc_reg = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, acc_reg, sa_.result_slot);
-                    try self.emitAndRegs(.w64, acc_reg, acc_reg, sa_.result_reg);
-                    try self.codegen.emitStoreStack(.w64, sa_.result_slot, acc_reg);
-                    self.codegen.freeGeneral(acc_reg);
-                },
-
-                .struct_finish => |sf| {
-                    try self.codegen.emitLoadStack(.w64, sf.result_reg, sf.result_slot);
-                },
-
-                .node_tag => |t| {
-                    const rr = t.result_reg;
-                    const stored_layout = ls.getLayout(t.layout_idx);
-                    if (stored_layout.tag == .box) {
-                        const inner_layout_idx = stored_layout.getIdx();
-                        const lhs_norm = try self.normalizeValueLocationToLayout(t.lhs_loc, t.layout_idx, inner_layout_idx);
-                        const rhs_norm = try self.normalizeValueLocationToLayout(t.rhs_loc, t.layout_idx, inner_layout_idx);
-                        try work.append(wa, .{ .node_tag = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } });
-                        continue;
-                    }
-                    if (stored_layout.tag != .tag_union) unreachable;
-                    const tu_idx = stored_layout.getTagUnion().idx;
-                    const tu_data = ls.getTagUnionData(tu_idx);
-                    const total_size = tu_data.size.get(ls.targetUsize());
-                    if (total_size == 0) {
-                        try self.codegen.emitLoadImm(rr, 1);
-                        continue;
-                    }
-                    const lhs_base = try self.ensureRecordOnStack(t.lhs_loc, total_size);
-                    const rhs_base = try self.ensureRecordOnStack(t.rhs_loc, total_size);
-                    const disc_offset: i32 = @intCast(tu_data.discriminant_offset.get(self.layout_store.targetUsize()));
-                    const disc_size = tu_data.discriminant_size;
-                    const disc_use_w32 = (disc_offset + 8 > @as(i32, @intCast(total_size)));
-                    const lhs_disc, const rhs_disc = try self.allocTempGenerals(2);
-                    if (disc_size == 0) {
-                        try self.codegen.emitLoadImm(lhs_disc, 0);
-                        try self.codegen.emitLoadImm(rhs_disc, 0);
-                    } else if (disc_use_w32) {
-                        try self.codegen.emitLoadStack(.w32, lhs_disc, lhs_base + disc_offset);
-                        try self.codegen.emitLoadStack(.w32, rhs_disc, rhs_base + disc_offset);
-                    } else {
-                        try self.codegen.emitLoadStack(.w64, lhs_disc, lhs_base + disc_offset);
-                        try self.codegen.emitLoadStack(.w64, rhs_disc, rhs_base + disc_offset);
-                    }
-                    if (disc_size != 0 and disc_size < 8) {
-                        const disc_mask: u64 = (@as(u64, 1) << @intCast(disc_size * 8)) - 1;
-                        const disc_mask_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(disc_mask_reg, @bitCast(disc_mask));
-                        try self.emitAndRegs(.w64, lhs_disc, lhs_disc, disc_mask_reg);
-                        try self.emitAndRegs(.w64, rhs_disc, rhs_disc, disc_mask_reg);
-                        self.codegen.freeGeneral(disc_mask_reg);
-                    }
-                    try self.emitCmpReg(lhs_disc, rhs_disc);
-                    self.codegen.freeGeneral(rhs_disc);
-                    try self.codegen.emitLoadImm(rr, 0);
-                    const disc_ne_patch = try self.emitJumpIfNotEqual();
-                    const variants = ls.getTagUnionVariants(tu_data);
-                    const variant_count = variants.len;
-                    if (variant_count == 1) {
-                        self.codegen.freeGeneral(lhs_disc);
-                        const payload_layout_idx = variants.get(0).payload_layout;
-                        const payload_layout = ls.getLayout(payload_layout_idx);
-                        const payload_size = ls.layoutSizeAlign(payload_layout).size;
-                        if (payload_size > 0) {
-                            try work.append(wa, .{ .tag_finish1 = .{ .result_reg = rr, .disc_ne_patch = disc_ne_patch } });
-                            try work.append(wa, .{ .node_field = .{ .lhs_off = lhs_base, .rhs_off = rhs_base, .layout_idx = payload_layout_idx, .size = payload_size, .result_reg = rr } });
-                        } else {
-                            try self.codegen.emitLoadImm(rr, 1);
-                            try self.codegen.patchJump(disc_ne_patch, self.codegen.currentOffset());
-                        }
-                    } else {
-                        try self.codegen.emitLoadImm(rr, 1);
-                        const disc_slot = self.codegen.allocStackSlot(8);
-                        try self.codegen.emitStoreStack(.w64, disc_slot, lhs_disc);
-                        self.codegen.freeGeneral(lhs_disc);
-                        const state = try self.allocator.create(EqTagState);
-                        state.* = .{
-                            .result_reg = rr,
-                            .lhs_base = lhs_base,
-                            .rhs_base = rhs_base,
-                            .disc_slot = disc_slot,
-                            .disc_ne_patch = disc_ne_patch,
-                            .end_patches = std.ArrayList(usize).empty,
-                        };
-                        try work.append(wa, .{ .tag_finish = state });
-                        var vi: u32 = @intCast(variant_count);
-                        while (vi > 0) {
-                            vi -= 1;
-                            const payload_layout_idx = variants.get(vi).payload_layout;
-                            const payload_layout = ls.getLayout(payload_layout_idx);
-                            const payload_size = ls.layoutSizeAlign(payload_layout).size;
-                            if (payload_size == 0) continue;
-                            try work.append(wa, .{ .tag_variant = .{ .state = state, .variant_i = vi, .payload_layout_idx = payload_layout_idx, .payload_size = payload_size } });
-                        }
-                    }
-                },
-
-                .tag_variant => |tv| {
-                    const st = tv.state;
-                    const disc_temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadStack(.w64, disc_temp, st.disc_slot);
-                    try self.emitCmpImm(disc_temp, @intCast(tv.variant_i));
-                    self.codegen.freeGeneral(disc_temp);
-                    const skip_patch = try self.emitJumpIfNotEqual();
-                    try work.append(wa, .{ .tag_after = .{ .state = st, .skip_patch = skip_patch } });
-                    try work.append(wa, .{ .node_field = .{ .lhs_off = st.lhs_base, .rhs_off = st.rhs_base, .layout_idx = tv.payload_layout_idx, .size = tv.payload_size, .result_reg = st.result_reg } });
-                },
-
-                .tag_after => |ta| {
-                    const st = ta.state;
-                    try st.end_patches.append(self.allocator, try self.codegen.emitJump());
-                    try self.codegen.patchJump(ta.skip_patch, self.codegen.currentOffset());
-                },
-
-                .tag_finish => |st| {
-                    const current = self.codegen.currentOffset();
-                    for (st.end_patches.items) |patch| {
-                        try self.codegen.patchJump(patch, current);
-                    }
-                    try self.codegen.patchJump(st.disc_ne_patch, self.codegen.currentOffset());
-                    st.end_patches.deinit(self.allocator);
-                    self.allocator.destroy(st);
-                },
-
-                .tag_finish1 => |tf| {
-                    try self.codegen.patchJump(tf.disc_ne_patch, self.codegen.currentOffset());
-                },
-
-                .node_list => |l| {
-                    const rr = l.result_reg;
-                    const list_layout = ls.getLayout(l.layout_idx);
-                    if (list_layout.tag == .box) {
-                        const inner_layout_idx = list_layout.getIdx();
-                        const lhs_norm = try self.normalizeValueLocationToLayout(l.lhs_loc, l.layout_idx, inner_layout_idx);
-                        const rhs_norm = try self.normalizeValueLocationToLayout(l.rhs_loc, l.layout_idx, inner_layout_idx);
-                        try work.append(wa, .{ .node_list = .{ .lhs_loc = lhs_norm, .rhs_loc = rhs_norm, .layout_idx = inner_layout_idx, .result_reg = rr } });
-                        continue;
-                    }
-                    const elem_layout_idx: layout.Idx = switch (list_layout.tag) {
-                        .list => list_layout.getIdx(),
-                        .list_of_zst => .zst,
-                        .scalar,
-                        .box,
-                        .box_of_zst,
-                        .erased_box,
-                        .struct_,
-                        .closure,
-                        .erased_callable,
-                        .zst,
-                        .tag_union,
-                        .ptr,
-                        => unreachable,
-                    };
-                    const elem_layout = ls.getLayout(elem_layout_idx);
-                    const elem_size: u32 = ls.layoutSizeAlign(elem_layout).size;
-                    const lhs_base: i32 = listStructOffset(l.lhs_loc);
-                    const rhs_base: i32 = listStructOffset(l.rhs_loc);
-                    const lhs_len, const rhs_len = try self.allocTempGenerals(2);
-                    try self.emitLoad(.w64, lhs_len, frame_ptr, lhs_base + 8);
-                    try self.emitLoad(.w64, rhs_len, frame_ptr, rhs_base + 8);
-                    try self.emitCmpReg(lhs_len, rhs_len);
-                    self.codegen.freeGeneral(rhs_len);
-                    try self.codegen.emitLoadImm(rr, 0);
-                    const len_ne_patch = try self.codegen.emitCondJump(condCode(.not_equal));
-                    try self.codegen.emitLoadImm(rr, 1);
-                    const len_slot = self.codegen.allocStackSlot(8);
-                    try self.codegen.emitStoreStack(.w64, len_slot, lhs_len);
-                    try self.emitCmpImm(lhs_len, 0);
-                    self.codegen.freeGeneral(lhs_len);
-                    const empty_patch = try self.codegen.emitCondJump(condCode(.equal));
-                    if (elem_size == 0) {
-                        const done_offset = self.codegen.currentOffset();
-                        try self.codegen.patchJump(len_ne_patch, done_offset);
-                        try self.codegen.patchJump(empty_patch, done_offset);
-                        continue;
-                    }
-                    const lhs_ptr_slot = self.codegen.allocStackSlot(8);
-                    const rhs_ptr_slot = self.codegen.allocStackSlot(8);
-                    {
-                        const tmp = try self.allocTempGeneral();
-                        try self.emitLoad(.w64, tmp, frame_ptr, lhs_base);
-                        try self.codegen.emitStoreStack(.w64, lhs_ptr_slot, tmp);
-                        try self.emitLoad(.w64, tmp, frame_ptr, rhs_base);
-                        try self.codegen.emitStoreStack(.w64, rhs_ptr_slot, tmp);
-                        self.codegen.freeGeneral(tmp);
-                    }
-                    const ctr_slot = self.codegen.allocStackSlot(8);
-                    const offset_slot = self.codegen.allocStackSlot(8);
-                    const aligned_elem = @as(u32, @intCast(std.mem.alignForward(u32, elem_size, 8)));
-                    const lhs_elem_slot = self.codegen.allocStackSlot(@intCast(aligned_elem));
-                    const rhs_elem_slot = self.codegen.allocStackSlot(@intCast(aligned_elem));
-                    {
-                        const tmp = try self.allocTempGeneral();
-                        try self.codegen.emitLoadImm(tmp, 0);
-                        try self.codegen.emitStoreStack(.w64, ctr_slot, tmp);
-                        try self.codegen.emitStoreStack(.w64, offset_slot, tmp);
-                        self.codegen.freeGeneral(tmp);
-                    }
-                    const loop_start = self.codegen.currentOffset();
-                    {
-                        const ctr_reg, const len_reg = try self.allocTempGenerals(2);
-                        try self.codegen.emitLoadStack(.w64, ctr_reg, ctr_slot);
-                        try self.codegen.emitLoadStack(.w64, len_reg, len_slot);
-                        try self.codegen.emit.cmpRegReg(.w64, ctr_reg, len_reg);
-                        self.freeGenerals(.{ ctr_reg, len_reg });
-                    }
-                    const exit_patch = try self.codegen.emitCondJump(condCode(.greater_or_equal));
-                    {
-                        const ptr_reg, const off_reg = try self.allocTempGenerals(2);
-                        try self.codegen.emitLoadStack(.w64, ptr_reg, lhs_ptr_slot);
-                        try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
-                        try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
-                        self.codegen.freeGeneral(off_reg);
-                        const tmp = try self.allocTempGeneral();
-                        try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, lhs_elem_slot, elem_size);
-                        self.freeGenerals(.{ tmp, ptr_reg });
-                    }
-                    {
-                        const ptr_reg, const off_reg = try self.allocTempGenerals(2);
-                        try self.codegen.emitLoadStack(.w64, ptr_reg, rhs_ptr_slot);
-                        try self.codegen.emitLoadStack(.w64, off_reg, offset_slot);
-                        try self.emitAddRegs(.w64, ptr_reg, ptr_reg, off_reg);
-                        self.codegen.freeGeneral(off_reg);
-                        const tmp = try self.allocTempGeneral();
-                        try self.copyChunked(tmp, ptr_reg, 0, frame_ptr, rhs_elem_slot, elem_size);
-                        self.freeGenerals(.{ tmp, ptr_reg });
-                    }
-                    const state = try self.allocator.create(EqListState);
-                    state.* = .{
-                        .result_reg = rr,
-                        .loop_start = loop_start,
-                        .ctr_slot = ctr_slot,
-                        .offset_slot = offset_slot,
-                        .elem_size = elem_size,
-                        .exit_patch = exit_patch,
-                        .len_ne_patch = len_ne_patch,
-                        .empty_patch = empty_patch,
-                    };
-                    // The nested element comparison completes before `list_finish` and
-                    // may therefore reuse the list's result register at every depth.
-                    try work.append(wa, .{ .list_finish = state });
-                    try work.append(wa, .{ .node_field = .{ .lhs_off = lhs_elem_slot, .rhs_off = rhs_elem_slot, .layout_idx = elem_layout_idx, .size = elem_size, .result_reg = rr } });
-                },
-
-                .list_finish => |st| {
-                    try self.emitCmpImm(st.result_reg, 1);
-                    const ne_patch = try self.codegen.emitCondJump(condCode(.not_equal));
-                    {
-                        const ctr_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, ctr_reg, st.ctr_slot);
-                        try self.emitAddImm(ctr_reg, ctr_reg, 1);
-                        try self.codegen.emitStoreStack(.w64, st.ctr_slot, ctr_reg);
-                        self.codegen.freeGeneral(ctr_reg);
-                        const off_reg = try self.allocTempGeneral();
-                        try self.codegen.emitLoadStack(.w64, off_reg, st.offset_slot);
-                        try self.emitAddImm(off_reg, off_reg, @intCast(st.elem_size));
-                        try self.codegen.emitStoreStack(.w64, st.offset_slot, off_reg);
-                        self.codegen.freeGeneral(off_reg);
-                    }
-                    const back_patch = try self.codegen.emitJump();
-                    try self.codegen.patchJump(back_patch, st.loop_start);
-                    try self.codegen.patchJump(ne_patch, self.codegen.currentOffset());
-                    try self.codegen.emitLoadImm(st.result_reg, 0);
-                    const ne_done_patch = try self.codegen.emitJump();
-                    try self.codegen.patchJump(st.exit_patch, self.codegen.currentOffset());
-                    try self.codegen.patchJump(ne_done_patch, self.codegen.currentOffset());
-                    try self.codegen.patchJump(st.len_ne_patch, self.codegen.currentOffset());
-                    try self.codegen.patchJump(st.empty_patch, self.codegen.currentOffset());
-                    self.allocator.destroy(st);
-                },
-            };
-
-            return .{ .general_reg = result_reg };
-        }
-
-        /// Ensure a record value is on the stack, returning its base offset.
-        fn ensureRecordOnStack(self: *Self, loc: ValueLocation, record_size: u32) Allocator.Error!i32 {
-            return switch (loc) {
-                .stack_str, .stack_i128 => |off| off,
-                .stack => |s| s.offset,
-                .general_reg => |reg| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    try self.emitStore(.w64, frame_ptr, slot, reg);
-                    break :blk slot;
-                },
-                .immediate_i64 => |val| blk: {
-                    const slot = self.codegen.allocStackSlot(@intCast(record_size));
-                    const temp = try self.allocTempGeneral();
-                    try self.codegen.emitLoadImm(temp, val);
-                    try self.emitStore(.w64, frame_ptr, slot, temp);
-                    self.codegen.freeGeneral(temp);
-                    break :blk slot;
-                },
-                .float_reg,
-                .vector_reg,
-                .list_stack,
-                .immediate_f32,
-                .immediate_f64,
-                .immediate_i128,
-                .noreturn,
-                => unreachable,
-            };
         }
 
         /// Generate floating-point binary operation
@@ -17189,19 +16268,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     const loc = try self.emitValueLocal(local);
                     return try self.ensureOnStack(loc, 8);
                 },
-                .dict_method_arg => |projection| {
-                    const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
-                    var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
-                    defer builder.deinit();
-                    try builder.addMemArg(frame_ptr, dict_slot);
-                    try builder.addImmArg(projection.method_slot);
-                    try builder.addImmArg(@backingInt(projection.method));
-                    try builder.addImmArg(projection.arg_index);
-                    try self.callBoxyBuiltin(&builder, .dict_method_arg_desc);
-                    const slot = self.codegen.allocStackSlot(8);
-                    try self.emitStore(.w64, frame_ptr, slot, ret_reg_0);
-                    return slot;
-                },
                 .dict_method_hidden => |projection| {
                     const dict_slot = try self.boxyDictRefToSlot(.{ .local = projection.dict });
                     var builder = try Builder.init(&self.codegen.emit, &self.codegen.stack_offset);
@@ -17373,7 +16439,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                         return self.stackLocationForLayout(target_layout, slot);
                     },
                     .local => |local| return try self.emitValueLocal(local),
-                    .dict_method_arg, .dict_method_hidden => {
+                    .dict_method_hidden => {
                         const slot = try self.boxyDescRefToSlot(assign.desc);
                         return self.stackLocationForLayout(target_layout, slot);
                     },
@@ -17434,7 +16500,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     }
                     return try self.emitValueLocal(local);
                 },
-                .runtime, .dict_method_arg, .dict_method_hidden => base.invariant(
+                .runtime, .dict_method_hidden => base.invariant(
                     "Dev/codegen invariant violated: runtime boxy desc ref in dev codegen not implemented",
                     .{},
                 ),
@@ -20115,12 +19181,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             defer self.deinitJoinPointJumpsMap(&saved_join_point_jumps);
             var saved_join_point_params = self.join_point_params.clone() catch return error.OutOfMemory;
             defer saved_join_point_params.deinit();
-            var saved_loop_continue_targets = try self.loop_continue_targets.clone(self.allocator);
-            defer saved_loop_continue_targets.deinit(self.allocator);
-            var saved_loop_break_patch_starts = try self.loop_break_patch_starts.clone(self.allocator);
-            defer saved_loop_break_patch_starts.deinit(self.allocator);
-            var saved_loop_break_patches = try self.loop_break_patches.clone(self.allocator);
-            defer saved_loop_break_patches.deinit(self.allocator);
 
             // Clear state for procedure's scope
             self.clearLocalLocationsRetainingCapacity();
@@ -20221,9 +19281,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                 std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
                 std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
                 std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
-                std.mem.swap(@TypeOf(self.loop_continue_targets), &self.loop_continue_targets, &saved_loop_continue_targets);
-                std.mem.swap(@TypeOf(self.loop_break_patch_starts), &self.loop_break_patch_starts, &saved_loop_break_patch_starts);
-                std.mem.swap(@TypeOf(self.loop_break_patches), &self.loop_break_patches, &saved_loop_break_patches);
                 self.early_return_ret_layout = saved_early_return_ret_layout;
                 self.early_return_patches.shrinkRetainingCapacity(saved_early_return_patches_len);
             }
@@ -20461,9 +19518,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
             std.mem.swap(@TypeOf(self.stmt_locations), &self.stmt_locations, &saved_stmt_locations);
             std.mem.swap(@TypeOf(self.join_point_jumps), &self.join_point_jumps, &saved_join_point_jumps);
             std.mem.swap(@TypeOf(self.join_point_params), &self.join_point_params, &saved_join_point_params);
-            std.mem.swap(@TypeOf(self.loop_continue_targets), &self.loop_continue_targets, &saved_loop_continue_targets);
-            std.mem.swap(@TypeOf(self.loop_break_patch_starts), &self.loop_break_patch_starts, &saved_loop_break_patch_starts);
-            std.mem.swap(@TypeOf(self.loop_break_patches), &self.loop_break_patches, &saved_loop_break_patches);
 
             try self.registerAssembledProc(proc.identity, self.proc_registry.get(key).?.code_start);
             try self.maybeDrainRcHelpers();
@@ -22200,12 +21254,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                             try work.append(wa, .{ .node = assign.next });
                         },
 
-                        .assign_boxy_reuse_box => |assign| {
-                            const value_loc = try self.emitValueLocal(assign.source);
-                            try self.bindAssignedLocal(assign.target, value_loc);
-                            try work.append(wa, .{ .node = assign.next });
-                        },
-
                         .assign_boxy_unbox => |assign| {
                             const value_loc = try self.generateBoxyUnbox(assign);
                             try self.bindAssignedLocal(assign.target, value_loc);
@@ -22713,28 +21761,6 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                                 },
                             }
                             try self.emitTrap();
-                        },
-
-                        .loop_continue => {
-                            if (builtin.mode == .debug and self.loop_continue_targets.items.len == 0) {
-                                base.invariant(
-                                    "Dev/codegen invariant violated: loop_continue encountered outside a loop",
-                                    .{},
-                                );
-                            }
-                            const loop_target = self.loop_continue_targets.items[self.loop_continue_targets.items.len - 1];
-                            const patch = try self.codegen.emitJump();
-                            try self.codegen.patchJump(patch, loop_target);
-                        },
-
-                        .loop_break => {
-                            if (builtin.mode == .debug and self.loop_break_patch_starts.items.len == 0) {
-                                base.invariant(
-                                    "Dev/codegen invariant violated: loop_break encountered outside a loop",
-                                    .{},
-                                );
-                            }
-                            try self.loop_break_patches.append(self.allocator, try self.emitJumpPlaceholder());
                         },
                     }
                 },
@@ -24252,7 +23278,7 @@ pub fn LirCodeGen(comptime target: RocTarget) type {
                     .static => try self.boxyDescRefToSlot(desc_ref),
                     .local => |local| paramSlotForLocal(param_refs, param_slots, local) orelse
                         base.invariant("{s}", .{"Dev/codegen invariant violated: dictionary thunk return descriptor was not a procedure parameter"}),
-                    .runtime, .dict_method_arg, .dict_method_hidden => base.invariant(
+                    .runtime, .dict_method_hidden => base.invariant(
                         "Dev/codegen invariant violated: runtime boxy desc ref in dictionary thunk return",
                         .{},
                     ),
@@ -27261,83 +26287,6 @@ test "dev lowering keeps F32 addition in binary32 locations" {
 
     const proc = try addBinaryF32LowLevelProc(&store, .num_float_add, 1.25, 2.5);
     try std.testing.expectEqual(@as(u64, @as(u32, @bitCast(@as(f32, 3.75)))), try runRootFloatBits(&store, &test_state.layout_store, proc, .f32));
-}
-
-test "record equality uses layout-aware comparison" {
-    if (comptime builtin.cpu.arch != .x86_64 and builtin.cpu.arch != .aarch64) {
-        return error.SkipZigTest;
-    }
-
-    const allocator = std.testing.allocator;
-    var store = LirStore.init(allocator);
-    defer store.deinit();
-    var test_state = try TestLayoutState.init(allocator);
-    defer test_state.deinit();
-
-    const record_layout = try test_state.layout_store.putStructFields(&.{
-        .{ .index = 0, .layout = .u8 },
-        .{ .index = 1, .layout = .i64 },
-    });
-    const record_layout_val = test_state.layout_store.getLayout(record_layout);
-    const record_idx = record_layout_val.getStruct().idx;
-    const record_data = test_state.layout_store.getStructData(record_idx);
-    const committed_fields = test_state.layout_store.struct_fields.sliceRange(record_data.getFields());
-    try std.testing.expectEqual(layout.Idx.i64, committed_fields.get(0).layout);
-    try std.testing.expectEqual(@as(u32, 8), test_state.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 0));
-    try std.testing.expectEqual(@as(u32, 0), test_state.layout_store.getStructFieldOffsetByOriginalIndex(record_idx, 1));
-
-    const lhs_small = try addLocal(&store, .u8);
-    const lhs_large = try addLocal(&store, .i64);
-    const rhs_small = try addLocal(&store, .u8);
-    const rhs_large = try addLocal(&store, .i64);
-    const lhs_record = try addLocal(&store, record_layout);
-    const rhs_record = try addLocal(&store, record_layout);
-    const eq_result = try addLocal(&store, .bool);
-
-    const ret = try store.addCFStmt(.{ .ret = .{ .value = eq_result } }, .test_fixture);
-    const eq_args = try store.addLocalSpan(&.{ lhs_record, rhs_record });
-    const eq_stmt = try store.addCFStmt(.{ .assign_low_level = .{
-        .target = eq_result,
-        .op = .num_is_eq,
-        .rc_effect = lir.LowLevel.num_is_eq.rcEffect(),
-        .args = eq_args,
-        .next = ret,
-    } }, .test_fixture);
-    const rhs_fields = try store.addLocalSpan(&.{ rhs_small, rhs_large });
-    const rhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
-        .target = rhs_record,
-        .fields = rhs_fields,
-        .next = eq_stmt,
-    } }, .test_fixture);
-    const lhs_fields = try store.addLocalSpan(&.{ lhs_small, lhs_large });
-    const lhs_record_stmt = try store.addCFStmt(.{ .assign_struct = .{
-        .target = lhs_record,
-        .fields = lhs_fields,
-        .next = rhs_record_stmt,
-    } }, .test_fixture);
-    const assign_rhs_large = try store.addCFStmt(.{ .assign_literal = .{
-        .target = rhs_large,
-        .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
-        .next = lhs_record_stmt,
-    } }, .test_fixture);
-    const assign_rhs_small = try store.addCFStmt(.{ .assign_literal = .{
-        .target = rhs_small,
-        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
-        .next = assign_rhs_large,
-    } }, .test_fixture);
-    const assign_lhs_large = try store.addCFStmt(.{ .assign_literal = .{
-        .target = lhs_large,
-        .value = .{ .i64_literal = .{ .value = 999, .layout_idx = .i64 } },
-        .next = assign_rhs_small,
-    } }, .test_fixture);
-    const assign_lhs_small = try store.addCFStmt(.{ .assign_literal = .{
-        .target = lhs_small,
-        .value = .{ .i64_literal = .{ .value = 7, .layout_idx = .u8 } },
-        .next = assign_lhs_large,
-    } }, .test_fixture);
-    const proc = try addNoArgProc(&store, assign_lhs_small, .bool);
-
-    try std.testing.expectEqual(@as(u8, 1), try runRootU8(&store, &test_state.layout_store, proc, .bool));
 }
 
 test "generate modulo" {

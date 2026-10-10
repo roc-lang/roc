@@ -107,7 +107,7 @@ const no_stmt_node_index = std.math.maxInt(u32);
 const no_arc_bit = std.math.maxInt(u32);
 const arc_bit_needed = no_arc_bit - 1;
 
-/// Source-owned keep-free analysis. The allocator must outlive every emission
+/// Source-owned liveness analysis. The allocator must outlive every emission
 /// using this cache (normally a durable source arena). No retained graph state
 /// points into a ProcArcDomain: only stable source-frame ordinals are retained.
 /// Freeze after preparation and before sharing with planning workers.
@@ -391,39 +391,26 @@ const GroupLivenessIndex = struct {
     /// containing only non-resource locals have empty ranges.
     ranges: []const Range = &.{},
 
-    /// Join seeding inverts only singleton raw bits and group bits. The
-    /// singleton prefix maps raw bits to resource indices (or no_arc_bit for
-    /// solver-only anchors); each group range contains only concrete RC units.
-    /// Absent for procedures without joins and for identity-numbered frames.
-    seed_resources: []const u32 = &.{},
-    seed_ranges: []const Range = &.{},
     /// Raw liveness bit -> ownership resource index: the exact inverse of
-    /// `raw_bits`. Present exactly when `seed_resources` is.
+    /// `raw_bits`. Absent for procedures without joins and for
+    /// identity-numbered frames.
     use_resources: []const u32 = &.{},
 
     fn init(
         allocator: Allocator,
         domain: *const ProcArcDomain,
         solution: *const arc_solve.Solution,
-        seed_refcounted: ?[]const bool,
+        index_uses: bool,
     ) ResourceError!GroupLivenessIndex {
         if (domain.group_leaders.len == 0) return .{};
         const raw_bits = try allocator.alloc(u32, domain.resource_locals.len);
         const ranges = try allocator.alloc(Range, domain.group_leaders.len);
         @memset(ranges, .{});
-        const seed_ranges: []Range = if (seed_refcounted != null)
-            try allocator.alloc(Range, ranges.len)
-        else
-            &.{};
-        @memset(seed_ranges, .{});
         var singletons: u32 = 0;
         for (domain.resource_locals) |local| {
             if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
                 const group = bit - raw_bits.len;
                 ranges[group].end += 1;
-                if (seed_refcounted) |rc| {
-                    if (rc[@backingInt(local)]) seed_ranges[group].end += 1;
-                }
             } else {
                 singletons += 1;
             }
@@ -435,50 +422,28 @@ const GroupLivenessIndex = struct {
             offset += count;
         }
         std.debug.assert(offset == raw_bits.len);
-        var seed_offset = singletons;
-        for (seed_ranges) |*range| {
-            const count = range.end;
-            range.* = .{ .start = seed_offset, .end = seed_offset };
-            seed_offset += count;
-        }
-        const seed_resources: []u32 = if (seed_refcounted != null)
-            try allocator.alloc(u32, seed_offset)
-        else
-            &.{};
         var singleton_bit: u32 = 0;
-        for (domain.resource_locals, raw_bits, 0..) |local, *raw_bit, resource| {
+        for (domain.resource_locals, raw_bits) |local, *raw_bit| {
             if (domain.groupBitOf(solution.leaderOf(local))) |bit| {
                 const group = bit - raw_bits.len;
                 const range = &ranges[group];
                 raw_bit.* = range.end;
                 range.end += 1;
-                if (seed_refcounted) |rc| {
-                    if (rc[@backingInt(local)]) {
-                        const seed_range = &seed_ranges[group];
-                        seed_resources[seed_range.end] = @intCast(resource);
-                        seed_range.end += 1;
-                    }
-                }
             } else {
                 raw_bit.* = singleton_bit;
-                if (seed_refcounted) |rc| {
-                    seed_resources[singleton_bit] = if (rc[@backingInt(local)]) @intCast(resource) else no_arc_bit;
-                }
                 singleton_bit += 1;
             }
         }
-        const use_resources: []u32 = if (seed_refcounted != null)
+        const use_resources: []u32 = if (index_uses)
             try allocator.alloc(u32, raw_bits.len)
         else
             &.{};
-        if (seed_refcounted != null) {
+        if (index_uses) {
             for (raw_bits, 0..) |raw_bit, resource| use_resources[raw_bit] = @intCast(resource);
         }
         return .{
             .raw_bits = raw_bits,
             .ranges = ranges,
-            .seed_resources = seed_resources,
-            .seed_ranges = seed_ranges,
             .use_resources = use_resources,
         };
     }
@@ -502,33 +467,6 @@ const GroupLivenessIndex = struct {
         if (group >= self.ranges.len) return &.{};
         const range = self.ranges[group];
         return self.use_resources[range.start..range.end];
-    }
-
-    /// Exact inverse of groupUsedFromTable over concrete refcounted locals.
-    /// Raw bits for group members and borrowed-result bits do not select units.
-    fn seedKeep(self: *const GroupLivenessIndex, reads: *const Row, refcounted: []const bool, keep: *OwnedSet) ResourceError!void {
-        const resources = keep.domain.resource_locals;
-        if (resources.len == 0) return;
-        std.debug.assert(self.seed_ranges.len == self.ranges.len);
-        const singleton_end = if (self.ranges.len == 0) resources.len else self.ranges[0].start;
-        var singletons = reads.iteratorRange(0, singleton_end);
-        while (singletons.next()) |bit| {
-            const resource = if (self.ranges.len == 0) blk: {
-                if (!refcounted[@backingInt(resources[bit])]) continue;
-                break :blk @as(u32, @intCast(bit));
-            } else self.seed_resources[bit];
-            if (resource == no_arc_bit) continue;
-            if (builtin.mode == .debug) keep_set_liveness_visits.increment();
-            try keep.setResource(resource);
-        }
-        var groups = reads.iteratorRange(resources.len, resources.len + self.seed_ranges.len);
-        while (groups.next()) |bit| {
-            const range = self.seed_ranges[bit - resources.len];
-            for (self.seed_resources[range.start..range.end]) |resource| {
-                if (builtin.mode == .debug) keep_set_liveness_visits.increment();
-                try keep.setResource(resource);
-            }
-        }
     }
 
     fn rawBitOf(self: *const GroupLivenessIndex, domain: *const ProcArcDomain, local: LIR.LocalId) ?usize {
@@ -932,7 +870,6 @@ const EmissionOwner = struct {
     dismantle_temps: std.ArrayList(LIR.LocalId) = .empty,
     arc_plans: ArcPlans = .{},
     restitution_switches: std.AutoHashMapUnmanaged(LIR.CFStmtId, RestitutionSwitch) = .empty,
-    loop_liveness_caches: std.ArrayList(LoopLivenessCache) = .empty,
     owned_binding_override: OwnedSet = undefined,
     root: LIR.CFStmtId = undefined,
     frame: LIR.LocalSpan = undefined,
@@ -989,9 +926,6 @@ const EmissionOwner = struct {
         inserter.variant_requests = .empty;
         inserter.resolved_variants = &.{};
         inserter.restitution_switches = &self.restitution_switches;
-        inserter.next_loop_keep_id = 1;
-        try self.loop_liveness_caches.append(inserter.emission_allocator, .{});
-        inserter.loop_liveness_caches = &self.loop_liveness_caches;
 
         self.owned_binding_override = try OwnedSet.init(inserter.emission_allocator, domain);
         const owned_binding_override = &self.owned_binding_override;
@@ -1321,29 +1255,6 @@ const VariantTable = struct {
     }
 };
 
-/// Explicit loop-liveness input. The identity is allocated with the join
-/// summary and travels with the keep-set; no consumer reconstructs it from a
-/// pointer address.
-const LoopKeep = struct {
-    set: *const OwnedSet,
-    id: u32,
-};
-
-const LoopLivenessCache = struct {
-    /// Dense liveness-node rows for one compact loop identity. Null rows are
-    /// outside the forward closure of that join's two explicit regions.
-    rows: []?Row = &.{},
-    active: ?std.bit_set.DynamicBitSetUnmanaged = null,
-    keep_reads: ?Row = null,
-    /// The join regions interpreted under this loop identity. Solving their
-    /// forward closure up front makes every later query a direct node lookup,
-    /// including sibling switch arms that the first query did not traverse.
-    region_roots: [2]LIR.CFStmtId = undefined,
-    initialized: bool = false,
-    consumed_keep_bits: bool = false,
-    dirty: bool = false,
-};
-
 // Join-summary solver
 //
 // One structured abstract interpretation per proc emission computes each
@@ -1404,8 +1315,7 @@ const LoopLivenessCache = struct {
 // previous memo, or the memo of the region whose walk reached the join.
 // Until a jump reaches the body, the only reader of the body keep is the
 // entry keep's membership test on dead units, so the seed is represented by
-// its membership predicate; joins whose regions reach a loop edge, where
-// loop-keyed liveness enumerates the keep, materialize it.
+// its membership predicate.
 
 /// Exactly the members of `source` whose liveness group `reads` does not
 /// read, as ownership resource indices. Deriving one from another memo
@@ -1461,7 +1371,6 @@ const JoinSummary = struct {
     /// reference for the first `entry_dead`.
     region_dead: ?*const ?DeadUnits,
     body_reachable: bool = false,
-    loop_keep_id: u32,
     remainder_plan: u32,
     body_plan: u32,
     /// Context the join statement was first reached in; remainder and body
@@ -1539,7 +1448,6 @@ const SolveBodyScope = struct {
 };
 
 const SolveContext = struct {
-    loop_keep: ?LoopKeep = null,
     stops: ?*const SolveStop = null,
     body_scope: ?*const SolveBodyScope = null,
     /// Dead-unit memo of the join region being walked, if any.
@@ -1826,13 +1734,9 @@ const Inserter = struct {
     current_domain: ?*const ProcArcDomain = null,
     /// Ownership signature of the proc currently being materialized.
     current_sig: arc_sig.RcSig = arc_sig.RcSig.all_owned,
-    /// Direct cache per compact loop identity; each entry is indexed by the
-    /// immutable liveness graph's compact node number.
-    loop_liveness_caches: *std.ArrayList(LoopLivenessCache) = undefined,
     /// Source-owned cache; frozen preparation permits read-only worker reuse.
     source_liveness: *SourceLiveness = undefined,
     current_source_proc: LIR.LirProcSpecId = undefined,
-    next_loop_keep_id: u32 = 1,
     // Set to the proc being rewritten before any diagnostic or helper reads it.
     current_proc: LIR.LirProcSpecId = undefined,
     current_proc_body: LIR.CFStmtId = undefined,
@@ -2423,12 +2327,6 @@ const Inserter = struct {
                 .fields_desc = assign.fields_desc,
                 .next = next,
             } }, origin),
-            .assign_boxy_reuse_box => |assign| try self.store.addCFStmt(.{ .assign_boxy_reuse_box = .{
-                .target = assign.target,
-                .source = assign.source,
-                .desc = assign.desc,
-                .next = next,
-            } }, origin),
             .assign_boxy_unbox => |assign| blk: {
                 if (step.retain_assign_ref_target) next = try self.retainLocalIfRc(assign.target, .{ .stmt = at, .reason = .alias_bind }, next);
                 break :blk try self.store.addCFStmt(.{ .assign_boxy_unbox = .{
@@ -2634,8 +2532,6 @@ const Inserter = struct {
             .str_match,
             .str_match_set,
             .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -2682,8 +2578,8 @@ const Inserter = struct {
             // Jump reachability is structural, so once the tasks drain, a
             // join with no contributions has an unreachable body for good.
             // Its keep then settles to the params-only set the emission uses
-            // for unreachable bodies; the shrink can ripple through
-            // loop-keyed liveness, so drain again until nothing adjusts.
+            // for unreachable bodies; the shrink can change the entry keep,
+            // so drain again until nothing adjusts.
             var adjusted = false;
             for (self.join_summaries) |maybe_summary| {
                 const summary = maybe_summary orelse continue;
@@ -2693,9 +2589,7 @@ const Inserter = struct {
                 if (!summary.body_keep_is_seed and params_only.eql(&summary.body_keep)) continue;
                 summary.body_keep_is_seed = false;
                 assignOwnedSet(&summary.body_keep, &params_only);
-                const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
-                const entry_changed = try self.recomputeSolveEntryKeep(summary);
-                if (purged or entry_changed) {
+                if (try self.recomputeSolveEntryKeep(summary)) {
                     try self.scheduleSolveJoinProcess(&tasks, summary);
                     adjusted = true;
                 }
@@ -2816,7 +2710,7 @@ const Inserter = struct {
                         switch (assign.op) {
                             .local => |source| {
                                 if (assign.target != source) {
-                                    transfer = try self.transferForAliasBind(&segment.owned, assign.target, source, assign.next, segment.ctx.loop_keep);
+                                    transfer = try self.transferForAliasBind(&segment.owned, assign.target, source, assign.next);
                                 } else {
                                     transfer.retain_target = false;
                                 }
@@ -2856,7 +2750,7 @@ const Inserter = struct {
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.retain_assign_ref_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ refOpSource(assign.op), assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .init_uninitialized => |uninit| {
@@ -2868,14 +2762,14 @@ const Inserter = struct {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_call => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const unique_demand = self.options.specialize and !self.solution.isPinnedProc(assign.proc);
                     const tail_call = self.solution.tailCallAt(self.current_source_proc, segment.cursor);
-                    const transfer = try self.transferForCall(&segment.owned, segment.cursor, tail_call, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null, segment.ctx.loop_keep);
+                    const transfer = try self.transferForCall(&segment.owned, segment.cursor, tail_call, assign.proc, self.solution.sigOf(assign.proc), unique_demand, assign.args, assign.next, assign.target, null);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     for (transfer.args.retain_args) |arg| try step.pre_retain.append(self.solve_allocator, .{ .local = arg, .reason = .owned_param_demand });
                     step.retain_call_result = transfer.retain_call_result;
@@ -2892,20 +2786,20 @@ const Inserter = struct {
                         step.pre_release_extra_reason = .tail_call_frame;
                         step.replaces_frame = self.sharesReturnContract(assign);
                     } else {
-                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                        try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, transfer.args.demanded.ret_mode, assign.next, self.death_scratch);
+                        try self.postStmtDeaths(&segment.owned, &.{}, assign.args, assign.next, self.death_scratch);
                         try self.copyDeathScratchToStep(step);
                     }
                     segment.cursor = assign.next;
                 },
                 .assign_call_erased => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForCall(&segment.owned, null, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure, segment.ctx.loop_keep);
+                    const transfer = try self.transferForCall(&segment.owned, null, null, null, arc_sig.RcSig.all_owned, false, assign.args, assign.next, assign.target, assign.closure);
                     var preserve_reuse_source = false;
                     if (assign.reuse_closure) {
                         if (assign.closure == assign.target) arcInvariant("owned erased call cannot consume and rebind the same local");
                         const reuse_source = assign.reuse_source orelse arcInvariant("owned erased call lacked its explicit reuse ownership source");
-                        preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source, segment.ctx.loop_keep);
+                        preserve_reuse_source = try self.groupUsedInPath(assign.next, reuse_source);
                         if (!preserve_reuse_source) _ = try self.takeUnit(&segment.owned, reuse_source);
                     }
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
@@ -2922,22 +2816,22 @@ const Inserter = struct {
                         step.pre_release_extra_reason = .tail_call_frame;
                         step.replaces_frame = true;
                     } else {
-                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.noteCallResultDeathIfUnused(&segment.owned, assign.target, .owned, assign.next, self.death_scratch);
                         const singles = [_]LIR.LocalId{ assign.closure, assign.reuse_source orelse assign.closure };
-                        try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                        try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, self.death_scratch);
                         try self.copyDeathScratchToStep(step);
                     }
                     segment.cursor = assign.next;
                 },
                 .assign_packed_erased_fn => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForPackedErased(&segment.owned, assign, segment.ctx.loop_keep);
+                    const transfer = try self.transferForPackedErased(&segment.owned, assign);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
                     step.reuse_unique = transfer.reuse_unique;
                     if (transfer.preserve_reuse) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.reuse.?, .reason = .reuse_source_preserved });
                     const singles = [_]LIR.LocalId{ assign.capture orelse assign.target, assign.reuse orelse assign.target, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_desc_ref => |assign| {
@@ -2946,7 +2840,6 @@ const Inserter = struct {
                         assign.target,
                         &segment.owned,
                         assign.next,
-                        segment.ctx.loop_keep,
                         &step.pre_release_extra,
                     );
                     step.pre_release_extra_reason = .descriptor_invalidated;
@@ -2955,7 +2848,7 @@ const Inserter = struct {
                     const desc_local = assign.desc.localOrNull() orelse assign.target;
                     const residual_local = if (assign.tag_residual_for) |desc| desc.localOrNull() orelse assign.target else assign.target;
                     const singles = [_]LIR.LocalId{ desc_local, residual_local, assign.target };
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.captures, assign.next, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
@@ -2964,13 +2857,13 @@ const Inserter = struct {
                     step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     const dict_local = assign.dict.localOrNull() orelse assign.target;
                     const singles = [_]LIR.LocalId{ dict_local, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.captures, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_box => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next)
                     else
                         SingleTransfer{
                             .transfer_single = false,
@@ -2982,35 +2875,25 @@ const Inserter = struct {
                         try step.pre_retain.append(self.solve_allocator, .{ .local = assign.payload, .reason = .stored_payload });
                     }
                     const singles = [_]LIR.LocalId{ assign.payload, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_record_update => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.fields, assign.target, assign.next);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
                     if (!transfer.transfer_single) {
                         try step.pre_retain.append(self.solve_allocator, .{ .local = assign.fields, .reason = .stored_payload });
                     }
                     const singles = [_]LIR.LocalId{ assign.fields, assign.base, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
-                    segment.cursor = assign.next;
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep);
-                    step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
-                    step.transfer_single = transfer.transfer_single;
-                    if (!transfer.transfer_single) try step.pre_retain.append(self.solve_allocator, .{ .local = assign.source, .reason = .stored_payload });
-                    const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 inline .assign_boxy_unbox, .assign_boxy_tag_payload => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next)
                     else
                         SingleTransfer{
                             .transfer_single = false,
@@ -3023,13 +2906,13 @@ const Inserter = struct {
                     }
                     step.retain_assign_ref_target = assign.source_mode == .borrow and !self.isBindingBorrowed(assign.target);
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 inline .assign_boxy_adapt, .assign_boxy_inspect => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = if (assign.source_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next, segment.ctx.loop_keep)
+                        try self.transferForSingle(&segment.owned, assign.source, assign.target, assign.next)
                     else
                         SingleTransfer{
                             .transfer_single = false,
@@ -3041,7 +2924,7 @@ const Inserter = struct {
                         try step.pre_retain.append(self.solve_allocator, .{ .local = assign.source, .reason = .stored_payload });
                     }
                     const singles = [_]LIR.LocalId{ assign.source, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_eq => |assign| {
@@ -3049,7 +2932,7 @@ const Inserter = struct {
                     const release_old_target = try self.transferForFreshBind(&segment.owned, assign.target);
                     step.pre_release = if (release_old_target) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.lhs, assign.rhs, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_hash => |assign| {
@@ -3057,13 +2940,13 @@ const Inserter = struct {
                     const release_old_target = try self.transferForFreshBind(&segment.owned, assign.target);
                     step.pre_release = if (release_old_target) self.releaseDecision(assign.target) else null;
                     const singles = [_]LIR.LocalId{ assign.value, assign.hasher, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_boxy_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const transfer = if (assign.payload_mode == .move)
-                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep)
+                        try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next)
                     else
                         SingleTransfer{
                             .transfer_single = false,
@@ -3075,7 +2958,7 @@ const Inserter = struct {
                         if (assign.payload) |payload| try step.pre_retain.append(self.solve_allocator, .{ .local = payload, .reason = .stored_payload });
                     }
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .boxy_tag_match => |tag_match| {
@@ -3087,13 +2970,13 @@ const Inserter = struct {
                 },
                 .assign_call_dict => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, segment.ctx.loop_keep, .no);
+                    step.transfer_mask = try self.spanTransferMask(assign.args, ~@as(u64, 0), assign.next, assign.target, &segment.owned, .no);
                     step.pre_release = if (try self.transferForFreshBind(&segment.owned, assign.target)) self.releaseDecision(assign.target) else null;
                     self.death_scratch.clearRetainingCapacity();
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, segment.ctx.loop_keep, self.death_scratch);
-                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, segment.ctx.loop_keep, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &singles, assign.args, assign.next, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.arg_descs, assign.next, self.death_scratch);
+                    try self.postStmtDeaths(&segment.owned, &.{}, assign.hidden_args, assign.next, self.death_scratch);
                     try self.copyDeathScratchToStep(step);
                     segment.cursor = assign.next;
                 },
@@ -3106,7 +2989,7 @@ const Inserter = struct {
                         const boxed = GuardedList.at(args, 0);
                         use_borrowed = !self.options.consume_dead_boxes or
                             !self.ownsUnit(&segment.owned, boxed) or
-                            try self.groupUsedInPathExcept(assign.next, boxed, assign.target, segment.ctx.loop_keep);
+                            try self.groupUsedInPathExcept(assign.next, boxed, assign.target);
                     }
                     const selected_op = if (use_borrowed) borrowed_variant.? else assign.op;
                     const selected_effect = if (borrowed_variant != null) selected_op.rcEffect() else assign.rc_effect;
@@ -3116,7 +2999,6 @@ const Inserter = struct {
                         selected_effect,
                         assign.target,
                         assign.next,
-                        segment.ctx.loop_keep,
                         true,
                         borrowed_variant != null and !use_borrowed,
                     );
@@ -3129,53 +3011,53 @@ const Inserter = struct {
                         step.low_level_selection = .{ .op = selected_op, .rc_effect = selected_effect };
                     }
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.args, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_list => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     self.transfer_position_scratch.clearRetainingCapacity();
-                    const transfer = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    const transfer = try self.transferForAggregate(&segment.owned, assign.elems, assign.target, assign.next, self.transfer_position_scratch);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.elems, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.elems, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_struct => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     self.transfer_position_scratch.clearRetainingCapacity();
-                    const transfer = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    const transfer = try self.transferForAggregate(&segment.owned, assign.fields, assign.target, assign.next, self.transfer_position_scratch);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
                     const singles = [_]LIR.LocalId{assign.target};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, assign.fields, assign.next);
                     segment.cursor = assign.next;
                 },
                 .assign_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
-                    const transfer = try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next, segment.ctx.loop_keep);
+                    const transfer = try self.transferForSingle(&segment.owned, assign.payload, assign.target, assign.next);
                     step.pre_release = if (transfer.release_old_target) self.releaseDecision(assign.target) else null;
                     step.transfer_single = transfer.transfer_single;
                     const singles = [_]LIR.LocalId{ assign.payload orelse assign.target, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .store_struct => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     self.transfer_position_scratch.clearRetainingCapacity();
-                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep, self.transfer_position_scratch);
+                    try self.spanTransferPositions(assign.fields, assign.next, assign.dest, &segment.owned, self.transfer_position_scratch);
                     try step.transfer_positions.appendSlice(self.solve_allocator, self.transfer_position_scratch.items);
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &.{}, assign.fields, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &.{}, assign.fields, assign.next);
                     segment.cursor = assign.next;
                 },
                 .store_tag => |assign| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     if (assign.payload) |payload| {
-                        step.transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &segment.owned, segment.ctx.loop_keep);
+                        step.transfer_single = try self.singleTransfer(payload, assign.next, assign.dest, &segment.owned);
                     }
                     const singles = [_]LIR.LocalId{assign.payload orelse assign.dest};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .set_local => |assign| {
@@ -3184,23 +3066,23 @@ const Inserter = struct {
                         self.releaseDecisionFrom(bit, segment.owned.entryAt(bit))
                     else
                         null;
-                    const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.mode, assign.next, segment.ctx.loop_keep);
+                    const transfer = try self.transferForSetLocal(&segment.owned, assign.target, assign.value, assign.next);
                     step.pre_release = if (transfer.release_old_target) old_release orelse arcInvariant("ARC set-local released a non-resource target") else null;
                     step.retain_set_target = transfer.retain_target;
                     const singles = [_]LIR.LocalId{ assign.value, assign.target };
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, assign.next);
                     segment.cursor = assign.next;
                 },
                 .debug => |debug_stmt| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{debug_stmt.message};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, debug_stmt.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, debug_stmt.next);
                     segment.cursor = debug_stmt.next;
                 },
                 .expect => |expect_stmt| {
                     const step = try self.nextArcPlanStep(segment.plan_index, segment.cursor);
                     const singles = [_]LIR.LocalId{expect_stmt.condition};
-                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, expect_stmt.next, segment.ctx.loop_keep);
+                    try self.finishArcPlanStepDeaths(step, &segment.owned, &singles, null, expect_stmt.next);
                     segment.cursor = expect_stmt.next;
                 },
                 .decref_if_initialized => |rc| {
@@ -3370,14 +3252,6 @@ const Inserter = struct {
                     try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, null, retain_value);
                     return;
                 },
-                .loop_continue, .loop_break => {
-                    if (segment.ctx.loop_keep) |keep| {
-                        try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, keep.set, null);
-                    } else {
-                        try self.setArcPlanTerminal(segment.plan_index, segment.cursor, &segment.owned, &segment.owned, null);
-                    }
-                    return;
-                },
                 .ret => |ret_stmt| {
                     var retain_value: ?LIR.LocalId = null;
                     if (self.current_sig.ret_mode == .borrowed) {
@@ -3479,10 +3353,9 @@ const Inserter = struct {
         singles: []const LIR.LocalId,
         span: ?LIR.LocalSpan,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!void {
         self.death_scratch.clearRetainingCapacity();
-        try self.postStmtDeaths(owned, singles, span, next, loop_keep, self.death_scratch);
+        try self.postStmtDeaths(owned, singles, span, next, self.death_scratch);
         try self.copyDeathScratchToStep(step);
     }
 
@@ -4145,33 +4018,6 @@ const Inserter = struct {
         return parent;
     }
 
-    fn registerLoopKeep(
-        self: *Inserter,
-        loop_keep_id: u32,
-        body: LIR.CFStmtId,
-        remainder: LIR.CFStmtId,
-    ) ResourceError!void {
-        if (loop_keep_id != self.loop_liveness_caches.items.len) {
-            arcInvariant("ARC loop identities were not registered sequentially");
-        }
-        try self.loop_liveness_caches.append(self.emission_allocator, .{
-            .region_roots = .{ body, remainder },
-        });
-    }
-
-    /// Marks exactly one loop identity for boundary-delta propagation after
-    /// its keep-set shrank. Rows depend on the keep-set only through loop-edge
-    /// reads, so a build that consumed no keep bits remains valid.
-    fn purgeLoopKeepLiveness(self: *Inserter, loop_keep_id: u32) ResourceError!bool {
-        if (loop_keep_id >= self.loop_liveness_caches.items.len) {
-            arcInvariant("ARC purged an unknown loop identity");
-        }
-        const cache = &self.loop_liveness_caches.items[loop_keep_id];
-        if (!cache.consumed_keep_bits) return false;
-        cache.dirty = true;
-        return true;
-    }
-
     /// True when the local's liveness group is read according to the given
     /// table row: the group bit for multi-member groups, the raw bit
     /// otherwise.
@@ -4189,32 +4035,10 @@ const Inserter = struct {
     /// Seeds a join's body keep from above: every refcounted unit whose
     /// group is read in the body, plus the join params. Always a superset of
     /// the final keep, so the fixpoint descends monotonically. The seed
-    /// stays represented by its membership predicate unless the join's
-    /// regions reach a loop edge, whose liveness enumerates the keep.
+    /// stays represented by its membership predicate.
     fn seedSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!void {
         try self.placeJoinRetainedInto(summary, null, &summary.seed_placed);
         try self.placeSolveJoinParamsInto(summary, &summary.seed_placed);
-        if (!try self.joinRegionsReachLoopEdge(summary)) return;
-        const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
-        try self.groupLivenessIndex().seedKeep(reads, self.local_contains_refcounted, &summary.body_keep);
-        try self.placeJoinRetainedInto(summary, null, &summary.body_keep);
-        try self.placeSolveJoinParamsInto(summary, &summary.body_keep);
-        summary.body_keep_is_seed = false;
-    }
-
-    /// Whether a walk under either of the join's regions can reach a
-    /// loop edge, where liveness reads the join's keep as boundary facts.
-    fn joinRegionsReachLoopEdge(self: *Inserter, summary: *const JoinSummary) ResourceError!bool {
-        try self.prepareSourceLiveness();
-        const graph = self.source_liveness.graphFor(self.current_sig);
-        for ([_]LIR.CFStmtId{ summary.body, summary.remainder }) |root| {
-            const node_index = self.source_liveness.nodeIndex(root);
-            if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
-                arcInvariant("ARC join region root was outside its source graph");
-            }
-            if (graph.reaches_loop_edge.isSet(node_index)) return true;
-        }
-        return false;
     }
 
     /// Whether `local` belongs to the join's body keep. While the keep is
@@ -4223,7 +4047,7 @@ const Inserter = struct {
         if (!summary.body_keep_is_seed) return summary.body_keep.contains(local);
         if (summary.seed_placed.contains(local)) return true;
         if (!self.local_contains_refcounted[@backingInt(local)]) return false;
-        const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
+        const reads = try self.computeReadsBeforeRebind(summary.body);
         return self.groupUsedFromTable(reads, local);
     }
 
@@ -4385,19 +4209,12 @@ const Inserter = struct {
         return changed;
     }
 
-    const BodyKeepUpdate = struct {
-        changed: bool,
-        /// Loop-keyed liveness for this join changed; every ownership region
-        /// interpreted under its keep must re-walk after the exact row delta.
-        purged: bool,
-    };
-
     /// Recomputes a join's body keep from its jump-site states: intersect,
     /// filter to units read in the body, then place params. The stored keep
     /// can only shrink.
-    fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!BodyKeepUpdate {
-        if (!summary.body_reachable) return .{ .changed = false, .purged = false };
-        const reads = try self.computeReadsBeforeRebind(summary.body, null, 0);
+    fn recomputeSolveBodyKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
+        if (!summary.body_reachable) return false;
+        const reads = try self.computeReadsBeforeRebind(summary.body);
         const reference: ?*const DeadUnits = if (summary.body_dead) |*own|
             own
         else if (summary.entry_dead) |*entry|
@@ -4414,17 +4231,16 @@ const Inserter = struct {
             try merged.putEntry(@intCast(resource), .{});
         }
         try self.placeSolveJoinParamsInto(summary, &merged);
-        if (!summary.body_keep_is_seed and merged.eql(&summary.body_keep)) return .{ .changed = false, .purged = false };
+        if (!summary.body_keep_is_seed and merged.eql(&summary.body_keep)) return false;
         summary.body_keep_is_seed = false;
         assignOwnedSet(&summary.body_keep, &merged);
-        const purged = try self.purgeLoopKeepLiveness(summary.loop_keep_id);
-        return .{ .changed = true, .purged = purged };
+        return true;
     }
 
     /// Recomputes entry_keep = (entry_state filtered to units read from the
     /// remainder) | (body_keep & entry_state). Returns whether it changed.
     fn recomputeSolveEntryKeep(self: *Inserter, summary: *JoinSummary) ResourceError!bool {
-        const remainder_reads = try self.computeReadsBeforeRebind(summary.remainder, null, 0);
+        const remainder_reads = try self.computeReadsBeforeRebind(summary.remainder);
         const reference: ?*const DeadUnits = if (summary.entry_dead) |*own|
             own
         else if (summary.region_dead) |region|
@@ -4444,9 +4260,9 @@ const Inserter = struct {
         return true;
     }
 
-    /// Context for walking one of a join's regions: the join's body keep is
-    /// the loop keep-set, and inherited switch stops still bound the walk
-    /// but collect no contributions across the join frame.
+    /// Context for walking one of a join's regions: inherited switch stops
+    /// still bound the walk but collect no contributions across the join
+    /// frame.
     fn solveRegionCtx(
         self: *Inserter,
         summary: *JoinSummary,
@@ -4454,7 +4270,6 @@ const Inserter = struct {
         region_dead: *const ?DeadUnits,
     ) ResourceError!SolveContext {
         return .{
-            .loop_keep = .{ .set = &summary.body_keep, .id = summary.loop_keep_id },
             .stops = try self.stripStopContributions(summary.origin_ctx.stops),
             .body_scope = body_scope,
             .region_dead = region_dead,
@@ -4552,14 +4367,11 @@ const Inserter = struct {
                 .seed_placed = try OwnedSet.init(self.solve_allocator, self.domain()),
                 .retained_resources = try self.resourceIndicesOf(join_stmt.retained),
                 .region_dead = segment.ctx.region_dead,
-                .loop_keep_id = self.next_loop_keep_id,
                 .remainder_plan = remainder_plan,
                 .body_plan = body_plan,
                 .origin_ctx = segment.ctx,
                 .jump_states = jump_states,
             };
-            try self.registerLoopKeep(summary.loop_keep_id, summary.body, summary.remainder);
-            self.next_loop_keep_id += 1;
             self.join_summaries[join_index] = summary;
             try self.updateJoinArrivalPlan(summary, segment.plan_index, segment.cursor, &segment.owned);
             try self.scheduleSolveJoinProcess(tasks, summary);
@@ -4637,14 +4449,7 @@ const Inserter = struct {
         tasks: *std.ArrayList(SolveTask),
         summary: *JoinSummary,
     ) ResourceError!void {
-        const update = try self.recomputeSolveBodyKeep(summary);
-        if (update.purged) {
-            // Liveness rows under this join's keep changed, so states
-            // everywhere in its regions can shift: full re-process.
-            try self.scheduleSolveJoinProcess(tasks, summary);
-            return;
-        }
-        if (update.changed) {
+        if (try self.recomputeSolveBodyKeep(summary)) {
             // Liveness rows are unaffected, so the remainder walk would
             // reproduce its states unless the entry keep itself moved; the
             // body still re-walks from its smaller seed.
@@ -4795,9 +4600,8 @@ const Inserter = struct {
         target: LIR.LocalId,
         source: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
-        var move_value = try self.canMoveAliasBindValue(owned, source, target, next, loop_keep);
+        var move_value = try self.canMoveAliasBindValue(owned, source, target, next);
         if (!move_value and self.ownsUnit(owned, source) and self.localContainsRefcounted(source)) {
             // The source stays live, but the alias may be the argument of a
             // checked call whose outcome switch restores the source's unit on
@@ -4844,9 +4648,7 @@ const Inserter = struct {
         const release_old_target = try self.takeRebindTarget(owned, target);
         const unit = self.unitOf(root);
         // The path query follows loop edges itself and stops at a rebind of
-        // this exact place definition. A loop keep-set cannot make that
-        // distinction: it intentionally merges the old and next-iteration
-        // bindings under the same LocalId.
+        // this exact place definition.
         const root_used = try self.ownershipPlaceUsedInPath(next, unit);
         const has_unit = owned.contains(unit);
         const restitution = if (root_used)
@@ -4957,24 +4759,18 @@ const Inserter = struct {
         return self.takeRebindTarget(owned, target);
     }
 
-    /// `set_local`: like an alias bind, but the write mode decides whether
-    /// the target's previous binding dies (join-result initialization writes
-    /// into a cell that holds no previous value).
+    /// `set_local`: like an alias bind, and the target's previous binding
+    /// dies.
     fn transferForSetLocal(
         self: *Inserter,
         owned: *OwnedSet,
         target: LIR.LocalId,
         value: LIR.LocalId,
-        mode: LIR.SetLocalWriteMode,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!AliasBindTransfer {
         if (target == value) return .{ .retain_target = false, .release_old_target = false };
-        const move_value = try self.canMoveAliasBindValue(owned, value, target, next, loop_keep);
-        const release_old_target = switch (mode) {
-            .replace_existing, .initialize_join_param => try self.takeRebindTarget(owned, target),
-            .initialize_join_result => false,
-        };
+        const move_value = try self.canMoveAliasBindValue(owned, value, target, next);
+        const release_old_target = try self.takeRebindTarget(owned, target);
         if (move_value) _ = try self.takeUnit(owned, value);
         try self.placeUnit(owned, target);
         return .{ .retain_target = !move_value, .release_old_target = release_old_target };
@@ -5005,9 +4801,8 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         extra_use: ?LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!CallTransfer {
-        const arg_ownership = try self.callArgOwnership(call_stmt, tail_call, callee, owned, callee_sig, unique_demand, args, next, target, loop_keep);
+        const arg_ownership = try self.callArgOwnership(call_stmt, tail_call, callee, owned, callee_sig, unique_demand, args, next, target);
         const target_feeds_call = self.spanUsesLocal(args, target) or
             (extra_use != null and extra_use.? == target);
         const release_old_target = if (target_feeds_call)
@@ -5038,10 +4833,9 @@ const Inserter = struct {
         operands: LIR.LocalSpan,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         transfer_positions: ?*std.ArrayList(u32),
     ) ResourceError!AggregateTransfer {
-        try self.spanTransferPositions(operands, next, target, owned, loop_keep, transfer_positions);
+        try self.spanTransferPositions(operands, next, target, owned, transfer_positions);
         const release_old_target = try self.takeRebindTarget(owned, target);
         try self.placeUnit(owned, target);
         return .{ .release_old_target = release_old_target };
@@ -5061,11 +4855,10 @@ const Inserter = struct {
         payload: ?LIR.LocalId,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!SingleTransfer {
         var transfer_single = false;
         if (payload) |operand| {
-            transfer_single = try self.singleTransfer(operand, next, target, owned, loop_keep);
+            transfer_single = try self.singleTransfer(operand, next, target, owned);
         }
         const release_old_target = try self.takeRebindTarget(owned, target);
         try self.placeUnit(owned, target);
@@ -5083,13 +4876,12 @@ const Inserter = struct {
         self: *Inserter,
         owned: *OwnedSet,
         assign: @FieldType(LIR.CFStmt, "assign_packed_erased_fn"),
-        loop_keep: ?LoopKeep,
     ) ResourceError!PackedErasedTransfer {
         var preserve_reuse = false;
         var reuse_unique = false;
         if (assign.reuse) |reuse| {
             if (reuse == assign.target) arcInvariant("erased callable repack cannot reuse its result binding");
-            preserve_reuse = try self.groupUsedInPath(assign.next, reuse, loop_keep);
+            preserve_reuse = try self.groupUsedInPath(assign.next, reuse);
             reuse_unique = !preserve_reuse and self.ownsUnit(owned, reuse) and self.isLocalUniqueHere(reuse);
             if (assign.capture) |capture| {
                 if (self.solution.leaderOf(capture) == self.solution.leaderOf(reuse)) reuse_unique = false;
@@ -5097,7 +4889,7 @@ const Inserter = struct {
             if (!preserve_reuse) _ = try self.takeUnit(owned, reuse);
         }
 
-        const transfer = try self.transferForSingle(owned, assign.capture, assign.target, assign.next, loop_keep);
+        const transfer = try self.transferForSingle(owned, assign.capture, assign.target, assign.next);
         return .{
             .transfer_single = transfer.transfer_single,
             .preserve_reuse = preserve_reuse,
@@ -5133,7 +4925,6 @@ const Inserter = struct {
         rc_effect: LIR.LowLevel.RcEffect,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         want_unique: bool,
         supply_missing_consumed_args: bool,
     ) ResourceError!LowLevelTransfer {
@@ -5146,7 +4937,6 @@ const Inserter = struct {
             rc_effect.result_aliases_consumed_args,
             next,
             target,
-            loop_keep,
         );
         if (supply_missing_consumed_args) {
             const locals = self.store.getLocalSpan(args);
@@ -5176,7 +4966,7 @@ const Inserter = struct {
         }
         var transfer_mask: u64 = 0;
         if (rc_effect.retain_args != 0) {
-            transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, loop_keep, .yes);
+            transfer_mask = try self.spanTransferMask(args, rc_effect.retain_args, next, target, owned, .yes);
         }
         try self.placeUnit(owned, target);
         return .{
@@ -5206,14 +4996,13 @@ const Inserter = struct {
         desc_local: LIR.LocalId,
         owned: *OwnedSet,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         releases: *std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         const params = self.store.getLocalSpan(self.store.getProcSpec(self.current_source_proc).args);
         for (self.boxy_desc_users.usersOf(desc_local)) |local| {
             if (!owned.contains(local)) continue;
             if (localSpanContains(params, local)) continue;
-            if (try self.valueUsedInPath(next, local, loop_keep)) continue;
+            if (try self.valueUsedInPath(next, local)) continue;
             if (!try self.takeRebindTarget(owned, local)) arcInvariant("ARC descriptor invalidation lost an owned local");
             try releases.append(self.solve_allocator, self.releaseDecision(local));
         }
@@ -5242,7 +5031,6 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?LoopKeep,
         target_holds_unit: TargetHoldsUnit,
     ) ResourceError!u64 {
         var transfer: u64 = 0;
@@ -5261,7 +5049,7 @@ const Inserter = struct {
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
             if (!self.ownsUnit(owned, local)) continue;
-            if (try self.groupUsedInPath(next, local, loop_keep)) continue;
+            if (try self.groupUsedInPath(next, local)) continue;
             try self.unsetOwnedUnit(owned, local);
             transfer |= bit;
         }
@@ -5279,7 +5067,6 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?LoopKeep,
         transferred_positions: ?*std.ArrayList(u32),
     ) ResourceError!void {
         if (!self.localContainsRefcounted(target)) return;
@@ -5289,7 +5076,7 @@ const Inserter = struct {
             if (local == target) continue;
             if (!self.localContainsRefcounted(local)) continue;
             if (!self.ownsUnit(owned, local)) continue;
-            if (try self.groupUsedInPath(next, local, loop_keep)) continue;
+            if (try self.groupUsedInPath(next, local)) continue;
             try self.unsetOwnedUnit(owned, local);
             if (transferred_positions) |positions| {
                 try positions.append(self.emission_allocator, @intCast(i));
@@ -5305,13 +5092,12 @@ const Inserter = struct {
         next: LIR.CFStmtId,
         target: LIR.LocalId,
         owned: *OwnedSet,
-        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         if (local == target) return false;
         if (!self.localContainsRefcounted(target)) return false;
         if (!self.localContainsRefcounted(local)) return false;
         if (!self.ownsUnit(owned, local)) return false;
-        if (try self.groupUsedInPath(next, local, loop_keep)) return false;
+        if (try self.groupUsedInPath(next, local)) return false;
         try self.unsetOwnedUnit(owned, local);
         return true;
     }
@@ -5326,17 +5112,16 @@ const Inserter = struct {
         singles: []const LIR.LocalId,
         span: ?LIR.LocalSpan,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         for (singles) |local| {
-            try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+            try self.noteDeathIfUnused(owned, local, next, collected);
         }
         if (span) |operand_span| {
             const locals = self.store.getLocalSpan(operand_span);
             for (0..GuardedList.borrowLen(locals)) |index| {
                 const local = GuardedList.at(locals, index);
-                try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+                try self.noteDeathIfUnused(owned, local, next, collected);
             }
         }
     }
@@ -5347,11 +5132,10 @@ const Inserter = struct {
         value: LIR.LocalId,
         target: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
         if (!self.ownsUnit(owned, value)) return false;
         if (!self.localContainsRefcounted(value)) return false;
-        return !(try self.groupUsedInPathExcept(next, value, target, loop_keep));
+        return !(try self.groupUsedInPathExcept(next, value, target));
     }
 
     fn noteDeathIfUnused(
@@ -5359,7 +5143,6 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         // A borrowed operand's lifetime event belongs to its owning leader:
@@ -5373,7 +5156,7 @@ const Inserter = struct {
         if (self.solution.isJoinParam(owner) or self.solution.isJoinParam(local)) {
             return;
         }
-        const used = try self.groupUsedInPath(next, owner, loop_keep);
+        const used = try self.groupUsedInPath(next, owner);
         if (used) {
             return;
         }
@@ -5389,13 +5172,12 @@ const Inserter = struct {
         local: LIR.LocalId,
         ret_mode: arc_sig.Mode,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         if (ret_mode == .owned and self.solution.isBorrowed(local)) {
-            try self.noteOwnedLocalDeathIfUnused(owned, local, next, loop_keep, collected);
+            try self.noteOwnedLocalDeathIfUnused(owned, local, next, collected);
         } else {
-            try self.noteDeathIfUnused(owned, local, next, loop_keep, collected);
+            try self.noteDeathIfUnused(owned, local, next, collected);
         }
     }
 
@@ -5404,14 +5186,13 @@ const Inserter = struct {
         owned: *OwnedSet,
         local: LIR.LocalId,
         next: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
         collected: ?*std.ArrayList(ReleaseDecision),
     ) ResourceError!void {
         const bit = owned.domain.resourceBitOf(local) orelse return;
         const entry = owned.entryAt(bit);
         if (!entry.present) return;
         if (self.solution.isJoinParam(local)) return;
-        if (try self.valueUsedInPath(next, local, loop_keep)) return;
+        if (try self.valueUsedInPath(next, local)) return;
         if (collected) |list| {
             try list.append(self.emission_allocator, self.releaseDecisionFrom(bit, entry));
         }
@@ -5461,7 +5242,6 @@ const Inserter = struct {
         result_aliases_mask: u64,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!u64 {
         if (mask == 0) return 0;
         var preserve: u64 = 0;
@@ -5473,9 +5253,9 @@ const Inserter = struct {
             if ((mask & bit) == 0) continue;
             if (local == target) continue;
             const used_after = if ((result_aliases_mask & bit) != 0)
-                try self.groupUsedInPathExcept(next, local, target, loop_keep)
+                try self.groupUsedInPathExcept(next, local, target)
             else
-                try self.groupUsedInPath(next, local, loop_keep);
+                try self.groupUsedInPath(next, local);
             if (used_after) {
                 preserve |= bit;
             }
@@ -5909,8 +5689,7 @@ const Inserter = struct {
                 try uses.append(gpa, assign.fields);
                 return .{ .rebinds = assign.target };
             },
-            inline .assign_boxy_reuse_box,
-            .assign_boxy_unbox,
+            inline .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
             .assign_boxy_tag_payload,
@@ -6000,9 +5779,6 @@ const Inserter = struct {
                 try uses.append(gpa, expect_err_stmt.message);
                 return .{};
             },
-            // An implicit loop boundary hands the kept value to either the
-            // next iteration or the code after the loop.
-            .loop_continue, .loop_break => return .{ .uses_every_place = true },
         }
     }
 
@@ -6020,7 +5796,6 @@ const Inserter = struct {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -6067,8 +5842,6 @@ const Inserter = struct {
             .ret,
             .crash,
             .expect_err,
-            .loop_continue,
-            .loop_break,
             .runtime_error,
             .comptime_exhaustiveness_failed,
             => {},
@@ -6488,7 +6261,6 @@ const Inserter = struct {
         span: LIR.LocalSpan,
         next: LIR.CFStmtId,
         target: LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!CallArgOwnership {
         self.retain_arg_scratch.clearRetainingCapacity();
         var demanded = callee_sig;
@@ -6551,7 +6323,7 @@ const Inserter = struct {
                 null;
             const root_receipt = root_receipts[position];
             const used_after_call = field_receipt != null or root_receipt != null or
-                (local != target and try self.groupUsedInPath(next, local, loop_keep));
+                (local != target and try self.groupUsedInPath(next, local));
             const restored_resource: RestoredResource = if (field_receipt) |receipt|
                 if (owned.contains(receipt.place.root))
                     .{ .field = receipt.place }
@@ -6619,7 +6391,7 @@ const Inserter = struct {
                 const used_after_call = local != target and (if (enables_field_take)
                     try self.ownershipPlaceUsedInPath(next, owner)
                 else
-                    try self.groupUsedInPath(next, local, loop_keep));
+                    try self.groupUsedInPath(next, local));
                 // Another position of this call may lend the same value to the
                 // callee. Moving the caller's only unit into this position
                 // would let the callee end it while that position still reads
@@ -6657,7 +6429,7 @@ const Inserter = struct {
                 null;
             const root_receipt = if (position < arc_sig.tracked_param_count) root_receipts[position] else null;
             const used_after_call = field_receipt != null or root_receipt != null or
-                (local != target and try self.groupUsedInPath(next, local, loop_keep));
+                (local != target and try self.groupUsedInPath(next, local));
             const restored_resource: RestoredResource = if (field_receipt) |receipt| blk: {
                 // A live residual shell can receive its field back. Once the
                 // root resource has ended, the projection binding is the
@@ -6826,16 +6598,13 @@ const Inserter = struct {
         /// index with their reverse, every node's read and defined bits, and
         /// every edge's kills.
         liveness: arc_liveness.Graph,
-        /// Each node's keep-free liveness row.
+        /// Each node's liveness row.
         rows: []const Row = &.{},
-        loop_edges: []const u32 = &.{},
-        /// Compact node bits whose forward paths can reach a loop boundary.
-        reaches_loop_edge: std.bit_set.DynamicBitSetUnmanaged = .{},
 
-        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution, seed_refcounted: ?[]const bool) ResourceError!ReadBeforeRebindGraph {
+        fn init(allocator: Allocator, proc_domain: *const ProcArcDomain, solution: *const arc_solve.Solution, index_uses: bool) ResourceError!ReadBeforeRebindGraph {
             return .{
                 .allocator = allocator,
-                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, seed_refcounted),
+                .group_liveness = try GroupLivenessIndex.init(allocator, proc_domain, solution, index_uses),
                 .nodes = .empty,
                 .successors = .empty,
                 .liveness = .{ .succ_starts = &.{}, .succs = &.{}, .pred_starts = &.{}, .preds = &.{}, .read_starts = &.{}, .reads = &.{}, .def_starts = &.{}, .defs = &.{}, .bit_len = 0 },
@@ -6935,19 +6704,6 @@ const Inserter = struct {
         try self.noteLivenessUseLocal(reads, refOpSource(op));
     }
 
-    /// Records the loop keep-set as reads at a `loop_continue`/`loop_break`:
-    /// kept units, groups with any kept member, and kept call-result locals
-    /// all stay live across the loop edge.
-    fn noteLivenessLoopKeep(self: *const Inserter, reads: *Row, keep: *const OwnedSet) ResourceError!void {
-        // Every kept unit reads as a value use, which also sets its group
-        // and value-use bits, so the loop edge keeps a group alive whenever
-        // any member is kept.
-        var keep_iter = keep.iterator(.{});
-        while (keep_iter.next()) |kept| {
-            try self.noteLivenessUseLocal(reads, keep.domain.resourceLocalAt(kept));
-        }
-    }
-
     fn setReadBeforeRebindDef(
         graph: *ReadBeforeRebindGraph,
         node_index: usize,
@@ -6989,45 +6745,15 @@ const Inserter = struct {
         graph.nodes.items[node_index].edge_kills = merged;
     }
 
-    fn computeReadsBeforeRebind(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
-        loop_keep_id: u32,
-    ) ResourceError!*const Row {
+    /// Liveness row of the source graph node at `start`.
+    fn computeReadsBeforeRebind(self: *Inserter, start: LIR.CFStmtId) ResourceError!*const Row {
         try self.prepareSourceLiveness();
-        if (loop_keep_id == 0) {
-            const graph = self.source_liveness.graphFor(self.current_sig);
-            const node_index = self.source_liveness.nodeIndex(start);
-            if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
-                arcInvariant("ARC keep-free liveness start was outside its source graph");
-            }
-            return &graph.rows[node_index];
-        } else {
-            if (loop_keep_id >= self.loop_liveness_caches.items.len) {
-                arcInvariant("ARC liveness queried an unknown loop identity");
-            }
-            const cache = &self.loop_liveness_caches.items[loop_keep_id];
-            if (cache.initialized) {
-                if (cache.dirty) {
-                    const keep = loop_keep orelse arcInvariant("ARC dirty loop cache was refreshed without its boundary facts");
-                    try self.refreshLoopReadsBeforeRebind(cache, keep);
-                }
-                const node_index = self.source_liveness.nodeIndex(start);
-                if (node_index == no_stmt_node_index or node_index >= cache.rows.len) {
-                    arcInvariant("ARC loop liveness start was outside its source graph");
-                }
-                return if (cache.rows[node_index]) |*cached|
-                    cached
-                else
-                    arcInvariant("ARC loop cache omitted a queried active node");
-            }
+        const graph = self.source_liveness.graphFor(self.current_sig);
+        const node_index = self.source_liveness.nodeIndex(start);
+        if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
+            arcInvariant("ARC liveness start was outside its source graph");
         }
-
-        if (loop_keep) |keep| {
-            return self.computeLoopReadsBeforeRebind(start, keep, loop_keep_id);
-        }
-        arcInvariant("ARC liveness query lacked its loop boundary");
+        return &graph.rows[node_index];
     }
 
     /// Build before sharing the source cache. All retained rows and ordinal
@@ -7036,7 +6762,7 @@ const Inserter = struct {
         const graph_slot = &self.source_liveness.graph;
         if (graph_slot.* != null) return;
         if (self.source_liveness.frozen) arcInvariant("ARC frozen source liveness lacked its prepared graph");
-        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution, if (self.join_bodies.len == 0 or self.domain().resource_locals.len == 0) null else self.local_contains_refcounted);
+        graph_slot.* = try ReadBeforeRebindGraph.init(self.source_liveness.allocator, self.domain(), self.solution, self.join_bodies.len != 0 and self.domain().resource_locals.len != 0);
         errdefer {
             graph_slot.* = null;
             self.source_liveness.stmt_node_indices.clearRetainingCapacity();
@@ -7051,15 +6777,8 @@ const Inserter = struct {
             graph.nodes.deinit(self.source_liveness.scratch_allocator);
             graph.successors.deinit(self.source_liveness.scratch_allocator);
         };
-        var scratch_arena = std.heap.ArenaAllocator.init(self.source_liveness.scratch_allocator);
-        defer scratch_arena.deinit();
-        const scratch_allocator = scratch_arena.allocator();
         var work = std.ArrayList(u32).empty;
         defer work.deinit(self.source_liveness.scratch_allocator);
-        // Loop-edge nodes found by a keep-free build seed the backward
-        // reachability sweep that decides which statements ever need
-        // loop-keyed rows.
-        var loop_edge_nodes = std.ArrayList(u32).empty;
 
         // The source body is the complete ownership-neutral graph.
         _ = try self.ensureReadBeforeRebindNode(&graph, &work, self.current_proc_body);
@@ -7135,12 +6854,6 @@ const Inserter = struct {
                     try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.fields);
                     if (assign.base_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     if (assign.fields_desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
-                    setReadBeforeRebindDef(&graph, node_index, assign.target);
-                    try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
-                },
-                .assign_boxy_reuse_box => |assign| {
-                    try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, assign.source);
-                    if (assign.desc.localOrNull()) |local| try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, local);
                     setReadBeforeRebindDef(&graph, node_index, assign.target);
                     try self.appendReadBeforeRebindSuccessor(&graph, &work, node_index, assign.next);
                 },
@@ -7332,9 +7045,6 @@ const Inserter = struct {
                 .crash => |crash_stmt| if (crash_stmt.msg.localId()) |message| {
                     try self.noteLivenessUseLocal(&graph.nodes.items[node_index].reads, message);
                 },
-                .loop_continue,
-                .loop_break,
-                => try loop_edge_nodes.append(scratch_allocator, @intCast(node_index)),
                 .runtime_error,
                 .comptime_exhaustiveness_failed,
                 => {},
@@ -7348,18 +7058,7 @@ const Inserter = struct {
         graph.liveness = try self.livenessStructure(&graph, graph_allocator);
         graph.successors.deinit(self.source_liveness.scratch_allocator);
         lists_growing = false;
-        graph.loop_edges = try graph_allocator.dupe(u32, loop_edge_nodes.items);
-        graph.reaches_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(graph_allocator, graph.nodes.items.len);
-        for (loop_edge_nodes.items) |edge_node| graph.reaches_loop_edge.set(edge_node);
-        while (loop_edge_nodes.pop()) |reach_index| {
-            for (graph.liveness.predecessorsOf(reach_index)) |predecessor_index| {
-                if (graph.reaches_loop_edge.isSet(predecessor_index)) continue;
-                graph.reaches_loop_edge.set(predecessor_index);
-                try loop_edge_nodes.append(scratch_allocator, predecessor_index);
-            }
-        }
-
-        try self.solveKeepFreeLiveness(&graph);
+        try self.solveLiveness(&graph);
         // There are exactly two source read contracts: no restitution, or
         // the solver's complete available outcome span. Parameter ownership
         // and uniqueness specialization do not change these raw reads.
@@ -7379,7 +7078,7 @@ const Inserter = struct {
                     try self.noteRestitutionBoundaryReads(&node.reads, node.stmt);
                 }
             }
-            try self.solveKeepFreeLiveness(&restitution);
+            try self.solveLiveness(&restitution);
             self.source_liveness.restitution_graph = restitution;
         }
         graph_slot.* = graph;
@@ -7449,220 +7148,12 @@ const Inserter = struct {
         structure.reads = reads.items;
     }
 
-    /// Solve every node's keep-free liveness row: a bit is exposed at a node
+    /// Solve every node's liveness row: a bit is exposed at a node
     /// when some path from the node reaches a read of it without crossing a
     /// definition of it or an edge that kills it (see `arc_liveness`).
-    fn solveKeepFreeLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
+    fn solveLiveness(self: *Inserter, graph: *ReadBeforeRebindGraph) ResourceError!void {
         try setLivenessReads(&graph.liveness, graph, graph.allocator);
         graph.rows = try arc_liveness.solve(graph.allocator, self.source_liveness.scratch_allocator, &graph.liveness);
-    }
-
-    /// Rows of a loop-keyed solve over the active subgraph, in which every
-    /// active node holds a row.
-    const LoopRows = struct {
-        rows: []const ?Row,
-
-        fn rowOf(self: @This(), node: u32) *const Row {
-            return if (self.rows[node]) |*row| row else arcInvariant("ARC loop liveness reached a node outside its active subgraph");
-        }
-    };
-
-    /// Sets every active loop edge's row to its keep-free row plus the
-    /// keep-set's reads, queueing the active predecessors of each row that
-    /// changed.
-    fn seedLoopEdgeRows(
-        self: *Inserter,
-        graph: *const ReadBeforeRebindGraph,
-        active: *const std.bit_set.DynamicBitSetUnmanaged,
-        rows: []?Row,
-        keep_reads: *const Row,
-        in_work: *std.bit_set.DynamicBitSetUnmanaged,
-        work: *std.ArrayList(usize),
-    ) ResourceError!void {
-        for (graph.loop_edges) |loop_node| {
-            if (!active.isSet(loop_node)) continue;
-            var candidate = graph.rows[loop_node].clone(self.emission_allocator);
-            try candidate.setUnion(keep_reads);
-            const row = rows[loop_node] orelse arcInvariant("ARC active loop edge lacked its row");
-            if (row.eql(&candidate)) continue;
-            rows[loop_node] = candidate;
-            try self.queueActivePredecessors(graph, active, in_work, work, loop_node);
-        }
-    }
-
-    fn queueActivePredecessors(
-        self: *Inserter,
-        graph: *const ReadBeforeRebindGraph,
-        active: *const std.bit_set.DynamicBitSetUnmanaged,
-        in_work: *std.bit_set.DynamicBitSetUnmanaged,
-        work: *std.ArrayList(usize),
-        node_index: usize,
-    ) ResourceError!void {
-        for (graph.liveness.predecessorsOf(node_index)) |predecessor| {
-            if (!active.isSet(predecessor) or in_work.isSet(predecessor)) continue;
-            in_work.set(predecessor);
-            try work.append(self.emission_allocator, predecessor);
-        }
-    }
-
-    /// Recomputes queued rows from their successors until every active row
-    /// satisfies its equation, queueing the active predecessors of each row
-    /// that changed. Loop edges have no successors, so they are never
-    /// queued by a change and keep their seeded rows.
-    fn settleLoopRows(
-        self: *Inserter,
-        graph: *const ReadBeforeRebindGraph,
-        active: *const std.bit_set.DynamicBitSetUnmanaged,
-        rows: []?Row,
-        in_work: *std.bit_set.DynamicBitSetUnmanaged,
-        work: *std.ArrayList(usize),
-    ) ResourceError!void {
-        while (work.pop()) |node_index| {
-            in_work.unset(node_index);
-            const candidate = try arc_liveness.equationRow(&graph.liveness, node_index, self.emission_allocator, LoopRows{ .rows = rows }, LoopRows.rowOf);
-            const row = rows[node_index] orelse arcInvariant("ARC active loop node lacked its row");
-            if (row.eql(&candidate)) continue;
-            rows[node_index] = candidate;
-            try self.queueActivePredecessors(graph, active, in_work, work, node_index);
-        }
-    }
-
-    fn computeLoopReadsBeforeRebind(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        keep: LoopKeep,
-        loop_keep_id: u32,
-    ) ResourceError!*const Row {
-        if (loop_keep_id == 0 or loop_keep_id >= self.loop_liveness_caches.items.len) {
-            arcInvariant("ARC loop liveness referenced an unknown loop identity");
-        }
-        const cache = &self.loop_liveness_caches.items[loop_keep_id];
-        if (cache.initialized) arcInvariant("ARC recomputed an initialized direct loop cache");
-        const graph = self.source_liveness.graphFor(self.current_sig);
-        const start_node = self.source_liveness.nodeIndex(start);
-        if (start_node == no_stmt_node_index or start_node >= graph.nodes.items.len) {
-            arcInvariant("ARC loop liveness start was outside its source graph");
-        }
-
-        const allocator = self.emission_allocator;
-        const node_count = graph.nodes.items.len;
-        var active = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-        var walk = std.ArrayList(usize).empty;
-        for (cache.region_roots) |root| {
-            const root_node = self.source_liveness.nodeIndex(root);
-            if (root_node == no_stmt_node_index or root_node >= node_count) {
-                arcInvariant("ARC loop region root was outside its source graph");
-            }
-            if (active.isSet(root_node)) continue;
-            active.set(root_node);
-            try walk.append(allocator, root_node);
-        }
-        while (walk.pop()) |node_index| {
-            for (graph.liveness.successorsOf(node_index)) |successor| {
-                if (active.isSet(successor)) continue;
-                active.set(successor);
-                try walk.append(allocator, successor);
-            }
-        }
-        if (!active.isSet(start_node)) arcInvariant("ARC loop liveness query was outside its explicit join regions");
-
-        var keep_reads = Row.initEmpty(allocator, self.domain().livenessBitLen());
-        try self.noteLivenessLoopKeep(&keep_reads, keep.set);
-        cache.consumed_keep_bits = !keep_reads.isEmpty();
-
-        const rows = try allocator.alloc(?Row, node_count);
-        @memset(rows, null);
-        var active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| rows[node_index] = graph.rows[node_index].clone(allocator);
-        var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, node_count);
-        var node_work = std.ArrayList(usize).empty;
-        try self.seedLoopEdgeRows(graph, &active, rows, &keep_reads, &in_work, &node_work);
-        try self.settleLoopRows(graph, &active, rows, &in_work, &node_work);
-
-        cache.rows = rows;
-        cache.active = active;
-        cache.keep_reads = keep_reads;
-        cache.initialized = true;
-        cache.dirty = false;
-        if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
-        return if (cache.rows[start_node]) |*row|
-            row
-        else
-            arcInvariant("ARC loop liveness cache did not include its requested start");
-    }
-
-    /// Applies a changed loop keep-set as an exact boundary delta to the
-    /// retained active subgraph. Keep-sets only shrink, so only loop-edge
-    /// rows that actually lose bits seed the reverse worklist; propagation
-    /// then visits precisely predecessors whose solved row changes.
-    fn refreshLoopReadsBeforeRebind(self: *Inserter, cache: *LoopLivenessCache, keep: LoopKeep) ResourceError!void {
-        if (!cache.initialized or !cache.dirty) arcInvariant("ARC refreshed a loop cache outside its dirty initialized state");
-        const graph = self.source_liveness.graphFor(self.current_sig);
-        const active = if (cache.active) |*bits| bits else arcInvariant("ARC initialized loop cache lacked its active subgraph");
-        const old_keep_reads = if (cache.keep_reads) |*bits| bits else arcInvariant("ARC initialized loop cache lacked its boundary row");
-        if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop cache row domain changed after graph construction");
-
-        const allocator = self.emission_allocator;
-        var new_keep_reads = Row.initEmpty(allocator, self.domain().livenessBitLen());
-        try self.noteLivenessLoopKeep(&new_keep_reads, keep.set);
-        var new_iter = new_keep_reads.iterator();
-        while (new_iter.next()) |bit| {
-            if (!old_keep_reads.isSet(bit)) arcInvariant("ARC loop boundary facts grew after their monotone keep-set shrank");
-        }
-        if (!old_keep_reads.eql(&new_keep_reads)) {
-            var in_work = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
-            var node_work = std.ArrayList(usize).empty;
-            try self.seedLoopEdgeRows(graph, active, cache.rows, &new_keep_reads, &in_work, &node_work);
-            try self.settleLoopRows(graph, active, cache.rows, &in_work, &node_work);
-            old_keep_reads.* = new_keep_reads;
-        }
-        cache.consumed_keep_bits = !new_keep_reads.isEmpty();
-        cache.dirty = false;
-        if (builtin.mode == .debug) try self.certifyLoopReadsBeforeRebind(cache);
-    }
-
-    /// Debug-only independent least-fixed-point recomputation for one loop
-    /// cache. The production update descends from the previous solution via
-    /// the changed boundary; this oracle instead starts at the immutable
-    /// keep-free solution and grows all active rows, so agreement certifies
-    /// both directions of the exact-delta algorithm.
-    fn certifyLoopReadsBeforeRebind(self: *Inserter, cache: *const LoopLivenessCache) ResourceError!void {
-        if (builtin.mode != .debug) return;
-        const graph = self.source_liveness.graphFor(self.current_sig);
-        const active = if (cache.active) |*bits|
-            bits
-        else
-            arcInvariant("ARC loop-liveness certifier lacked its active subgraph");
-        const keep_reads = if (cache.keep_reads) |*bits|
-            bits
-        else
-            arcInvariant("ARC loop-liveness certifier lacked its boundary facts");
-        if (cache.rows.len != graph.nodes.items.len) arcInvariant("ARC loop-liveness certifier saw a row-domain mismatch");
-
-        const allocator = self.emission_allocator;
-        const expected = try allocator.alloc(?Row, graph.nodes.items.len);
-        @memset(expected, null);
-        var is_loop_edge = try std.bit_set.DynamicBitSetUnmanaged.initEmpty(allocator, graph.nodes.items.len);
-        for (graph.loop_edges) |loop_node| is_loop_edge.set(loop_node);
-        var in_work = try active.clone(allocator);
-        var work = std.ArrayList(usize).empty;
-        var active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| {
-            expected[node_index] = graph.rows[node_index].clone(allocator);
-            if (!is_loop_edge.isSet(node_index)) try work.append(allocator, node_index);
-        }
-        try self.seedLoopEdgeRows(graph, active, expected, keep_reads, &in_work, &work);
-        try self.settleLoopRows(graph, active, expected, &in_work, &work);
-
-        active_iter = active.iterator(.{});
-        while (active_iter.next()) |node_index| {
-            const actual = if (cache.rows[node_index]) |*row|
-                row
-            else
-                arcInvariant("ARC loop-liveness cache omitted an active row");
-            const independently_solved = expected[node_index].?;
-            if (!actual.eql(&independently_solved)) arcInvariant("ARC loop liveness delta disagreed with an independent fixed point");
-        }
     }
 
     /// Value liveness for one raw local (no group extension). Borrowed call
@@ -7672,9 +7163,8 @@ const Inserter = struct {
         self: *Inserter,
         start: LIR.CFStmtId,
         needle: LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
-        const reads = try self.livenessRow(start, loop_keep);
+        const reads = try self.computeReadsBeforeRebind(start);
         const bit = self.valueUseBitOf(needle) orelse self.rawLivenessBitOf(needle) orelse
             arcInvariant("ARC value-use query for a local without a value-use bit");
         return reads.isSet(bit);
@@ -7692,34 +7182,12 @@ const Inserter = struct {
     /// Liveness for one owned local extended over its borrow group: the
     /// local's value must stay live while the local itself or any borrow
     /// anchored on it is still used.
-    /// Liveness row for a query start under an optional loop keep-set. A
-    /// loop-keyed row differs from the keep-free row only when a loop edge
-    /// is reachable from the start, so everything else shares the keep-free
-    /// row and the cache stays linear in proc size.
-    fn livenessRow(
-        self: *Inserter,
-        start: LIR.CFStmtId,
-        loop_keep: ?LoopKeep,
-    ) ResourceError!*const Row {
-        const keep = loop_keep orelse return self.computeReadsBeforeRebind(start, null, 0);
-        if (keep.id == 0) arcInvariant("ARC loop keep-set used the keep-free identity");
-        const keep_free = try self.computeReadsBeforeRebind(start, null, 0);
-        const graph = self.source_liveness.graphFor(self.current_sig);
-        const node_index = self.source_liveness.nodeIndex(start);
-        if (node_index == no_stmt_node_index or node_index >= graph.nodes.items.len) {
-            arcInvariant("ARC loop liveness query was outside its source graph");
-        }
-        if (!graph.reaches_loop_edge.isSet(node_index)) return keep_free;
-        return self.computeReadsBeforeRebind(start, keep, keep.id);
-    }
-
     fn groupUsedInPath(
         self: *Inserter,
         start: LIR.CFStmtId,
         local: LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
-        const reads = try self.livenessRow(start, loop_keep);
+        const reads = try self.computeReadsBeforeRebind(start);
         return self.groupUsedFromTable(reads, local);
     }
 
@@ -7728,9 +7196,8 @@ const Inserter = struct {
         start: LIR.CFStmtId,
         local: LIR.LocalId,
         except: LIR.LocalId,
-        loop_keep: ?LoopKeep,
     ) ResourceError!bool {
-        const reads = try self.livenessRow(start, loop_keep);
+        const reads = try self.computeReadsBeforeRebind(start);
         const leader = self.solution.leaderOf(local);
         return self.groupLivenessIndex().usedExcept(self.domain(), reads, leader, except);
     }
@@ -8783,7 +8250,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -8810,8 +8276,6 @@ const ArcTest = struct {
                 .str_match,
                 .str_match_set,
                 .boxy_tag_match,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -8843,7 +8307,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -8870,8 +8333,6 @@ const ArcTest = struct {
                 .switch_initialized_payload,
                 .str_match,
                 .str_match_set,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -8966,7 +8427,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref,
                 .assign_boxy_box,
                 .assign_boxy_record_update,
-                .assign_boxy_reuse_box,
                 .assign_boxy_unbox,
                 .assign_boxy_adapt,
                 .assign_boxy_inspect,
@@ -8993,8 +8453,6 @@ const ArcTest = struct {
                 .str_match,
                 .str_match_set,
                 .boxy_tag_match,
-                .loop_continue,
-                .loop_break,
                 .join,
                 .jump,
                 .ret,
@@ -9055,10 +8513,10 @@ const ArcTest = struct {
                     try stack.append(self.allocator, j.body);
                     try stack.append(self.allocator, j.remainder);
                 },
-                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_reuse_box, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
+                inline .assign_ref, .assign_literal, .init_uninitialized, .assign_call, .assign_call_erased, .assign_packed_erased_fn, .assign_boxy_desc_ref, .assign_boxy_dict_ref, .assign_boxy_box, .assign_boxy_record_update, .assign_boxy_unbox, .assign_boxy_adapt, .assign_boxy_inspect, .assign_boxy_eq, .assign_boxy_hash, .assign_boxy_tag, .assign_boxy_tag_payload, .assign_call_dict, .assign_list, .assign_struct, .assign_tag, .store_struct, .store_tag, .set_local, .debug, .expect, .comptime_branch_taken, .incref, .decref, .decref_if_initialized, .free => |s| {
                     try stack.append(self.allocator, s.next);
                 },
-                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => {},
+                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => {},
             }
         }
         return mask;
@@ -9107,7 +8565,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
                 .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
                 .assign_boxy_inspect => |assign| cursor = assign.next,
@@ -9134,7 +8591,7 @@ const ArcTest = struct {
                     if (before == .crash) return error.ExpectedRcBeforeStop;
                     return;
                 },
-                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -9172,7 +8629,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
                 .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
                 .assign_boxy_inspect => |assign| cursor = assign.next,
@@ -9190,7 +8646,7 @@ const ArcTest = struct {
                 .debug => |debug_stmt| cursor = debug_stmt.next,
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
-                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed, .loop_continue, .loop_break => return error.ExpectedConditionalDecref,
+                .ret, .jump, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedConditionalDecref,
                 .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join => return error.NonLinearPath,
             }
         }
@@ -9227,7 +8683,6 @@ const ArcTest = struct {
                 .assign_boxy_dict_ref => |assign| cursor = assign.next,
                 .assign_boxy_box => |assign| cursor = assign.next,
                 .assign_boxy_record_update => |assign| cursor = assign.next,
-                .assign_boxy_reuse_box => |assign| cursor = assign.next,
                 .assign_boxy_unbox => |assign| cursor = assign.next,
                 .assign_boxy_adapt => |assign| cursor = assign.next,
                 .assign_boxy_inspect => |assign| cursor = assign.next,
@@ -9246,7 +8701,7 @@ const ArcTest = struct {
                 .expect => |expect_stmt| cursor = expect_stmt.next,
                 .comptime_branch_taken => |marker| cursor = marker.next,
                 .ret, .crash, .expect_err, .runtime_error, .comptime_exhaustiveness_failed => return error.ExpectedDecref,
-                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .loop_continue, .loop_break, .join, .jump => return error.NonLinearPath,
+                .switch_stmt, .switch_initialized_payload, .str_match, .str_match_set, .boxy_tag_match, .join, .jump => return error.NonLinearPath,
             }
         }
         return error.CyclicPath;
@@ -9413,7 +8868,6 @@ test "ARC preserves erased callable repack reuse" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -9440,8 +8894,6 @@ test "ARC preserves erased callable repack reuse" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .crash,
@@ -9566,7 +9018,6 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -9593,8 +9044,6 @@ test "ARC runtime-checks erased callable repack from an ordinary parameter" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -9653,7 +9102,6 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -9680,8 +9128,6 @@ test "ARC transfers erased call ownership from an explicit outer source" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -9766,7 +9212,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -9792,8 +9237,6 @@ test "ARC retains an erased call reuse source that is read after the call" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .crash,
@@ -9859,7 +9302,6 @@ test "ARC retains an erased callable whose repack input is used later" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -9886,8 +9328,6 @@ test "ARC retains an erased callable whose repack input is used later" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -10011,16 +9451,6 @@ test "ARC proc domain excludes scalar and other-proc locals" {
         try testing.expectEqual(@as(usize, 1), domain.resource_locals.len);
         try testing.expectEqual(@as(usize, 1), domain.livenessBitLen());
         try testing.expectEqual(resource, domain.resourceLocalAt(0));
-        var failing = testing.FailingAllocator.init(testing.allocator, .{ .fail_index = 0 });
-        const seed_index = try GroupLivenessIndex.init(failing.allocator(), &domain, &solution, &local_contains_refcounted);
-        try testing.expectEqual(@as(usize, 0), seed_index.seed_resources.len);
-        var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
-        try reads.set(0);
-        var seed = try OwnedSet.init(arena.allocator(), &domain);
-        try seed_index.seedKeep(&reads, &local_contains_refcounted, &seed);
-        try testing.expect(seed.contains(resource));
-        try testing.expect(!seed.contains(scalar));
-
         var owned = try OwnedSet.init(arena.allocator(), &domain);
         defer owned.deinit();
         try testing.expect(!owned.contains(scalar));
@@ -10150,9 +9580,6 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
     var liveness_arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer liveness_arena.deinit();
     var source_liveness = SourceLiveness.init(liveness_arena.allocator(), testing.allocator);
-    var loop_liveness_caches = std.ArrayList(LoopLivenessCache).empty;
-    defer loop_liveness_caches.deinit(testing.allocator);
-    try loop_liveness_caches.append(testing.allocator, .{});
 
     var inserter = Inserter{
         .store = &f.store,
@@ -10163,13 +9590,12 @@ test "ARC lender-death query sees a live solver-only borrow anchor" {
         .current_source_proc = proc,
         .current_proc_body = body,
         .source_liveness = &source_liveness,
-        .loop_liveness_caches = &loop_liveness_caches,
     };
 
     // Excluding the concrete projection leaves only the live solver anchor.
     // Scanning only concrete refcounted locals incorrectly reports the lender dead;
     // scanning the exact `resource_locals` domain reports it live.
-    try testing.expect(try inserter.groupUsedInPathExcept(use_anchor, concrete, concrete, null));
+    try testing.expect(try inserter.groupUsedInPathExcept(use_anchor, concrete, concrete));
 }
 
 test "ARC prepared source liveness survives transient domains and frozen reuse" {
@@ -10211,7 +9637,7 @@ test "ARC prepared source liveness survives transient domains and frozen reuse" 
     source.allocator = testing.failing_allocator;
     source.scratch_allocator = testing.failing_allocator;
     try inserter.prepareSourceLiveness();
-    const reads = try inserter.computeReadsBeforeRebind(body, null, 0);
+    const reads = try inserter.computeReadsBeforeRebind(body);
     try testing.expect(reads.isSet(0));
     try testing.expectEqual(rows, source.graph.?.nodes.items.ptr);
     try testing.expectEqual(count, source.stmt_node_indices.count());
@@ -10256,83 +9682,6 @@ test "ARC proc domain sparse high global IDs retain only a tiny frame" {
     try testing.expectEqual(@as(usize, 0), indices.count());
 }
 
-test "ARC sparse join seeds agree with exhaustive group predicates and emission masks" {
-    var f = try ArcTest.init(testing.allocator);
-    defer f.deinit();
-    var locals: [10]LIR.LocalId = undefined;
-    for (&locals, 0..) |*local, i| local.* = try f.local(switch (i) {
-        3, 4 => f.pair_str,
-        5, 6, 9 => .i64,
-        else => .str,
-    });
-    var body = try f.ret(locals[9]);
-    body = try f.assignI64(locals[9], 0, body);
-    var i: usize = 9;
-    while (i > 0) {
-        i -= 1;
-        body = try f.expectStmt(locals[i], body);
-        body = switch (i) {
-            2 => try f.assignRefLocal(locals[i], locals[0], body),
-            4 => try f.assignRefLocal(locals[i], locals[3], body),
-            6 => try f.assignRefLocal(locals[i], locals[5], body),
-            8 => try f.assignRefLocal(locals[i], locals[7], body),
-            3 => try f.assignStruct(locals[i], &.{ locals[0], locals[1] }, body),
-            5 => try f.assignI64(locals[i], 1, body),
-            else => try f.assignStr(locals[i], "seed", body),
-        };
-    }
-    const proc = try f.addProc(&.{}, body, .i64);
-    const solver_rc = [_]bool{ true, true, true, true, true, false, false, true, true, false };
-    var solution = try arc_solve.solve(testing.allocator, &f.store, &f.layouts, &solver_rc, &.{}, &.{}, true);
-    defer solution.deinit();
-    try testing.expectEqual(locals[0], solution.leaderOf(locals[2]));
-    try testing.expectEqual(locals[3], solution.leaderOf(locals[4]));
-    try testing.expectEqual(locals[7], solution.leaderOf(locals[8]));
-    // A scalar-only group and a solver-only RC anchor must not create units.
-    solution.leader[@backingInt(locals[6])] = @backingInt(locals[5]);
-    var concrete_rc = solver_rc;
-    concrete_rc[7] = false;
-    var indices = collections.DenseMap(LIR.LocalId, u32).init(testing.allocator);
-    defer indices.deinit();
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &concrete_rc, &indices, f.store.getProcSpec(proc).frame_locals);
-    defer domain.clearGlobalIndices();
-    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, &concrete_rc);
-    const no_joins = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
-    try testing.expectEqual(@as(usize, 0), no_joins.seed_resources.len);
-    try testing.expectEqual(@as(usize, 0), no_joins.seed_ranges.len);
-    try testing.expectEqualSlices(u32, grouped.raw_bits, no_joins.raw_bits);
-    try testing.expect(grouped.rawBitOf(&domain, locals[1]).? != domain.requiredResourceBitOf(locals[1]));
-    // Extra suffix bits model borrowed-result liveness, which never seeds units.
-    var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen() + 65);
-    var expected = try OwnedSet.init(arena.allocator(), &domain);
-    var actual = try OwnedSet.init(arena.allocator(), &domain);
-    var prng = std.Random.DefaultPrng.init(11323);
-    const random = prng.random();
-    for (0..100) |round| {
-        reads.unsetAll();
-        expected.clear();
-        actual.clear();
-        // Exercise individual bits (especially raw members without group
-        // bits), empty/dense rows, and independently populated mixed rows.
-        for (0..reads.bit_len) |bit| {
-            const live = if (round == 0) false else if (round == 1) true else if (round < reads.bit_len + 2) bit == round - 2 else random.boolean();
-            if (live) try reads.set(bit);
-        }
-        // The immutable index must consume this emission's committed masks.
-        domain.resource_full_masks[domain.requiredResourceBitOf(locals[3])] = if (round % 2 == 0) 0 else 3;
-        domain.resource_full_masks[domain.requiredResourceBitOf(locals[4])] = if (round % 2 == 0) 3 else 0;
-        for (domain.resource_locals) |local| {
-            if (!concrete_rc[@backingInt(local)]) continue;
-            const bit = domain.groupBitOf(solution.leaderOf(local)) orelse grouped.rawBitOf(&domain, local).?;
-            if (reads.isSet(bit)) try expected.set(local);
-        }
-        try grouped.seedKeep(&reads, &concrete_rc, &actual);
-        try testing.expect(expected.eql(&actual));
-    }
-}
-
 test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     var f = try ArcTest.init(testing.allocator);
     defer f.deinit();
@@ -10362,7 +9711,7 @@ test "ARC grouped raw liveness agrees with exhaustive resource queries" {
     defer arena.deinit();
     var domain = try ProcArcDomain.init(arena.allocator(), &f.store, &solution, &rc, &indices, f.store.getProcSpec(proc).frame_locals);
     defer domain.clearGlobalIndices();
-    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, null);
+    const grouped = try GroupLivenessIndex.init(arena.allocator(), &domain, &solution, false);
     var reads = Row.initEmpty(arena.allocator(), domain.livenessBitLen());
     var expected = @as([locals.len]bool, @splat(false));
     var prng = std.Random.DefaultPrng.init(11127);
@@ -10501,8 +9850,8 @@ test "RC if result matched later tail-cleans matched binding" {
     const default_value = try f.local(.str);
     const result = try f.local(.str);
     const ret = try f.ret(result);
-    const branch_set = try f.setLocal(result, branch_value, .initialize_join_result, ret);
-    const default_set = try f.setLocal(result, default_value, .initialize_join_result, ret);
+    const branch_set = try f.setLocal(result, branch_value, .replace_existing, ret);
+    const default_set = try f.setLocal(result, default_value, .replace_existing, ret);
     const switch_stmt = try f.switchStmt(cond, branch_set, default_set, ret);
     const default_assign = try f.assignStr(default_value, "default", switch_stmt);
     const branch_assign = try f.assignStr(branch_value, "branch", default_assign);
@@ -10742,9 +10091,9 @@ test "RC if_then_else: then-only value is decref'd inside the else branch" {
 
     // if cond { result = call(value) } else { result = 0 }; return result
     const ret = try f.ret(result);
-    const then_set = try f.setLocal(result, then_result, .initialize_join_result, ret);
+    const then_set = try f.setLocal(result, then_result, .replace_existing, ret);
     const then_body = try f.assignCall(then_result, &.{value}, then_set);
-    const else_set = try f.setLocal(result, else_result, .initialize_join_result, ret);
+    const else_set = try f.setLocal(result, else_result, .replace_existing, ret);
     const else_body = try f.assignI64(else_result, 0, else_set);
     const if_stmt = try f.switchStmt(cond, then_body, else_body, ret);
     const body = try f.assignStr(value, "then-only", if_stmt);
@@ -10890,7 +10239,7 @@ test "RC discriminant_switch: complete payload moves scrutinee unit on payload p
 
     // match tag_value { Tag1(extracted) => call(extracted), _ => 0 }
     const ret = try f.ret(result);
-    const branch_set = try f.setLocal(result, branch_result, .initialize_join_result, ret);
+    const branch_set = try f.setLocal(result, branch_result, .replace_existing, ret);
     const branch_call = try f.assignCall(branch_result, &.{extracted}, branch_set);
     const branch_body = try f.assignTagPayload(extracted, tag_value, branch_call);
     const default_body = try f.assignI64(result, 0, ret);
@@ -11698,51 +11047,6 @@ test "RC switch continuation merge releases branch-divergent owner at the bounda
     // the string's unit into the callee, so the merged continuation entry
     // excludes it and the default branch releases it at the boundary.
     try f.expectRc(diverged, 0, 1, 0);
-}
-
-test "RC complete field projection preserves a root at implicit loop boundaries" {
-    for ([_]LIR.CFStmt{ .loop_continue, .loop_break }) |terminal| {
-        var f = try ArcTest.init(testing.allocator);
-        defer f.deinit();
-        const record_layout = try f.layouts.putStructFields(&[_]layout_mod.StructField{
-            .{ .index = 0, .layout = f.list_i64 },
-        });
-        const field = try f.local(f.list_i64);
-        const record = try f.local(record_layout);
-        const state = try f.local(record_layout);
-        const extracted = try f.local(f.list_i64);
-        const appended = try f.local(f.list_i64);
-        const elem = try f.local(.i64);
-
-        const join_id = f.freshJoinPointId();
-        const boundary = try f.store.addCFStmt(terminal, .test_fixture);
-        const consume = try f.assignLowLevel(
-            appended,
-            &.{ extracted, elem },
-            LIR.LowLevel.RcEffect.consumesArgsReturningConsumedArgsRetainingArgs(1, 0),
-            boundary,
-        );
-        const take = try f.assignRefField(extracted, state, 0, consume);
-        const entry = try f.store.addCFStmt(.{ .jump = .{ .target = join_id } }, .test_fixture);
-        const initialize_state = try f.setLocal(state, record, .initialize_join_param, entry);
-        const assign_elem = try f.assignI64(elem, 1, initialize_state);
-        const assign_record = try f.assignStruct(record, &.{field}, assign_elem);
-        const remainder = try f.assignList(field, &.{}, assign_record);
-        const body = try f.store.addCFStmt(.{ .join = .{
-            .id = join_id,
-            .params = try f.span(&.{state}),
-            .body = take,
-            .remainder = remainder,
-        } }, .test_fixture);
-
-        _ = try f.addProc(&.{}, body, .i64);
-        try f.run();
-
-        // Both loop terminals hand the kept root to an enclosing iteration
-        // engine. The complete field read must retain its target instead of
-        // moving that unit away.
-        try f.expectRc(extracted, 1, 0, 0);
-    }
 }
 
 test "RC complete field projection moves a join binding replaced before the back edge" {
@@ -14419,7 +13723,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .assign_boxy_dict_ref => |a| cursor = a.next,
             .assign_boxy_box => |a| cursor = a.next,
             .assign_boxy_record_update => |a| cursor = a.next,
-            .assign_boxy_reuse_box => |a| cursor = a.next,
             .assign_boxy_unbox => |a| cursor = a.next,
             .assign_boxy_adapt => |a| cursor = a.next,
             .assign_boxy_inspect => |a| cursor = a.next,
@@ -14446,8 +13749,6 @@ fn expectDecrefBeforeStmt(f: *const ArcTest, start: LIR.CFStmtId, local: LIR.Loc
             .str_match,
             .str_match_set,
             .boxy_tag_match,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -14765,7 +14066,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -14793,8 +14093,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -14818,7 +14116,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -14846,8 +14143,6 @@ test "RC sublist of a dying unique argument passed to a non-inlined callee consu
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -15215,7 +14510,6 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -15235,8 +14529,6 @@ test "RC outcome restitution preserves List Str on failure and seeds the success
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -15445,9 +14737,9 @@ test "RC outcome restitution spends retained arguments through aliases only on s
             source.scratch_allocator = testing.failing_allocator;
             for ([_]arc_sig.RcSig{ base_sig, outcome_sig, base_sig, outcome_sig }) |sig| {
                 inserter.current_sig = sig;
-                const failure_reads = try inserter.computeReadsBeforeRebind(failure, null, 0);
+                const failure_reads = try inserter.computeReadsBeforeRebind(failure);
                 const boundary_reads = &source.graphFor(sig).nodes.items[source.nodeIndex(failure_jump)].reads;
-                const success_reads = try inserter.computeReadsBeforeRebind(success_jump, null, 0);
+                const success_reads = try inserter.computeReadsBeforeRebind(success_jump);
                 for ([_]LIR.LocalId{ input_param, replacement_param }) |param| {
                     const bit = inserter.rawLivenessBitOf(param).?;
                     try testing.expectEqual(!sig.outcomes.isEmpty(), boundary_reads.isSet(bit));
@@ -15603,7 +14895,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -15623,8 +14914,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -15652,7 +14941,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -15672,8 +14960,6 @@ test "RC outcome restitution releases every returned argument before a nested jo
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .jump,
             .ret,
             .crash,
@@ -16557,7 +15843,6 @@ test "RC field take restores the exact aggregate field on checked failure withou
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -16577,8 +15862,6 @@ test "RC field take restores the exact aggregate field on checked failure withou
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -16740,7 +16023,6 @@ test "RC specialization: caller body survives variant proc append" {
             .assign_boxy_dict_ref,
             .assign_boxy_box,
             .assign_boxy_record_update,
-            .assign_boxy_reuse_box,
             .assign_boxy_unbox,
             .assign_boxy_adapt,
             .assign_boxy_inspect,
@@ -16761,8 +16043,6 @@ test "RC specialization: caller body survives variant proc append" {
             .switch_initialized_payload,
             .str_match,
             .str_match_set,
-            .loop_continue,
-            .loop_break,
             .join,
             .jump,
             .ret,
@@ -17459,7 +16739,7 @@ test "RC alias into set_local moves the leader unit" {
     const alias = try f.local(.str);
     const result = try f.local(.str);
     const ret = try f.ret(result);
-    const set_result = try f.setLocal(result, alias, .initialize_join_result, ret);
+    const set_result = try f.setLocal(result, alias, .replace_existing, ret);
     const alias_assign = try f.assignRefLocal(alias, value, set_result);
     const body = try f.assignStr(value, "through-set-local", alias_assign);
     _ = try f.addProc(&.{}, body, .str);
@@ -17559,7 +16839,7 @@ test "RC descriptor snapshot owns an alias across source descriptor reuse" {
         .next = use_alias,
     } }, .test_fixture);
     const assign_alias = try f.assignRefLocal(alias, source, reuse_source_desc);
-    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .initialize_join_result, assign_alias);
+    const snapshot_desc = try f.setLocal(alias_desc, source_desc, .replace_existing, assign_alias);
     const assign_source = try f.assignStr(source, "old", snapshot_desc);
     const init_source_desc = try f.store.addCFStmt(.{ .assign_boxy_desc_ref = .{
         .target = source_desc,

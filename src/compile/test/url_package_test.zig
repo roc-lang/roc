@@ -46,6 +46,7 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     var build_env = try BuildEnv.init(gpa, .single_threaded, 1, roc_target.RocTarget.detectNative(), cwd, io);
     defer build_env.deinit();
     build_env.package_cache_dir = try gpa.dupe(u8, cache_dir);
+    build_env.setWatchInputTracking(true);
 
     // Resolution must succeed without any network access: the bundle is
     // already in the cache, so the fetcher's warm path serves it.
@@ -75,12 +76,13 @@ test "URL dependency resolves from a warm cache with no network, and its modules
     defer gpa.free(cached_local_path);
     try std.testing.expect(!build_env.isBundleableModule("module", cached_local_path));
 
-    const watch_inputs = try build_env.collectWatchInputs();
-    defer build_env.freeWatchInputs(watch_inputs);
+    const watch_inputs = try build_env.collectWatchInputStates();
+    defer build_env.freeWatchInputStates(watch_inputs);
 
     var found_consumer = false;
     var found_url_package_file = false;
-    for (watch_inputs) |path| {
+    for (watch_inputs) |input| {
+        const path = input.path;
         if (std.mem.eql(u8, path, consumer_main)) {
             found_consumer = true;
         }

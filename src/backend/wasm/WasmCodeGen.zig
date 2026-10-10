@@ -135,10 +135,6 @@ fn wasmInvariantFmt(comptime fmt: []const u8, args: anytype) noreturn {
     unreachable;
 }
 
-fn builtinInternalLayoutContainsRefcounted(ls: *const LayoutStore, comptime _: []const u8, layout_idx: layout.Idx) bool {
-    return ls.layoutContainsRefcounted(ls.getLayout(layout_idx));
-}
-
 const BuiltinListAbi = struct {
     elem_layout_idx: ?layout.Idx,
     elem_layout: layout.Layout,
@@ -323,10 +319,6 @@ pending_overflow_result_target: ?ProcLocalId = null,
 /// Arithmetic assignments whose result was emitted with their matching
 /// overflow predicate and must not be emitted a second time.
 precomputed_overflow_results: std.AutoHashMap(u32, void),
-/// Stack of loop-continue label depths for lowering explicit LIR loop_continue.
-loop_continue_target_depths: std.ArrayList(u32),
-/// Stack of loop-break label depths for lowering explicit LIR loop_break.
-loop_break_target_depths: std.ArrayList(u32),
 /// Configurable wasm stack size in bytes (default 1MB).
 wasm_stack_bytes: u32 = 1024 * 1024,
 /// Configurable wasm memory pages (0 = auto-compute from stack size).
@@ -391,8 +383,6 @@ pub fn init(
         .active_stmt_generations = std.AutoHashMap(u32, void).init(allocator),
         .stmt_generation_counts = std.AutoHashMap(u32, u32).init(allocator),
         .precomputed_overflow_results = std.AutoHashMap(u32, void).init(allocator),
-        .loop_continue_target_depths = .empty,
-        .loop_break_target_depths = .empty,
     };
 }
 
@@ -487,8 +477,6 @@ pub fn deinit(self: *Self) void {
     self.active_stmt_generations.deinit();
     self.stmt_generation_counts.deinit();
     self.precomputed_overflow_results.deinit();
-    self.loop_continue_target_depths.deinit(self.allocator);
-    self.loop_break_target_depths.deinit(self.allocator);
 }
 
 fn beginFunction(self: *Self, local_idx: LocalFunctionIndex) Allocator.Error!void {
@@ -831,41 +819,12 @@ fn emitStrCaselessEqCall(self: *Self, lhs: u32, rhs: u32) Allocator.Error!void {
     try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_caseless_ascii_equals)));
 }
 
-fn emitAddressOffsetToLocal(self: *Self, base_local: u32, offset: u32) Allocator.Error!u32 {
-    const result = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(base_local);
-    if (offset > 0) {
-        try self.emitI32Const(@intCast(offset));
-        self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    }
-    try self.emitLocalSet(result);
-    return result;
-}
-
 fn emitStrEqCall(self: *Self, lhs_str_ptr: u32, rhs_str_ptr: u32) Allocator.Error!void {
     const lhs = try self.loadRocStrFields(lhs_str_ptr);
     const rhs = try self.loadRocStrFields(rhs_str_ptr);
     try self.emitRocStrFields(lhs);
     try self.emitRocStrFields(rhs);
     try self.emitBuiltinCall(BuiltinSignatures.kindOf(comptime LowLevelBuiltins.strOp(.str_is_eq)));
-}
-
-fn emitListEqCall(
-    self: *Self,
-    lhs_list_ptr: u32,
-    rhs_list_ptr: u32,
-    kind: BuiltinKind,
-    elem_size: ?u32,
-) Allocator.Error!void {
-    const lhs = try self.loadRocListFields(lhs_list_ptr);
-    const rhs = try self.loadRocListFields(rhs_list_ptr);
-    try self.emitRocListFields(lhs);
-    try self.emitRocListFields(rhs);
-
-    if (elem_size) |size| {
-        try self.emitI32Const(@intCast(size));
-    }
-    try self.emitBuiltinCall(kind);
 }
 
 fn emitHasherState(self: *Self, hasher: ProcLocalId) Allocator.Error!void {
@@ -3195,11 +3154,6 @@ fn emitCanonicalizeScalarForLayout(self: *Self, layout_idx: layout.Idx) Allocato
     }
 }
 
-/// Get the byte size of the value a local produces.
-fn procLocalByteSize(self: *Self, value: ProcLocalId) Allocator.Error!u32 {
-    return try self.layoutByteSize(self.procLocalLayoutIdx(value));
-}
-
 /// Check if a local produces a composite value (stored in stack memory).
 fn isCompositeLocal(self: *const Self, value: ProcLocalId) Allocator.Error!bool {
     return try self.isCompositeLayout(self.store.getLocal(value).layout_idx);
@@ -3278,689 +3232,6 @@ fn shiftNeedsZeroFillMask(layout_idx: layout.Idx) bool {
     };
 }
 
-/// Generate structural equality comparison for two composite values (records, tuples, tag unions).
-/// Uses layout-aware comparison for fields containing heap types (strings, lists).
-/// Leaves an i32 (bool) on the stack: 1 for equal, 0 for not equal.
-fn emitStructuralEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: bool) Allocator.Error!void {
-    // Check for string/list type via layout
-    {
-        const lay_idx = self.procLocalLayoutIdx(lhs);
-        if (lay_idx == .str) {
-            try self.emitStrEq(lhs, rhs, negate);
-            return;
-        }
-        const ls = self.getLayoutStore();
-        const l = ls.getLayout(lay_idx);
-        if (l.tag == .list or l.tag == .list_of_zst) {
-            try self.emitListEq(lhs, rhs, lay_idx, negate);
-            return;
-        }
-    }
-
-    // Generate both operand expressions—each pushes an i32 pointer
-    const lhs_local = try self.emitProcLocalToNewLocal(lhs, .i32);
-
-    const rhs_local = try self.emitProcLocalToNewLocal(rhs, .i32);
-
-    // Try layout-aware comparison for records/tuples/tag unions containing heap types
-    {
-        const lay_idx = self.procLocalLayoutIdx(lhs);
-        const ls = self.getLayoutStore();
-        const l = ls.getLayout(lay_idx);
-        switch (l.tag) {
-            .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
-            .struct_ => {
-                try self.compareCompositeByLayout(lhs_local, rhs_local, lay_idx);
-                if (negate) {
-                    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-                }
-                return;
-            },
-            .tag_union => {
-                const tu_info = ls.getTagUnionInfo(l);
-                if (tu_info.contains_refcounted) {
-                    try self.compareTagUnionByLayout(lhs_local, rhs_local, lay_idx);
-                    if (negate) {
-                        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-                    }
-                    return;
-                }
-                // No heap types—fall through to bytewise comparison
-            },
-            .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {},
-        }
-    }
-
-    // Fallback: bytewise comparison for types without heap-allocated fields
-    const byte_size = try self.procLocalByteSize(lhs);
-    try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
-
-    if (negate) {
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    }
-}
-
-/// Work item for the explicit (non-recursive) structural-equality driver.
-///
-/// Structural equality recurses over nested layouts (records inside records,
-/// tag-union payloads, list elements). To stay stack-safe the four mutually
-/// recursive emitters are expressed as work items processed by `runEqWork`:
-/// a frame that "would recurse" instead pushes its glue continuation(s) and the
-/// child frame(s), preserving the exact interleaving of glue with child descent.
-/// Items are pushed in reverse so LIFO popping keeps source emission order.
-const EqWork = union(enum) {
-    /// Emit composite (record/tuple) equality at lhs/rhs pointers. Leaves i32.
-    composite: struct { lhs: u32, rhs: u32, layout_idx: layout.Idx },
-    /// Emit a single field comparison. Leaves i32.
-    field: struct {
-        lhs: u32,
-        rhs: u32,
-        field_offset: u32,
-        field_size: u32,
-        field_layout_idx: layout.Idx,
-    },
-    /// Emit tag-union equality. Leaves i32.
-    tag_union: struct { lhs: u32, rhs: u32, layout_idx: layout.Idx },
-    /// Emit an inline list element-by-element comparison loop. Leaves i32.
-    list_loop: struct { lhs: u32, rhs: u32, elem_layout_idx: layout.Idx, elem_size: u32 },
-    /// Glue: emit a bare i32_and (used between struct field results).
-    emit_and: void,
-    /// Glue: emit the per-variant prefix (open block + br_if skip if disc mismatch).
-    tu_variant_before: struct { lhs_disc: u32, variant_i: u32 },
-    /// Glue: emit the per-variant suffix (local.set payload_eq, end block).
-    tu_variant_after: *TuEqState,
-    /// Glue: emit tag-union finish (and into result, end outer block, push result).
-    tu_finish: *TuEqState,
-    /// Glue: emit list-loop suffix after the element comparison child.
-    list_loop_after: *ListEqState,
-};
-
-/// Heap-allocated state threaded through a tag-union comparison's continuations.
-const TuEqState = struct {
-    lhs_disc: u32,
-    disc_eq_local: u32,
-    payload_eq_local: u32,
-    result_local: u32,
-    have_payload: bool,
-};
-
-/// Heap-allocated state threaded through a list-loop comparison's continuation.
-const ListEqState = struct {
-    result_local: u32,
-    idx_local: u32,
-};
-
-/// Compare a composite type (record or tuple) field-by-field using layout information.
-/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
-fn compareCompositeByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    try self.runEqWork(.{ .composite = .{ .lhs = lhs_local, .rhs = rhs_local, .layout_idx = layout_idx } });
-}
-
-/// Compare a tag union by layout: compare discriminants first, then dispatch
-/// per-variant payload comparison. Pushes i32 result onto the WASM stack.
-fn compareTagUnionByLayout(self: *Self, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    try self.runEqWork(.{ .tag_union = .{ .lhs = lhs_local, .rhs = rhs_local, .layout_idx = layout_idx } });
-}
-
-/// Emit an inline element-by-element comparison loop for two lists whose elements
-/// need structural (non-bytewise) equality—e.g. lists of records/tuples/tag-unions
-/// containing refcounted fields.
-/// lhs_local/rhs_local are i32 pointers to 12-byte RocList structs.
-/// Pushes i32 (1=equal, 0=not equal) onto the WASM stack.
-fn emitListEqLoop(
-    self: *Self,
-    lhs_local: u32,
-    rhs_local: u32,
-    elem_layout_idx: layout.Idx,
-    elem_size: u32,
-) Allocator.Error!void {
-    try self.runEqWork(.{ .list_loop = .{
-        .lhs = lhs_local,
-        .rhs = rhs_local,
-        .elem_layout_idx = elem_layout_idx,
-        .elem_size = elem_size,
-    } });
-}
-
-/// Explicit work-stack driver for the structural-equality emitters. Processes
-/// `initial` and any frames it transitively pushes, preserving exact emission
-/// order and the value-stack discipline of the original mutually recursive
-/// `compareCompositeByLayout`/`compareTagUnionByLayout`/`compareFieldByLayout`/
-/// `emitListEqLoop` functions.
-fn runEqWork(self: *Self, initial: EqWork) Allocator.Error!void {
-    var sfa_buffer: [64 * @sizeOf(EqWork)]u8 align(@alignOf(usize)) = undefined;
-    var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
-    const wa = sfa.allocator();
-    var work = std.ArrayList(EqWork).empty;
-    defer work.deinit(wa);
-    try work.append(wa, initial);
-
-    while (work.pop()) |item| {
-        switch (item) {
-            .emit_and => {
-                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-            },
-            .composite => |c| try self.expandComposite(&work, wa, c.lhs, c.rhs, c.layout_idx),
-            .field => |f| try self.expandField(&work, wa, f.lhs, f.rhs, f.field_offset, f.field_size, f.field_layout_idx),
-            .tag_union => |t| try self.expandTagUnion(&work, wa, t.lhs, t.rhs, t.layout_idx),
-            .list_loop => |ll| try self.expandListLoop(&work, wa, ll.lhs, ll.rhs, ll.elem_layout_idx, ll.elem_size),
-            .tu_variant_before => |v| {
-                // Check: if (disc == variant_i) { compare payload with this variant's layout }
-                self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
-                self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory; // void block
-
-                // Skip if disc != variant_i
-                try self.emitLocalGet(v.lhs_disc);
-                try self.emitI32Const(@intCast(v.variant_i));
-                self.currentCode().append(self.allocator, Op.i32_ne) catch return error.OutOfMemory;
-                try self.emitBrIf(0);
-            },
-            .tu_variant_after => |state| {
-                try self.emitLocalSet(state.payload_eq_local);
-                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory; // end variant block
-            },
-            .tu_finish => |state| {
-                if (state.have_payload) {
-                    // result = disc_eq AND payload_eq
-                    try self.emitLocalGets(.{ state.disc_eq_local, state.payload_eq_local });
-                    self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                    try self.emitLocalSet(state.result_local);
-                }
-                self.currentCode().append(self.allocator, Op.end) catch return error.OutOfMemory; // end outer block
-                // Push result
-                try self.emitLocalGet(state.result_local);
-                self.allocator.destroy(state);
-            },
-            .list_loop_after => |state| {
-                // result = result AND elem_eq
-                try self.emitLocalGet(state.result_local);
-                self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-                try self.emitLocalSet(state.result_local);
-
-                // idx++
-                try self.emitLocalGet(state.idx_local);
-                try self.emitI32Const(1);
-                self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-                try self.emitLocalSet(state.idx_local);
-
-                // br 0 (continue loop)
-                try self.emitBr(0);
-
-                // end loop, end block
-                try self.emitOps(.{ Op.end, Op.end });
-
-                // Push final result
-                try self.emitLocalGet(state.result_local);
-                self.allocator.destroy(state);
-            },
-        }
-    }
-}
-
-/// Expand a `composite` work frame: emit struct field comparisons (pushing child
-/// frames + `emit_and` glue), or a bytewise comparison for non-structs.
-fn expandComposite(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const l = ls.getLayout(layout_idx);
-
-    switch (l.tag) {
-        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box equality survived Boxy lowering", .{}),
-        .struct_ => {
-            const struct_idx = l.getStruct().idx;
-            const struct_data = ls.getStructData(struct_idx);
-            const field_count = struct_data.fields.count;
-            if (field_count == 0) {
-                try self.emitI32Const(1);
-                return;
-            }
-
-            // Collect the non-zero-size fields in source order, then push their
-            // child frames (and the `i32_and` glue that follows all but the first)
-            // in reverse so popping reproduces the original left-to-right emission.
-            var sfa_buffer: [16 * @sizeOf(u32)]u8 align(@alignOf(usize)) = undefined;
-            var sfa = std.heap.BufferFirstAllocator.init(&sfa_buffer, self.allocator);
-            const ta = sfa.allocator();
-            var fields = std.ArrayList(u32).empty;
-            defer fields.deinit(ta);
-
-            var field_i: u32 = 0;
-            while (field_i < field_count) : (field_i += 1) {
-                // Padding spacers hold uninitialized bytes; never compare them.
-                if (ls.getStructFieldIsPadding(struct_idx, @intCast(field_i))) continue;
-                const field_size = try self.structFieldSizeBySortedIndexWasm(struct_idx, @intCast(field_i));
-                if (field_size == 0) continue;
-                try fields.append(ta, field_i);
-            }
-
-            if (fields.items.len == 0) {
-                // All fields were zero-size
-                try self.emitI32Const(1);
-                return;
-            }
-
-            var i: usize = fields.items.len;
-            while (i > 0) {
-                i -= 1;
-                const fi = fields.items[i];
-                if (i != 0) {
-                    // `i32_and` runs after this field's result is on the stack.
-                    try work.append(wa, .emit_and);
-                }
-                const field_offset = try self.structFieldOffsetBySortedIndexWasm(struct_idx, @intCast(fi));
-                const field_size = try self.structFieldSizeBySortedIndexWasm(struct_idx, @intCast(fi));
-                const field_layout_idx = ls.getStructFieldLayout(struct_idx, @intCast(fi));
-                try work.append(wa, .{ .field = .{
-                    .lhs = lhs_local,
-                    .rhs = rhs_local,
-                    .field_offset = field_offset,
-                    .field_size = field_size,
-                    .field_layout_idx = field_layout_idx,
-                } });
-            }
-        },
-        .scalar, .box, .box_of_zst, .list, .list_of_zst, .closure, .erased_callable, .zst, .tag_union, .ptr => {
-            // Non-composite layouts compare directly as raw bytes.
-            const byte_size = ls.layoutSizeAlign(l).size;
-            try self.emitBytewiseEq(lhs_local, rhs_local, byte_size);
-        },
-    }
-}
-
-/// Expand a `tag_union` work frame: emit the discriminant comparison and block
-/// scaffolding, then push per-variant payload children plus their glue.
-fn expandTagUnion(self: *Self, work: *std.ArrayList(EqWork), wa: Allocator, lhs_local: u32, rhs_local: u32, layout_idx: layout.Idx) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const l = ls.getLayout(layout_idx);
-    std.debug.assert(l.tag == .tag_union);
-
-    const tu_layout = try WasmLayout.tagUnionLayoutWithStore(l.getTagUnion().idx, ls);
-    const disc_offset = tu_layout.discriminant_offset;
-    const disc_size = tu_layout.discriminant_size;
-
-    // Allocate a local to hold the result
-    const result_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-
-    // Load LHS discriminant
-    if (disc_size == 0) {
-        try self.emitI32Const(0);
-    } else {
-        try self.emitLocalGet(lhs_local);
-        try self.emitLoadBySize(disc_size, @intCast(disc_offset));
-    }
-    const lhs_disc = try self.emitSetNewLocal(.i32);
-
-    // Load RHS discriminant
-    if (disc_size == 0) {
-        try self.emitI32Const(0);
-    } else {
-        try self.emitLocalGet(rhs_local);
-        try self.emitLoadBySize(disc_size, @intCast(disc_offset));
-    }
-    const rhs_disc = try self.emitSetNewLocal(.i32);
-
-    // Compare discriminants
-    try self.emitLocalGets(.{ lhs_disc, rhs_disc });
-    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-    const disc_eq_local = try self.emitSetNewLocal(.i32);
-
-    // If discriminants differ, result is 0
-    // We use: result = disc_eq AND payload_eq
-    // Start by assuming payload_eq = 1 (for the case where discriminants differ, we short-circuit)
-
-    // Default result: discriminants equal ? (will be AND'd with payload comparison) : 0
-    try self.emitLocalGet(disc_eq_local);
-    try self.emitLocalSet(result_local);
-
-    // Only compare payloads if discriminants are equal
-    // Only compare payloads if discriminants are equal
-    // block { if disc_ne: br 0; ... payload comparison ... } end
-    self.currentCode().append(self.allocator, Op.block) catch return error.OutOfMemory;
-    self.currentCode().append(self.allocator, 0x40) catch return error.OutOfMemory; // void block type
-    try self.emitLocalGet(disc_eq_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory; // disc_ne
-    self.currentCode().append(self.allocator, Op.br_if) catch return error.OutOfMemory;
-    WasmModule.leb128WriteU32(self.allocator, self.currentCode(), 0) catch return error.OutOfMemory; // break out of block
-
-    const state = try self.allocator.create(TuEqState);
-    state.* = .{
-        .lhs_disc = lhs_disc,
-        .disc_eq_local = disc_eq_local,
-        .payload_eq_local = undefined,
-        .result_local = result_local,
-        .have_payload = false,
-    };
-    // `tu_finish` runs last: emit closing glue + push result, after every variant.
-    try work.append(wa, .{ .tu_finish = state });
-
-    // Payload comparison: compare based on variant
-    // For simplicity, compare the payload bytes up to discriminant_offset
-    // using layout-aware comparison for the variant's payload layout
-    const variants = ls.getTagUnionVariants(ls.getTagUnionData(l.getTagUnion().idx));
-    if (variants.len > 0) {
-        const payload_size = disc_offset; // Payload occupies bytes [0..disc_offset)
-        if (payload_size > 0) {
-            // Compare payloads based on variant layout
-            // For each variant, check if discriminant matches and compare payload
-            // Use a local to accumulate payload equality
-            const payload_eq_local = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            state.payload_eq_local = payload_eq_local;
-            state.have_payload = true;
-
-            // Default: payload equal (1) - will be overwritten
-            try self.emitSetI32Local(payload_eq_local, 1);
-
-            // Each emitting variant (payload size > 0) emits, in source order:
-            //   [open block + br_if skip] [payload child] [set payload_eq, end].
-            // `compareFieldByLayout` reproduces both the layout-aware and the
-            // scalar (bytewise-at-offset-0) cases of the original, so a single
-            // `.field` child covers every payload kind. Push prefix/child/suffix in
-            // reverse so popping reproduces the original left-to-right emission.
-            var i: usize = variants.len;
-            while (i > 0) {
-                i -= 1;
-                const variant_payload_layout = variants.get(i).payload_layout;
-                const variant_payload_size = try self.layoutByteSize(variant_payload_layout);
-                if (variant_payload_size == 0) continue;
-
-                // Suffix runs after the child: set payload_eq, end block.
-                try work.append(wa, .{ .tu_variant_after = state });
-
-                // Payload child.
-                try work.append(wa, .{ .field = .{
-                    .lhs = lhs_local,
-                    .rhs = rhs_local,
-                    .field_offset = 0,
-                    .field_size = variant_payload_size,
-                    .field_layout_idx = variant_payload_layout,
-                } });
-
-                // Prefix runs before the child: open the variant block + br_if skip.
-                try work.append(wa, .{ .tu_variant_before = .{ .lhs_disc = lhs_disc, .variant_i = @intCast(i) } });
-            }
-        }
-    }
-}
-
-/// Compare a single field by layout type. Pushes i32 (1=equal, 0=not equal) onto the WASM stack.
-/// lhs_local/rhs_local are i32 pointers to the parent struct, field_offset is the byte offset.
-fn expandField(
-    self: *Self,
-    work: *std.ArrayList(EqWork),
-    wa: Allocator,
-    lhs_local: u32,
-    rhs_local: u32,
-    field_offset: u32,
-    field_size: u32,
-    field_layout_idx: layout.Idx,
-) Allocator.Error!void {
-    if (field_layout_idx == .str) {
-        const lhs_field_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
-        const rhs_field_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
-        try self.emitStrEqCall(lhs_field_local, rhs_field_local);
-        return;
-    }
-
-    const ls = self.getLayoutStore();
-
-    const field_layout = ls.getLayout(field_layout_idx);
-    switch (field_layout.tag) {
-        .erased_box => wasmInvariantFmt("WasmCodeGen invariant violated: erased-box field equality survived Boxy lowering", .{}),
-        .list => {
-            const elem_layout = field_layout.getIdx();
-            const lhs_list_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
-            const rhs_list_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
-
-            if (elem_layout == .str) {
-                try self.emitListEqCall(lhs_list_local, rhs_list_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.str)), null);
-            } else if (ls.getLayout(elem_layout).tag == .list) {
-                const inner_elem_layout = ls.getLayout(elem_layout).getIdx();
-                const inner_elem_size = try self.layoutByteSize(inner_elem_layout);
-                try self.emitListEqCall(lhs_list_local, rhs_list_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.list)), inner_elem_size);
-            } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.compareFieldByLayout.builtin_elem_rc", elem_layout)) {
-                // Composite elements (records/tuples/tag-unions with refcounted fields):
-                // inline element-by-element structural comparison loop.
-                const elem_size = try self.layoutByteSize(elem_layout);
-                try work.append(wa, .{ .list_loop = .{
-                    .lhs = lhs_list_local,
-                    .rhs = rhs_list_local,
-                    .elem_layout_idx = elem_layout,
-                    .elem_size = elem_size,
-                } });
-            } else {
-                const elem_size = try self.layoutByteSize(elem_layout);
-                try self.emitListEqCall(lhs_list_local, rhs_list_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.flat)), elem_size);
-            }
-        },
-        .struct_, .tag_union => {
-            // Nested composite: create offset locals and recurse
-            const lhs_field_local = try self.emitAddressOffsetToLocal(lhs_local, field_offset);
-            const rhs_field_local = try self.emitAddressOffsetToLocal(rhs_local, field_offset);
-
-            if (field_layout.tag == .tag_union) {
-                const tu_info = ls.getTagUnionInfo(field_layout);
-                if (tu_info.contains_refcounted) {
-                    try work.append(wa, .{ .tag_union = .{
-                        .lhs = lhs_field_local,
-                        .rhs = rhs_field_local,
-                        .layout_idx = field_layout_idx,
-                    } });
-                } else {
-                    try self.emitBytewiseEq(lhs_field_local, rhs_field_local, field_size);
-                }
-            } else {
-                try work.append(wa, .{ .composite = .{
-                    .lhs = lhs_field_local,
-                    .rhs = rhs_field_local,
-                    .layout_idx = field_layout_idx,
-                } });
-            }
-        },
-        .scalar, .box, .box_of_zst, .list_of_zst, .closure, .erased_callable, .zst, .ptr => {
-            // Scalar/other: bytewise comparison at offset
-            try self.emitBytewiseEqAtOffset(lhs_local, rhs_local, field_offset, field_size);
-        },
-    }
-}
-
-/// Expand a `list_loop` work frame: emit the list element-comparison loop, pushing
-/// the element comparison child plus the `list_loop_after` glue continuation.
-fn expandListLoop(
-    self: *Self,
-    work: *std.ArrayList(EqWork),
-    wa: Allocator,
-    lhs_local: u32,
-    rhs_local: u32,
-    elem_layout_idx: layout.Idx,
-    elem_size: u32,
-) Allocator.Error!void {
-    // Allocate scratch locals
-    const lhs_len, const rhs_len, const lhs_data, const rhs_data, const idx_local, const result_local = try self.allocAnonymousLocals(.i32, 6);
-    const lhs_elem, const rhs_elem = try self.allocAnonymousLocals(.i32, 2);
-
-    // Load lhs length (offset 4 in RocList)
-    try self.emitLoadAt(lhs_local, .i32, 4);
-    try self.emitLocalSet(lhs_len);
-
-    // Load rhs length (offset 4 in RocList)
-    try self.emitLoadAt(rhs_local, .i32, 4);
-    try self.emitLocalSet(rhs_len);
-
-    // result = (lhs_len == rhs_len)
-    try self.emitLocalGets(.{ lhs_len, rhs_len });
-    self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-    try self.emitLocalSet(result_local);
-
-    // Load data pointers (offset 0 in RocList)
-    try self.emitLoadAt(lhs_local, .i32, 0);
-    try self.emitLocalSet(lhs_data);
-
-    try self.emitLoadAt(rhs_local, .i32, 0);
-    try self.emitLocalSet(rhs_data);
-
-    // idx = 0
-    try self.emitSetI32Local(idx_local, 0);
-
-    // block { loop {
-    try self.emitVoidBlock();
-    try self.emitVoidLoop();
-
-    // if result == 0, break (lengths didn't match or previous elem failed)
-    try self.emitLocalGet(result_local);
-    self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    try self.emitBrIf(1);
-
-    // if idx >= lhs_len, break (all elements compared)
-    try self.emitLocalGets(.{ idx_local, lhs_len });
-    self.currentCode().append(self.allocator, Op.i32_ge_u) catch return error.OutOfMemory;
-    try self.emitBrIf(1);
-
-    // lhs_elem = lhs_data + idx * elem_size
-    try self.emitLocalGets(.{ lhs_data, idx_local });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-    try self.emitLocalSet(lhs_elem);
-
-    // rhs_elem = rhs_data + idx * elem_size
-    try self.emitLocalGets(.{ rhs_data, idx_local });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-    try self.emitLocalSet(rhs_elem);
-
-    // The post-child glue (accumulate result, idx++, loop, close blocks, push
-    // result) runs after the element comparison child completes.
-    const state = try self.allocator.create(ListEqState);
-    state.* = .{ .result_local = result_local, .idx_local = idx_local };
-    try work.append(wa, .{ .list_loop_after = state });
-
-    // Compare elements structurally: pushes i32 result onto stack
-    try work.append(wa, .{ .field = .{
-        .lhs = lhs_elem,
-        .rhs = rhs_elem,
-        .field_offset = 0,
-        .field_size = elem_size,
-        .field_layout_idx = elem_layout_idx,
-    } });
-}
-
-/// Emit bytewise equality comparison of two memory regions.
-/// lhs_local and rhs_local are i32 pointers, compared for byte_size bytes starting at offset 0.
-/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
-fn emitBytewiseEq(self: *Self, lhs_local: u32, rhs_local: u32, byte_size: u32) Allocator.Error!void {
-    if (byte_size == 0) {
-        try self.emitI32Const(1);
-        return;
-    }
-
-    var offset: u32 = 0;
-    var first = true;
-
-    while (offset + 4 <= byte_size) : (offset += 4) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load, 0, offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load, 0, offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-    }
-
-    if (offset + 2 <= byte_size) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load16_u, 1, offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load16_u, 1, offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-        offset += 2;
-    }
-
-    if (offset < byte_size) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load8_u, 0, offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load8_u, 0, offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-    }
-
-    if (first) {
-        try self.emitI32Const(1);
-    }
-}
-
-/// Emit bytewise equality comparison at a specific offset within parent structs.
-/// Pushes an i32 (1=equal, 0=not equal) onto the WASM stack.
-fn emitBytewiseEqAtOffset(self: *Self, lhs_local: u32, rhs_local: u32, base_offset: u32, byte_size: u32) Allocator.Error!void {
-    if (byte_size == 0) {
-        try self.emitI32Const(1);
-        return;
-    }
-
-    var offset: u32 = 0;
-    var first = true;
-
-    while (offset + 4 <= byte_size) : (offset += 4) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load, 0, base_offset + offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load, 0, base_offset + offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-    }
-
-    if (offset + 2 <= byte_size) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load16_u, 1, base_offset + offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load16_u, 1, base_offset + offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-        offset += 2;
-    }
-
-    if (offset < byte_size) {
-        try self.emitLocalGet(lhs_local);
-        try self.emitMemOp(Op.i32_load8_u, 0, base_offset + offset);
-
-        try self.emitLocalGet(rhs_local);
-        try self.emitMemOp(Op.i32_load8_u, 0, base_offset + offset);
-
-        self.currentCode().append(self.allocator, Op.i32_eq) catch return error.OutOfMemory;
-        if (!first) {
-            self.currentCode().append(self.allocator, Op.i32_and) catch return error.OutOfMemory;
-        }
-        first = false;
-    }
-
-    if (first) {
-        try self.emitI32Const(1);
-    }
-}
-
 /// Emit a load instruction appropriate for the discriminant size.
 /// Loads an unsigned integer of disc_size bytes at the given offset from the address on the stack.
 fn emitLoadBySize(self: *Self, disc_size: u8, offset: u32) Allocator.Error!void {
@@ -4006,9 +3277,21 @@ fn stabilizeCompositeResult(self: *Self, size: u32) Allocator.Error!u32 {
 /// Generate composite (i128/Dec) numeric operations via LowLevel ops.
 /// Both operands are i32 pointers to 16-byte values in linear memory.
 fn emitCompositeNumericOp(self: *Self, op: NumericOp, args: anytype, ret_layout: layout.Idx, operand_layout: layout.Idx) Allocator.Error!void {
-    // For comparison ops like num_is_eq, check for structural equality first
     if (op == .num_is_eq) {
-        try self.emitStructuralEq(GuardedList.at(args, 0), GuardedList.at(args, 1), false);
+        // Lowering decomposes structural equality, so `num_is_eq` only ever
+        // compares numbers.
+        if (operand_layout != .i128 and operand_layout != .u128 and operand_layout != .dec) wasmInvariantFmt(
+            "WasmCodeGen invariant violated: num_is_eq received non-numeric operand layout {d}",
+            .{@backingInt(operand_layout)},
+        );
+        const lhs_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
+        const rhs_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 1), .i32);
+        try self.emitLoadAt(lhs_local, .i64, 0);
+        try self.emitLoadAt(rhs_local, .i64, 0);
+        self.currentCode().append(self.allocator, Op.i64_eq) catch return error.OutOfMemory;
+        try self.emitLoadAt(lhs_local, .i64, 8);
+        try self.emitLoadAt(rhs_local, .i64, 8);
+        try self.emitOps(.{ Op.i64_eq, Op.i32_and });
         return;
     }
 
@@ -6826,7 +6109,7 @@ fn generateBoxyDictProcThunk(self: *Self, proc_id: LIR.LirProcSpecId, proc: LirP
                     }
                     break :blk;
                 },
-                .runtime, .dict_method_arg, .dict_method_hidden => wasmInvariantFmt(
+                .runtime, .dict_method_hidden => wasmInvariantFmt(
                     "WASM/codegen invariant violated: unresolved runtime return descriptor reached dictionary thunk",
                     .{},
                 ),
@@ -7220,7 +6503,6 @@ pub fn registerBoxySymbolTargets(self: *Self) HostedSymbolError!void {
     try self.registerBoxySymbol("roc_boxy_init_embedded", &.{.i32}, &.{});
     try self.registerBoxySymbol("roc_boxy_static_desc", &.{.i32}, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_static_dict", &.{.i32}, &.{.i32});
-    try self.registerBoxySymbol("roc_boxy_dict_method_arg_desc", &.{ .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_dict_method_hidden_desc", &.{ .i32, .i32, .i32, .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_nested_desc", &.{ .i32, .i32 }, &.{.i32});
     try self.registerBoxySymbol("roc_boxy_box_payload_desc", &.{ .i32, .i32 }, &.{.i32});
@@ -7328,13 +6610,6 @@ fn resolveBoxyDesc(self: *Self, desc: LIR.BoxyDescRef) Allocator.Error!void {
             try self.emitBoxyCall("roc_boxy_static_desc");
         },
         .local => |local| try self.emitProcLocal(local),
-        .dict_method_arg => |projection| {
-            try self.emitProcLocal(projection.dict);
-            try self.emitI32Const(@intCast(projection.method_slot));
-            try self.emitI32Const(@intCast(@backingInt(projection.method)));
-            try self.emitI32Const(@intCast(projection.arg_index));
-            try self.emitBoxyCall("roc_boxy_dict_method_arg_desc");
-        },
         .dict_method_hidden => |projection| {
             try self.emitProcLocal(projection.dict);
             try self.emitI32Const(@intCast(projection.method_slot));
@@ -7419,7 +6694,7 @@ fn generateBoxyDescRef(self: *Self, assign: anytype) Allocator.Error!void {
     } else {
         const desc_id = switch (assign.desc) {
             .static => |id| id,
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => wasmInvariantFmt(
+            .local, .runtime, .dict_method_hidden => wasmInvariantFmt(
                 "WASM/codegen invariant violated: captured descriptor copy did not name a static descriptor",
                 .{},
             ),
@@ -8377,11 +7652,6 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
             try self.bindAssignedLocal(assign.target);
             try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
         },
-        .assign_boxy_reuse_box => |assign| {
-            try self.emitProcLocal(assign.source);
-            try self.bindAssignedLocal(assign.target);
-            try work.append(wa, .{ .node = .{ .stmt_id = assign.next, .stop = stop } });
-        },
         .assign_boxy_unbox => |assign| {
             try self.generateBoxyUnbox(assign);
             try self.bindAssignedLocal(assign.target);
@@ -8784,28 +8054,6 @@ fn generateCFStmtNode(self: *Self, work: *std.ArrayList(StmtWork), wa: Allocator
         .expect_err => |expect_err_stmt| {
             try self.emitRocStrCall(expect_err_stmt.message, .crashed);
             self.currentCode().append(self.allocator, Op.@"unreachable") catch return error.OutOfMemory;
-        },
-        .loop_continue => {
-            if (builtin.mode == .debug and self.loop_continue_target_depths.items.len == 0) {
-                base.invariant(
-                    "WasmCodeGen invariant violated: loop_continue encountered outside a loop",
-                    .{},
-                );
-            }
-            const loop_depth = self.loop_continue_target_depths.items[self.loop_continue_target_depths.items.len - 1];
-            const br_target = self.cf_depth - loop_depth;
-            try self.emitBr(br_target);
-        },
-        .loop_break => {
-            if (builtin.mode == .debug and self.loop_break_target_depths.items.len == 0) {
-                base.invariant(
-                    "WasmCodeGen invariant violated: loop_break encountered outside a loop",
-                    .{},
-                );
-            }
-            const break_depth = self.loop_break_target_depths.items[self.loop_break_target_depths.items.len - 1];
-            const br_target = self.cf_depth - break_depth;
-            try self.emitBr(br_target);
         },
     }
 }
@@ -9892,30 +9140,6 @@ fn structFieldSizeByOriginalIndexWasm(self: *const Self, struct_idx: layout.Stru
         if (field.index == original_idx) return try self.layoutStorageByteSize(field.layout);
     }
     unreachable;
-}
-
-fn structFieldOffsetBySortedIndexWasm(self: *const Self, struct_idx: layout.StructIdx, sorted_index: u32) Allocator.Error!u32 {
-    const ls = self.getLayoutStore();
-    const struct_data = ls.getStructData(struct_idx);
-    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-    var offset: u32 = 0;
-    for (0..fields.len) |i| {
-        const field = fields.get(i);
-        // Padding spacers are alignment 1 (their value layout's alignment is ignored).
-        const field_align: u32 = if (field.is_padding) 1 else try self.layoutStorageByteAlign(field.layout);
-        offset = alignUp(offset, field_align);
-        if (i == sorted_index) return offset;
-        offset += try self.layoutStorageByteSize(field.layout);
-    }
-    unreachable;
-}
-
-fn structFieldSizeBySortedIndexWasm(self: *const Self, struct_idx: layout.StructIdx, sorted_index: u32) Allocator.Error!u32 {
-    const ls = self.getLayoutStore();
-    const struct_data = ls.getStructData(struct_idx);
-    const fields = ls.struct_fields.sliceRange(struct_data.getFields());
-    if (sorted_index >= fields.len) unreachable;
-    return try self.layoutStorageByteSize(fields.get(sorted_index).layout);
 }
 
 /// Emit a store instruction for the given value type at an address already on the stack.
@@ -11232,10 +10456,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.emitLocalGet(result_local);
         },
 
-        // String operations
-        // Bitwise operations
-        .num_log => unreachable, // Resolved by earlier lowering
-
         .num_abs_diff => {
             // abs_diff(a, b) -> |a - b|
             return self.emitNumericLowLevel(ll.op, args, ll.ret_layout);
@@ -11263,155 +10483,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
             try self.generateLLListSwap(args, ll.ret_layout, ll.target, ll.unique_args);
         },
 
-        // List element access operations (no heap allocation needed)
-        .list_first => {
-            const ls = self.getLayoutStore();
-            const list_layout_idx = self.procLocalLayoutIdx(GuardedList.at(args, 0));
-            const elem_layout_idx = self.listElemLayout(list_layout_idx);
-            const elem_size: u32 = try self.layoutStorageByteSize(elem_layout_idx);
-            const elem_is_composite = try self.isCompositeLayout(elem_layout_idx);
-
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitLoadAt(list_local, .i32, 0);
-
-            if (elem_is_composite) {
-                const src_local = try self.emitSetNewLocal(.i32);
-
-                const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_layout_idx)).alignment.toByteUnits(), 1));
-                const dst_offset = try self.allocStackMemory(elem_size, elem_align);
-                const dst_local = try self.emitFpOffsetToNewLocal(dst_offset);
-
-                try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitLocalGet(dst_local);
-            } else {
-                try self.emitLoadOpForLayout(elem_layout_idx, 0);
-            }
-        },
-        .list_last => {
-            const ls = self.getLayoutStore();
-            const list_layout_idx = self.procLocalLayoutIdx(GuardedList.at(args, 0));
-            const elem_layout_idx = self.listElemLayout(list_layout_idx);
-            const elem_size: u32 = try self.layoutStorageByteSize(elem_layout_idx);
-            const elem_is_composite = try self.isCompositeLayout(elem_layout_idx);
-
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitLoadAt(list_local, .i32, 0);
-            try self.emitLoadAt(list_local, .i32, 4);
-            try self.emitI32Const(1);
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-
-            if (elem_is_composite) {
-                const src_local = try self.emitSetNewLocal(.i32);
-
-                const elem_align: u32 = @intCast(@max(ls.layoutSizeAlign(ls.getLayout(elem_layout_idx)).alignment.toByteUnits(), 1));
-                const dst_offset = try self.allocStackMemory(elem_size, elem_align);
-                const dst_local = try self.emitFpOffsetToNewLocal(dst_offset);
-
-                try self.emitMemCopy(dst_local, 0, src_local, elem_size);
-                try self.emitLocalGet(dst_local);
-            } else {
-                try self.emitLoadOpForLayout(elem_layout_idx, 0);
-            }
-        },
-        .list_drop_first => {
-            // list_drop_first(list, count) -> list
-            // Returns a RocList with adjusted elements_ptr and length
-            // No allocation needed—returns a view
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Allocate result RocList (12 bytes)
-            const result_offset = try self.allocStackMemory(12, 4);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            // Get element size from ret_layout (which is the list layout, not elem)
-            const list_abi = self.builtinInternalListAbi("wasm.list_drop_first.builtin_list_abi", ll.ret_layout);
-            const elem_size = list_abi.elem_size;
-
-            // Zero-width elements have no bytes to skip past, so dropping a
-            // prefix only shortens the length of an unallocated list.
-            if (elem_size == 0) {
-                const len_local = try self.emitListLenLocal(list_local);
-                try self.emitU32SaturatingSub(len_local, count_local);
-                try self.emitZstListFromStackLen();
-                return;
-            }
-
-            // new_ptr = old_ptr + count * elem_size
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 0);
-            try self.emitLocalGet(count_local);
-            try self.emitI32Const(@intCast(elem_size));
-            try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-            try self.emitStoreOp(.i32, 0);
-
-            // new_len = old_len - count
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 4);
-            try self.emitLocalGet(count_local);
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            try self.emitStoreOp(.i32, 4);
-
-            // Encode seamless-slice cap from the source allocation pointer.
-            const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-            try self.emitPrepareListSliceMetadata(list_local, list_abi.elements_refcounted, encoded_cap);
-
-            try self.emitLocalGets(.{ result_local, encoded_cap });
-            try self.emitStoreOp(.i32, 8);
-
-            // Push result pointer
-            try self.emitLocalGet(result_local);
-        },
-        .list_drop_last => {
-            // list_drop_last(list, count) -> list
-            // Returns a RocList with adjusted length (pointer stays same)
-            const list_local = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-            try self.emitProcLocalAsI32(GuardedList.at(args, 1));
-            const count_local = try self.emitSetNewLocal(.i32);
-
-            // Zero-width elements have no bytes to drop, so removing a suffix
-            // only shortens the length of an unallocated list.
-            {
-                const drop_abi = self.builtinInternalListAbi("wasm.list_drop_last.builtin_list_abi", ll.ret_layout);
-                if (drop_abi.elem_size == 0) {
-                    const len_local = try self.emitListLenLocal(list_local);
-                    try self.emitU32SaturatingSub(len_local, count_local);
-                    try self.emitZstListFromStackLen();
-                    return;
-                }
-            }
-
-            // Allocate result RocList (12 bytes)
-            const result_offset = try self.allocStackMemory(12, 4);
-            const result_local = try self.emitFpOffsetToNewLocal(result_offset);
-
-            // Same elements_ptr
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 0);
-            try self.emitStoreOp(.i32, 0);
-
-            // new_len = old_len - count
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 4);
-            try self.emitLocalGet(count_local);
-            self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-            try self.emitStoreOp(.i32, 4);
-
-            // Same capacity
-            try self.emitLocalGet(result_local);
-            try self.emitLoadAt(list_local, .i32, 8);
-            try self.emitStoreOp(.i32, 8);
-
-            // Push result pointer
-            try self.emitLocalGet(result_local);
-        },
         .list_take_first => {
             // list_take_first(list, count) -> list
             // Same as list but with length = min(count, len)
@@ -11580,14 +10651,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         // list_release_excess_capacity(list) -> list with capacity = length
         .list_release_excess_capacity => {
             try self.generateLLListReleaseExcessCapacity(args, ll.ret_layout, ll.target, ll.unique_args);
-        },
-        // list_split_first(list) -> { first: elem, rest: list }
-        .list_split_first => {
-            try self.generateLLListSplitFirst(args, ll.ret_layout);
-        },
-        // list_split_last(list) -> { rest: list, last: elem }
-        .list_split_last => {
-            try self.generateLLListSplitLast(args, ll.ret_layout);
         },
         // list_sublist(list, {len: U64, start: U64}) -> list
         .list_sublist, .list_sublist_borrowed => {
@@ -12160,25 +11223,6 @@ fn generateLowLevel(self: *Self, ll: anytype) Allocator.Error!void {
         .dec_to_str => try self.emitDecToStr(GuardedList.at(args, 0)),
         .f32_to_str => try self.emitFloatToStr(GuardedList.at(args, 0), true),
         .f64_to_str => try self.emitFloatToStr(GuardedList.at(args, 0), false),
-        .num_to_str => switch (self.procLocalLayoutIdx(GuardedList.at(args, 0))) {
-            .u8 => try self.emitIntToStr(GuardedList.at(args, 0), 1, false),
-            .i8 => try self.emitIntToStr(GuardedList.at(args, 0), 1, true),
-            .u16 => try self.emitIntToStr(GuardedList.at(args, 0), 2, false),
-            .i16 => try self.emitIntToStr(GuardedList.at(args, 0), 2, true),
-            .u32 => try self.emitIntToStr(GuardedList.at(args, 0), 4, false),
-            .i32 => try self.emitIntToStr(GuardedList.at(args, 0), 4, true),
-            .u64 => try self.emitIntToStr(GuardedList.at(args, 0), 8, false),
-            .i64 => try self.emitIntToStr(GuardedList.at(args, 0), 8, true),
-            .u128 => try self.emitIntToStr(GuardedList.at(args, 0), 16, false),
-            .i128 => try self.emitIntToStr(GuardedList.at(args, 0), 16, true),
-            .dec => try self.emitDecToStr(GuardedList.at(args, 0)),
-            .f32 => try self.emitFloatToStr(GuardedList.at(args, 0), true),
-            .f64 => try self.emitFloatToStr(GuardedList.at(args, 0), false),
-            .bool, .str, .opaque_ptr, .zst, .u8x16, .i8x16, .u16x8, .i16x8, .u32x4, .i32x4, .u64x2, .i64x2, _ => wasmInvariantFmt(
-                "WasmCodeGen invariant violated: num_to_str received non-numeric layout {s}",
-                .{@tagName(self.procLocalLayoutIdx(GuardedList.at(args, 0)))},
-            ),
-        },
 
         // Box operations
         .box_box => {
@@ -13449,12 +12493,6 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
             }
         },
         .num_is_eq => {
-            // Check for structural equality (strings, lists, records, etc.)
-            const lay_idx = self.procLocalLayoutIdx(GuardedList.at(args, 0));
-            if (lay_idx == .str or try self.isCompositeLayout(lay_idx)) {
-                try self.emitStructuralEq(GuardedList.at(args, 0), GuardedList.at(args, 1), false);
-                return;
-            }
             try self.emitProcLocal(GuardedList.at(args, 0));
             try self.emitProcLocal(GuardedList.at(args, 1));
             const wasm_op: u8 = switch (vt) {
@@ -13748,66 +12786,6 @@ fn emitNumericLowLevel(self: *Self, op: LIR.LowLevel, args: anytype, ret_layout:
                 .f32, .f64, .v128 => unreachable,
             }
         },
-    }
-}
-
-/// Generate string equality comparison.
-/// Both lhs and rhs should produce i32 pointers to 12-byte RocStr values.
-fn emitStrEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, negate: bool) Allocator.Error!void {
-    // Generate both string expressions, store to locals
-    const lhs_local = try self.emitProcLocalToNewLocal(lhs, .i32);
-
-    const rhs_local = try self.emitProcLocalToNewLocal(rhs, .i32);
-
-    try self.emitStrEqCall(lhs_local, rhs_local);
-
-    // If negate, flip the result
-    if (negate) {
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
-    }
-}
-
-/// Generate list equality comparison using roc_list_eq host function.
-/// Both lhs and rhs should produce i32 pointers to 12-byte RocList values.
-fn emitListEq(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, list_layout_idx: layout.Idx, negate: bool) Allocator.Error!void {
-    const ls = self.getLayoutStore();
-    const list_layout = ls.getLayout(list_layout_idx);
-    std.debug.assert(list_layout.tag == .list);
-    const elem_layout = self.listElemLayout(list_layout_idx);
-    try self.emitListEqWithElemLayout(lhs, rhs, elem_layout, negate);
-}
-
-/// Generate list equality with a known element layout.
-/// Supports all element types including strings and nested lists.
-fn emitListEqWithElemLayout(self: *Self, lhs: ProcLocalId, rhs: ProcLocalId, elem_layout: layout.Idx, negate: bool) Allocator.Error!void {
-    // Generate both list expressions, store to locals
-    const lhs_local = try self.emitProcLocalToNewLocal(lhs, .i32);
-
-    const rhs_local = try self.emitProcLocalToNewLocal(rhs, .i32);
-
-    // Determine which comparison to use based on element type
-    if (elem_layout == .str) {
-        try self.emitListEqCall(lhs_local, rhs_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.str)), null);
-    } else {
-        const ls = self.getLayoutStore();
-        const elem_l = ls.getLayout(elem_layout);
-        if (elem_l.tag == .list) {
-            const inner_elem_layout = elem_l.getIdx();
-            const inner_elem_size = try self.layoutByteSize(inner_elem_layout);
-            try self.emitListEqCall(lhs_local, rhs_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.list)), inner_elem_size);
-        } else if (builtinInternalLayoutContainsRefcounted(ls, "wasm.emitListEqWithElemLayout.builtin_elem_rc", elem_layout)) {
-            // Composite elements with refcounted fields: inline structural loop
-            const elem_size = try self.layoutByteSize(elem_layout);
-            try self.emitListEqLoop(lhs_local, rhs_local, elem_layout, elem_size);
-        } else {
-            const elem_size = try self.layoutByteSize(elem_layout);
-            try self.emitListEqCall(lhs_local, rhs_local, BuiltinSignatures.kindOf(comptime LowLevelBuiltins.listEq(.flat)), elem_size);
-        }
-    }
-
-    // If negate, flip the result
-    if (negate) {
-        self.currentCode().append(self.allocator, Op.i32_eqz) catch return error.OutOfMemory;
     }
 }
 
@@ -17525,136 +16503,6 @@ fn resolveListElementPairLayout(self: *Self, ret_layout: layout.Idx) ListElement
             ls.getStructFieldOffset(record_idx, 1),
         .list_layout = if (field0_is_list) field0_layout else field1_layout,
     };
-}
-
-/// Generate list_split_first: split list into first element and rest
-fn generateLLListSplitFirst(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    const pair = self.resolveListElementPairLayout(_ret_layout);
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitFirst.builtin_list_abi", pair.list_layout);
-    const elem_size = list_abi.elem_size;
-    // Generate list arg
-    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, 0);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, 4);
-
-    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
-    const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-
-    // Copy first element to result
-    const bytes_local = try self.emitI32ConstToNewLocal(@intCast(elem_size));
-
-    const first_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.elem_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(first_dst);
-
-    const zero6 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(first_dst, zero6, old_data, bytes_local);
-
-    // Build rest list (pointing to old_data + elem_size, len = old_len - 1)
-    const rest_data = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_data);
-    try self.emitI32Const(@intCast(elem_size));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_data);
-
-    const rest_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_len);
-
-    const encoded_cap = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitPrepareListSliceMetadata(list_ptr, list_abi.elements_refcounted, encoded_cap);
-
-    // Store rest list in result struct
-    const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.list_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_base);
-
-    // ptr
-    try self.emitLocalGet(rest_data);
-    try self.emitStoreToMem(rest_base, 0, .i32);
-    // len
-    try self.emitLocalGet(rest_len);
-    try self.emitStoreToMem(rest_base, 4, .i32);
-    // cap = encoded seamless-slice allocation pointer
-    try self.emitLocalGet(encoded_cap);
-    try self.emitStoreToMem(rest_base, 8, .i32);
-
-    // Push result pointer
-    try self.emitLocalGet(result_ptr);
-}
-
-/// Generate list_split_last: split list into rest and last element
-fn generateLLListSplitLast(self: *Self, args: anytype, _ret_layout: layout.Idx) Allocator.Error!void {
-    const pair = self.resolveListElementPairLayout(_ret_layout);
-    const list_abi = self.builtinInternalListAbi("wasm.generateLLListSplitLast.builtin_list_abi", pair.list_layout);
-    const elem_size = list_abi.elem_size;
-
-    // Generate list arg
-    const list_ptr = try self.emitProcLocalToNewLocal(GuardedList.at(args, 0), .i32);
-
-    // Load list fields
-    const old_data = try self.emitLoadAtToNewLocal(list_ptr, .i32, 0);
-
-    const old_len = try self.emitLoadAtToNewLocal(list_ptr, .i32, 4);
-
-    const result_offset = try self.allocStackMemory(pair.result_size, pair.result_align);
-    const result_ptr = try self.emitFpOffsetToNewLocal(result_offset);
-
-    // rest_len = old_len - 1
-    const rest_len = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(old_len);
-    try self.emitI32Const(1);
-    self.currentCode().append(self.allocator, Op.i32_sub) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_len);
-
-    // Store rest list in result struct (shares data ptr, but with reduced length)
-    const rest_base = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.list_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(rest_base);
-
-    // ptr (same as old_data)
-    try self.emitLocalGet(old_data);
-    try self.emitStoreToMem(rest_base, 0, .i32);
-    // len
-    try self.emitLocalGet(rest_len);
-    try self.emitStoreToMem(rest_base, 4, .i32);
-    // Preserve source list cap metadata (including seamless-slice encoding).
-    const source_cap = try self.emitLoadAtToNewLocal(list_ptr, .i32, 8);
-    try self.emitLocalGet(source_cap);
-    try self.emitStoreToMem(rest_base, 8, .i32);
-
-    // Copy last element to result
-    // last_src = old_data + rest_len * elem_size
-    const last_src = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGets(.{ old_data, rest_len });
-    try self.emitI32Const(@intCast(elem_size));
-    try self.emitOps(.{ Op.i32_mul, Op.i32_add });
-    try self.emitLocalSet(last_src);
-
-    const bytes_local = try self.emitI32ConstToNewLocal(@intCast(elem_size));
-
-    const last_dst = self.storage.allocAnonymousLocal(.i32) catch return error.OutOfMemory;
-    try self.emitLocalGet(result_ptr);
-    try self.emitI32Const(@intCast(pair.elem_offset));
-    self.currentCode().append(self.allocator, Op.i32_add) catch return error.OutOfMemory;
-    try self.emitLocalSet(last_dst);
-
-    const zero7 = try self.emitI32ConstToNewLocal(0);
-    try self.emitMemCopyLoop(last_dst, zero7, last_src, bytes_local);
-
-    // Push result pointer
-    try self.emitLocalGet(result_ptr);
 }
 
 fn checkedOverflowMessage(op: LIR.LowLevel) []const u8 {

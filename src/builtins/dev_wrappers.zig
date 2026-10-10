@@ -2497,55 +2497,7 @@ pub fn roc_builtins_float_from_utf8_prefix(out: *anyopaque, bytes: ?[*]u8, len: 
     floatFromPrefix(.utf8, out, bytes, len, cap, listBytes(bytes, len), float_width, layout);
 }
 
-// ── List equality and reverse wrappers ──
-
-/// Compare two lists of flat (non-refcounted) elements for equality.
-/// Elements are compared byte-by-byte using the element width.
-pub fn roc_builtins_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, elem_width: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    return std.mem.eql(u8, a[0 .. a_len * elem_width], b[0 .. b_len * elem_width]);
-}
-
-/// Compare two lists of strings for equality.
-pub fn roc_builtins_list_str_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    const str_size = @sizeOf(RocStr);
-    for (0..a_len) |i| {
-        const a_str: *const RocStr = @ptrCast(@alignCast(a + i * str_size));
-        const b_str: *const RocStr = @ptrCast(@alignCast(b + i * str_size));
-        if (!strEqual(a_str.*, b_str.*)) return false;
-    }
-    return true;
-}
-
-/// Compare two lists of lists for equality (inner elements are flat).
-pub fn roc_builtins_list_list_eq(a_bytes: ?[*]u8, a_len: usize, _: usize, b_bytes: ?[*]u8, b_len: usize, _: usize, inner_elem_width: usize) callconv(.c) bool {
-    if (a_len != b_len) return false;
-    if (a_len == 0) return true;
-    if (a_bytes == b_bytes) return true;
-    const a = a_bytes orelse return b_bytes == null;
-    const b = b_bytes orelse return false;
-    const list_size = @sizeOf(RocList);
-    for (0..a_len) |i| {
-        const a_list: *const RocList = @ptrCast(@alignCast(a + i * list_size));
-        const b_list: *const RocList = @ptrCast(@alignCast(b + i * list_size));
-        if (a_list.length != b_list.length) return false;
-        if (a_list.length == 0) continue;
-        if (a_list.bytes == b_list.bytes) continue;
-        const ab = a_list.bytes orelse return b_list.bytes == null;
-        const bb = b_list.bytes orelse return false;
-        if (!std.mem.eql(u8, ab[0 .. a_list.length * inner_elem_width], bb[0 .. b_list.length * inner_elem_width])) return false;
-    }
-    return true;
-}
+// ── List reverse wrappers ──
 
 /// Wrapper: listReverse. The update mode is forwarded to the builtin's
 /// uniqueness check; `.InPlace` skips it and reverses the elements in place.

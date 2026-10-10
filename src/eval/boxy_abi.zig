@@ -117,7 +117,6 @@ pub const GlobalBoxyRuntime = struct {
     runtime_boxy_desc_refs: std.ArrayList(LirProgram.BoxyDescRef) = .empty,
     runtime_boxy_tag_variants: std.ArrayList(LirProgram.BoxyTagVariant) = .empty,
     runtime_boxy_tag_payload_descs: std.ArrayList(LirProgram.BoxyTagPayloadDesc) = .empty,
-    runtime_boxy_payload_steps: std.ArrayList(LirProgram.BoxyPayloadStep) = .empty,
     runtime_boxy_dicts: boxy_runtime.RuntimeBoxyDicts = .{},
     /// Backs runtime-materialized descriptors; they live until deinit.
     desc_arena: std.heap.ArenaAllocator,
@@ -512,7 +511,6 @@ fn createRuntime(
             .runtime_boxy_desc_refs = undefined,
             .runtime_boxy_tag_variants = undefined,
             .runtime_boxy_tag_payload_descs = undefined,
-            .runtime_boxy_payload_steps = undefined,
             .runtime_boxy_dicts = undefined,
             .roc_ops = roc_ops,
             .scratch = gpa,
@@ -527,7 +525,6 @@ fn createRuntime(
     g.runtime.runtime_boxy_desc_refs = &g.runtime_boxy_desc_refs;
     g.runtime.runtime_boxy_tag_variants = &g.runtime_boxy_tag_variants;
     g.runtime.runtime_boxy_tag_payload_descs = &g.runtime_boxy_tag_payload_descs;
-    g.runtime.runtime_boxy_payload_steps = &g.runtime_boxy_payload_steps;
     g.runtime.runtime_boxy_dicts = &g.runtime_boxy_dicts;
     g.runtime.descriptor_arena = g.desc_arena.allocator();
     g.runtime.eval_arena = g.desc_arena.allocator();
@@ -596,8 +593,6 @@ pub fn createRuntimeFromSidecarView(
         .tag_variants = view.tables.tag_variants,
         .tag_payload_descs = view.tables.tag_payload_descs,
         .field_names = view.tables.field_names,
-        .adapt_steps = view.tables.adapt_steps,
-        .payload_steps = view.tables.payload_steps,
         .method_slots = view.tables.method_slots,
         .method_arg_layouts = view.tables.method_arg_layouts,
         .method_hidden_desc_sources = view.tables.method_hidden_desc_sources,
@@ -619,7 +614,6 @@ pub fn deinitRuntime(g: *GlobalBoxyRuntime) void {
     g.runtime_boxy_dicts.deinit(g.gpa);
     g.adapter_desc_specializations.deinit(g.gpa);
     g.runtime_boxy_desc_ids.deinit(g.gpa);
-    g.runtime_boxy_payload_steps.deinit(g.gpa);
     g.runtime_boxy_tag_payload_descs.deinit(g.gpa);
     g.runtime_boxy_tag_variants.deinit(g.gpa);
     g.runtime_boxy_desc_refs.deinit(g.gpa);
@@ -663,7 +657,7 @@ const AbiHooks = struct {
                 }
                 abiCrashMissingDescriptorCapture(self.g, local, false);
             },
-            .dict_method_arg, .dict_method_hidden => return error.RuntimeError,
+            .dict_method_hidden => return error.RuntimeError,
         };
     }
 
@@ -2396,26 +2390,6 @@ pub fn roc_boxy_materialize_call_result(
 pub fn roc_boxy_static_dict(dict_id: u32) callconv(.c) *const BoxyDict {
     const g = requireGlobal();
     return g.runtime.requireBoxyDict(@fromBackingInt(@intCast(dict_id)));
-}
-
-/// Resolve one explicit argument descriptor from a runtime dictionary method
-/// adapter. Backends use this to materialize `BoxyDescRef.dict_method_arg`.
-pub fn roc_boxy_dict_method_arg_desc(
-    dict: *const BoxyDict,
-    method_slot: u32,
-    method: u32,
-    arg_index: u32,
-) callconv(.c) *const BoxyTypeDesc {
-    const g = requireGlobal();
-    enter(g);
-    defer leave(g);
-    return g.runtime.resolveDictMethodArgDesc(
-        hooks(g),
-        dict,
-        method_slot,
-        method,
-        arg_index,
-    ) catch abiCrash(g, "dictionary method argument descriptor resolution");
 }
 
 /// Resolve one hidden worker descriptor from a runtime dictionary method slot.

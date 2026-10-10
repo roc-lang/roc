@@ -304,8 +304,6 @@ pub const BoxyTables = struct {
     tag_variants: []const LirProgram.BoxyTagVariant = &.{},
     tag_payload_descs: []const LirProgram.BoxyTagPayloadDesc = &.{},
     field_names: []const LIR.BoxyNameId = &.{},
-    adapt_steps: []const LirProgram.BoxyAdaptStep = &.{},
-    payload_steps: []const LirProgram.BoxyPayloadStep = &.{},
     method_slots: []const LirProgram.BoxyMethodSlot = &.{},
     worker_procs: []const LIR.LirProcSpecId = &.{},
     method_arg_layouts: []const layout_mod.Idx = &.{},
@@ -324,8 +322,6 @@ pub const BoxyTables = struct {
             self.tag_variants.len != 0 or
             self.tag_payload_descs.len != 0 or
             self.field_names.len != 0 or
-            self.adapt_steps.len != 0 or
-            self.payload_steps.len != 0 or
             self.method_slots.len != 0 or
             self.worker_procs.len != 0 or
             self.method_arg_layouts.len != 0 or
@@ -357,8 +353,6 @@ pub const BoxyTables = struct {
             .tag_variants = result.boxy_tag_variants.items,
             .tag_payload_descs = result.boxy_tag_payload_descs.items,
             .field_names = result.boxy_field_names.items,
-            .adapt_steps = result.boxy_adapt_steps.items,
-            .payload_steps = result.boxy_payload_steps.items,
             .method_slots = result.boxy_method_slots.items,
             .worker_procs = result.boxy_worker_procs.items,
             .method_arg_layouts = result.boxy_method_arg_layouts.items,
@@ -380,8 +374,6 @@ pub const BoxyTables = struct {
             .tag_variants = view.boxy_tag_variants,
             .tag_payload_descs = view.boxy_tag_payload_descs,
             .field_names = view.boxy_field_names,
-            .adapt_steps = view.boxy_adapt_steps,
-            .payload_steps = view.boxy_payload_steps,
             .method_slots = view.boxy_method_slots,
             .worker_procs = view.boxy_worker_procs,
             .method_arg_layouts = view.boxy_method_arg_layouts,
@@ -461,7 +453,6 @@ pub const BoxyRuntime = struct {
     runtime_boxy_desc_refs: *std.ArrayList(LirProgram.BoxyDescRef),
     runtime_boxy_tag_variants: *std.ArrayList(LirProgram.BoxyTagVariant),
     runtime_boxy_tag_payload_descs: *std.ArrayList(LirProgram.BoxyTagPayloadDesc),
-    runtime_boxy_payload_steps: *std.ArrayList(LirProgram.BoxyPayloadStep),
     runtime_boxy_dicts: *RuntimeBoxyDicts,
     roc_ops: *RocOps,
     /// Backs the runtime descriptor tables' storage.
@@ -1233,29 +1224,6 @@ pub const BoxyRuntime = struct {
         return self.runtime_boxy_desc_ids.get(@intFromPtr(desc));
     }
 
-    pub fn requireBoxyPayloadSteps(self: *const BoxyRuntime, span: LIR.BoxySpan) []const LirProgram.BoxyPayloadStep {
-        if (runtimeBoxySpanStart(span)) |start| {
-            const end = start + span.len;
-            if (end > self.runtime_boxy_payload_steps.items.len) {
-                self.invariantFailed(
-                    "LIR/interpreter invariant violated: runtime boxy payload step span [{d}, {d}) exceeded table length {d}",
-                    .{ start, end, self.runtime_boxy_payload_steps.items.len },
-                );
-            }
-            return self.runtime_boxy_payload_steps.items[start..end];
-        }
-
-        const start: usize = span.start;
-        const end = start + span.len;
-        if (end > self.boxy_tables.payload_steps.len) {
-            self.invariantFailed(
-                "LIR/interpreter invariant violated: boxy payload step span [{d}, {d}) exceeded payload step table length {d}",
-                .{ start, end, self.boxy_tables.payload_steps.len },
-            );
-        }
-        return self.boxy_tables.payload_steps[start..end];
-    }
-
     pub fn materializeBoxyDescRefValue(
         self: *const BoxyRuntime,
         hooks: anytype,
@@ -1271,7 +1239,7 @@ pub const BoxyRuntime = struct {
         captures: LIR.LocalSpan,
     ) Error!*const LirProgram.BoxyTypeDesc {
         const desc_id = switch (desc_ref) {
-            .local, .runtime, .dict_method_arg, .dict_method_hidden => return try hooks.resolveDescRef(desc_ref),
+            .local, .runtime, .dict_method_hidden => return try hooks.resolveDescRef(desc_ref),
             .static => |desc_id| desc_id,
         };
         const template = self.requireBoxyTypeDesc(desc_id);
@@ -1802,7 +1770,7 @@ pub const BoxyRuntime = struct {
             .runtime => return desc_ref,
             // A closed static descriptor reaches no runtime reference.
             .static => |desc_id| if (self.requireBoxyTypeDesc(desc_id).closure == .closed) return desc_ref,
-            .local, .dict_method_arg, .dict_method_hidden => {},
+            .local, .dict_method_hidden => {},
         }
 
         const source = try hooks.resolveDescRef(desc_ref);
@@ -1834,8 +1802,6 @@ pub const BoxyRuntime = struct {
             try self.copyBoxyDescRefToRuntime(hooks, tag_ext, copied)
         else
             null;
-        target.copy_plan = try self.copyBoxyPayloadStepSpanToRuntime(hooks, source.copy_plan, copied);
-        target.drop_plan = try self.copyBoxyPayloadStepSpanToRuntime(hooks, source.drop_plan, copied);
         target.inspect_method = source.inspect_method;
         target.inspect_hidden_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_hidden_descs, copied);
         target.inspect_arg_descs = try self.copyBoxyDescRefSpanToRuntime(hooks, source.inspect_arg_descs, copied);
@@ -1939,38 +1905,6 @@ pub const BoxyRuntime = struct {
             };
         }
         return makeRuntimeBoxySpan(start, source_descs.len);
-    }
-
-    fn copyBoxyPayloadStepSpanToRuntime(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        span: LIR.BoxySpan,
-        copied: *std.AutoHashMapUnmanaged(usize, u32),
-    ) Error!LIR.BoxySpan {
-        if (runtimeBoxySpanStart(span) != null) return span;
-
-        const source_steps = self.requireBoxyPayloadSteps(span);
-        if (source_steps.len == 0) return .{};
-
-        const start = self.runtime_boxy_payload_steps.items.len;
-        try self.runtime_boxy_payload_steps.appendNTimes(self.scratch, .{ .concrete = .{
-            .op = .copy,
-            .layout_idx = .zst,
-        } }, source_steps.len);
-        for (source_steps, 0..) |step, index| {
-            // Materialize before indexing: the recursive copy can append to and
-            // reallocate `runtime_boxy_payload_steps`, invalidating a destination
-            // address computed ahead of the call.
-            const copied_step: LirProgram.BoxyPayloadStep = switch (step) {
-                .concrete => |concrete| .{ .concrete = concrete },
-                .dynamic => |dynamic| .{ .dynamic = .{
-                    .op = dynamic.op,
-                    .desc = try self.copyBoxyDescRefToRuntime(hooks, dynamic.desc, copied),
-                } },
-            };
-            self.runtime_boxy_payload_steps.items[start + index] = copied_step;
-        }
-        return makeRuntimeBoxySpan(start, source_steps.len);
     }
 
     /// Layout-directed equality of two values whose layout holds no
@@ -8054,35 +7988,6 @@ pub const BoxyRuntime = struct {
             );
         }
         return slot;
-    }
-
-    /// Resolve the exact descriptor accepted by one explicit dictionary
-    /// method argument. Dictionary-call lowering uses this for values whose
-    /// runtime encoding depends on the selected method adapter.
-    pub fn resolveDictMethodArgDesc(
-        self: *const BoxyRuntime,
-        hooks: anytype,
-        dict: *const LirProgram.BoxyDict,
-        method_slot_index: u32,
-        required_method: u32,
-        arg_index: u32,
-    ) Error!*const LirProgram.BoxyTypeDesc {
-        const method_slot = try self.dictionaryMethodSlot(dict, method_slot_index, required_method);
-        const arg_layouts = self.requireBoxyMethodArgLayouts(method_slot.adapter.arg_layouts);
-        const arg_descs = self.requireBoxyDescRefs(method_slot.adapter.arg_descs);
-        if (arg_descs.len != arg_layouts.len) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: dictionary method adapter had {d} argument descriptors for {d} argument layouts",
-                .{ arg_descs.len, arg_layouts.len },
-            );
-        }
-        if (arg_index >= arg_descs.len) {
-            return self.invariantFailedError(
-                "LIR/interpreter invariant violated: dictionary method argument descriptor index {d} exceeded adapter arity {d}",
-                .{ arg_index, arg_descs.len },
-            );
-        }
-        return try hooks.resolveDescRef(arg_descs[arg_index]);
     }
 
     /// Resolve one exact hidden descriptor carried by a dictionary method

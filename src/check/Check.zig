@@ -242,11 +242,11 @@ alias_row_names: std.ArrayListUnmanaged(AliasRowName) = .empty,
 /// row's duplicate-name check is one lookup rather than a scan of its run.
 alias_row_name_set: std.AutoHashMapUnmanaged(AliasRowName, void) = .empty,
 /// A map from one var to another. Used to apply type arguments in instantiation
-rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var),
+rigid_var_substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
 /// Header rigid vars for the currently-processed type declaration.
 /// Used to resolve rigid vars in local type decl bodies that were not
 /// rewritten as rigid_var_lookup during canonicalization.
-type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var),
+type_decl_rigid_vars: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty,
 /// Default expressions recorded at annotation/type-decl materialization and
 /// CHECKED at finalize (design.md "Defaulted Fields"): materialization can
 /// run before check order exists (type-decl generation, scheme
@@ -3223,7 +3223,8 @@ const TryReturnRows = struct {
         self.tags.clearRetainingCapacity();
     }
 
-    fn deinit(self: *TryReturnRows, gpa: Allocator) void {
+    /// Release every owned buffer.
+    pub fn deinit(self: *TryReturnRows, gpa: Allocator) void {
         self.uses.deinit();
         self.projections.deinit();
         self.work.deinit(gpa);
@@ -3312,7 +3313,8 @@ const TryRowFixpointScratch = struct {
         self.order_start.clearRetainingCapacity();
     }
 
-    fn deinit(self: *TryRowFixpointScratch, gpa: Allocator) void {
+    /// Release every owned buffer.
+    pub fn deinit(self: *TryRowFixpointScratch, gpa: Allocator) void {
         self.edges.deinit(gpa);
         self.edge_nodes.deinit(gpa);
         self.edge_targets.deinit(gpa);
@@ -3645,8 +3647,6 @@ fn initAssumePrepared(
         .try_return_rows = TryReturnRows.init(gpa),
         .var_set = collections.DenseMap(Var, void).init(gpa),
         .inspect_type_visits = std.AutoHashMap(Var, u8).init(gpa),
-        .rigid_var_substitutions = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
-        .type_decl_rigid_vars = std.AutoHashMapUnmanaged(Ident.Idx, Var){},
         .type_decl_generation_states = try initNodeSlots(TypeDeclGenerationState, gpa, node_count, .not_generated),
         .type_decl_dense_indices = try initNodeSlots(u32, gpa, node_count, no_type_decl_dense_index),
         .scratch_vars = try base.Scratch(types_mod.Var).init(gpa),
@@ -3706,335 +3706,62 @@ pub fn fixupTypeWriter(self: *Self) void {
     self.type_writer.setDefaultSourceResolver(self.cir, ModuleEnv.typeWriterDefaultSource);
 }
 
-/// Deinit owned fields
+/// Struct-typed field types that own no memory, so `deinit` releases nothing.
+const deinit_exempt_types = [_]type{ std.mem.Allocator, BuiltinContext, ExhaustivenessContext.Context, problem.RelationOwner };
+
+/// Deinit owned fields. Memory owned by container elements is released
+/// first; then every field whose type declares `deinit` releases itself. Each
+/// such field owns only its own allocations, so their order does not matter.
 pub fn deinit(self: *Self) void {
-    self.canonical_key_writer.deinit();
-    self.owner_envs_by_identity.deinit(self.gpa);
-    self.regions.deinit(self.gpa);
-    self.problems.deinit(self.gpa);
-    self.snapshots.deinit();
-    self.import_mapping.deinit();
-    self.unify_scratch.deinit();
-    self.occurs_scratch.deinit();
-    self.seen_annos.deinit(self.gpa);
     if (self.check_order) |*order| order.deinit();
-    self.def_group.deinit(self.gpa);
-    self.group_states.deinit(self.gpa);
-    self.group_dependency_walk.deinit(self.gpa);
-    self.group_dependency_collected.deinit(self.gpa);
-    self.group_dependency_checks.deinit(self.gpa);
-    self.group_stack.deinit(self.gpa);
-    self.group_frame_positions.deinit(self.gpa);
-    self.pending_dispatch_targets.deinit(self.gpa);
-    self.pending_predeclared_scheme_uses.deinit(self.gpa);
-    self.predeclared_use_fresh_vars.deinit(self.gpa);
-    self.pending_predeclared_use_relations.deinit(self.gpa);
-    self.predeclared_relation_vars.deinit(self.gpa);
-    self.waiting_predeclared_dispatch_uses.deinit(self.gpa);
     for (self.type_schemes.items) |*scheme| {
         scheme.indexed_vars.deinit(self.gpa);
         scheme.dispatch_requirements.deinit(self.gpa);
     }
-    self.type_schemes.deinit(self.gpa);
-    self.type_scheme_by_var.deinit(self.gpa);
-    self.binding_scheme_nodes.deinit(self.gpa);
-    self.synthetic_binding_schemes.deinit(self.gpa);
-    self.retired_binding_scheme_codec_requirements.deinit(self.gpa);
-    self.binding_scheme_classification_seen.deinit(self.gpa);
-    self.binding_scheme_classification_stack.deinit(self.gpa);
-    self.settled_static_dispatch_constraint_fns.deinit(self.gpa);
-    self.waiting_obligations.deinit(self.gpa);
-    self.settled_static_dispatch_failure_exprs.deinit(self.gpa);
-    self.waiting_trigger_log.deinit(self.gpa);
-    self.scheme_requirement_candidates.deinit(self.gpa);
     var scheme_candidate_indices = self.scheme_requirement_candidate_indices_by_owner.valueIterator();
     while (scheme_candidate_indices.next()) |indices| indices.deinit(self.gpa);
-    self.scheme_requirement_candidate_indices_by_owner.deinit(self.gpa);
-    self.predeclared_scheme_vars.deinit(self.gpa);
-    self.predeclared_slots.deinit(self.gpa);
-    self.predeclared_slot_vars.deinit(self.gpa);
     var hole_shared_iter = self.hole_shared_schemes.valueIterator();
     while (hole_shared_iter.next()) |holes| self.gpa.free(holes.*);
-    self.hole_shared_schemes.deinit(self.gpa);
-    self.predeclared_local_annotations.deinit(self.gpa);
-    self.value_lookup_tracking.deinit(self.gpa);
-    self.nonlocal_value_lookups.deinit(self.gpa);
-    self.erroneous_value_exprs.deinit(self.gpa);
-    self.erroneous_statements.deinit(self.gpa);
-    self.rejected_destructure_defs.deinit(self.gpa);
-    self.call_operand_type_error_exprs.deinit(self.gpa);
-    self.retired_operand_sequences.deinit(self.gpa);
-    self.retired_operand_pool.deinit(self.gpa);
-    self.host_boundary_annotations.deinit(self.gpa);
     var position_values = self.nominal_positions.valueIterator();
     while (position_values.next()) |positions| if (positions.*) |items| self.gpa.free(items);
-    self.nominal_positions.deinit(self.gpa);
-    self.implicit_open_exts.deinit(self.gpa);
-    self.annotation_implicit_open_exts.deinit(self.gpa);
-    self.bounded_row_marks.deinit(self.gpa);
-    self.weak_value_implicit_open_ext_ranges.deinit(self.gpa);
-    self.late_implicit_open_ext_audits.deinit(self.gpa);
-    self.codec_row_demands.deinit(self.gpa);
-    self.codec_row_demand_tags.deinit(self.gpa);
-    self.implicit_parse_requests.deinit(self.gpa);
-    self.erroneous_value_patterns.deinit(self.gpa);
-    self.binder_source_exprs.deinit(self.gpa);
-    self.binder_source_path.deinit(self.gpa);
-    self.problem_owners.deinit(self.gpa);
-    self.relation_operands.deinit(self.gpa);
-    self.relation_operand_pool.deinit(self.gpa);
-    self.erroneous_causes.deinit(self.gpa);
-    self.rejected_value_annotations.deinit(self.gpa);
-    self.rejected_default_exprs.deinit(self.gpa);
-    self.accepted_nominal_constructor_backings.deinit(self.gpa);
-    self.hoist_promotion_dependencies.deinit(self.gpa);
-    self.pending_comptime_conditions.deinit(self.gpa);
-    self.hoist_frames.deinit(self.gpa);
-    self.hoist_expr_candidates.deinit(self.gpa);
-    self.hoist_deferred_roots.deinit(self.gpa);
-    self.hoist_binding_candidates.deinit(self.gpa);
-    self.hoist_binding_scope_patterns.deinit(self.gpa);
     var known_value_iter = self.hoist_known_values.iterator();
     while (known_value_iter.next()) |entry| {
         self.deinitHoistKnownValue(entry.value_ptr.*);
     }
-    self.hoist_known_values.deinit(self.gpa);
-    self.hoist_known_value_scope_patterns.deinit(self.gpa);
-    self.hoist_contextual_bindings.deinit(self.gpa);
-    self.hoist_contextual_binding_scope_patterns.deinit(self.gpa);
-    self.hoist_selected_bindings.deinit(self.gpa);
-    self.hoist_selected_exprs.deinit(self.gpa);
-    self.hoist_selected_pattern_validations.deinit(self.gpa);
-    self.hoist_invalidated_exprs.deinit(self.gpa);
-    self.hoist_retired_binders.deinit(self.gpa);
-    self.rejected_instantiation_exprs.deinit(self.gpa);
-    self.hoist_guarded_exprs.deinit(self.gpa);
     for (self.selected_hoisted_roots.items) |*root| {
         hoist_roots.deinitSelectedRoot(self.gpa, root);
     }
-    self.selected_hoisted_roots.deinit(self.gpa);
-    self.local_procedure_candidates.deinit(self.gpa);
-    self.local_procedure_candidate_stack.deinit(self.gpa);
-    self.rigid_var_candidate_depths.deinit(self.gpa);
-    self.module_type_decls.deinit(self.gpa);
-    self.local_pattern_candidate_depths.deinit(self.gpa);
-    self.local_procedure_outer_refs.deinit(self.gpa);
-    self.promoted_local_procedures.deinit(self.gpa);
-    self.promoted_local_procedure_patterns.deinit(self.gpa);
-    self.contextual_local_dispatch_fn_vars.deinit(self.gpa);
-    self.contextual_local_dispatch_exprs.deinit(self.gpa);
-    self.executable_root_defs.deinit(self.gpa);
-    self.compile_time_executable_roots.deinit(self.gpa);
-    self.env_pool.deinit();
-    self.generalizer.deinit(self.gpa);
-    self.var_map.deinit();
-    self.ground_expected_backups.deinit(self.gpa);
-    self.ground_polarized_instances.deinit(self.gpa);
     var subtree_entries = self.polarized_instance_subtrees.valueIterator();
     while (subtree_entries.next()) |entry| self.gpa.free(entry.*);
-    self.polarized_instance_subtrees.deinit(self.gpa);
-    self.snapshot_ground_copies.deinit(self.gpa);
-    self.constraints.deinit(self.gpa);
-    self.return_constraints.deinit(self.gpa);
-    self.try_return_conditions.deinit();
-    self.try_lambda_host_origins.deinit();
-    self.return_value_exprs.deinit(self.gpa);
-    self.return_constraint_frames.deinit(self.gpa);
-    self.try_return_rows.deinit(self.gpa);
-    self.try_row_fixpoints.deinit(self.gpa);
-    self.try_row_fixpoint_links.deinit(self.gpa);
-    self.deferred_try_row_edges.deinit(self.gpa);
-    self.try_row_fixpoint_scratch.deinit(self.gpa);
-    self.try_row_open_tails.deinit(self.gpa);
-    self.var_set.deinit();
-    self.inspect_type_visits.deinit();
-    self.type_visit_stack.deinit(self.gpa);
-    self.alias_row_frames.deinit(self.gpa);
-    self.alias_row_names.deinit(self.gpa);
-    self.alias_row_name_set.deinit(self.gpa);
-    self.rigid_var_substitutions.deinit(self.gpa);
-    self.type_decl_rigid_vars.deinit(self.gpa);
-    self.pending_default_checks.deinit(self.gpa);
-    self.optional_field_accesses.deinit(self.gpa);
-    self.literal_field_kinds.deinit(self.gpa);
-    self.record_constructions.deinit(self.gpa);
-    self.pending_record_updates.deinit(self.gpa);
-    self.pending_record_destructs.deinit(self.gpa);
-    self.pending_default_seen.deinit(self.gpa);
-    self.type_decl_generation_states.deinit(self.gpa);
-    self.type_decl_dense_indices.deinit(self.gpa);
-    self.type_decl_statements.deinit(self.gpa);
-    self.type_decl_invalid.deinit(self.gpa);
-    self.type_decl_dependencies.deinit(self.gpa);
-    self.scratch_vars.deinit();
-    self.scratch_tags.deinit();
-    self.scratch_record_fields.deinit();
-    self.scratch_record_field_vars.deinit();
-    self.scratch_static_dispatch_constraints.deinit();
-    self.scratch_deferred_static_dispatch_constraints.deinit();
-    self.final_codec_dispatch_constraints.deinit(self.gpa);
-    self.boundary_codec_derivations.deinit(self.gpa);
-    self.boundary_codec_calls.deinit(self.gpa);
-    self.final_codec_dispatch_constraint_fns.deinit(self.gpa);
-    self.scheme_deferred_codec_constraint_fns.deinit(self.gpa);
-    self.scratch_default_param_vars.deinit();
-    self.scratch_generated_codec_calls.deinit(self.gpa);
-    self.scratch_scheme_owned_codec_fns.deinit(self.gpa);
-    self.imported_schemes.deinit(self.gpa);
-    self.imported_scheme_by_source.deinit(self.gpa);
-    self.associated_lookup_cache.deinit(self.gpa);
-    self.ident_to_var_map.deinit();
-    self.checked_interpolation_part_constraints.deinit();
-    self.int_unbound_vars.deinit();
-    self.reported_constraint_errors.deinit();
-    self.expect_effect_slots.deinit(self.gpa);
-    self.expect_dispatch_effect_watchers.deinit(self.gpa);
-    self.successful_dispatch_fn_vars.deinit(self.gpa);
-    self.top_level_ptrns.deinit(self.gpa);
-    self.platform_required_defs.deinit(self.gpa);
     for (self.platform_requirement_solutions.items) |solution| {
         self.gpa.free(@constCast(solution.identity_vars));
     }
-    self.platform_requirement_solutions.deinit(self.gpa);
-    self.local_processing_ptrns.deinit(self.gpa);
-    self.local_value_processing_ptrns.deinit(self.gpa);
-    self.local_binding_roots.deinit(self.gpa);
-    self.type_writer.deinit();
-    self.instantiation_dispatchers.deinit(self.gpa);
-    self.instantiated_literal_conversion_uses.deinit(self.gpa);
-    self.pending_scheme_requirement_dispatchers.deinit(self.gpa);
-    self.ambiguity_candidates.deinit(self.gpa);
-    self.ambiguity_candidate_by_key.deinit(self.gpa);
-    self.ambiguity_escalation_journal.deinit(self.gpa);
-    self.ambiguity_verdicts.deinit(self.gpa);
-    self.default_materializations.deinit(self.gpa);
-    self.dispatch_target_instantiations.deinit(self.gpa);
-    self.dispatch_target_instantiation_by_fn_var.deinit(self.gpa);
-    {
-        var sources = self.dispatch_replay_sources.valueIterator();
-        while (sources.next()) |list| list.deinit(self.gpa);
-        self.dispatch_replay_sources.deinit(self.gpa);
-    }
-    self.dispatch_replay_shapes.deinit(self.gpa);
-    self.dispatch_replay_frozen_pairs.deinit(self.gpa);
-    self.dispatch_replay_trees.deinit(self.gpa);
-    self.scratch_freeze_map.deinit(self.gpa);
-    self.scratch_freeze_order.deinit(self.gpa);
-    self.scratch_freeze_vars.deinit(self.gpa);
-    self.dispatch_replay_bindings.deinit(self.gpa);
-    self.scratch_replay_shape.deinit(self.gpa);
-    self.pending_replay_shape.deinit(self.gpa);
-    self.dispatch_replayed_edges.deinit(self.gpa);
-    self.dispatch_replay_candidates.deinit(self.gpa);
-    self.scratch_replay_shape_vars.deinit(self.gpa);
-    self.dispatch_replay_ready.deinit(self.gpa);
-    self.use_instances.deinit(self.gpa);
-    self.use_replayable_schemes.deinit(self.gpa);
-    self.use_owned_fns.deinit(self.gpa);
-    self.use_instance_by_fn_var.deinit();
-    self.reach_free_schemes.deinit();
-    self.use_deferred_callables.deinit(self.gpa);
-    self.use_saved_copies.deinit(self.gpa);
-    self.uses_with_deferred_callables.deinit(self.gpa);
-    self.scratch_deferred_callables.deinit(self.gpa);
-    self.link_var_map.deinit();
-    self.scratch_deferred_placeholders.deinit();
-    self.scratch_deferred_slots.deinit(self.gpa);
-    self.scratch_replay_matches.deinit(self.gpa);
-    self.link_scratch_pairs.deinit(self.gpa);
-    self.link_scratch_owned.deinit(self.gpa);
-    self.link_new_copies.deinit(self.gpa);
-    self.probe_links.deinit(self.gpa);
-    self.probe_link_copies.deinit(self.gpa);
-    {
-        var sources = self.use_replay_sources.valueIterator();
-        while (sources.next()) |list| list.deinit(self.gpa);
-        self.use_replay_sources.deinit(self.gpa);
-    }
-    self.use_replay_shapes.deinit(self.gpa);
-    self.use_replay_trees.deinit(self.gpa);
-    self.use_settled_entries.deinit(self.gpa);
-    self.scratch_use_owned.deinit(self.gpa);
-    self.scratch_ground_vars.deinit(self.gpa);
-    self.scratch_ground_seen.deinit(self.gpa);
-    self.scratch_replay_sources.deinit(self.gpa);
-    self.scratch_replay_pairs.deinit(self.gpa);
-    self.scratch_replay_nodes.deinit(self.gpa);
-    self.scratch_replay_grafts.deinit(self.gpa);
-    self.scratch_replay_walk.deinit(self.gpa);
-    self.scratch_replay_walked.deinit(self.gpa);
-    self.where_method_use_record_by_fn_var.deinit(self.gpa);
-    self.dispatch_derivations.deinit(self.gpa);
-    self.dispatch_derivation_by_child_fn_var.deinit(self.gpa);
-    {
-        var mint_names = self.method_name_mints.valueIterator();
-        while (mint_names.next()) |names| self.gpa.free(names.*);
-        self.method_name_mints.deinit();
-        self.method_mint_names.deinit();
-        var scheme_names = self.scheme_mint_names.valueIterator();
-        while (scheme_names.next()) |names| self.gpa.free(names.*);
-        self.scheme_mint_names.deinit(self.gpa);
-    }
+    var dispatch_sources = self.dispatch_replay_sources.valueIterator();
+    while (dispatch_sources.next()) |list| list.deinit(self.gpa);
+    var use_sources = self.use_replay_sources.valueIterator();
+    while (use_sources.next()) |list| list.deinit(self.gpa);
+    var mint_names = self.method_name_mints.valueIterator();
+    while (mint_names.next()) |names| self.gpa.free(names.*);
+    var scheme_names = self.scheme_mint_names.valueIterator();
+    while (scheme_names.next()) |names| self.gpa.free(names.*);
     if (self.method_binding_envs) |envs| self.gpa.free(envs);
-    self.scratch_method_mint_evidence.deinit(self.gpa);
-    self.scratch_method_mint_params.deinit(self.gpa);
-    self.scratch_method_mint_requirements.deinit(self.gpa);
-    self.scratch_scheme_mint_names.deinit(self.gpa);
-    self.component_derivations.deinit(self.gpa);
-    self.component_derivation_by_child_fn_var.deinit(self.gpa);
-    self.local_decl_expr_by_pattern.deinit(self.gpa);
-    self.local_method_names.deinit(self.gpa);
-    self.dispatch_candidate_frames.deinit(self.gpa);
-    self.dispatch_candidate_frame_patterns.deinit(self.gpa);
-    self.local_type_context_depths.deinit(self.gpa);
-    self.type_decl_generation_frames.deinit(self.gpa);
-    self.scratch_embed_active_pairs.deinit(self.gpa);
-    self.scratch_embed_memo.deinit(self.gpa);
-    self.scratch_evidence_pairs.deinit(self.gpa);
-    self.scratch_evidence_pairs_sorted.deinit(self.gpa);
-    self.open_literal_vars.deinit(self.gpa);
-    self.open_numeral_literals.deinit(self.gpa);
-    self.instantiated_interpolation_owners.deinit(self.gpa);
-    self.row_extension_derivations.deinit(self.gpa);
-    self.interpolation_part_numerals.deinit(self.gpa);
-    self.retired_literal_dispatch_plans.deinit(self.gpa);
-    self.conflicted_default_literal_vars.deinit(self.gpa);
-    self.default_decided_records.deinit(self.gpa);
-    self.undetermined_type_reported.deinit(self.gpa);
-    self.pending_tuple_accesses.deinit(self.gpa);
-    self.pinnable_vars.deinit();
-    self.reported_dispatch_vars.deinit();
-    self.ambiguity_verdict_vars.deinit();
-    self.external_pinnable.deinit();
-    self.scheme_relation_reachability.deinit();
-    self.scheme_relation_reachable_vars.deinit();
-    self.boundary_reachable_vars.deinit();
-    self.boundary_leak_vars.deinit();
-    self.boundary_eql_edges.deinit(self.gpa);
-    self.literal_defaulting_open_roots.deinit(self.gpa);
-    self.literal_defaulting_seen_roots.deinit();
-    self.literal_defaulting_component_parent.deinit(self.gpa);
-    self.literal_defaulting_is_driver.deinit(self.gpa);
-    self.literal_defaulting_footprint_owner.deinit();
-    self.literal_defaulting_footprint.deinit();
-    self.literal_defaulting_group_drivers.deinit(self.gpa);
-    self.literal_defaulting_group_warnings.deinit(self.gpa);
-    self.literal_defaulting_constraint_ranges.deinit(self.gpa);
-    self.literal_defaulting_kinds.deinit(self.gpa);
-    self.literal_defaulting_candidate_vars.deinit(self.gpa);
-    self.alt_pattern_baseline.deinit();
-    self.alt_pattern_bindings.deinit(self.gpa);
-    self.alt_pattern_current.deinit();
-    self.collected_constructed_tags.deinit(self.gpa);
-    self.payload_vars_to_close.deinit(self.gpa);
-    self.known_empty_payload_vars_destructure.deinit(self.gpa);
-    self.known_empty_payload_vars_match.deinit(self.gpa);
-    self.checked_lambda_params.deinit(self.gpa);
-    self.effectful_lambda_bodies.deinit();
-    self.pending_function_effect_dependencies.deinit(self.gpa);
-    self.function_effect_dependency_frame_starts.deinit(self.gpa);
-    self.function_effect_resolution.deinit();
-    self.probe_var_pool_lens.deinit(self.gpa);
+    const fields = @typeInfo(Self).@"struct";
+    inline for (fields.field_names, fields.field_types) |name, T| {
+        const info = @typeInfo(T);
+        if (info != .@"struct" and info != .@"union") continue;
+        if (!@hasDecl(T, "deinit")) {
+            const exempt = comptime for (deinit_exempt_types) |Exempt| {
+                if (T == Exempt) break true;
+            } else false;
+            if (!exempt) @compileError("Check field '" ++ name ++ "' needs a pub deinit");
+            continue;
+        }
+        if (@typeInfo(@TypeOf(T.deinit)).@"fn".param_types.len == 2) {
+            @field(self, name).deinit(self.gpa);
+        } else {
+            @field(self, name).deinit();
+        }
+    }
 }
 
 /// Returns the hoisted roots selected while checking this module.
@@ -9917,11 +9644,7 @@ fn fresh(self: *Self, env: *Env, new_region: Region) Allocator.Error!Var {
 
 /// Create fresh var with the provided content
 fn freshFromContent(self: *Self, content: Content, env: *Env, new_region: Region) Allocator.Error!Var {
-    const var_ = try self.types.freshFromContentWithRank(content, env.rank());
-    try self.fillInRegionsThrough(var_);
-    self.setRegionAt(var_, new_region);
-    try env.var_pool.addVarToRank(var_, env.rank());
-    return var_;
+    return self.freshFromContentAtRank(content, env, new_region, env.rank());
 }
 
 /// Create fresh var with the provided content and an explicit rank.
@@ -23852,11 +23575,10 @@ fn unifyMatchAltPatternBindings(
 
 // expr //
 
-/// Copy structural checking context without creating another scheme use.
-/// The source remains the authority on dispatch obligations. In particular,
-/// neither attached constraints nor off-root scheme requirements are copied.
-fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
-    var instantiator = Instantiator{
+/// An instantiator that copies expected structure into `env` through `var_map`
+/// (see `copyExpectedShape`).
+fn expectedShapeCopier(self: *Self, env: *Env) Instantiator {
+    return .{
         .store = self.types,
         .idents = self.cir.getIdentStoreConst(),
         .var_map = &self.var_map,
@@ -23866,6 +23588,13 @@ fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
         .purpose = .expected_shape,
         .preserve_annotation_tag_ext = true,
     };
+}
+
+/// Copy structural checking context without creating another scheme use.
+/// The source remains the authority on dispatch obligations. In particular,
+/// neither attached constraints nor off-root scheme requirements are copied.
+fn copyExpectedShape(self: *Self, source: Var, env: *Env) Allocator.Error!Var {
+    var instantiator = self.expectedShapeCopier(env);
     self.var_map.clearRetainingCapacity();
     const fresh_start = self.types.len();
     const copied = try instantiator.instantiateVar(source);
@@ -24050,16 +23779,7 @@ fn projectExpectedTagPayload(
 
     const fresh_start = self.types.len();
     self.var_map.clearRetainingCapacity();
-    var copier = Instantiator{
-        .store = self.types,
-        .idents = self.cir.getIdentStoreConst(),
-        .var_map = &self.var_map,
-        .current_rank = env.rank(),
-        .rigid_behavior = .fresh_flex,
-        .rank_behavior = .ignore_rank,
-        .purpose = .expected_shape,
-        .preserve_annotation_tag_ext = true,
-    };
+    var copier = self.expectedShapeCopier(env);
     var substitutions: std.AutoHashMapUnmanaged(Ident.Idx, Var) = .empty;
     defer substitutions.deinit(self.gpa);
     const scratch_top = self.scratch_vars.top();
@@ -37519,10 +37239,10 @@ fn schemeCandidateIsUnresolvedGeneratedCodec(
     if (!self.schemeCandidateUsesGeneratedCodec(candidate)) return false;
 
     const shape_support = if (candidate.constraint.fn_name.eql(self.cir.idents.parser_for)) blk: {
-        break :blk try self.varSupportsDerivedParseShape(candidate.receiver_var);
+        break :blk try self.derivedCodecShapeSupport(.parse, .{ .shape = candidate.receiver_var });
     } else if (candidate.constraint.fn_name.eql(self.cir.idents.encoder_for)) blk: {
         if (self.encoderForConstraintEncodingVar(candidate.constraint) == null) return false;
-        break :blk try self.varSupportsDerivedEncodeShape(candidate.receiver_var);
+        break :blk try self.derivedCodecShapeSupport(.encode, .{ .shape = candidate.receiver_var });
     } else return false;
     const support = combineDerivedSupport(shape_support, self.generatedCodecFormatSupport(candidate.constraint));
 
@@ -38265,7 +37985,7 @@ fn deferredConstraintWaitsOnDerivedCodec(self: *Self, direction: DerivedCodecDir
     if (direction == .encode and self.encoderForConstraintEncodingVar(codec_for) == null) return false;
 
     return combineDerivedSupport(
-        try self.varSupportsDerivedCodecShape(direction, deferred.var_),
+        try self.derivedCodecShapeSupport(direction, .{ .shape = deferred.var_ }),
         self.generatedCodecFormatSupport(codec_for),
     ) == .unresolved;
 }
@@ -41447,8 +41167,8 @@ fn dispatchEmbedRecordRowSteps(
     defer small_fields.deinit(self.gpa);
     var big_fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
     defer big_fields.deinit(self.gpa);
-    const small_tail = try self.dispatchCollectRecordRow(small_var, &small_fields);
-    const big_tail = try self.dispatchCollectRecordRow(big_var, &big_fields);
+    const small_tail = try self.dispatchCollectRow(DispatchRecordField, small_var, &small_fields);
+    const big_tail = try self.dispatchCollectRow(DispatchRecordField, big_var, &big_fields);
     if (small_tail.kind != big_tail.kind or small_fields.items.len != big_fields.items.len) {
         return try steps.append(self.gpa, .{ .immediate = .none });
     }
@@ -41478,8 +41198,8 @@ fn dispatchEmbedTagRowSteps(
     defer small_tags.deinit(self.gpa);
     var big_tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
     defer big_tags.deinit(self.gpa);
-    const small_tail = try self.dispatchCollectTagRow(small_var, &small_tags);
-    const big_tail = try self.dispatchCollectTagRow(big_var, &big_tags);
+    const small_tail = try self.dispatchCollectRow(DispatchUnionTag, small_var, &small_tags);
+    const big_tail = try self.dispatchCollectRow(DispatchUnionTag, big_var, &big_tags);
     if (small_tail.kind != big_tail.kind or small_tags.items.len != big_tags.items.len) {
         return try steps.append(self.gpa, .{ .immediate = .none });
     }
@@ -41541,7 +41261,7 @@ fn dispatchEmbedDiveSteps(
             .record => {
                 var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
                 defer fields.deinit(self.gpa);
-                const tail = try self.dispatchCollectRecordRow(big.var_, &fields);
+                const tail = try self.dispatchCollectRow(DispatchRecordField, big.var_, &fields);
                 for (fields.items) |field| {
                     try steps.append(self.gpa, .{ .pair = .{ .small = small_var, .big = field.presence.typeVar() } });
                     if (field.presence.presenceVar()) |presence_var| {
@@ -41553,7 +41273,7 @@ fn dispatchEmbedDiveSteps(
             .tag_union => {
                 var tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
                 defer tags.deinit(self.gpa);
-                const tail = try self.dispatchCollectTagRow(big.var_, &tags);
+                const tail = try self.dispatchCollectRow(DispatchUnionTag, big.var_, &tags);
                 for (tags.items) |tag| {
                     for (self.types.sliceVars(tag.args)) |arg| {
                         try steps.append(self.gpa, .{ .pair = .{ .small = small_var, .big = arg } });
@@ -41565,14 +41285,16 @@ fn dispatchEmbedDiveSteps(
     }
 }
 
-/// Collect one record row's normalized layout: every field along the
-/// extension chain plus the terminal tail. Mirrors the canonical key
-/// builder's row normalization so two spellings of one row compare equal.
-fn dispatchCollectRecordRow(
+/// Collect one record or tag-union row's normalized layout: every entry
+/// along the extension chain plus the terminal tail. Mirrors the canonical
+/// key builder's row normalization so two spellings of one row compare equal.
+fn dispatchCollectRow(
     self: *Self,
+    comptime Entry: type,
     row_var: Var,
-    fields: *std.ArrayListUnmanaged(DispatchRecordField),
+    entries: *std.ArrayListUnmanaged(Entry),
 ) Allocator.Error!DispatchRowTail {
+    const is_record = Entry == DispatchRecordField;
     var seen: std.ArrayListUnmanaged(Var) = .empty;
     defer seen.deinit(self.gpa);
     var tail_var = row_var;
@@ -41582,57 +41304,29 @@ fn dispatchCollectRecordRow(
         try seen.append(self.gpa, resolved.var_);
         switch (resolved.desc.content) {
             .structure => |flat| switch (flat) {
-                .empty_record => return .{ .kind = .closed, .var_ = resolved.var_ },
-                .record => |record| {
+                .empty_record => if (is_record) return .{ .kind = .closed, .var_ = resolved.var_ },
+                .empty_tag_union => if (!is_record) return .{ .kind = .closed, .var_ = resolved.var_ },
+                .record => |record| if (is_record) {
                     const slice = self.types.getRecordFieldsSlice(record.fields);
-                    const names = slice.items(.name);
-                    const presences = slice.items(.presence);
-                    for (names, presences) |name, presence| {
-                        try fields.append(self.gpa, .{ .name = name, .presence = presence });
+                    for (slice.items(.name), slice.items(.presence)) |name, presence| {
+                        try entries.append(self.gpa, .{ .name = name, .presence = presence });
                     }
                     tail_var = record.ext;
+                    continue;
                 },
-                .empty_tag_union, .tag_union, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
-                    return .{ .kind = .open, .var_ = resolved.var_ };
-                },
-            },
-            .flex, .rigid, .alias, .field_presence, .err => return .{ .kind = .open, .var_ = resolved.var_ },
-        }
-    }
-}
-
-/// Collect one tag-union row's normalized layout: every tag along the
-/// extension chain plus the terminal tail.
-fn dispatchCollectTagRow(
-    self: *Self,
-    row_var: Var,
-    tags: *std.ArrayListUnmanaged(DispatchUnionTag),
-) Allocator.Error!DispatchRowTail {
-    var seen: std.ArrayListUnmanaged(Var) = .empty;
-    defer seen.deinit(self.gpa);
-    var tail_var = row_var;
-    while (true) {
-        const resolved = self.types.resolveVar(tail_var);
-        if (dispatchVarInList(seen.items, resolved.var_)) return .{ .kind = .open, .var_ = resolved.var_ };
-        try seen.append(self.gpa, resolved.var_);
-        switch (resolved.desc.content) {
-            .structure => |flat| switch (flat) {
-                .empty_tag_union => return .{ .kind = .closed, .var_ = resolved.var_ },
-                .tag_union => |tag_union| {
+                .tag_union => |tag_union| if (!is_record) {
                     const slice = self.types.getTagsSlice(tag_union.tags);
-                    const names = slice.items(.name);
-                    const args = slice.items(.args);
-                    for (names, args) |name, arg_range| {
-                        try tags.append(self.gpa, .{ .name = name, .args = arg_range });
+                    for (slice.items(.name), slice.items(.args)) |name, arg_range| {
+                        try entries.append(self.gpa, .{ .name = name, .args = arg_range });
                     }
                     tail_var = tag_union.ext;
+                    continue;
                 },
-                .empty_record, .record, .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {
-                    return .{ .kind = .open, .var_ = resolved.var_ };
-                },
+                .tuple, .nominal_type, .fn_pure, .fn_unbound, .fn_effectful => {},
             },
-            .flex, .rigid, .alias, .field_presence, .err => return .{ .kind = .open, .var_ = resolved.var_ },
+            .flex, .rigid, .alias, .field_presence, .err => {},
         }
+        return .{ .kind = .open, .var_ = resolved.var_ };
     }
 }
 
@@ -41709,7 +41403,7 @@ fn dispatchReceiverSizeVisit(
             .record => {
                 var fields: std.ArrayListUnmanaged(DispatchRecordField) = .empty;
                 defer fields.deinit(self.gpa);
-                const tail = try self.dispatchCollectRecordRow(resolved.var_, &fields);
+                const tail = try self.dispatchCollectRow(DispatchRecordField, resolved.var_, &fields);
                 for (fields.items) |field| {
                     try work.append(self.gpa, .{ .visit = field.presence.typeVar() });
                     if (field.presence.presenceVar()) |presence_var| {
@@ -41721,7 +41415,7 @@ fn dispatchReceiverSizeVisit(
             .tag_union => {
                 var tags: std.ArrayListUnmanaged(DispatchUnionTag) = .empty;
                 defer tags.deinit(self.gpa);
-                const tail = try self.dispatchCollectTagRow(resolved.var_, &tags);
+                const tail = try self.dispatchCollectRow(DispatchUnionTag, resolved.var_, &tags);
                 for (tags.items) |tag| {
                     for (self.types.sliceVars(tag.args)) |arg| {
                         try work.append(self.gpa, .{ .visit = arg });
@@ -44602,161 +44296,33 @@ inline fn processDeferredDispatchEntry(
                     continue;
                 };
                 if (staticDispatchBindingIsDerivedMarker(method_lookup)) {
-                    if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                        if (!try self.nominalSupportsStructuralDerive(nominal_type, .equality)) {
-                            try self.reportEqualityError(
-                                deferred_constraint.var_,
-                                constraint,
-                                env,
-                                failure_expr,
-                            );
-                            continue;
+                    const kind = self.derivedMethodKind(constraint.fn_name) orelse {
+                        if (builtin.mode == .debug) {
+                            base.invariant("derived-method marker registered for unsupported method", .{});
                         }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                        try self.satisfyDerivedStructuralConstraint(
-                            .equality,
+                        unreachable;
+                    };
+                    switch (try self.satisfyDerivedForShape(
+                        kind,
+                        .{ .nominal_shape = nominal_type },
+                        deferred_constraint,
+                        constraint,
+                        env,
+                        region,
+                        failure_expr,
+                        is_numeric_default_pass,
+                    )) {
+                        .done => {},
+                        .redeferred => break :dispatch_resolution,
+                        .unsupported => try self.reportConstraintError(
                             deferred_constraint.var_,
                             constraint,
-                            constraint.fn_var,
+                            .{ .missing_method = .nominal },
                             env,
-                            region,
                             failure_expr,
-                        );
-                        continue;
+                        ),
                     }
-                    if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
-                        if (!try self.nominalSupportsStructuralDerive(nominal_type, .hash)) {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .{ .missing_method = .nominal },
-                                env,
-                                failure_expr,
-                            );
-                            continue;
-                        }
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                        try self.satisfyDerivedStructuralConstraint(
-                            .hash,
-                            deferred_constraint.var_,
-                            constraint,
-                            constraint.fn_var,
-                            env,
-                            region,
-                            failure_expr,
-                        );
-                        continue;
-                    }
-                    if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
-                        if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                        // A derived parser determines each tag row exactly, so
-                        // implicit output-position openness collapses first—including
-                        // rows inside the nominal's args (eg a Dict
-                        // key union). See closeTagRowsForDerivation.
-                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                        if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
-                        switch (combineDerivedSupport(
-                            try self.nominalSupportsDerivedParseShape(nominal_type),
-                            self.generatedCodecFormatSupport(constraint),
-                        )) {
-                            .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                            },
-                            .unresolved => if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.parse, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            } else {
-                                try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
-                                try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
-                            },
-                            .unsupported => try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .{ .missing_method = .nominal },
-                                env,
-                                failure_expr,
-                            ),
-                        }
-                        continue;
-                    }
-                    if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
-                        if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                        _ = self.encoderForConstraintEncodingVar(constraint) orelse {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                            continue;
-                        };
-                        // A derived encoder determines each tag row exactly, so
-                        // implicit output-position openness collapses first—including
-                        // rows inside the nominal's args (see
-                        // closeTagRowsForDerivation).
-                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                        if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
-                        switch (combineDerivedSupport(
-                            try self.nominalSupportsDerivedEncodeShape(nominal_type),
-                            self.generatedCodecFormatSupport(constraint),
-                        )) {
-                            .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                            },
-                            .unresolved => if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.encode, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            } else {
-                                try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
-                                try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
-                            },
-                            .unsupported => try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .{ .missing_method = .nominal },
-                                env,
-                                failure_expr,
-                            ),
-                        }
-                        continue;
-                    }
-                    if (constraint.fn_name.eql(self.cir.idents.map) or constraint.fn_name.eql(self.cir.idents.map_bang)) {
-                        switch (try self.satisfyDerivedMapConstraint(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                            region,
-                            constraint.fn_name.eql(self.cir.idents.map_bang),
-                        )) {
-                            .satisfied, .suppressed_by_error => {},
-                            .unsupported => try self.reportDerivedMapError(
-                                deferred_constraint.var_,
-                                constraint,
-                                env,
-                                failure_expr,
-                            ),
-                        }
-                        continue;
-                    }
-                    if (builtin.mode == .debug) {
-                        base.invariant("derived-method marker registered for unsupported method", .{});
-                    }
-                    unreachable;
+                    continue;
                 }
                 if (try self.rejectValuelessMethodDispatch(
                     method_lookup,
@@ -44956,194 +44522,31 @@ inline fn processDeferredDispatchEntry(
                 if (constraint.origin.literalKind() == .interpolation) {
                     try self.ensureCustomInterpolationPartsChecked(constraint, explicitDeferredConstraintFailureExpr(deferred_constraint), env);
                 }
-                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                    const method_lookup = self.lookupStaticDispatchMethodBinding(
+                if (self.derivedMethodKind(constraint.fn_name)) |kind| derived: {
+                    if ((kind == .parser or kind == .encoder) and
+                        self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
+                    if (self.lookupStaticDispatchMethodBinding(
                         original_env,
                         alias.source_decl.toOptional(),
                         self.cir,
                         constraint.fn_name,
-                    );
-                    if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
-                        const backing_var = self.types.getAliasBackingVar(alias);
-                        if (try self.varSupportsStructuralDerive(.equality, backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                            try self.satisfyDerivedStructuralConstraint(
-                                .equality,
-                                deferred_constraint.var_,
-                                constraint,
-                                constraint.fn_var,
-                                env,
-                                region,
-                                failure_expr,
-                            );
-                        } else {
-                            try self.reportEqualityError(
-                                deferred_constraint.var_,
-                                constraint,
-                                env,
-                                failure_expr,
-                            );
-                        }
-                        continue;
-                    }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
-                    const method_lookup = self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    );
-                    if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
-                        const backing_var = self.types.getAliasBackingVar(alias);
-                        if (try self.varSupportsStructuralDerive(.hash, backing_var)) {
-                            try self.deriveStructuralEqHashComponentObligations(backing_var, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                            try self.satisfyDerivedStructuralConstraint(
-                                .hash,
-                                deferred_constraint.var_,
-                                constraint,
-                                constraint.fn_var,
-                                env,
-                                region,
-                                failure_expr,
-                            );
-                        } else {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .{ .missing_method = .nominal },
-                                env,
-                                failure_expr,
-                            );
-                        }
-                        continue;
-                    }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
-                    if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    const method_lookup = self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    );
-                    if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
-                        const backing_var = self.types.getAliasBackingVar(alias);
-                        // Collapse implicit output-position openness before
-                        // deriving against the alias backing (see
-                        // closeTagRowsForDerivation).
-                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                        if ((try self.relateDerivedParserShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
-                        switch (combineDerivedSupport(
-                            try self.varSupportsDerivedParseShape(backing_var),
-                            self.generatedCodecFormatSupport(constraint),
-                        )) {
-                            .supported => {
-                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                    try self.satisfyImplicitParserConstraint(
-                                        deferred_constraint.var_,
-                                        constraint,
-                                        constraint.fn_var,
-                                        env,
-                                        region,
-                                        failure_expr,
-                                    );
-                                }
-                                continue;
-                            },
-                            .unresolved => if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.parse, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            } else {
-                                try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
-                                try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
-                                continue;
-                            },
-                            .unsupported => {},
-                        }
-                    }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
-                    if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    const method_lookup = self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    );
-                    if (method_lookup != null and !staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
+                    )) |method_lookup| {
                         // Exact attached implementations win over derivation.
-                    } else {
-                        const backing_var = self.types.getAliasBackingVar(alias);
-                        _ = self.encoderForConstraintEncodingVar(constraint) orelse {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                            continue;
-                        };
-                        // Collapse implicit output-position openness before
-                        // deriving against the alias backing (see
-                        // closeTagRowsForDerivation).
-                        if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                        if ((try self.relateDerivedEncoderShape(deferred_constraint.var_, constraint, env, region, failure_expr)) == null) continue;
-                        switch (combineDerivedSupport(
-                            try self.varSupportsDerivedEncodeShape(backing_var),
-                            self.generatedCodecFormatSupport(constraint),
-                        )) {
-                            .supported => {
-                                if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                    try self.satisfyImplicitEncoderForConstraint(
-                                        deferred_constraint.var_,
-                                        constraint,
-                                        constraint.fn_var,
-                                        env,
-                                        region,
-                                        failure_expr,
-                                    );
-                                }
-                                continue;
-                            },
-                            .unresolved => if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.encode, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            } else {
-                                try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
-                                try self.settleUndeterminedDerivedCodec(deferred_constraint, constraint, env);
-                                continue;
-                            },
-                            .unsupported => {},
-                        }
+                        if (!staticDispatchBindingIsDerivedMarker(method_lookup)) break :derived;
                     }
-                }
-                if (constraint.fn_name.eql(self.cir.idents.map) or constraint.fn_name.eql(self.cir.idents.map_bang)) {
-                    const method_lookup = self.lookupStaticDispatchMethodBinding(
-                        original_env,
-                        alias.source_decl.toOptional(),
-                        self.cir,
-                        constraint.fn_name,
-                    );
-                    if (method_lookup == null or staticDispatchBindingIsDerivedMarker(method_lookup.?)) {
-                        switch (try self.satisfyDerivedMapConstraint(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                            region,
-                            constraint.fn_name.eql(self.cir.idents.map_bang),
-                        )) {
-                            .satisfied, .suppressed_by_error => continue,
-                            .unsupported => {},
-                        }
-                        try self.reportDerivedMapError(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                            failure_expr,
-                        );
-                        continue;
+                    switch (try self.satisfyDerivedForShape(
+                        kind,
+                        .{ .shape = self.types.getAliasBackingVar(alias) },
+                        deferred_constraint,
+                        constraint,
+                        env,
+                        region,
+                        failure_expr,
+                        is_numeric_default_pass,
+                    )) {
+                        .done => continue,
+                        .redeferred => break :dispatch_resolution,
+                        .unsupported => {},
                     }
                 }
 
@@ -45255,204 +44658,16 @@ inline fn processDeferredDispatchEntry(
                 dispatcher_content.structure == .empty_record or
                 dispatcher_content.structure == .empty_tag_union))
         {
-            // Anonymous structural types (records, tuples, tag unions) have derived is_eq
-            // only if all their components also support is_eq
+            // Anonymous structural types (records, tuples, tag unions) have
+            // derived methods only when all their components support them.
             // iterRange re-fetches each item through the SafeList, so it stays valid even if
             // satisfyDerivedStructuralConstraint appends and reallocates the backing array.
             var constraints_iter = self.types.static_dispatch_constraints.iterRange(deferred_constraint.constraints);
             while (constraints_iter.next()) |constraint| {
-                // Check if this is a call to is_eq (anonymous types have derived is_eq)
-                if (constraint.fn_name.eql(self.cir.idents.is_eq)) {
-                    // Check if all components of this anonymous type support is_eq
-                    if (try self.typeSupportsStructuralDerive(.equality, dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .equality, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                        try self.satisfyDerivedStructuralConstraint(
-                            .equality,
-                            deferred_constraint.var_,
-                            constraint,
-                            constraint.fn_var,
-                            env,
-                            self.getRegionAt(deferred_constraint.var_),
-                            failure_expr,
-                        );
-                    } else {
-                        // Some component doesn't support is_eq (e.g., contains a function)
-                        try self.reportEqualityError(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                            failure_expr,
-                        );
-                    }
-                } else if (constraint.fn_name.eql(self.cir.idents.to_hash)) {
-                    // Anonymous structural types have derived to_hash if all their
-                    // components also support to_hash.
-                    if (try self.typeSupportsStructuralDerive(.hash, dispatcher_content.structure)) {
-                        try self.deriveStructuralEqHashComponentObligations(deferred_constraint.var_, .hash, constraint, env, .{ .recorded = .{ .group_index = deferred_constraint.owner_group_index, .scheme_root = deferred_constraint.owner_scheme_root } });
-                        try self.satisfyDerivedStructuralConstraint(
-                            .hash,
-                            deferred_constraint.var_,
-                            constraint,
-                            constraint.fn_var,
-                            env,
-                            self.getRegionAt(deferred_constraint.var_),
-                            failure_expr,
-                        );
-                    } else {
-                        // Some component doesn't support to_hash (e.g., contains a function)
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .{ .missing_method = .nominal },
-                            env,
-                            failure_expr,
-                        );
-                    }
-                } else if (constraint.fn_name.eql(self.cir.idents.map) or constraint.fn_name.eql(self.cir.idents.map_bang)) {
-                    const region = self.getRegionAt(deferred_constraint.var_);
-                    switch (try self.satisfyDerivedMapConstraint(
-                        deferred_constraint.var_,
-                        constraint,
-                        env,
-                        region,
-                        constraint.fn_name.eql(self.cir.idents.map_bang),
-                    )) {
-                        .satisfied, .suppressed_by_error => {},
-                        .unsupported => try self.reportDerivedMapError(
-                            deferred_constraint.var_,
-                            constraint,
-                            env,
-                            failure_expr,
-                        ),
-                    }
-                } else if (constraint.fn_name.eql(self.cir.idents.parser_for)) {
-                    if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                    const region = self.getRegionAt(deferred_constraint.var_);
-                    // A derived parser determines each tag row exactly, so
-                    // implicit output-position openness collapses first
-                    // (see closeTagRowsForDerivation).
-                    if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                    switch (try self.typeSupportsDerivedParse(dispatcher_content.structure)) {
-                        .supported => {
-                            if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                            }
-                        },
-                        .unresolved => {
-                            if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.parse, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            }
-                            // Nothing further will arrive to close the row,
-                            // so the fields it has are the fields it gets.
-                            if (try self.closeRecordRowForDerivedCodec(.parse, deferred_constraint.var_, env)) {
-                                try self.satisfyImplicitParserConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                                continue;
-                            }
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                        },
-                        .unsupported => {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                        },
-                    }
-                } else if (constraint.fn_name.eql(self.cir.idents.encoder_for)) {
-                    if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) continue;
-                    if (self.staticDispatchConstraintIsInactive(constraint)) continue;
-                    const region = self.getRegionAt(deferred_constraint.var_);
-                    // A derived encoder determines each tag row exactly, so
-                    // implicit output-position openness collapses first
-                    // (see closeTagRowsForDerivation).
-                    if (try self.deferCodecWithInferredTagRows(deferred_constraint, constraint, env)) continue;
-                    _ = self.encoderForConstraintEncodingVar(constraint) orelse {
-                        try self.reportConstraintError(
-                            deferred_constraint.var_,
-                            constraint,
-                            .not_nominal,
-                            env,
-                            failure_expr,
-                        );
-                        continue;
-                    };
-                    switch (try self.typeSupportsDerivedEncode(dispatcher_content.structure)) {
-                        .supported => {
-                            if (!try self.deferGeneratedCodecConstraintToFinalization(deferred_constraint, constraint)) {
-                                try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                            }
-                        },
-                        .unresolved => {
-                            if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(.encode, deferred_constraint)) {
-                                try self.scratch_deferred_static_dispatch_constraints.append(deferred_constraint);
-                                break :dispatch_resolution;
-                            }
-                            // Nothing further will arrive to close the row,
-                            // so the fields it has are the fields it gets.
-                            if (try self.closeRecordRowForDerivedCodec(.encode, deferred_constraint.var_, env)) {
-                                try self.satisfyImplicitEncoderForConstraint(
-                                    deferred_constraint.var_,
-                                    constraint,
-                                    constraint.fn_var,
-                                    env,
-                                    region,
-                                    failure_expr,
-                                );
-                                continue;
-                            }
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                        },
-                        .unsupported => {
-                            try self.reportConstraintError(
-                                deferred_constraint.var_,
-                                constraint,
-                                .not_nominal,
-                                env,
-                                failure_expr,
-                            );
-                        },
-                    }
-                } else {
-                    // Structural types (other than is_eq, to_hash, parser_for, and
-                    // encoder_for) cannot have methods called on them. The user must
-                    // explicitly wrap the value in a nominal type.
+                const kind = self.derivedMethodKind(constraint.fn_name) orelse {
+                    // Structural types cannot have other methods called on
+                    // them. The user must explicitly wrap the value in a
+                    // nominal type.
                     try self.reportConstraintError(
                         deferred_constraint.var_,
                         constraint,
@@ -45460,6 +44675,27 @@ inline fn processDeferredDispatchEntry(
                         env,
                         failure_expr,
                     );
+                    continue;
+                };
+                switch (try self.satisfyDerivedForShape(
+                    kind,
+                    .{ .flat = dispatcher_content.structure },
+                    deferred_constraint,
+                    constraint,
+                    env,
+                    self.getRegionAt(deferred_constraint.var_),
+                    failure_expr,
+                    is_numeric_default_pass,
+                )) {
+                    .done => {},
+                    .redeferred => break :dispatch_resolution,
+                    .unsupported => try self.reportConstraintError(
+                        deferred_constraint.var_,
+                        constraint,
+                        .not_nominal,
+                        env,
+                        failure_expr,
+                    ),
                 }
             }
             break :dispatch_resolution;
@@ -47118,18 +46354,6 @@ fn expandDerivedParseQuery(
     }
 }
 
-fn typeSupportsDerivedParse(self: *Self, flat_type: types_mod.FlatType) Allocator.Error!DerivedSupport {
-    return try self.derivedParseSupport(.{ .flat = flat_type });
-}
-
-fn varSupportsDerivedParseShape(self: *Self, var_: Var) Allocator.Error!DerivedSupport {
-    return try self.derivedParseSupport(.{ .shape = var_ });
-}
-
-fn nominalSupportsDerivedParseShape(self: *Self, nominal: types_mod.NominalType) Allocator.Error!DerivedSupport {
-    return try self.derivedParseSupport(.{ .nominal_shape = nominal });
-}
-
 fn derivedParseTagUnionHasAnyTag(self: *Self, tag_union: types_mod.TagUnion) Allocator.Error!DerivedSupport {
     var current = tag_union;
     while (true) {
@@ -47174,14 +46398,195 @@ fn closeRecordRowForDerivedCodec(
     env: *Env,
 ) Allocator.Error!bool {
     if (!try self.closeDerivedCodecOpenRecordExts(var_, env)) return false;
-    return (try self.varSupportsDerivedCodecShape(direction, var_)) == .supported;
+    return (try self.derivedCodecShapeSupport(direction, .{ .shape = var_ })) == .supported;
 }
 
-fn varSupportsDerivedCodecShape(self: *Self, direction: DerivedCodecDirection, var_: Var) Allocator.Error!DerivedSupport {
+/// The receiver shape a compiler-derived method is checked against: a
+/// nominal's declared backing, a var's shape (eg an alias's backing), or an
+/// anonymous structure.
+const DerivedReceiverShape = union(enum) {
+    nominal_shape: types_mod.NominalType,
+    shape: Var,
+    flat: types_mod.FlatType,
+};
+
+fn derivedCodecShapeSupport(self: *Self, direction: DerivedCodecDirection, shape: DerivedReceiverShape) Allocator.Error!DerivedSupport {
     return switch (direction) {
-        .parse => try self.varSupportsDerivedParseShape(var_),
-        .encode => try self.varSupportsDerivedEncodeShape(var_),
+        .parse => try self.derivedParseSupport(switch (shape) {
+            .nominal_shape => |nominal| .{ .nominal_shape = nominal },
+            .shape => |var_| .{ .shape = var_ },
+            .flat => |flat| .{ .flat = flat },
+        }),
+        .encode => try self.derivedEncodeSupport(switch (shape) {
+            .nominal_shape => |nominal| .{ .nominal_shape = nominal },
+            .shape => |var_| .{ .shape = var_ },
+            .flat => |flat| .{ .flat = flat },
+        }),
     };
+}
+
+/// How `satisfyDerivedForShape` left a derived-method obligation.
+const DerivedMethodOutcome = enum {
+    /// Satisfied, reported, or parked for finalization.
+    done,
+    /// Pushed back onto the deferred queue for a later drain.
+    redeferred,
+    /// The receiver's shape cannot support a derived codec; the caller decides.
+    unsupported,
+};
+
+/// The compiler-derivable method `fn_name` names, if any.
+fn derivedMethodKind(self: *const Self, fn_name: Ident.Idx) ?CIR.DerivedMethodKind {
+    inline for (comptime std.enums.values(CIR.DerivedMethodKind)) |kind| {
+        if (fn_name.eql(self.derivedMethodName(kind))) return kind;
+    }
+    return null;
+}
+
+/// Discharge a derived-method obligation of `deferred`'s receiver against
+/// `shape`: the support query for that shape, then the derivation itself.
+fn satisfyDerivedForShape(
+    self: *Self,
+    kind: CIR.DerivedMethodKind,
+    shape: DerivedReceiverShape,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+    is_numeric_default_pass: bool,
+) Allocator.Error!DerivedMethodOutcome {
+    switch (kind) {
+        .equality => try self.satisfyDerivedEqHashForShape(.equality, shape, deferred, constraint, env, region, failure_expr),
+        .hash => try self.satisfyDerivedEqHashForShape(.hash, shape, deferred, constraint, env, region, failure_expr),
+        .parser => return self.satisfyDerivedCodecForShape(.parse, shape, deferred, constraint, env, region, failure_expr, is_numeric_default_pass),
+        .encoder => return self.satisfyDerivedCodecForShape(.encode, shape, deferred, constraint, env, region, failure_expr, is_numeric_default_pass),
+        .map, .map_effectful => switch (try self.satisfyDerivedMapConstraint(
+            deferred.var_,
+            constraint,
+            env,
+            region,
+            kind == .map_effectful,
+        )) {
+            .satisfied, .suppressed_by_error => {},
+            .unsupported => try self.reportDerivedMapError(deferred.var_, constraint, env, failure_expr),
+        },
+    }
+    return .done;
+}
+
+fn satisfyDerivedEqHashForShape(
+    self: *Self,
+    comptime derivation: EqHashDerivation,
+    shape: DerivedReceiverShape,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    const supported = switch (shape) {
+        .nominal_shape => |nominal| try self.nominalSupportsStructuralDerive(nominal, derivation),
+        .shape => |var_| try self.varSupportsStructuralDerive(derivation, var_),
+        .flat => |flat| try self.typeSupportsStructuralDerive(derivation, flat),
+    };
+    if (!supported) {
+        // Some component cannot be compared or hashed (eg a function).
+        switch (derivation) {
+            .equality => try self.reportEqualityError(deferred.var_, constraint, env, failure_expr),
+            .hash => try self.reportConstraintError(deferred.var_, constraint, .{ .missing_method = .nominal }, env, failure_expr),
+        }
+        return;
+    }
+    const components_var = switch (shape) {
+        .shape => |var_| var_,
+        .nominal_shape, .flat => deferred.var_,
+    };
+    try self.deriveStructuralEqHashComponentObligations(components_var, derivation, constraint, env, .{ .recorded = .{
+        .group_index = deferred.owner_group_index,
+        .scheme_root = deferred.owner_scheme_root,
+    } });
+    try self.satisfyDerivedStructuralConstraint(derivation, deferred.var_, constraint, constraint.fn_var, env, region, failure_expr);
+}
+
+/// A nominal or var-shaped receiver relates the codec's expected shape and
+/// waits for its format; an anonymous structure does neither, and when
+/// nothing further can arrive it closes its open records instead.
+fn satisfyDerivedCodecForShape(
+    self: *Self,
+    direction: DerivedCodecDirection,
+    shape: DerivedReceiverShape,
+    deferred: DeferredConstraintCheck,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+    is_numeric_default_pass: bool,
+) Allocator.Error!DerivedMethodOutcome {
+    if (self.schemeDefersGeneratedCodecConstraint(constraint.fn_var)) return .done;
+    const anonymous = shape == .flat;
+    if (anonymous and self.staticDispatchConstraintIsInactive(constraint)) return .done;
+    if (direction == .encode and !anonymous and self.encoderForConstraintEncodingVar(constraint) == null) {
+        try self.reportConstraintError(deferred.var_, constraint, .not_nominal, env, failure_expr);
+        return .done;
+    }
+    // A derived codec determines each tag row exactly, so implicit
+    // output-position openness collapses first—including rows inside a
+    // nominal's args (eg a Dict key union). See closeTagRowsForDerivation.
+    if (try self.deferCodecWithInferredTagRows(deferred, constraint, env)) return .done;
+    if (direction == .encode and anonymous and self.encoderForConstraintEncodingVar(constraint) == null) {
+        try self.reportConstraintError(deferred.var_, constraint, .not_nominal, env, failure_expr);
+        return .done;
+    }
+    const support = if (anonymous) try self.derivedCodecShapeSupport(direction, shape) else support: {
+        const related = switch (direction) {
+            .parse => try self.relateDerivedParserShape(deferred.var_, constraint, env, region, failure_expr),
+            .encode => try self.relateDerivedEncoderShape(deferred.var_, constraint, env, region, failure_expr),
+        };
+        if (related == null) return .done;
+        break :support combineDerivedSupport(
+            try self.derivedCodecShapeSupport(direction, shape),
+            self.generatedCodecFormatSupport(constraint),
+        );
+    };
+    switch (support) {
+        .supported => if (!try self.deferGeneratedCodecConstraintToFinalization(deferred, constraint)) {
+            try self.satisfyImplicitCodecConstraint(direction, deferred.var_, constraint, env, region, failure_expr);
+        },
+        .unresolved => {
+            if (!is_numeric_default_pass or try self.deferredHasPendingOpenLiteral(direction, deferred)) {
+                try self.scratch_deferred_static_dispatch_constraints.append(deferred);
+                return .redeferred;
+            }
+            if (!anonymous) {
+                try self.scratch_scheme_owned_codec_fns.append(self.gpa, constraint.fn_var);
+                try self.settleUndeterminedDerivedCodec(deferred, constraint, env);
+            } else if (try self.closeRecordRowForDerivedCodec(direction, deferred.var_, env)) {
+                // Nothing further will arrive to close the row, so the
+                // fields it has are the fields it gets.
+                try self.satisfyImplicitCodecConstraint(direction, deferred.var_, constraint, env, region, failure_expr);
+            } else {
+                try self.reportConstraintError(deferred.var_, constraint, .not_nominal, env, failure_expr);
+            }
+        },
+        .unsupported => return .unsupported,
+    }
+    return .done;
+}
+
+fn satisfyImplicitCodecConstraint(
+    self: *Self,
+    direction: DerivedCodecDirection,
+    dispatcher_var: Var,
+    constraint: StaticDispatchConstraint,
+    env: *Env,
+    region: Region,
+    failure_expr: ?CIR.Expr.Idx,
+) Allocator.Error!void {
+    switch (direction) {
+        .parse => try self.satisfyImplicitParserConstraint(dispatcher_var, constraint, constraint.fn_var, env, region, failure_expr),
+        .encode => try self.satisfyImplicitEncoderForConstraint(dispatcher_var, constraint, constraint.fn_var, env, region, failure_expr),
+    }
 }
 
 /// Collect, in variable order, the flexible extension of every record a
@@ -47410,18 +46815,6 @@ fn expandDerivedEncodeQuery(
             return .supported;
         },
     }
-}
-
-fn typeSupportsDerivedEncode(self: *Self, flat_type: types_mod.FlatType) Allocator.Error!DerivedSupport {
-    return try self.derivedEncodeSupport(.{ .flat = flat_type });
-}
-
-fn varSupportsDerivedEncodeShape(self: *Self, var_: Var) Allocator.Error!DerivedSupport {
-    return try self.derivedEncodeSupport(.{ .shape = var_ });
-}
-
-fn nominalSupportsDerivedEncodeShape(self: *Self, nominal: types_mod.NominalType) Allocator.Error!DerivedSupport {
-    return try self.derivedEncodeSupport(.{ .nominal_shape = nominal });
 }
 
 fn missingTryInfoForVar(self: *Self, var_: Var) Allocator.Error!?MissingTryInfo {
@@ -50802,10 +50195,7 @@ fn leaveParseSettle(self: *Self, settle: *ParseSettleFrame) void {
 fn finishParseSettle(self: *Self, inputs: DerivedCodecInputs, post: ParseSettlePost) Allocator.Error!DerivedParseValidation {
     switch (post) {
         .method => |method| {
-            if (method.own_error_row) |row| switch (try self.constrainDerivedParserFormatError(row.parent, row.child, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region)) {
-                .ok => {},
-                .unsupported, .reported_error => |validation| return validation,
-            };
+            if (method.own_error_row) |row| if (derivedCodecFailed(try self.constrainDerivedParserFormatError(row.parent, row.child, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region))) |validation| return validation;
             return try self.finishGeneratedCodecMethodValidation(method.result, method.method_name, method.encoding_var, method.expected_fn, method.method_var, method.subject_var);
         },
         .nominal_error_row => |child_err_var| return try self.constrainDerivedParserErrorRowIncludes(inputs.err_var, child_err_var, inputs.constraint, inputs.failure_expr, inputs.env, inputs.region),
@@ -52452,7 +51842,7 @@ fn leaveDerivedCodecBacking(self: *Self, inputs: DerivedCodecInputs, nominal: *N
     nominal.backing = null;
 }
 
-/// Whether a validation continues the walk.
+/// The failure a validation ends the walk with, or null when it continues.
 fn derivedCodecFailed(input: ?DerivedParseValidation) ?DerivedParseValidation {
     const validation = input orelse return null;
     return switch (validation) {
@@ -52692,30 +52082,18 @@ fn validateDerivedParseRecordFields(
     const failure_expr = inputs.failure_expr;
     var collected = std.ArrayList(types_mod.RecordField.Presence).empty;
     defer collected.deinit(self.gpa);
-    switch (try self.collectDerivedRecordFields(record_var, &collected)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
+    if (derivedCodecFailed(try self.collectDerivedRecordFields(record_var, &collected))) |result| return result;
     try field_presences.appendSlice(self.gpa, collected.items);
     if (field_presences.items.len > 0) {
-        switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region, failure_expr, walk)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
+        if (derivedCodecFailed(try self.validateRenameFieldMethod(encoding_var, constraint, env, region, failure_expr, walk))) |result| return result;
     }
 
     for (field_presences.items) |presence| {
         const field_var = presence.typeVar();
-        switch (try self.pinWildcardOptionalParseField(field_var, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
+        if (derivedCodecFailed(try self.pinWildcardOptionalParseField(field_var, env, region))) |result| return result;
     }
     if (try self.recordParseNeedsRequiredFieldError(field_presences.items)) {
-        switch (try self.constrainDerivedParserRequiredFieldError(record_var, err_var, constraint, failure_expr, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
+        if (derivedCodecFailed(try self.constrainDerivedParserRequiredFieldError(record_var, err_var, constraint, failure_expr, env, region))) |result| return result;
     }
     return null;
 }
@@ -52747,10 +52125,7 @@ fn stepDerivedParseNominal(
         .start => {},
         .checked_payload => return shape(frame.then_var),
         .set_from_list => {
-            switch (try self.validateGeneratedNominalMethodCall(nominal_var, nominal, "from_list", &.{frame.vars.items[0]}, nominal_var, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateGeneratedNominalMethodCall(nominal_var, nominal, "from_list", &.{frame.vars.items[0]}, nominal_var, constraint, env, region))) |result| return .{ .done = result };
             return shape(frame.then_var);
         },
         .dict_keys => {
@@ -52779,10 +52154,7 @@ fn stepDerivedParseNominal(
         },
         .dict_construction => {
             const args = self.nominalDictKeyValueVars(nominal).?;
-            switch (try self.validateDictConstructionMethods(nominal_var, nominal, args.key, args.value, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateDictConstructionMethods(nominal_var, nominal, args.key, args.value, constraint, env, region))) |result| return .{ .done = result };
             return shape(args.value);
         },
         .dict_key_start => {
@@ -52794,10 +52166,7 @@ fn stepDerivedParseNominal(
         },
         .dict_key => {
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
-            switch (try self.validateDictConstructionMethods(nominal_var, nominal, frame.vars.items[0], frame.nominal.dict_value, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateDictConstructionMethods(nominal_var, nominal, frame.vars.items[0], frame.nominal.dict_value, constraint, env, region))) |result| return .{ .done = result };
             return shape(frame.nominal.dict_value);
         },
         .backing => {
@@ -52957,17 +52326,14 @@ fn finishDerivedParseNominal(
     nominal: *const NominalCodecFrame,
     nominal_var: Var,
 ) Allocator.Error!DerivedCodecStep(DerivedParseTask) {
-    switch (try self.finishGeneratedCodecMethodValidation(
+    if (derivedCodecFailed(try self.finishGeneratedCodecMethodValidation(
         nominal.result,
         self.cir.idents.parser_for,
         nominal_var,
         nominal.expected_fn,
         nominal.derivation_source,
         nominal_var,
-    )) {
-        .ok => {},
-        .unsupported, .reported_error => |validation| return .{ .done = validation },
-    }
+    ))) |validation| return .{ .done = validation };
     // A generated nested parser was validated at the parent's own row, so
     // inclusion holds by construction and there is no child extension left to
     // close.
@@ -53122,7 +52488,7 @@ fn validateDictConstructionMethods(
     region: Region,
 ) Allocator.Error!DerivedParseValidation {
     const u64_var = try self.freshU64(env, region);
-    switch (try self.validateGeneratedNominalMethodCall(
+    if (derivedCodecFailed(try self.validateGeneratedNominalMethodCall(
         dict_var,
         dict_nominal,
         "with_capacity",
@@ -53131,10 +52497,7 @@ fn validateDictConstructionMethods(
         constraint,
         env,
         region,
-    )) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
+    ))) |result| return result;
     return try self.validateGeneratedNominalMethodCall(
         dict_var,
         dict_nominal,
@@ -53299,16 +52662,10 @@ fn stepDerivedEncode(
                 frame.stage = .components;
                 var field_presences = std.ArrayList(types_mod.RecordField.Presence).empty;
                 defer field_presences.deinit(self.gpa);
-                switch (try self.collectDerivedRecordFields(record_var, &field_presences)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
+                if (derivedCodecFailed(try self.collectDerivedRecordFields(record_var, &field_presences))) |result| return .{ .done = result };
 
                 const has_fields = field_presences.items.len > 0;
-                switch (try self.validateDerivedEncodeRecordMethods(record_var, encoding_var, state_var, err_var, constraint, env, region, has_fields, walk)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
+                if (derivedCodecFailed(try self.validateDerivedEncodeRecordMethods(record_var, encoding_var, state_var, err_var, constraint, env, region, has_fields, walk))) |result| return .{ .done = result };
 
                 const vars_top = try self.dupeRecordFieldTypeVars(field_presences.items);
                 frame.scratch_top = vars_top;
@@ -53325,10 +52682,7 @@ fn stepDerivedEncode(
         .tuple => |task| {
             if (frame.stage == .start) {
                 frame.stage = .components;
-                switch (try self.validateEncodeFormatMethod(encoding_var, state_var, task.var_, .tuple, err_var, constraint, env, region)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
+                if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, task.var_, .tuple, err_var, constraint, env, region))) |result| return .{ .done = result };
                 try frame.vars.appendSlice(self.gpa, self.types.sliceVars(task.tuple.elems));
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
@@ -53348,10 +52702,7 @@ fn stepDerivedEncode(
             }
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
             if (self.nextDerivedCodecPayload(frame)) |payload| return .{ .child = .{ .var_ = payload } };
-            switch (try self.validateEncodeFormatMethod(encoding_var, state_var, task.var_, .tag, err_var, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, task.var_, .tag, err_var, constraint, env, region))) |result| return .{ .done = result };
             return .{ .tail = .{ .tag_ext = task.tag_union.ext } };
         },
         .tag_ext => |ext_var| {
@@ -53414,10 +52765,7 @@ fn stepDerivedEncodeNominal(
         .start => {},
         .dict_key => {
             if (derivedCodecFailed(input)) |failed| return .{ .done = failed };
-            switch (try self.validateDictToListMethod(nominal_var, nominal, frame.vars.items[0], frame.nominal.dict_value, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateDictToListMethod(nominal_var, nominal, frame.vars.items[0], frame.nominal.dict_value, constraint, env, region))) |result| return .{ .done = result };
             return component(frame.nominal.dict_value);
         },
         .backing => {
@@ -53464,10 +52812,7 @@ fn stepDerivedEncodeNominal(
         }
     }
     if (self.nominalBuiltinPayloadVar(nominal, .list)) |payload_var| {
-        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
+        if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region))) |result| return .{ .done = result };
         return component(payload_var);
     }
     if (self.nominalBuiltinPayloadVar(nominal, .box)) |payload_var| {
@@ -53475,58 +52820,34 @@ fn stepDerivedEncodeNominal(
     }
     if (self.nominalBuiltinPayloadVar(nominal, .set)) |payload_var| {
         const list_var = try self.freshFromContent(try self.mkListContent(payload_var), env, region);
-        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
-        switch (try self.validateSetToListMethod(nominal_var, nominal, list_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
+        if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .list, err_var, constraint, env, region))) |result| return .{ .done = result };
+        if (derivedCodecFailed(try self.validateSetToListMethod(nominal_var, nominal, list_var, constraint, env, region))) |result| return .{ .done = result };
         return component(payload_var);
     }
     if (self.nominalDictKeyValueVars(nominal)) |args| {
-        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .dict, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
+        if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, nominal_var, .dict, err_var, constraint, env, region))) |result| return .{ .done = result };
         const closed_unit_tag_key = try self.closeDerivedCodecUnitTagDictKeyRow(args.key, env, region);
         if (closed_unit_tag_key or try self.varSupportsStringRenderedDictKey(args.key)) {
-            switch (try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateEncodeKeyMethod(args.key, encoding_var, state_var, err_var, constraint, env, region))) |result| return .{ .done = result };
             if (try self.varIsClosedUnitTagUnion(args.key)) {
                 const str_var = try self.freshStr(env, region);
-                switch (try self.validateEncodeKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region)) {
-                    .ok => {},
-                    .unsupported, .reported_error => |result| return .{ .done = result },
-                }
+                if (derivedCodecFailed(try self.validateEncodeKeyMethod(str_var, encoding_var, state_var, err_var, constraint, env, region))) |result| return .{ .done = result };
             }
         } else {
             // Mirrors the parse side: `encode_key_start` is what admits a key
             // the format cannot render as a key string.
-            switch (try self.validateEncodeDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null)) {
-                .ok => {},
-                .unsupported, .reported_error => |result| return .{ .done = result },
-            }
+            if (derivedCodecFailed(try self.validateEncodeDictProtocolMethod(args.key, encoding_var, state_var, "encode_key_start", try self.freshFromContent(try self.mkTryContent(state_var, err_var), env, region), constraint, env, region, null))) |result| return .{ .done = result };
             try frame.vars.append(self.gpa, args.key);
             frame.nominal.dict_value = args.value;
             frame.stage = .dict_key;
             return .{ .child = .{ .var_ = args.key } };
         }
-        switch (try self.validateDictToListMethod(nominal_var, nominal, args.key, args.value, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
+        if (derivedCodecFailed(try self.validateDictToListMethod(nominal_var, nominal, args.key, args.value, constraint, env, region))) |result| return .{ .done = result };
         return component(args.value);
     }
     if (self.nominalIsBuiltinDecl(nominal, .try_type)) {
         const info = try self.nullTryInfoFromNominal(nominal) orelse return .{ .done = .unsupported };
-        switch (try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return .{ .done = result },
-        }
+        if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, state_var, .null, err_var, constraint, env, region))) |result| return .{ .done = result };
         return component(info.ok_var);
     }
 
@@ -53613,15 +52934,9 @@ fn validateDerivedEncodeRecordMethods(
     has_fields: bool,
     walk: *const DerivedCodecWalk,
 ) Allocator.Error!DerivedParseValidation {
-    switch (try self.validateEncodeFormatMethod(encoding_var, state_var, record_var, .record, err_var, constraint, env, region)) {
-        .ok => {},
-        .unsupported, .reported_error => |result| return result,
-    }
+    if (derivedCodecFailed(try self.validateEncodeFormatMethod(encoding_var, state_var, record_var, .record, err_var, constraint, env, region))) |result| return result;
     if (has_fields) {
-        switch (try self.validateRenameFieldMethod(encoding_var, constraint, env, region, null, walk)) {
-            .ok => {},
-            .unsupported, .reported_error => |result| return result,
-        }
+        if (derivedCodecFailed(try self.validateRenameFieldMethod(encoding_var, constraint, env, region, null, walk))) |result| return result;
     }
     return .ok;
 }
@@ -54327,7 +53642,8 @@ const EnvPool = struct {
         };
     }
 
-    fn deinit(self: *EnvPool) void {
+    /// Release every pooled environment and the pool itself.
+    pub fn deinit(self: *EnvPool) void {
         for (self.available.items) |*env| {
             env.deinit(self.gpa);
         }
@@ -54497,26 +53813,7 @@ pub fn createImportMapping(
     return mapping;
 }
 
-/// Determine if `new_name` is a "better" display name than `existing_name`.
-/// Returns true if new_name should replace existing_name.
-///
-/// The rules are:
-/// 1. Shorter names are better (fewer characters to read in error messages)
-/// 2. For equal lengths, lexicographically smaller wins (deterministic regardless of import order)
-pub fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
-    // Shorter is better
-    if (new_name.len != existing_name.len) {
-        return new_name.len < existing_name.len;
-    }
-    // Equal length: lexicographic comparison (lower byte value wins)
-    for (new_name, existing_name) |new_byte, existing_byte| {
-        if (new_byte != existing_byte) {
-            return new_byte < existing_byte;
-        }
-    }
-    // Identical strings - no replacement needed
-    return false;
-}
+const displayNameIsBetter = can.Can.displayNameIsBetter;
 
 test "issue 11393: imported codec methods instantiate independently and reject unsupported arguments" {
     const TestEnv = @import("test/TestEnv.zig");

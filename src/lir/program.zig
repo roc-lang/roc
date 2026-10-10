@@ -272,12 +272,6 @@ pub const BoxyDictRef = LIR.BoxyDictRef;
 pub const BoxySpan = LIR.BoxySpan;
 /// Ownership transfer applied by one Boxy adaptation step.
 pub const BoxyTransferMode = LIR.BoxyTransferMode;
-/// One descriptor-guided representation adaptation step.
-pub const BoxyAdaptStep = LIR.BoxyAdaptStep;
-/// Operation performed by one descriptor payload traversal step.
-pub const BoxyPayloadOp = LIR.BoxyPayloadOp;
-/// One explicit descriptor payload traversal step.
-pub const BoxyPayloadStep = LIR.BoxyPayloadStep;
 
 /// Runtime metadata for one tag in a boxy tag-union descriptor.
 pub const BoxyTagVariant = struct {
@@ -321,7 +315,6 @@ pub const BoxyAdapter = struct {
     operation: BoxyAdapterOperation = .materialize,
     source_layout: layout.Idx,
     target_layout: layout.Idx,
-    steps: BoxySpan = .{},
     consumes_source: bool,
     produces_owned_result: bool,
 };
@@ -395,8 +388,6 @@ pub const BoxyTypeDesc = struct {
     /// The described value is an opaque nominal type: inspect must not
     /// reveal its backing structure.
     inspect_opaque: bool = false,
-    copy_plan: BoxySpan = .{},
-    drop_plan: BoxySpan = .{},
     inspect_method: ?BoxyMethodSlotId = null,
     /// The hidden descriptors `inspect_method`'s worker receives, in worker
     /// parameter order. They describe this descriptor's own type arguments,
@@ -693,8 +684,6 @@ pub const Result = struct {
     boxy_tag_variants: std.ArrayList(BoxyTagVariant) = .empty,
     boxy_tag_payload_descs: std.ArrayList(BoxyTagPayloadDesc) = .empty,
     boxy_field_names: std.ArrayList(LIR.BoxyNameId) = .empty,
-    boxy_adapt_steps: std.ArrayList(BoxyAdaptStep) = .empty,
-    boxy_payload_steps: std.ArrayList(BoxyPayloadStep) = .empty,
     boxy_method_slots: std.ArrayList(BoxyMethodSlot) = .empty,
     /// Dense, deduplicated proc ids named by live non-structural Boxy method
     /// slots. Machine backends consume this exact list when emitting the
@@ -754,8 +743,6 @@ pub const Result = struct {
         self.boxy_method_arg_layouts.deinit(allocator);
         self.boxy_worker_procs.deinit(allocator);
         self.boxy_method_slots.deinit(allocator);
-        self.boxy_payload_steps.deinit(allocator);
-        self.boxy_adapt_steps.deinit(allocator);
         self.boxy_field_names.deinit(allocator);
         self.boxy_tag_payload_descs.deinit(allocator);
         self.boxy_tag_variants.deinit(allocator);
@@ -807,15 +794,6 @@ pub const Result = struct {
         try self.lowering_modules.appendSlice(self.store.allocator, modules);
     }
 
-    /// The checked module a `LIR.LoweringModuleId` names.
-    pub fn loweringModuleKey(self: *const Result, id: LIR.LoweringModuleId) checked.ModuleId {
-        const raw = @backingInt(id);
-        if (raw >= self.lowering_modules.items.len) {
-            base.invariant("{s}", .{"LIR program invariant violated: lowering module id has no published checked module"});
-        }
-        return self.lowering_modules.items[raw];
-    }
-
     /// The dense id this program gave a checked module, when the module was
     /// part of its lowering input.
     pub fn loweringModuleId(self: *const Result, key: checked.ModuleId) ?LIR.LoweringModuleId {
@@ -857,7 +835,7 @@ pub const Result = struct {
             var refs = self.boxyDescRefIterator(desc);
             while (refs.next()) |ref| switch (ref) {
                 .static => |child| edge_starts[@backingInt(child) + 1] += 1,
-                .local, .runtime, .dict_method_arg, .dict_method_hidden => {},
+                .local, .runtime, .dict_method_hidden => {},
             };
         }
         for (1..edge_starts.len) |index| edge_starts[index] += edge_starts[index - 1];
@@ -877,7 +855,7 @@ pub const Result = struct {
                     fill[@backingInt(child)] += 1;
                 },
                 .local => class = @fromBackingInt(@intCast(@max(@backingInt(class), @backingInt(BoxyDescClosure.captures)))),
-                .runtime, .dict_method_arg, .dict_method_hidden => class = .context,
+                .runtime, .dict_method_hidden => class = .context,
             };
             desc.closure = class;
             if (class != .closed) try worklist.append(allocator, @intCast(desc_index));
@@ -925,20 +903,10 @@ pub const Result = struct {
                         self.variant += 1;
                         self.index = 0;
                     },
-                    5, 6 => {
-                        const plan = if (self.section == 5) self.desc.copy_plan else self.desc.drop_plan;
-                        while (self.index < plan.len) {
-                            self.index += 1;
-                            switch (r.boxy_payload_steps.items[plan.start + self.index - 1]) {
-                                .dynamic => |step| return step.desc,
-                                .concrete => {},
-                            }
-                        }
-                    },
-                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
-                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
-                    9 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
-                    10 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
+                    5 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_hidden_descs, &self.index)) |ref| return ref,
+                    6 => if (spanRef(r.boxy_desc_refs.items, self.desc.eq_arg_descs, &self.index)) |ref| return ref,
+                    7 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_hidden_descs, &self.index)) |ref| return ref,
+                    8 => if (spanRef(r.boxy_desc_refs.items, self.desc.hash_arg_descs, &self.index)) |ref| return ref,
                     else => return null,
                 }
                 self.section += 1;
@@ -1036,7 +1004,7 @@ test "lowering module table resolves checked module provenance both ways" {
 
     for (keys, 0..) |key, index| {
         const id: LIR.LoweringModuleId = @fromBackingInt(@intCast(@as(u32, @intCast(index))));
-        try std.testing.expectEqualSlices(u8, &key.bytes, &result.loweringModuleKey(id).bytes);
+        try std.testing.expectEqualSlices(u8, &key.bytes, &result.lowering_modules.items[@backingInt(id)].bytes);
         try std.testing.expectEqual(id, result.loweringModuleId(key).?);
     }
 
@@ -1050,7 +1018,7 @@ test "lowering module table resolves checked module provenance both ways" {
     const stored = result.comptime_sites.items[@backingInt(site)];
     try std.testing.expectEqual(owner, stored.owner);
     try std.testing.expectEqual(@as(?LIR.CheckedExhaustivenessSiteId, @fromBackingInt(@intCast(41))), stored.checked_site);
-    try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.loweringModuleKey(stored.owner).bytes);
+    try std.testing.expectEqualSlices(u8, &keys[2].bytes, &result.lowering_modules.items[@backingInt(stored.owner)].bytes);
 }
 
 test "boxy side tables initialize empty and use flat pools" {
@@ -1063,8 +1031,6 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 0), result.boxy_adapters.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_desc_refs.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_dict_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_adapt_steps.items.len);
-    try std.testing.expectEqual(@as(usize, 0), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_arg_layouts.items.len);
     try std.testing.expectEqual(@as(usize, 0), result.boxy_method_hidden_desc_sources.items.len);
@@ -1073,27 +1039,11 @@ test "boxy side tables initialize empty and use flat pools" {
     try result.boxy_desc_refs.append(allocator, .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) });
     const desc_refs = BoxySpan{ .start = @intCast(desc_refs_start), .len = 1 };
 
-    const copy_plan_start = result.boxy_payload_steps.items.len;
-    try result.boxy_payload_steps.append(allocator, .{ .dynamic = .{
-        .op = .copy,
-        .desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-    } });
-    const copy_plan = BoxySpan{ .start = @intCast(copy_plan_start), .len = 1 };
-
-    const drop_plan_start = result.boxy_payload_steps.items.len;
-    try result.boxy_payload_steps.append(allocator, .{ .concrete = .{
-        .op = .drop,
-        .layout_idx = .zst,
-    } });
-    const drop_plan = BoxySpan{ .start = @intCast(drop_plan_start), .len = 1 };
-
     try result.boxy_type_descs.append(allocator, .{
         .payload_layout = .zst,
         .contains_refcounted = true,
         .shape = .internal,
         .nested_descs = desc_refs,
-        .copy_plan = copy_plan,
-        .drop_plan = drop_plan,
     });
 
     const arg_layouts_start = result.boxy_method_arg_layouts.items.len;
@@ -1131,21 +1081,10 @@ test "boxy side tables initialize empty and use flat pools" {
         .method_slots = method_slots,
     });
 
-    const adapt_steps_start = result.boxy_adapt_steps.items.len;
-    try result.boxy_adapt_steps.append(allocator, .{ .dynamic_payload = .{
-        .source_offset = 0,
-        .target_offset = 8,
-        .source_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .target_desc = .{ .static = @fromBackingInt(@intCast(fixtureTableIndex(0))) },
-        .mode = .copy,
-    } });
-    const adapt_steps = BoxySpan{ .start = @intCast(adapt_steps_start), .len = 1 };
-
     try result.boxy_adapters.append(allocator, .{
         .kind = .boxy_to_host,
         .source_layout = .str,
         .target_layout = .str,
-        .steps = adapt_steps,
         .consumes_source = false,
         .produces_owned_result = true,
     });
@@ -1155,8 +1094,6 @@ test "boxy side tables initialize empty and use flat pools" {
     try std.testing.expectEqual(@as(usize, 1), result.boxy_adapters.items.len);
     try std.testing.expectEqual(@as(usize, 3), result.boxy_desc_refs.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_dict_refs.items.len);
-    try std.testing.expectEqual(@as(usize, 1), result.boxy_adapt_steps.items.len);
-    try std.testing.expectEqual(@as(usize, 2), result.boxy_payload_steps.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_slots.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_arg_layouts.items.len);
     try std.testing.expectEqual(@as(usize, 1), result.boxy_method_hidden_desc_sources.items.len);

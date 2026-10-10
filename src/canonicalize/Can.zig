@@ -20592,7 +20592,7 @@ fn setExternalTypeBinding(
 /// The rules are:
 /// 1. Shorter names are better (fewer characters to read in error messages)
 /// 2. For equal lengths, lexicographically smaller wins (deterministic regardless of import order)
-fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
+pub fn displayNameIsBetter(new_name: []const u8, existing_name: []const u8) bool {
     // Shorter is better
     if (new_name.len != existing_name.len) {
         return new_name.len < existing_name.len;

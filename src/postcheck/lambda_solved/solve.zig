@@ -242,8 +242,6 @@ const Solver = struct {
         list_sublist,
         list_take_first,
         list_take_last,
-        list_drop_first,
-        list_drop_last,
         list_release_excess_capacity,
         list_clear,
         list_reverse,
@@ -1886,8 +1884,6 @@ const Solver = struct {
             .list_sublist,
             .list_take_first,
             .list_take_last,
-            .list_drop_first,
-            .list_drop_last,
             => {
                 expectLowLevelArity(op, args, 2);
                 try self.unify(expected, args[0]);

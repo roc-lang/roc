@@ -16832,26 +16832,6 @@ const BoxyTransferMode = enum {
     move,
 };
 
-const BoxyAdaptStep = union(enum) {
-    copy_bytes: struct {
-        source_offset: u32,
-        target_offset: u32,
-        layout_idx: layout.Idx,
-    },
-    dynamic_payload: struct {
-        source_offset: u32,
-        target_offset: u32,
-        source_desc: ?BoxyDescSource,
-        target_desc: ?BoxyDescSource,
-        mode: BoxyTransferMode,
-    },
-    nested_adapter: struct {
-        source_offset: u32,
-        target_offset: u32,
-        adapter: BoxyAdapterId,
-        mode: BoxyTransferMode,
-    },
-};
 ```
 
 The exact descriptor, dictionary, and adapter payload structs are owned by LIR,
@@ -17061,8 +17041,6 @@ The boxy statement surface is:
   the same rules for dictionary values
 - `assign_boxy_box`: creates a boxy top-level box from a payload local, payload
   layout, optional payload descriptor, and explicit transfer mode
-- `assign_boxy_reuse_box`: reuses an existing box pointer when the source is
-  already in the compiler-internal boxy type-variable representation
 - `assign_boxy_unbox`: extracts or projects a concrete target layout from a boxy
   value using the statement's descriptor and source transfer mode
 - `assign_boxy_adapt`: applies a named adapter plan to a source local with
@@ -17561,10 +17539,8 @@ leaves its join, and each of its writes is deleted by routing the write's
 incoming edges to its successor; copying a successor over a deleted statement
 would duplicate any join it copied. Deleting a write can leave its value
 unread, so the pass repeats to a fixed point. Reads outside operand positions
-keep a parameter: a join's retained or maybe-uninitialized lists, another
-local's descriptor, and the implicit carry of `loop_continue` or `loop_break`,
-which keeps every current definition live, so a procedure containing either
-is left unchanged. A join parameter that is also a procedure argument is
+keep a parameter: a join's retained or maybe-uninitialized lists and another
+local's descriptor. A join parameter that is also a procedure argument is
 defined by the call as well, and is never removed.
 
 Where lowering carries the variables and the construct's result together in
@@ -18549,21 +18525,12 @@ per-statement group counters or additional membership sets are maintained.
 Solver-only resource anchors participate exactly like concrete RC resources in
 these queries. Group-extension bits are not substitutes for raw member bits:
 their read-before-rebind kill equations differ.
-Join keep-set seeding inverts the exact group-use predicate instead of scanning
-the procedure's resource inventory per join. Source preparation builds the
-inverse alongside raw liveness numbering only for procedures with joins and
-multi-member groups. Singleton-only frames retain their allocation-free identity
-mapping. The inverse names concrete refcounted resources, excluding solver-only
-anchors, and is shared by all ownership variants. Sparse range enumeration reads
-only singleton raw bits and group-extension bits; grouped raw-member bits and
-borrowed-result bits do not select seed units. Absent and out-of-range subtrees
-are skipped. Each emission supplies its own committed residual masks and places
-the existing retained resources and join parameters, preserving the exact
-descending ownership fixed point. Until a jump reaches a join's body, the
-only reader of its body keep-set is the entry keep-set's membership test, so
-the seed stays represented by that exact membership predicate. A join whose
-body or remainder reaches a loop edge materializes the seed, because
-loop-keyed liveness enumerates the keep-set as boundary data.
+A join's body keep-set seed is the exact group-use predicate over its body
+plus the existing retained resources and join parameters, preserving the exact
+descending ownership fixed point; no seed scans the procedure's resource
+inventory per join. Until a jump reaches a join's body, the only reader of its
+body keep-set is the entry keep-set's membership test, so the seed stays
+represented by that exact membership predicate.
 Consequently neither ownership nor liveness rows are widened by locals from
 other procedures. Unrelated scalar locals are not ARC resources and never
 receive raw liveness bits. This distinction is load-bearing for wide static
@@ -18592,11 +18559,11 @@ The graph uses a reusable dense statement-to-node table, so successors,
 predecessors, and worklist edges are direct node indices rather than statement
 hash lookups. Its strongly-connected-component condensation is solved in
 reverse dependency order: an acyclic singleton is evaluated once, and
-iteration occurs only inside genuinely cyclic components. Keep-free rows live
+iteration occurs only inside genuinely cyclic components. Rows live
 at their compact graph nodes and the active source graph supplies their direct
 dense statement-to-node lookup.
 
-Debug builds check the keep-free solve against a certificate the solver keeps
+Debug builds check the liveness solve against a certificate the solver keeps
 rather than re-solving it. Every row satisfies its equation exactly. Inside a
 cyclic component, every row is its innermost loop's carried row plus the bits
 its own node exposes, and every carried row is its parent loop's plus the bits
@@ -18608,14 +18575,9 @@ then has a finite path to a read and the fixed point is the least one. The
 checks descend only where the shared rows diverge, so certification is linear
 like the solve.
 
-Each join receives a compact loop identity whose direct cache covers the
-forward closure of its explicit body and remainder roots. The join keep-set
-adds a boundary row to each reachable loop-edge node. When that keep-set
-shrinks, ARC computes the exact new boundary row, seeds only loop edges whose
-rows actually changed, and propagates the delta through changed predecessors;
-it neither rebuilds the graph nor discards unaffected rows. Every loop-keyed
-query is therefore a direct `(loop identity, node index)` lookup with no map or
-statement scan.
+Join keep-sets never feed liveness: every liveness query is a direct node
+lookup in the source graph's rows, with no map or statement scan, and a keep
+change schedules no liveness work.
 
 Join ownership is a must-property. Each reachable jump site contributes a
 state that can only shrink; a join summary maintains their running
@@ -18641,10 +18603,7 @@ whose walk reached the join statement, by re-deciding only the units whose
 state entry or deciding liveness bit differs structurally between the two
 snapshots. The result is exact for any reference; the reference only bounds
 the work, which is the difference between related snapshots instead of the
-size of the sets, so a loop nest costs linear keep-set work in its depth. Each loop identity
-records whether its solved rows consumed any keep bits, answered from the
-row's structure rather than by counting its set bits. A keep change that
-supplied no boundary bits schedules no liveness work.
+size of the sets, so a loop nest costs linear keep-set work in its depth.
 
 Join, jump-site, and continuation-switch identities are compact indices
 assigned by the structural lift. Summary tables and plan registrations use
@@ -19162,8 +19121,7 @@ A later write first checks its value operand against
 the previous definition's take state, then starts the new definition with all
 fields available. This includes loop back edges: the join cell has no global
 incoming ownership origin, and each explicit write supplies its own intact unit.
-A prospective take that reaches `loop_continue` or `loop_break` is rejected
-because the implicit boundary keeps the join definition live. Join cells with
+Join cells with
 no explicit initializer or with any other kind of definition remain ineligible.
 
 Ownership-complete aggregate reads extend that schedule across wrappers without
@@ -19232,9 +19190,7 @@ The use
 query is definition-sensitive: a `set_local` that writes the root ends the
 current place definition after its value operand is read. Uses reached through
 the following jump belong to the newly written join value and cannot keep the
-previous definition alive. Conversely, reaching an implicit `loop_continue`
-or `loop_break` without such a rebind keeps the current definition live across
-the loop boundary. A pure
+previous definition alive. A pure
 same-value alias followed only by non-refcounted field reads is
 representation-only: an inline struct's scalar bytes remain available after
 its stored RC units move or are released, so such reads do not keep the

@@ -791,29 +791,6 @@ pub const DataLayout = struct {
         data_layout.pointer_specs.deinit(gpa);
     }
 
-    pub fn getIntegerSpec(data_layout: *const DataLayout, bit_width: PrimitiveSpec.BitWidth) PrimitiveSpec {
-        const specs = data_layout.int_specs.keys();
-        return specs[
-            @min(std.sort.lowerBound(PrimitiveSpec, specs, bit_width, struct {
-                fn order(ctx: PrimitiveSpec.BitWidth, spec: PrimitiveSpec) std.math.Order {
-                    return std.math.order(ctx, spec.bit_width);
-                }
-            }.order), specs.len - 1)
-        ];
-    }
-
-    pub fn getFloatSpec(data_layout: *const DataLayout, bit_width: PrimitiveSpec.BitWidth) PrimitiveSpec {
-        if (data_layout.float_specs.getEntry(.{
-            .bit_width = bit_width,
-            .abi_align = .default,
-            .pref_align = .default,
-        })) |entry| return entry.key_ptr.*;
-        const default_align: Alignment = .fromByteUnits(
-            std.math.ceilPowerOfTwoAssert(PrimitiveSpec.BitWidth, bit_width / 8),
-        );
-        return .{ .bit_width = bit_width, .abi_align = default_align, .pref_align = default_align };
-    }
-
     pub fn getPointerSpec(data_layout: *const DataLayout, addr_space: AddrSpace) PointerSpec {
         return data_layout.pointer_specs.get(addr_space) orelse data_layout.pointer_specs.values()[0];
     }
@@ -1346,21 +1323,6 @@ pub const Type = enum(u32) {
         };
     }
 
-    pub fn structFields(self: Type, builder: *const Builder) []const Type {
-        const item = builder.type_items.items[@backingInt(self)];
-        switch (item.tag) {
-            .structure,
-            .packed_structure,
-            => {
-                var extra = builder.typeExtraDataTrail(Type.Structure, item.data);
-                return extra.trail.next(extra.data.fields_len, Type, builder);
-            },
-            .named_structure => return builder.typeExtraData(Type.NamedStructure, item.data).body
-                .structFields(builder),
-            else => unreachable,
-        }
-    }
-
     pub fn childTypeAt(self: Type, indices: []const u32, builder: *const Builder) Type {
         if (indices.len == 0) return self;
         const item = builder.type_items.items[@backingInt(self)];
@@ -1653,65 +1615,6 @@ pub const Type = enum(u32) {
     }
 
     const Size = union(enum) { fixed: u64, scalable: u64 };
-    pub fn bits(ty: Type, builder: *const Builder) Size {
-        const item = builder.type_items.items[@backingInt(ty)];
-        return switch (item.tag) {
-            else => unreachable,
-            .simple => switch (@as(Simple, @fromBackingInt(@intCast(item.data)))) {
-                else => unreachable,
-                .label => .{ .fixed = builder.data_layout.getPointerSpec(.default).bit_width },
-                .half, .bfloat => .{ .fixed = 16 },
-                .float => .{ .fixed = 32 },
-                .double => .{ .fixed = 64 },
-                .ppc_fp128, .fp128 => .{ .fixed = 128 },
-                .x86_amx => .{ .fixed = 8192 },
-                .x86_fp80 => .{ .fixed = 80 },
-            },
-            .integer => .{ .fixed = item.data },
-            .pointer => .{
-                .fixed = builder.data_layout.getPointerSpec(@fromBackingInt(@intCast(item.data))).bit_width,
-            },
-        };
-    }
-
-    pub fn alignment(ty: Type, kind: enum { abi, pref }, builder: *const Builder) Alignment {
-        const item = builder.type_items.items[@backingInt(ty)];
-        switch (item.tag) {
-            else => unreachable,
-            .simple => switch (@as(Simple, @fromBackingInt(@intCast(item.data)))) {
-                else => unreachable,
-                .label => {
-                    const spec = builder.data_layout.getPointerSpec(.default);
-                    return switch (kind) {
-                        .abi => spec.flags.abi_align,
-                        .pref => spec.flags.pref_align,
-                    };
-                },
-                .half, .bfloat, .float, .double, .ppc_fp128, .fp128, .x86_fp80 => {
-                    const spec = builder.data_layout.getFloatSpec(@intCast(ty.bits(builder).fixed));
-                    return switch (kind) {
-                        .abi => spec.abi_align,
-                        .pref => spec.pref_align,
-                    };
-                },
-                .x86_amx => return comptime .fromByteUnits(64),
-            },
-            .integer => {
-                const spec = builder.data_layout.getIntegerSpec(@intCast(item.data));
-                return switch (kind) {
-                    .abi => spec.abi_align,
-                    .pref => spec.pref_align,
-                };
-            },
-            .pointer => {
-                const spec = builder.data_layout.getPointerSpec(@fromBackingInt(@intCast(item.data)));
-                return switch (kind) {
-                    .abi => spec.flags.abi_align,
-                    .pref => spec.flags.pref_align,
-                };
-            },
-        }
-    }
 };
 
 /// LLVM function and parameter attributes affecting calling conventions and optimization.
@@ -2087,9 +1990,6 @@ pub const Attribute = union(Kind) {
                 },
                 .none => unreachable,
             }
-        }
-        pub fn fmt(self: Index, builder: *const Builder, flags: FormatData.Flags) std.fmt.Alt(FormatData, format) {
-            return .{ .data = .{ .attribute_index = self, .builder = builder, .flags = flags } };
         }
 
         fn toStorage(self: Index, builder: *const Builder) Storage {
@@ -2837,20 +2737,6 @@ pub const Alignment = enum(u6) {
         };
     }
 
-    /// Asserts that neither `lhs` nor `rhs` is `.default`.
-    pub fn max(lhs: Alignment, rhs: Alignment) Alignment {
-        assert(lhs != .default);
-        assert(rhs != .default);
-        return @fromBackingInt(@max(@backingInt(lhs), @backingInt(rhs)));
-    }
-
-    /// Asserts that neither `lhs` nor `rhs` is `.default`.
-    pub fn order(lhs: Alignment, rhs: Alignment) std.math.Order {
-        assert(lhs != .default);
-        assert(rhs != .default);
-        return std.math.order(@backingInt(lhs), @backingInt(rhs));
-    }
-
     pub fn toLlvm(self: Alignment) u6 {
         return switch (self) {
             .default => 0,
@@ -3147,10 +3033,6 @@ pub const Global = struct {
             }
         }
 
-        pub fn eql(self: Index, other: Index, builder: *const Builder) bool {
-            return self.unwrap(builder) == other.unwrap(builder);
-        }
-
         pub fn ptr(self: Index, builder: *Builder) *Global {
             return &builder.globals.values()[@backingInt(self.unwrap(builder))];
         }
@@ -3187,17 +3069,8 @@ pub const Global = struct {
             return @fromBackingInt(@backingInt(Constant.first_global) + @backingInt(global));
         }
 
-        pub fn toValue(global: Index) Value {
-            return global.toConst().toValue();
-        }
-
         pub fn setLinkage(self: Index, linkage: Linkage, builder: *Builder) void {
             self.ptr(builder).linkage = linkage;
-            self.updateDsoLocal(builder);
-        }
-
-        pub fn setVisibility(self: Index, visibility: Visibility, builder: *Builder) void {
-            self.ptr(builder).visibility = visibility;
             self.updateDsoLocal(builder);
         }
 
@@ -3205,16 +3078,8 @@ pub const Global = struct {
             self.ptr(builder).dll_storage_class = class;
         }
 
-        pub fn setUnnamedAddr(self: Index, unnamed_addr: UnnamedAddr, builder: *Builder) void {
-            self.ptr(builder).unnamed_addr = unnamed_addr;
-        }
-
         pub fn setDebugMetadata(self: Index, dbg: Metadata, builder: *Builder) void {
             self.ptr(builder).dbg = dbg.toOptional();
-        }
-
-        pub fn getDebugMetadata(self: Index, builder: *const Builder) Metadata.Optional {
-            return self.ptrConst(builder).dbg;
         }
 
         const FormatData = struct {
@@ -3228,20 +3093,6 @@ pub const Global = struct {
         }
         pub fn fmt(self: Index, builder: *const Builder) std.fmt.Alt(FormatData, format) {
             return .{ .data = .{ .global = self, .builder = builder } };
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            try builder.ensureUnusedGlobalCapacity(new_name);
-            self.renameAssumeCapacity(new_name, builder);
-        }
-
-        pub fn replace(self: Index, other: Index, builder: *Builder) Allocator.Error!void {
-            try builder.ensureUnusedGlobalCapacity(.empty);
-            self.replaceAssumeCapacity(other, builder);
-        }
-
-        pub fn delete(self: Index, builder: *Builder) void {
-            self.ptr(builder).kind = .{ .replaced = .none };
         }
 
         fn updateDsoLocal(self: Index, builder: *Builder) void {
@@ -3263,24 +3114,6 @@ pub const Global = struct {
                 },
             }
         }
-
-        fn renameAssumeCapacity(self: Index, new_name: StrtabString, builder: *Builder) void {
-            const old_name = self.name(builder);
-            if (new_name == old_name) return;
-            const index = @backingInt(self.unwrap(builder));
-            builder.globals.setKey(index, new_name);
-            if (!old_name.isAnon()) return;
-            builder.next_unnamed_global = @fromBackingInt(@backingInt(builder.next_unnamed_global) - 1);
-            if (builder.next_unnamed_global == old_name) return;
-            builder.getGlobal(builder.next_unnamed_global).?.renameAssumeCapacity(old_name, builder);
-        }
-
-        fn replaceAssumeCapacity(self: Index, other: Index, builder: *Builder) void {
-            if (self.eql(other, builder)) return;
-            builder.next_replaced_global = @fromBackingInt(@backingInt(builder.next_replaced_global) - 1);
-            self.renameAssumeCapacity(builder.next_replaced_global, builder);
-            self.ptr(builder).kind = .{ .replaced = other.unwrap(builder) };
-        }
     };
 };
 
@@ -3293,34 +3126,6 @@ pub const Alias = struct {
     pub const Index = enum(u32) {
         none = maxInt(u32),
         _,
-
-        pub fn ptr(self: Index, builder: *Builder) *Alias {
-            return &builder.aliases.items[@backingInt(self)];
-        }
-
-        pub fn ptrConst(self: Index, builder: *const Builder) *const Alias {
-            return &builder.aliases.items[@backingInt(self)];
-        }
-
-        pub fn name(self: Index, builder: *const Builder) StrtabString {
-            return self.ptrConst(builder).global.name(builder);
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
-        pub fn typeOf(self: Index, builder: *const Builder) Type {
-            return self.ptrConst(builder).global.typeOf(builder);
-        }
-
-        pub fn toConst(self: Index, builder: *const Builder) Constant {
-            return self.ptrConst(builder).global.toConst();
-        }
-
-        pub fn toValue(self: Index, builder: *const Builder) Value {
-            return self.toConst(builder).toValue();
-        }
     };
 };
 
@@ -3343,18 +3148,6 @@ pub const Variable = struct {
 
         pub fn ptrConst(self: Index, builder: *const Builder) *const Variable {
             return &builder.variables.items[@backingInt(self)];
-        }
-
-        pub fn name(self: Index, builder: *const Builder) StrtabString {
-            return self.ptrConst(builder).global.name(builder);
-        }
-
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
-        pub fn typeOf(self: Index, builder: *const Builder) Type {
-            return self.ptrConst(builder).global.typeOf(builder);
         }
 
         pub fn toConst(self: Index, builder: *const Builder) Constant {
@@ -3381,10 +3174,6 @@ pub const Variable = struct {
                 global.type = initializer_type;
             }
             self.ptr(builder).init = initializer;
-        }
-
-        pub fn setSection(self: Index, section: String, builder: *Builder) void {
-            self.ptr(builder).section = section;
         }
 
         pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
@@ -4999,10 +4788,6 @@ pub const Function = struct {
             return self.ptrConst(builder).global.name(builder);
         }
 
-        pub fn rename(self: Index, new_name: StrtabString, builder: *Builder) Allocator.Error!void {
-            return self.ptrConst(builder).global.rename(new_name, builder);
-        }
-
         pub fn typeOf(self: Index, builder: *const Builder) Type {
             return self.ptrConst(builder).global.typeOf(builder);
         }
@@ -5019,10 +4804,6 @@ pub const Function = struct {
             return self.ptrConst(builder).global.setLinkage(linkage, builder);
         }
 
-        pub fn setUnnamedAddr(self: Index, unnamed_addr: UnnamedAddr, builder: *Builder) void {
-            return self.ptrConst(builder).global.setUnnamedAddr(unnamed_addr, builder);
-        }
-
         pub fn setCallConv(self: Index, call_conv: CallConv, builder: *Builder) void {
             self.ptr(builder).call_conv = call_conv;
         }
@@ -5035,20 +4816,8 @@ pub const Function = struct {
             self.ptr(builder).attributes = new_function_attributes;
         }
 
-        pub fn setSection(self: Index, section: String, builder: *Builder) void {
-            self.ptr(builder).section = section;
-        }
-
-        pub fn setAlignment(self: Index, alignment: Alignment, builder: *Builder) void {
-            self.ptr(builder).alignment = alignment;
-        }
-
         pub fn setSubprogram(self: Index, subprogram: Metadata, builder: *Builder) void {
             self.ptrConst(builder).global.setDebugMetadata(subprogram, builder);
-        }
-
-        pub fn getSubprogram(self: Index, builder: *const Builder) Metadata.Optional {
-            return self.ptrConst(builder).global.getDebugMetadata(builder);
         }
     };
 
@@ -6032,12 +5801,6 @@ pub const Function = struct {
     const ExtraDataTrail = struct {
         index: Instruction.ExtraIndex,
 
-        fn nextMut(self: *ExtraDataTrail, len: u32, comptime Item: type, function: *Function) []Item {
-            const items: []Item = @ptrCast(function.extra[self.index..][0..len]);
-            self.index += @intCast(len);
-            return items;
-        }
-
         fn next(
             self: *ExtraDataTrail,
             len: u32,
@@ -6100,18 +5863,6 @@ pub const DebugLocation = union(enum) {
         scope: Builder.Metadata.Optional,
         inlined_at: Builder.Metadata.Optional,
     };
-
-    pub fn toMetadata(self: DebugLocation, builder: *Builder) Allocator.Error!Metadata.Optional {
-        return switch (self) {
-            .no_location => .none,
-            .location => |location| (try builder.debugLocation(
-                location.line,
-                location.column,
-                location.scope.unwrap().?,
-                location.inlined_at.unwrap(),
-            )).toOptional(),
-        };
-    }
 };
 
 /// Work-in-progress function being constructed with mutable instruction lists.
@@ -6320,24 +6071,6 @@ pub const WipFunction = struct {
         _ = self.extra.addManyAsSliceAssumeCapacity(cases_len * 2);
         default.ptr(self).branches += 1;
         return .{ .index = 0, .instruction = instruction };
-    }
-
-    pub fn indirectbr(
-        self: *WipFunction,
-        addr: Value,
-        targets: []const Block.Index,
-    ) Allocator.Error!Instruction.Index {
-        try self.ensureUnusedExtraCapacity(1, Instruction.IndirectBr, targets.len);
-        const instruction = try self.addInst(null, .{
-            .tag = .indirectbr,
-            .data = self.addExtraAssumeCapacity(Instruction.IndirectBr{
-                .addr = addr,
-                .targets_len = @intCast(targets.len),
-            }),
-        });
-        _ = self.extra.appendSliceAssumeCapacity(@ptrCast(targets));
-        for (targets) |target| target.ptr(self).branches += 1;
-        return instruction;
     }
 
     pub fn @"unreachable"(self: *WipFunction) Allocator.Error!Instruction.Index {
@@ -6717,97 +6450,6 @@ pub const WipFunction = struct {
             }),
         });
         return instruction;
-    }
-
-    pub fn fence(
-        self: *WipFunction,
-        sync_scope: SyncScope,
-        ordering: AtomicOrdering,
-    ) Allocator.Error!Instruction.Index {
-        assert(ordering != .none);
-        try self.ensureUnusedExtraCapacity(1, NoExtra, 0);
-        const instruction = try self.addInst(null, .{
-            .tag = .fence,
-            .data = @bitCast(MemoryAccessInfo{
-                .sync_scope = sync_scope,
-                .success_ordering = ordering,
-            }),
-        });
-        return instruction;
-    }
-
-    pub fn cmpxchg(
-        self: *WipFunction,
-        kind: Instruction.CmpXchg.Kind,
-        access_kind: MemoryAccessKind,
-        ptr: Value,
-        cmp: Value,
-        new: Value,
-        sync_scope: SyncScope,
-        success_ordering: AtomicOrdering,
-        failure_ordering: AtomicOrdering,
-        alignment: Alignment,
-        name: []const u8,
-    ) Allocator.Error!Value {
-        assert(ptr.typeOfWip(self).isPointer(self.builder));
-        const ty = cmp.typeOfWip(self);
-        assert(ty == new.typeOfWip(self));
-        assert(success_ordering != .none);
-        assert(failure_ordering != .none);
-
-        _ = try self.builder.structType(.normal, &.{ ty, .i1 });
-        try self.ensureUnusedExtraCapacity(1, Instruction.CmpXchg, 0);
-        const instruction = try self.addInst(name, .{
-            .tag = switch (kind) {
-                .strong => .cmpxchg,
-                .weak => .@"cmpxchg weak",
-            },
-            .data = self.addExtraAssumeCapacity(Instruction.CmpXchg{
-                .info = .{
-                    .access_kind = access_kind,
-                    .sync_scope = sync_scope,
-                    .success_ordering = success_ordering,
-                    .failure_ordering = failure_ordering,
-                    .alignment = alignment,
-                },
-                .ptr = ptr,
-                .cmp = cmp,
-                .new = new,
-            }),
-        });
-        return instruction.toValue();
-    }
-
-    pub fn atomicrmw(
-        self: *WipFunction,
-        access_kind: MemoryAccessKind,
-        operation: Instruction.AtomicRmw.Operation,
-        ptr: Value,
-        val: Value,
-        sync_scope: SyncScope,
-        ordering: AtomicOrdering,
-        alignment: Alignment,
-        name: []const u8,
-    ) Allocator.Error!Value {
-        assert(ptr.typeOfWip(self).isPointer(self.builder));
-        assert(ordering != .none);
-
-        try self.ensureUnusedExtraCapacity(1, Instruction.AtomicRmw, 0);
-        const instruction = try self.addInst(name, .{
-            .tag = .atomicrmw,
-            .data = self.addExtraAssumeCapacity(Instruction.AtomicRmw{
-                .info = .{
-                    .access_kind = access_kind,
-                    .atomic_rmw_operation = operation,
-                    .sync_scope = sync_scope,
-                    .success_ordering = ordering,
-                    .alignment = alignment,
-                },
-                .ptr = ptr,
-                .val = val,
-            }),
-        });
-        return instruction.toValue();
     }
 
     pub fn gep(
@@ -8468,41 +8110,6 @@ pub const Constant = enum(u32) {
         }
     }
 
-    pub fn getBase(self: Constant, builder: *const Builder) Global.Index {
-        var cur = self;
-        while (true) switch (cur.unwrap()) {
-            .constant => |constant| {
-                const item = builder.constant_items.get(constant);
-                switch (item.tag) {
-                    .ptrtoint,
-                    .inttoptr,
-                    .bitcast,
-                    => cur = builder.constantExtraData(Cast, item.data).val,
-                    .getelementptr => cur = builder.constantExtraData(GetElementPtr, item.data).base,
-                    .add => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        const lhs_base = extra.lhs.getBase(builder);
-                        const rhs_base = extra.rhs.getBase(builder);
-                        return if (lhs_base != .none and rhs_base != .none)
-                            .none
-                        else if (lhs_base != .none) lhs_base else rhs_base;
-                    },
-                    .sub => {
-                        const extra = builder.constantExtraData(Binary, item.data);
-                        if (extra.rhs.getBase(builder) != .none) return .none;
-                        cur = extra.lhs;
-                    },
-                    else => return .none,
-                }
-            },
-            .global => |global| switch (global.ptrConst(builder).kind) {
-                .alias => |alias| cur = alias.ptrConst(builder).aliasee,
-                .variable, .function => return global,
-                .replaced => unreachable,
-            },
-        };
-    }
-
     const FormatData = struct {
         constant: Constant,
         builder: *Builder,
@@ -8890,9 +8497,6 @@ pub const Metadata = packed struct(u32) {
         pub fn toValue(metadata: Metadata.Optional) Value {
             return if (metadata.unwrap()) |m| m.toValue() else .none;
         }
-        pub fn toString(metadata: Metadata.Optional) Metadata.String.Optional {
-            return if (metadata.unwrap()) |m| m.toString().toOptional() else .none;
-        }
     };
     pub fn toOptional(metadata: Metadata) Metadata.Optional {
         return .{ .index = metadata.index, .kind = metadata.kind, .is_none = false };
@@ -9058,10 +8662,6 @@ pub const Metadata = packed struct(u32) {
         return builder.metadata_items.get(metadata.index);
     }
 
-    pub fn isInline(metadata: Metadata, builder: *const Builder) bool {
-        return metadata.tag(builder).isInline();
-    }
-
     pub fn unwrap(metadata: Metadata, builder: *const Builder) Metadata {
         switch (metadata.kind) {
             .string, .node, .local => return metadata,
@@ -9207,21 +8807,6 @@ pub const Metadata = packed struct(u32) {
         di_flags: DIFlags,
         compile_unit: Metadata.Optional,
     };
-    pub fn getSubprogram(metadata: Metadata, builder: *const Builder) Subprogram {
-        const metadata_item = metadata.item(builder);
-        switch (metadata_item.tag) {
-            else => unreachable,
-            .subprogram,
-            .@"subprogram local",
-            .@"subprogram definition",
-            .@"subprogram local definition",
-            .@"subprogram optimized",
-            .@"subprogram optimized local",
-            .@"subprogram optimized definition",
-            .@"subprogram optimized local definition",
-            => return builder.metadataExtraData(Metadata.Subprogram, metadata_item.data),
-        }
-    }
 
     pub const LexicalBlock = struct {
         scope: Metadata.Optional,
@@ -9738,55 +9323,6 @@ pub fn init(options: Options) Allocator.Error!Builder {
     return self;
 }
 
-/// Clears all data and frees all memory, leaving the builder in a reusable state.
-pub fn clearAndFree(self: *Builder) void {
-    self.module_asm.clearAndFree(self.gpa);
-
-    self.string_map.clearAndFree(self.gpa);
-    self.string_indices.clearAndFree(self.gpa);
-    self.string_bytes.clearAndFree(self.gpa);
-
-    self.types.clearAndFree(self.gpa);
-    self.next_unique_type_id.clearAndFree(self.gpa);
-    self.type_map.clearAndFree(self.gpa);
-    self.type_items.clearAndFree(self.gpa);
-    self.type_extra.clearAndFree(self.gpa);
-
-    self.attributes.clearAndFree(self.gpa);
-    self.attributes_map.clearAndFree(self.gpa);
-    self.attributes_indices.clearAndFree(self.gpa);
-    self.attributes_extra.clearAndFree(self.gpa);
-
-    self.function_attributes_set.clearAndFree(self.gpa);
-
-    self.globals.clearAndFree(self.gpa);
-    self.next_unique_global_id.clearAndFree(self.gpa);
-    self.aliases.clearAndFree(self.gpa);
-    self.variables.clearAndFree(self.gpa);
-    for (self.functions.items) |*function| function.deinit(self.gpa);
-    self.functions.clearAndFree(self.gpa);
-
-    self.strtab_string_map.clearAndFree(self.gpa);
-    self.strtab_string_indices.clearAndFree(self.gpa);
-    self.strtab_string_bytes.clearAndFree(self.gpa);
-
-    self.constant_map.clearAndFree(self.gpa);
-    self.constant_items.shrinkAndFree(self.gpa, 0);
-    self.constant_extra.clearAndFree(self.gpa);
-    self.constant_limbs.clearAndFree(self.gpa);
-
-    self.metadata_map.clearAndFree(self.gpa);
-    self.metadata_items.shrinkAndFree(self.gpa, 0);
-    self.metadata_extra.clearAndFree(self.gpa);
-    self.metadata_limbs.clearAndFree(self.gpa);
-    self.metadata_forward_references.clearAndFree(self.gpa);
-    self.metadata_named.clearAndFree(self.gpa);
-
-    self.metadata_string_map.clearAndFree(self.gpa);
-    self.metadata_string_indices.clearAndFree(self.gpa);
-    self.metadata_string_bytes.clearAndFree(self.gpa);
-}
-
 pub fn deinit(self: *Builder) void {
     const gpa = self.gpa;
 
@@ -10272,11 +9808,6 @@ pub fn stringConst(self: *Builder, val: String) Allocator.Error!Constant {
     return self.stringConstAssumeCapacity(val);
 }
 
-/// Creates a string value from an interned string.
-pub fn stringValue(self: *Builder, val: String) Allocator.Error!Value {
-    return (try self.stringConst(val)).toValue();
-}
-
 /// Creates a vector constant with the given element values.
 pub fn vectorConst(self: *Builder, ty: Type, vals: []const Constant) Allocator.Error!Constant {
     try self.ensureUnusedConstantCapacity(1, Constant.Aggregate, vals.len);
@@ -10371,20 +9902,6 @@ pub fn asmValue(
     constraints: String,
 ) Allocator.Error!Value {
     return (try self.asmConst(ty, info, assembly, constraints)).toValue();
-}
-
-/// Dumps the LLVM IR to stderr for debugging.
-pub fn dump(b: *Builder, io: Io) void {
-    var buffer: [4000]u8 = undefined;
-    const stderr: Io.File = .stderr();
-    b.printToFile(io, stderr, &buffer) catch {};
-}
-
-/// Prints the LLVM IR to a file handle.
-pub fn printToFile(b: *Builder, io: Io, file: Io.File, buffer: []u8) !void {
-    var fw = file.writer(io, buffer);
-    try print(b, &fw.interface);
-    try fw.interface.flush();
 }
 
 /// Prints the LLVM IR to a writer.
@@ -11739,12 +11256,6 @@ fn addTypeExtraAssumeCapacity(self: *Builder, extra: anytype) Type.Item.ExtraInd
 const TypeExtraDataTrail = struct {
     index: Type.Item.ExtraIndex,
 
-    fn nextMut(self: *TypeExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.type_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
-
     fn next(
         self: *TypeExtraDataTrail,
         len: u32,
@@ -12534,12 +12045,6 @@ fn addConstantExtraAssumeCapacity(self: *Builder, extra: anytype) Constant.Item.
 const ConstantExtraDataTrail = struct {
     index: Constant.Item.ExtraIndex,
 
-    fn nextMut(self: *ConstantExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.constant_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
-
     fn next(
         self: *ConstantExtraDataTrail,
         len: u32,
@@ -12611,12 +12116,6 @@ fn addMetadataExtraAssumeCapacity(self: *Builder, extra: anytype) Metadata.Item.
 
 const MetadataExtraDataTrail = struct {
     index: Metadata.Item.ExtraIndex,
-
-    fn nextMut(self: *MetadataExtraDataTrail, len: u32, comptime Item: type, builder: *Builder) []Item {
-        const items: []Item = @ptrCast(builder.metadata_extra.items[self.index..][0..len]);
-        self.index += @intCast(len);
-        return items;
-    }
 
     fn next(
         self: *MetadataExtraDataTrail,
