@@ -59,3 +59,32 @@ expect describe_lookup(missing) == "missing"
 expect describe_other(missing) == "missing-other"
 expect describe_nested(nested) == "inner"
 expect "${describe_first(boom)} ${describe_last(boom)}" == "boom-first boom-last"
+
+# A single tag whose payloads are all zero-sized has no storage of its own, so
+# widening it writes the target's discriminant and payloads from the tag alone:
+# into a union whose payloads are zero-sized too (a bare discriminant), into
+# one whose payload row widens, and into one whose payload holds `{}`.
+describe_outer : [Wrap([Inner]), Plain] -> Str
+describe_outer = |tag| match tag {
+    Wrap(Inner) => "inner"
+    Plain => "plain"
+}
+
+describe_wrapped : [Wrap([Inner, Outer])] -> Str
+describe_wrapped = |tag| match tag {
+    Wrap(Inner) => "inner"
+    Wrap(Outer) => "outer"
+}
+
+unit_payload : [Wrap({})]
+unit_payload = Wrap({})
+
+describe_unit : [Wrap({}), Plain] -> Str
+describe_unit = |tag| match tag {
+    Wrap(_) => "wrap"
+    Plain => "plain"
+}
+
+expect describe_outer(nested) == "inner"
+expect describe_wrapped(nested) == "inner"
+expect describe_unit(unit_payload) == "wrap"

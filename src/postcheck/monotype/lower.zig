@@ -32569,10 +32569,17 @@ const BodyContext = struct {
                 return requestLowerTask(self, .{ .expr = .{ .expr = child } }),
             .break_ => try self.breakCurrentLoopExprData(),
             .return_ => |ret| return requestLowerTask(self, .{ .return_value = .{ .expr = ret.expr, .lambda = ret.lambda, .context = ret.context } }),
-            // The coerced value is lowered at its own checked type, exactly
-            // like a `?` return's value; the widen node carries the demanded
-            // type and Lambda Solved relates the two without unifying them.
-            .row_coerce => |coerce| return requestLowerTask(self, .{ .expr = .{ .expr = coerce.value } }),
+            // The coerced value is lowered at a graph cell of its own checked
+            // type, like a `?` return's value; the widen node carries the
+            // demanded type and Lambda Solved relates the two without
+            // unifying them. A value's row that no use relates to stays a
+            // graph cell and seals by the specialization's row defaults.
+            .row_coerce => |coerce| return requestLowerTask(self, .{ .at_type_cell = .{
+                .expr = coerce.value,
+                .cell = try self.lowerTypeCell(self.view.bodies.expr(coerce.value).ty),
+                .demand = .runtime_value,
+                .diverges = false,
+            } }),
             .for_ => |for_| return requestLowerTask(self, .{ .loop = try self.boxLowerTask(LoopTask, .{ .kind = .{ .for_ = checkedForLoop(for_) } }) }),
             .hosted_lambda => Common.invariant("hosted lambda expression reached ordinary Monotype expression lowering"),
             .run_low_level => |low_level| return requestLowerTask(self, .{ .span = .{ .exprs = low_level.args } }),
