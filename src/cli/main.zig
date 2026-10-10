@@ -16396,6 +16396,7 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
     var pending = std.ArrayList(u8).empty;
     defer pending.deinit(ctx.gpa);
 
+    var multiline_string_at_eof = false;
     var should_exit = false;
     var had_diagnostics = false;
     while (!should_exit) {
@@ -16419,6 +16420,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
             .line => |raw_line| {
                 defer ctx.gpa.free(raw_line);
 
+                // A complete multiline string remains pending until a line
+                // without a string prefix arrives (or EOF). Process that line
+                // separately so it can begin the next REPL statement.
+                if (multiline_string_at_eof and !ReplSession.lineStartsMultilineString(raw_line)) {
+                    should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                    pending.clearRetainingCapacity();
+                    multiline_string_at_eof = false;
+                    if (should_exit) break;
+                }
+
                 if (pending.items.len == 0 and std.mem.trim(u8, raw_line, " \t\r\n").len == 0) {
                     continue;
                 }
@@ -16429,8 +16440,16 @@ fn rocRepl(ctx: *CliCtx, repl_args: cli_args.ReplArgs) CliMainError!void {
                 try pending.appendSlice(ctx.gpa, raw_line);
 
                 switch (try session.inputStatus(pending.items)) {
-                    .incomplete => {},
-                    .complete, .invalid => {
+                    .incomplete => multiline_string_at_eof = false,
+                    .complete => |info| {
+                        multiline_string_at_eof = info.multiline_string_at_eof;
+                        if (!multiline_string_at_eof) {
+                            should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
+                            pending.clearRetainingCapacity();
+                        }
+                    },
+                    .invalid => {
+                        multiline_string_at_eof = false;
                         should_exit = try processReplInput(ctx, &session, pending.items, report_config, &had_diagnostics);
                         pending.clearRetainingCapacity();
                     },

@@ -13,3 +13,9 @@ The CLI is the main entry point for developers using Roc. Its responsibilities i
 - **Default-App Staging**: Turning a file that runs on the built-in Echo platform—a headerless file with `main!`, or an `app` header that names no platform—into an ordinary app rooted beside a copy of that platform, through `default_app.zig`
 
 The CLI coordinates between the compiler frontend (parsing, type checking) and backend (code generation, linking) to provide a seamless development experience.
+
+## Multiline strings in the REPL
+
+The terminal REPL keeps consecutive multiline string lines in one statement.
+A blank line, a following non-string statement, or EOF submits the pending string.
+String payloads retain their trailing spaces.
