@@ -6318,6 +6318,8 @@ that already holds its identity is compared by that identity rather than by
 walking its proof graph again, so interning a chain of nested contracts costs
 one comparison per contract rather than one per contract below it. Source contracts remain intact for replay; specialization
 equality uses the shared identity rather than the per-use derivation index.
+Boxy selects a generated codec worker by the same identity, so every use of
+equivalent contracts shares one worker.
 
 The checker's derived-codec walk records each nominal application whose
 backing it walks together with the generated derivation that walks it. A later
@@ -6684,6 +6686,16 @@ Monotype commits that plan as one loop plus explicit shared continuations:
 - fallible operations inside the initialized record loop transfer their error
   payload to one typed error continuation, which constructs the outer `Err`
   exactly once.
+
+Boxy's generated record parser keeps the first rule the same way: each field's
+value parser is built once, as a join whose parameter is the state after the
+field's key, and the `Field`, `TryField`, and `TryFieldCaseless` events jump to
+it. It keeps the third rule with one error join inside the record loop, whose
+parameter is the parser result: every fallible operation in the loop,
+including those of nested field shapes, writes its `Err` into that parameter
+and jumps to it. The join's `retained` environment is the field-name evidence,
+the field names the worker owns, and the payload slots (initialized under their
+presence bits), so ARC releases them once in the join body.
 
 The continuation targets are producer-authored Monotype data. Lifting,
 specialization, lambda solving, and direct LIR lowering preserve and consume
