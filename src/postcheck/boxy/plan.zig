@@ -4967,7 +4967,15 @@ const Builder = struct {
         checked_type: CheckedTypeIdentity,
         root_request: ?checked.RootRequest,
     ) Allocator.Error!void {
-        const selected_source = self.workerSourceForCallableEvalSource(source);
+        const selected_source = switch (source) {
+            .generated_codec => |codec| WorkerSource{ .generated_codec = self.generatedCodecSourceAtIdentity(codec, checked_type) },
+            .procedure_template,
+            .procedure_binding,
+            .procedure_use,
+            .nested_expr,
+            .generated_field_iterator,
+            => self.workerSourceForCallableEvalSource(source),
+        };
         if (!workerSourceEql(selected_source, source)) {
             return try actions.append(self.allocator, .{ .ensure_worker = .{ .source = selected_source, .checked_type = checked_type, .root_request = root_request } });
         }
@@ -20712,6 +20720,28 @@ const Builder = struct {
         const view = self.moduleForCheckedModuleId(template_ref.artifact);
         const template = view.checked_procedure_templates.get(template_ref.template);
         return typeRef(view, template.checked_fn_root);
+    }
+
+    /// The source a generated codec worker is shared under. The checker
+    /// interns proof-equivalent contracts to one identity, and checked types
+    /// are interned by key, so every use of an equivalent contract selects the
+    /// identity's worker. A stored runtime keeps its own contract: its checked
+    /// expression names the value it captures.
+    fn generatedCodecSourceAtIdentity(
+        self: *Builder,
+        codec: GeneratedCodecSource,
+        checked_type: CheckedTypeIdentity,
+    ) GeneratedCodecSource {
+        if (codec.contract_expr != null) return codec;
+        const derivation_id = codec.contract_derivation orelse return codec;
+        const derivations = self.moduleForId(checked_type.module).static_dispatch_plans.generated_codec_derivations;
+        const identity = derivations[@backingInt(derivation_id)].identity;
+        if (derivations[@backingInt(identity)].kind != derivations[@backingInt(derivation_id)].kind) {
+            boxyPlanInvariant("generated codec contract identity named a contract of another kind");
+        }
+        var shared = codec;
+        shared.contract_derivation = identity;
+        return shared;
     }
 
     fn workerSourceForCallableEvalSource(self: *Builder, source: WorkerSource) WorkerSource {

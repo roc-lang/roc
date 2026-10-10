@@ -536,7 +536,9 @@ fn structuralJsonLirStats(
 
 /// Call statements in the whole Boxy-lowered program for a flat JSON record
 /// parser of `field_count` `Str` fields.
-fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize) TestError!usize {
+/// Calls in the boxy program for a `Shape` of `field_count` string fields
+/// that `parse_sites` separate functions each parse with `Json.parse`.
+fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize, parse_sites: usize) TestError!usize {
     var source_buf = std.ArrayList(u8).empty;
     defer source_buf.deinit(allocator);
     try source_buf.appendSlice(allocator, "Shape : {\n");
@@ -545,16 +547,23 @@ fn boxyStructuralJsonParserCalls(allocator: Allocator, field_count: usize) TestE
         defer allocator.free(field);
         try source_buf.appendSlice(allocator, field);
     }
-    try source_buf.appendSlice(allocator,
-        \\}
-        \\
-        \\parse_shape : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])
-        \\parse_shape = |json| Json.parse(json)
-        \\
-        \\main : Str -> Bool
-        \\main = |json| parse_shape(json).is_ok()
-        \\
-    );
+    try source_buf.appendSlice(allocator, "}\n");
+    for (0..parse_sites) |site| {
+        const parse_fn = try std.fmt.allocPrint(
+            allocator,
+            "\nparse_shape{d} : Str -> Try(Shape, [InvalidJson(Str), MissingRequiredField(Str)])\nparse_shape{d} = |json| Json.parse(json)\n",
+            .{ site, site },
+        );
+        defer allocator.free(parse_fn);
+        try source_buf.appendSlice(allocator, parse_fn);
+    }
+    try source_buf.appendSlice(allocator, "\nmain : Str -> Bool\nmain = |json| ");
+    for (0..parse_sites) |site| {
+        const use = try std.fmt.allocPrint(allocator, "{s}parse_shape{d}(json).is_ok()", .{ if (site == 0) "" else " and ", site });
+        defer allocator.free(use);
+        try source_buf.appendSlice(allocator, use);
+    }
+    try source_buf.appendSlice(allocator, "\n");
     const source = source_buf.items;
 
     var compiled = try helpers.compileProgramForTargetWithBuiltinAndContext(
@@ -2045,9 +2054,20 @@ test "issue 11910 boxy JSON record parser lowers each field's value parser once"
     // they jump to. A field therefore adds two calls: the parser's
     // constructor renaming its name, and the one call parsing its value.
     const allocator = std.testing.allocator;
-    const four = try boxyStructuralJsonParserCalls(allocator, 4);
-    const eight = try boxyStructuralJsonParserCalls(allocator, 8);
+    const four = try boxyStructuralJsonParserCalls(allocator, 4, 1);
+    const eight = try boxyStructuralJsonParserCalls(allocator, 8, 1);
     try std.testing.expectEqual(@as(usize, 2 * 4), eight - four);
+}
+
+test "issue 11910 boxy JSON parses of one shape share its generated parser" {
+    // The checker interns the two `Json.parse` contracts for `Shape` to one
+    // identity, so both functions call one generated runtime parser. The
+    // second function's parser construction still renames each field, so it
+    // adds one call per field rather than a second value parser per field.
+    const allocator = std.testing.allocator;
+    const narrow_second = try boxyStructuralJsonParserCalls(allocator, 4, 2) - try boxyStructuralJsonParserCalls(allocator, 4, 1);
+    const wide_second = try boxyStructuralJsonParserCalls(allocator, 8, 2) - try boxyStructuralJsonParserCalls(allocator, 8, 1);
+    try std.testing.expectEqual(@as(usize, 4), wide_second - narrow_second);
 }
 
 test "issue 10979 shared JSON record continuations preserve field semantics" {
