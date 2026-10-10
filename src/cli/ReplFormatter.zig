@@ -13,9 +13,9 @@ const RocStr = builtins.str.RocStr;
 // Tuples are an internal host ABI; their offsets come from committed layouts.
 const wrapper =
     \\import Formatter
-    \\main : (Bool, Str, Str, Str, Str) -> (Bool, Str)
+    \\main : (Bool, Str, Str, Str, Str, Bool, Str, Bool, Str) -> (Bool, Str)
     \\main = |request| {
-    \\    (decoding, input, result, stdout, diagnostics) = request
+    \\    (decoding, input, result, stdout, diagnostics, is_tag, name, has_payload, payload) = request
     \\    if decoding {
     \\        decoded : Try(Str, Str)
     \\        decoded = Formatter.decode(input)
@@ -24,7 +24,10 @@ const wrapper =
     \\            Err(reply) => (False, reply)
     \\        }
     \\    } else {
-    \\        (False, Formatter.encode({ result, stdout, diagnostics }))
+    \\        value = if is_tag {
+    \\            Tag({ name, payload: if has_payload Ok(payload) else Err({}) })
+    \\        } else { Other }
+    \\        (False, Formatter.encode({ result, stdout, diagnostics, value }))
     \\    }
     \\}
 ;
@@ -36,7 +39,7 @@ const Reply = struct {
 
 /// Call an already checked and lowered formatter. Each call owns its runtime
 /// allocations, including on a language crash; the compiled program is reused.
-fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8) !Reply {
+fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const eval.Inspected.CompiledTargetProgram, decoding: bool, strings: [4][]const u8, value: ReplSession.ResultValue) !Reply {
     const lowered = &program.lowered;
     const layouts = &lowered.view.layouts;
     var runtime = eval.RuntimeHostEnv.init(allocator);
@@ -65,6 +68,10 @@ fn call(allocator: std.mem.Allocator, stderr: *std.Io.Writer, program: *const ev
     for (strings, 0..) |bytes, i| {
         field(RocStr, args.ptr, layouts, arg_layouts[0], @intCast(i + 1)).* = RocStr.fromSlice(bytes, runtime.get_ops());
     }
+    field(bool, args.ptr, layouts, arg_layouts[0], 5).* = value.tag_name != null;
+    field(RocStr, args.ptr, layouts, arg_layouts[0], 6).* = RocStr.fromSlice(value.tag_name orelse "", runtime.get_ops());
+    field(bool, args.ptr, layouts, arg_layouts[0], 7).* = value.string_payload != null;
+    field(RocStr, args.ptr, layouts, arg_layouts[0], 8).* = RocStr.fromSlice(value.string_payload orelse "", runtime.get_ops());
     const returned = interpreter.eval(.{
         .proc_id = lowered.mainProc(),
         .arg_layouts = arg_layouts,
@@ -96,6 +103,8 @@ fn field(comptime T: type, bytes: [*]u8, layouts: *const layout.Store, idx: layo
 
 pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) !void {
     const allocator = ctx.gpa;
+    session.capture_result_value = true;
+    defer session.capture_result_value = false;
     const source = try ctx.coreCtx().readFile(path, allocator);
     defer allocator.free(source);
     var loader = session.sibling();
@@ -135,7 +144,7 @@ pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) !void {
         const eof = input.interface.buffered().len == 0;
         if (eof and line.writer.buffered().len == 0) break;
         if (!eof) input.interface.toss(1);
-        const decoded = try call(allocator, ctx.io.stderr(), &program, true, .{ std.mem.trimEnd(u8, line.writer.buffered(), "\r"), "", "", "" });
+        const decoded = try call(allocator, ctx.io.stderr(), &program, true, .{ std.mem.trimEnd(u8, line.writer.buffered(), "\r"), "", "", "" }, .{});
         defer allocator.free(decoded.bytes);
         if (!decoded.evaluate) {
             try writeReply(ctx, decoded.bytes);
@@ -147,8 +156,9 @@ pub fn run(ctx: *CliCtx, session: *ReplSession, path: []const u8) !void {
         defer output.deinit();
         var diagnostics = std.Io.Writer.Allocating.init(allocator);
         defer diagnostics.deinit();
-        try evaluate(session, decoded.bytes, config, &result, &output, &diagnostics);
-        const encoded = try call(allocator, ctx.io.stderr(), &program, false, .{ "", result.writer.buffered(), output.writer.buffered(), diagnostics.writer.buffered() });
+        const value = try evaluate(session, decoded.bytes, config, &result, &output, &diagnostics);
+        defer value.deinit(allocator);
+        const encoded = try call(allocator, ctx.io.stderr(), &program, false, .{ "", result.writer.buffered(), output.writer.buffered(), diagnostics.writer.buffered() }, value);
         defer allocator.free(encoded.bytes);
         try writeReply(ctx, encoded.bytes);
     }
@@ -162,13 +172,18 @@ fn writeReply(ctx: *CliCtx, bytes: []const u8) !void {
     ctx.io.flush();
 }
 
-fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) !void {
+fn evaluate(session: *ReplSession, source: []const u8, config: reporting.ReportingConfig, result: *std.Io.Writer.Allocating, output: *std.Io.Writer.Allocating, diagnostics: *std.Io.Writer.Allocating) !ReplSession.ResultValue {
+    var value: ReplSession.ResultValue = .{};
+    errdefer value.deinit(session.allocator);
     const statements = try session.splitInputIntoStatements(source);
     defer session.freeStatementSlices(statements);
     for (statements) |statement| {
         if (ReplSession.parseTypeQuery(statement)) |name| {
             const text = try session.printTypeOfVar(name, false);
             defer session.allocator.free(text);
+            // A query is a text result, never the preceding expression's tag.
+            value.deinit(session.allocator);
+            value = .{};
             result.clearRetainingCapacity();
             try result.writer.writeAll(std.mem.trimEnd(u8, text, "\n"));
             continue;
@@ -189,6 +204,8 @@ fn evaluate(session: *ReplSession, source: []const u8, config: reporting.Reporti
         }
         switch (step) {
             .expression => |text| {
+                value.deinit(session.allocator);
+                value = session.takeResultValue();
                 result.clearRetainingCapacity();
                 try result.writer.writeAll(text);
             },
@@ -203,4 +220,5 @@ fn evaluate(session: *ReplSession, source: []const u8, config: reporting.Reporti
             .definition, .statement, .none => {},
         }
     }
+    return value;
 }

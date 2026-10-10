@@ -73,6 +73,9 @@ definitions: DefinitionStore,
 virtual_modules: VirtualModuleStore,
 import_policy: ImportPolicy,
 last_events: []eval.InspectedRun.Event = &.{},
+capture_result_value: bool = false,
+last_value: ResultValue = .{},
+
 builtin_modules: *eval.BuiltinModules,
 /// Whether this session owns `builtin_modules` (and must deinit it). Tests can
 /// borrow a shared, already-published instance to avoid re-publishing the
@@ -81,6 +84,24 @@ owns_builtin_modules: bool,
 /// Directory that imported sibling modules are resolved against. Defaults to the
 /// process working directory (`.`); tests point it at a fixture directory.
 module_root: []const u8 = ".",
+
+/// An explicit projection of the checked top-level value. No display tag names
+/// or wire-format conventions belong to the compiler.
+pub const ResultValue = struct {
+    tag_name: ?[]const u8 = null,
+    string_payload: ?[]const u8 = null,
+
+    pub fn deinit(self: ResultValue, allocator: Allocator) void {
+        if (self.tag_name) |bytes| allocator.free(bytes);
+        if (self.string_payload) |bytes| allocator.free(bytes);
+    }
+};
+
+pub fn takeResultValue(self: *ReplSession) ResultValue {
+    const value = self.last_value;
+    self.last_value = .{};
+    return value;
+}
 
 /// Outcome of evaluating a single REPL input line.
 pub const StepResult = union(enum) {
@@ -229,6 +250,8 @@ pub fn deinit(self: *ReplSession) void {
 const ImportPolicy = enum { filesystem, virtual_only };
 
 fn clearLastEvents(self: *ReplSession) void {
+    self.last_value.deinit(self.allocator);
+    self.last_value = .{};
     for (self.last_events) |*event| event.deinit(self.allocator);
     self.allocator.free(self.last_events);
     self.last_events = &.{};
@@ -1491,12 +1514,31 @@ fn evaluateExpression(self: *ReplSession, expr: []const u8, report_config: repor
     const definitions = try self.definitionsSource();
     defer self.allocator.free(definitions);
 
-    // Checking preserves the REPL semantics of this zero-argument expression
-    // root, while checked publication selects its body for compile-time
-    // evaluation and archives the resulting Str directly in ConstStore.
-    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect((\n{s}\n))\n", .{ definitions, expr });
+    if (!self.capture_result_value) {
+        const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || Str.inspect((\n{s}\n))\n", .{ definitions, expr });
+        defer self.allocator.free(source);
+        return self.evaluateMainSource(source, report_config, .text);
+    }
+
+    // Intern the user's tokens to choose a hygienic local binder that cannot
+    // capture a user identifier or shadow an existing definition.
+    const user_source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || (\n{s}\n)\n", .{ definitions, expr });
+    defer self.allocator.free(user_source);
+    var env = try ModuleEnv.init(self.allocator, user_source);
+    defer env.deinit();
+    const ast = try parse.file(self.allocator, &env.common);
+    defer ast.deinit();
+    var name_buffer: [64]u8 = undefined;
+    var index: usize = 0;
+    const name = while (true) : (index += 1) {
+        const candidate = std.fmt.bufPrint(&name_buffer, "roc_repl_value_{d}", .{index}) catch unreachable;
+        if (env.common.findIdent(candidate) == null) break candidate;
+    };
+    // Evaluate once and publish both inspection text and the original value as
+    // explicit tuple fields in ConstStore. The projection uses semantic nodes.
+    const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s} = (\n{s}\n)\n(Str.inspect({s}), {s})\n}}\n", .{ definitions, name, expr, name, name });
     defer self.allocator.free(source);
-    return self.evaluateMainSource(source, report_config);
+    return self.evaluateMainSource(source, report_config, .value_and_text);
 }
 
 /// Evaluate a value-less statement (`expect`, `for`, `while`) by running it
@@ -1507,10 +1549,10 @@ fn evaluateStatement(self: *ReplSession, statement: []const u8, report_config: r
 
     const source = try std.fmt.allocPrint(self.allocator, "{s}\nmain = || {{\n{s}\nStr.inspect({{}})\n}}\n", .{ definitions, statement });
     defer self.allocator.free(source);
-    return self.evaluateMainSource(source, report_config);
+    return self.evaluateMainSource(source, report_config, .text);
 }
 
-fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig) ReplStepError!StepResult {
+fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: reporting.ReportingConfig, result_shape: enum { text, value_and_text }) ReplStepError!StepResult {
     const import_sources = switch (try self.resolveImports()) {
         .resolved => |s| s,
         .failed => |msg| return .{ .diagnostic = msg },
@@ -1553,7 +1595,27 @@ fn evaluateMainSource(self: *ReplSession, source: []const u8, report_config: rep
         ) };
     }
 
-    const output = try eval.Inspected.finalizedComptimeReplStr(&resources);
+    const output = switch (result_shape) {
+        .text => try eval.Inspected.finalizedComptimeReplStr(&resources),
+        .value_and_text => blk: {
+            const store = &resources.checked_artifact.const_store;
+            const tuple = store.get(eval.Inspected.finalizedComptimeReplValue(&resources)).tuple;
+            std.debug.assert(tuple.len == 2);
+            switch (store.get(tuple[1])) {
+                .tag => |tag| {
+                    self.last_value.tag_name = try self.allocator.dupe(u8, tag.tag_name);
+                    if (tag.payloads.len == 1) {
+                        const payload = store.get(tag.payloads[0]);
+                        if (payload == .str) {
+                            self.last_value.string_payload = try self.allocator.dupe(u8, store.strBytes(payload.str));
+                        }
+                    }
+                },
+                else => {},
+            }
+            break :blk eval.Inspected.finalizedConstStr(&resources, tuple[0]);
+        },
+    };
     var visible = std.Io.Writer.Allocating.init(self.allocator);
     defer visible.deinit();
     try base.bidi.writeVisible(&visible.writer, output);

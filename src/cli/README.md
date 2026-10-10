@@ -24,8 +24,12 @@ module [decode, encode]
 decode : Str -> Try(Str, Str)
 decode = |line| Ok(line)
 
-encode : { result : Str, stdout : Str, diagnostics : Str } -> Str
-encode = |response| Json.to_str(response)
+encode : { result : Str, stdout : Str, diagnostics : Str, value : [Other, Tag({ name : Str, payload : Try(Str, {}) })] } -> Str
+encode = |response| Json.to_str({
+    result: response.result,
+    stdout: response.stdout,
+    diagnostics: response.diagnostics,
+})
 ```
 
 The formatter is compiled once and runs separately from the user's definitions.
@@ -47,6 +51,13 @@ Invalid formatter signatures or formatter crashes terminate the process with a
 diagnostic on stderr. User-code diagnostics are encoded replies and leave the
 session usable. Formatter calls use the LIR interpreter; `--specialize` selects
 the normal lowering strategy. The protocol is independent of JSON and Jupyter.
+
+`value` describes the last expression's actual top-level value: `Other`, or
+`Tag({ name, payload })`. The payload is `Ok(text)` for exactly one Str argument,
+and `Err({})` for other types or arities. Nominal wrappers and nested tags are
+not unwrapped. This information comes from the checked constant store; inspection
+strings are never parsed to infer types. The expression runs once. Plugins decide
+which tag names and payloads represent rich output; the compiler has no MIME rules.
 
 The terminal REPL keeps consecutive multiline string lines in one statement.
 A blank line, a following non-string statement, or EOF submits the pending string.

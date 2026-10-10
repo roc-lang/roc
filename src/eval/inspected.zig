@@ -1356,37 +1356,31 @@ pub fn publishProgramKeepingReportedComptimeProblemsWithBuiltinAndContext(
     );
 }
 
-/// Return the finalized string value of the explicitly published compile-time
-/// REPL root. The returned bytes borrow from `resources`.
-pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
+/// Return the finalized semantic value of the explicitly published REPL root.
+/// The node and its children borrow from `resources`.
+pub fn finalizedComptimeReplValue(resources: *const ParsedResources) check.ConstStore.ConstNodeId {
     for (resources.checked_artifact.compile_time_roots.roots) |root| {
         if (root.kind != .repl_expr) continue;
-
-        var node = switch (root.payload) {
-            .const_node => |const_node| const_node,
-            .pending, .fn_value, .discarded, .expect, .runtime => return error.Internal,
+        return switch (root.payload) {
+            .const_node => |node| node,
+            else => unreachable,
         };
-        while (true) {
-            switch (resources.checked_artifact.const_store.get(node)) {
-                .str => |str| return resources.checked_artifact.const_store.strBytes(str),
-                .nominal => |nominal| node = nominal.backing,
-                .pending,
-                .zst,
-                .scalar,
-                .list,
-                .box,
-                .tuple,
-                .record,
-                .crash,
-                .checked_error,
-                .tag,
-                .fn_value,
-                => return error.Internal,
-            }
-        }
     }
+    unreachable;
+}
 
-    return error.EntrypointNotFound;
+/// Read the explicitly declared string root through checked semantic nodes.
+pub fn finalizedComptimeReplStr(resources: *const ParsedResources) Error![]const u8 {
+    return finalizedConstStr(resources, finalizedComptimeReplValue(resources));
+}
+
+pub fn finalizedConstStr(resources: *const ParsedResources, initial: check.ConstStore.ConstNodeId) []const u8 {
+    var node = initial;
+    while (true) switch (resources.checked_artifact.const_store.get(node)) {
+        .str => |str| return resources.checked_artifact.const_store.strBytes(str),
+        .nominal => |nominal| node = nominal.backing,
+        else => unreachable,
+    };
 }
 
 const PublishedRootMode = union(enum) {
@@ -1623,6 +1617,7 @@ fn parseAndCanonicalizeProgramWithRootModeReporting(
                 explicit_root_storage[0] = .{
                     .kind = .repl_expr,
                     .source = .{ .expr = body_expr },
+                    .source_pattern = root_def.pattern,
                     .abi = .compile_time,
                     .exposure = .private,
                 };
